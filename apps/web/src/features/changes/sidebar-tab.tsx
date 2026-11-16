@@ -1,3 +1,5 @@
+// 這個切片要右側欄帶給它的資料來源，在這裡補進 `RightSidebarSources`（`app/App.tsx` 組出來）。
+
 import { FileDiff } from 'lucide-react';
 import { useEffect, useSyncExternalStore } from 'react';
 
@@ -7,6 +9,7 @@ import { defineTab, isIndex } from '@/shared/right-sidebar/tab';
 import type { TabBodyProps } from '@/shared/right-sidebar/tab';
 
 import { ChangesReviewTab } from './review';
+import type { ChangesStores } from './diff';
 
 /** 改動分頁的座標：一輪一個分頁，同一輪換檔只改 `index`。 */
 export type ChangesSidebarTab = {
@@ -72,3 +75,9 @@ export const CHANGES_TAB = defineTab<ChangesSidebarTab>({
   Icon: FileDiff,
   Body: ChangesBody,
 });
+
+declare module '@/shared/right-sidebar/api' {
+  interface RightSidebarSources {
+    readonly changes?: ChangesStores | undefined;
+  }
+}

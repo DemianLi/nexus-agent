@@ -19,7 +19,7 @@ import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { TRACE_EMPTY_HINT, TRACE_EMPTY_TEXT } from '@/features/trace/panel';
 import { createChangesStores } from '@/features/changes/diff';
 import { createDeliverableFileStore } from '@/features/deliverable/file';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { LAYOUT_KEY_PREFIX, WIDTH_KEY, EMPTY_LAYOUT } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import { axeViolations } from '@/test/axe';

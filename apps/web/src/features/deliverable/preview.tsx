@@ -90,7 +90,7 @@ import type {
   DeliverableLongLine,
 } from '@/features/deliverable/file';
 import { MISSING_REASON, isLongLine, isPage } from '@/features/deliverable/file';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { LONG_LINE_CHARS, columnsOf, layoutOf } from '@/features/deliverable/line-segments';
 import { cn } from '@/lib/utils';
 

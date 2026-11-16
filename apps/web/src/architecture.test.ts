@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
  * 4. **切片之間不循環**：以切片為節點、產品碼的 import 為邊。
  * 5. **每個切片都有 `index.ts`，內容只有具名的 re-export**（`export { a } from './x'`、`export type { T } from './x'`）：
  *    不用 `export *`、不放任何邏輯，讀入口就知道切片對外給了什麼，載入入口不會多跑任何東西。
- * 6. **例外只能變短**：{@link EXCEPTIONS} 列的檔對規則 1、2 有明文豁免；列了卻沒命中（檔不見了、import 改走別的路）就紅，
+ * 6. **例外只能變短**：{@link EXCEPTIONS} 列的檔對規則 1、2 有明文豁免（目前沒有）；列了卻沒命中（檔不見了、import 改走別的路）就紅，
  *    逼清單跟著現況收斂。
  *
  * 7. **產品碼不拿整個 `Conversation`**：`features/` 與 `shared/` 裡從 {@link CONVERSATION_MODULE} import 了 `Conversation` 的檔，
@@ -33,20 +33,7 @@ type Violation = { rule: number; file: string; line: number; spec: string; messa
 type Exception = { file: string; targets: readonly string[]; why: string };
 
 /** 對規則 1、2 的明文豁免：`file` 允許深層 import `targets`（路徑相對 `src/`，不含副檔名）。要等的卡寫在 `why`。 */
-const EXCEPTIONS: readonly Exception[] = [
-  {
-    file: 'shared/right-sidebar/api.ts',
-    targets: [
-      'features/changes/diff',
-      'features/cost/subagent-usage',
-      'features/deliverable/download',
-      'features/deliverable/file',
-      'features/deliverable/view',
-      'features/trace/trajectory-pull',
-    ],
-    why: '右側欄的契約型別直接指向各分頁的資料型別；走入口會讓契約檔跟著載入各切片的元件。等 #2883 的右側欄分頁登記',
-  },
-];
+const EXCEPTIONS: readonly Exception[] = [];
 
 type Zone = { kind: 'slice'; name: string } | { kind: 'app' } | { kind: 'shared' };
 

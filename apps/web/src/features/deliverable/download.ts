@@ -42,7 +42,7 @@
 import type { DeliverableReadError } from '@nexus/wire';
 import { createDeliverableClient } from '@nexus/wire';
 
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { basename } from '@/features/deliverable/present-view';
 
 /** 下載不成的幾種結局；只有 `'error'` 值得再按一次。 */

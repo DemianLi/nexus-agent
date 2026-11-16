@@ -16,7 +16,7 @@ import type {
   DeliverableFileState,
   DeliverableLongLine,
 } from '@/features/deliverable/file';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { axeViolations } from '@/test/axe';
 import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
 import {

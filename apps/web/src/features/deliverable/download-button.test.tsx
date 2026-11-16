@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeliverablesCard } from '@/features/deliverable/card';
 import { createDeliverableDownloader } from '@/features/deliverable/download';
 import { MISSING_REASON, createDeliverableFileStore } from '@/features/deliverable/file';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { axeViolations } from '@/test/axe';
 import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
 import {

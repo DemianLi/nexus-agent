@@ -16,7 +16,7 @@ src/
     ├── connection/      連線核心：會話的狀態、協定、重連
     ├── lib/             不屬於任何一個功能的純邏輯
     ├── markdown/        markdown 的渲染
-    └── right-sidebar/   分頁共用的 context 與版面計算
+    └── right-sidebar/   分頁共用的 context、契約型別與版面計算
 ```
 
 下面這些也算共用層，位置不變：`components/ui/`（registry 元件）、`styles/`、`vendor/`、`test/`，以及被 vendor 檔或 `.github` 釘住路徑的 `lib/utils.ts`、`lib/portal-container.ts`、`lib/theme.ts`、`hooks/use-mobile.ts`。`main.tsx` 算組裝層。
@@ -61,15 +61,12 @@ src/
 
 ### 例外
 
-共用層還有右側欄的一個檔在 import 切片，登記在 `src/architecture.test.ts` 的例外清單。清單只能變短，列了卻沒命中會紅。
-
-| 檔                                                              | 為什麼                                               | 什麼時候拿掉                                                                                       |
-| --------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `shared/right-sidebar/api.ts` | 分頁要的資料來源集中在一個型別裡，用到各分頁的型別   | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「右側欄分頁登記」                  |
+目前沒有例外。要加就得登記在 `src/architecture.test.ts` 的 `EXCEPTIONS`：清單只能變短，列了卻沒命中會紅。
 
 ## 新東西放哪
 
 - **只有一個功能用**：放那個切片。
 - **第二個切片也要用**：下沉到 `shared/`（元件放 `blocks/`，純邏輯放 `lib/`），不要從切片 A 深層 import，也不要為了它讓兩個切片互相 import。
+- **右側欄的新分頁**：它要的資料來源，在自己切片的 `sidebar-tab.tsx` 用 declaration merging 加到 `RightSidebarSources`，由 `app/App.tsx` 提供；`shared/right-sidebar/` 不認得任何切片。
 - **新功能**：開新切片 `features/<名字>/`，加 `index.ts`，在 `app/` 接上。
 - **要認得好幾個切片才寫得出來的**：那是組裝，放 `app/`。

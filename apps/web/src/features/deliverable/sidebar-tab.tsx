@@ -1,3 +1,5 @@
+// 這個切片要右側欄帶給它的資料來源，在這裡補進 `RightSidebarSources`（`app/App.tsx` 組出來）。
+
 import { FileText } from 'lucide-react';
 
 import { useControl } from '@/shared/right-sidebar/context';
@@ -6,7 +8,9 @@ import type { TabBodyProps } from '@/shared/right-sidebar/tab';
 
 import { basename } from './present-view';
 import { DeliverablePreviewTab } from './preview';
-import type { LocatedFile } from './view';
+import type { LocatedFile } from '@/shared/lib/located-file';
+import type { DeliverableDownloader } from './download';
+import type { DeliverableFileStore } from './file';
 
 /** 交付分頁的座標：一個檔一個分頁，不同輪交付的同名檔是兩個分頁。 */
 export type DeliverableSidebarTab = {
@@ -49,3 +53,10 @@ export const DELIVERABLE_TAB = defineTab<DeliverableSidebarTab>({
   Icon: FileText,
   Body: DeliverableBody,
 });
+
+declare module '@/shared/right-sidebar/api' {
+  interface RightSidebarSources {
+    readonly deliverableFiles?: DeliverableFileStore | undefined;
+    readonly deliverableDownload?: DeliverableDownloader | undefined;
+  }
+}
