@@ -5,14 +5,14 @@ import { useMemo, useSyncExternalStore } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { usePlanLibrary } from '@/features/plan/review';
+import { RightSidebarToggle } from '@/app/right-sidebar/right-sidebar';
 import {
   PLAN_TAB_LOCATE_LABEL,
   PLAN_TAB_MISSING_TEXT,
   PLAN_TAB_READ_FAILED_LEAD,
   PLAN_TAB_SCANNING_TEXT,
   PLAN_TAB_STILL_MISSING_TEXT,
-  RightSidebarToggle,
-} from '@/app/right-sidebar/right-sidebar';
+} from '@/features/plan/tab';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import type { WritableConversationStore } from '@/shared/connection/conversation-store';

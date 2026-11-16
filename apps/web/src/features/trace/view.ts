@@ -165,9 +165,6 @@ export function loadsThrough(row: TraceRow): boolean {
   return row.kind === 'call' && row.target === undefined && row.hasContent && !row.loaded;
 }
 
-/** 目標要先往前載入時，載入期間唸的那一句。 */
-export const TRACE_LOCATE_LOADING_TEXT = '正在載入更早的對話，載完就捲過去';
-
 /** 一次模型呼叫沒有正常回來的說法：拋錯、被中止，或被那一輪的時鐘切斷。 */
 export const CALL_OUTCOME_LABEL = {
   error: '失敗',
