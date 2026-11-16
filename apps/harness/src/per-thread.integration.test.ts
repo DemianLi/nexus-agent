@@ -1223,8 +1223,8 @@ describe.skipIf(SUPERVISOR === undefined)(
     );
 
     /**
-     * 外掛的工具：建一個檔、然後不返回。純物件、不 import 任何東西：home 在暫存目錄，從那裡解析不到 `zod` 與 `@langchain/core`。
-     * 檔出現的時候 `tool/call` 已經落盤（工具本體之前先排空這條 thread 的日誌），所以可以看著它殺。
+     * 外掛的工具：建一個檔、然後不返回。純物件、不 import 任何套件（只在執行時載入 node 內建）：home 在暫存目錄，從那裡解析不到 `zod` 與 `@langchain/core`。
+     * 檔出現的時候 `tool/call` 已經落盤（工具本體之前先排空這條 thread 的日誌），所以可以看著它殺（耐久檢查點開著時，預設如此）。
      */
     const HANG_PROBE = [
       'export default {',
@@ -1290,7 +1290,7 @@ describe.skipIf(SUPERVISOR === undefined)(
         // 刪掉它：之後再出現就是續接把工具重跑了。
         rmSync(marker);
 
-        // 前台收到 `down` 會了結這條 thread 所有在等的 `ensure`，所以下一句要等前台處理過舊葉子的 `down`（同上一支）。
+        // 前台收到 `down` 會了結這條 thread 所有在等的 `ensure`，所以下一句要等前台處理過舊葉子的 `down`。
         await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([THREAD]);
         expect(signalPid(killed, 'SIGKILL')).toBe(true);
         await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([]);
@@ -1307,7 +1307,7 @@ describe.skipIf(SUPERVISOR === undefined)(
         downlink.abort();
 
         expect(replies(await turn(client, THREAD, '剛才的暗號是什麼'))).toEqual(['第 1 次回覆']);
-        // 被殺的那一輪：人話、帶著 `hang` 的呼叫、補上的「結果不明」、第二句人話。`tool/call` 落了盤，所以不是「沒開始」。
+        // `tool/call` 落了盤，續接補的是「結果不明」，不是「沒開始」。
         const messages = messagesFor(model, '剛才的暗號是什麼');
         expect(messages.map((message) => message.role)).toEqual([
           'user',
@@ -1321,7 +1321,6 @@ describe.skipIf(SUPERVISOR === undefined)(
         expect(textOf(messages[2]!)).toContain(TOOL_OUTCOME_UNKNOWN_TEXT);
         expect(textOf(messages[2]!)).not.toContain(TOOL_NOT_STARTED_TEXT);
         expect(textOf(messages[3]!)).toContain('剛才的暗號是什麼');
-        // 續接不重進工具。
         expect(existsSync(marker)).toBe(false);
 
         expect(
