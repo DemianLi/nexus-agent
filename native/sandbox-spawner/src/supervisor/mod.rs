@@ -71,7 +71,8 @@
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
 //! `ready`、`bound` 看組合行程的，`bind` 也送給它，`up` 給的是它的 socket；`turn`、閒置、`drain` 走葉子。
-//! 從起組合行程（補葉子時從補的那一刻）到讀到 `ready` 超過 `--start-timeout-ms` 就殺組合行程、整對收（[`Supervisor::check_starts`]）。
+//! 從起組合行程（補葉子時從補的那一刻）到讀到 `ready` 超過 `--start-timeout-ms` 就殺組合行程、整對收（[`Supervisor::check_starts`]）；
+//! 不成對的對話行程從 spawn 起到 `ready` 也是這一個期限，過了殺它自己。
 //! 葉子死了照它的死因回 `down`：上一則 `bind` 回過 `bound`、又是它自己壞掉的，組合行程留著等下一個 `ensure` 補葉子
 //! （留到 `--idle-ms`，名額滿時最先收；補了之後等它替新葉子再回一則 `ready` 才重送 `bind`）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
 //! 被連帶收掉的那一個稽核記 `peer`，不回 `down`、不進死因累計；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也記 `peer`
