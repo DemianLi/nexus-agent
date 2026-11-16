@@ -89,7 +89,7 @@ pub enum Record<'a> {
         reason: &'a str,
     },
     /// 一條 thread 的行程連續失敗，這個窗第一次擋掉它的 `ensure`（[`super::Supervisor::ensure`]）；每個窗只寫一行，不代表被擋的次數。
-    /// 沒有行程結束，所以不是 `role` 那種行。`failures` 是連續第幾次，`wait_ms` 是這個窗的長度。
+    /// 不帶 `exit_code`、`signal`。`failures` 是連續第幾次，`wait_ms` 是這個窗的長度。
     Backoff {
         thread: &'a [u8],
         cause: DeathCause,

@@ -1540,7 +1540,7 @@ impl Supervisor {
 
     /// 一條 thread 失敗了一次。距這條上一次失敗不到忘記時間才算連續，不然從第一次數；忘記時間是 [`args::THREAD_BACKOFF_FORGET`]
     /// 與實際上限兩倍的較大者。第一次不等（加窗會把 #2905 修掉的那次延遲加回來）；第二次起等 `--front-restart-ms`，每次加倍到
-    /// [`args::THREAD_BACKOFF_MAX`]（比 `--front-restart-ms` 大就用前者）。不放棄。`--front-restart-ms 0` 時沒有間隔，也不會加倍。
+    /// [`args::THREAD_BACKOFF_MAX`]（實際上限是兩者較大者）。不放棄。`--front-restart-ms 0` 時沒有間隔，也不會加倍。
     /// 順手清掉過期的；表滿了丟最舊的。
     fn note_thread_failure(&mut self, thread: Vec<u8>, cause: DeathCause, now: Instant) {
         let start = self.thread_backoff_start();
@@ -4568,7 +4568,7 @@ mod tests {
         assert!(supervisor.conversations.is_empty(), "沒有補葉子");
     }
 
-    /// 同上，但這是第一次失敗（沒有窗）：隊伍裡的留著，`serve_pending` 照起，前台重送的 `ensure` 等得到 `up`（#2905 修的行為）。
+    /// 等 `drain` 回答時被排進隊伍的 thread，行程自己死了、這是第一次失敗（沒有窗）：隊伍裡的留著，`serve_pending` 照起。
     #[test]
     fn a_thread_queued_during_a_drain_is_restarted_when_its_first_failure_opens_no_window() {
         let (mut supervisor, _) = with_an_unpaired_starter("tb-19", Some(b"t"), Instant::now());

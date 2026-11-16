@@ -1712,9 +1712,9 @@ fn measure_a_tight_loop_on_a_crashing_pair() {
     measure_a_tight_loop("成對", paired());
 }
 
-/// 量測（#2815）：一條 thread 的行程 `bound` 之後馬上結束（等於 `up` 之後立刻死），前台照量測用的節奏（250–500 毫秒，取中間 375）
+/// 量測（#2815）：一條 thread 的行程 `bound` 之後馬上結束（等於 `up` 之後立刻死），前台照估計的節奏（250–500 毫秒，取中間 375，沒有量過真的前台）
 /// 要、等 `down`、睡、再要，跑 10 秒；只印、斷言只放很鬆的下界。印的是起了幾次 `up`、收到幾則 `down`、稽核幾行
-/// （`down` 比稽核行數多的部分，就是沒起行程、直接回掉的）。
+/// （`down` 次數減 `up` 次數，是被閘回掉的加上起不來的）。
 fn measure_a_web_paced_retry_loop(label: &str, options: Options) {
     let mut h = Harness::start(options);
     let until = Instant::now() + Duration::from_secs(10);

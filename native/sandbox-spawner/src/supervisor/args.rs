@@ -47,11 +47,10 @@ pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_millis(5_000);
 pub const WARM_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
 /// 預熱的行程到過 `ready`、而且活過這麼久才死，下一次補的等待回到 `--front-restart-ms`。兩個條件缺一個都不歸零（[`super::Supervisor::warm_failed`]）。
 pub const WARM_STABLE: Duration = Duration::from_millis(60_000);
-/// 一條 thread 的行程連續失敗時，下一次 `ensure` 之前最多等多久：第一次失敗不等，第二次起從 `--front-restart-ms` 開始、每次加倍到這裡為止
+/// 一條 thread 的行程連續失敗時，下一次 `ensure` 之前最多等多久：第一次失敗不等，第二次起從 `--front-restart-ms` 開始、每次加倍；實際上限是這個值與 `--front-restart-ms` 的較大者
 /// （[`super::Supervisor::note_thread_failure`]）。不開旗標：這是監督行程內部的節流。
 pub const THREAD_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
-/// 同一條 thread 距上一次失敗超過這麼久才再失敗，算第一次。要至少是實際上限的兩倍：退到上限之後用戶端每個上限才拿得到一次起動，
-/// 小於這個間隔的話那一筆會在兩次失敗之間過期，每次都變回第一次（`the_forget_time_is_at_least_twice_the_cap` 釘住預設的上限；
+/// 同一條 thread 距上一次失敗超過這麼久才再失敗，算第一次。要至少是實際上限的兩倍，不然退避長不到上限：那一筆會在兩次失敗之間過期，每次都變回第一次（`the_forget_time_is_at_least_twice_the_cap` 釘住預設的上限；
 /// `--front-restart-ms` 大過 [`THREAD_BACKOFF_MAX`] 時用實際上限的兩倍，見 [`super::Supervisor::note_thread_failure`]）。
 pub const THREAD_BACKOFF_FORGET: Duration = Duration::from_millis(60_000);
 /// 每條 thread 的失敗紀錄最多留幾筆；滿了丟最舊的（那一條等於被原諒一次）。
