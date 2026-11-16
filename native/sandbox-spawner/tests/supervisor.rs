@@ -2280,7 +2280,7 @@ fn conversations_get_the_socket_the_host_binds_only_when_there_is_a_host() {
         host: real_host(),
         ..Options::default()
     });
-    let socket = h.up("a,host-hello");
+    let socket = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&socket).contains(&"host hello".to_string())),
         "{:?}",
@@ -2302,7 +2302,7 @@ fn the_token_travels_only_on_the_control_channel() {
         host: real_host(),
         ..Options::default()
     });
-    let socket = h.up("a,host-hello");
+    let socket = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&socket).contains(&"host hello".to_string())),
         "{:?}",
@@ -2344,7 +2344,7 @@ fn conversations_reach_the_host_and_violations_are_audited_and_quarantined() {
         host: real_host(),
         ..Options::default()
     });
-    let a = h.up("a,host-hello");
+    let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -2436,7 +2436,7 @@ fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
         host: real_host(),
         ..Options::default()
     });
-    let a = h.up("a,host-hello,wait-go,host-hello");
+    let a = h.up("a,host-retry:15000,wait-go,host-hello");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -2652,7 +2652,7 @@ fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf
         extra: vec!["--host-start-failures", start_failures],
         ..Options::default()
     });
-    let a = h.up("a,host-hello");
+    let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
