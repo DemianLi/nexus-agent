@@ -1,6 +1,7 @@
 export { abortedToolLabel } from './aborted';
 export { AttributionBadge, TOOL_STATUS_LABEL, ToolCard } from './card';
 export { MAX_TOKENS_NOTICE } from './max-tokens-view';
+export { dialogToolSummary } from './dialog-summary';
 export { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL, escalationReason } from './sandbox-escalation';
 export {
   type SubagentControl,
