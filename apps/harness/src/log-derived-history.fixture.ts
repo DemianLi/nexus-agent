@@ -68,6 +68,7 @@ import type { ConversationState, Event as WireEvent } from '@nexus/wire';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
+import { openEndpointCollection } from './request-baseline.js';
 import { BaseChatOpenAI } from './base-chat-openai.js';
 import { runCli, runRepl } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -148,6 +149,7 @@ export interface FakeEndpoint {
  * 假 OpenAI 端點。`stream` 為真時一律走 SSE（serve 走的就是串流）；否則照請求本文的 `stream`：CLI 的 native 打串流請求、`langgraph` 打非串流，
  * 回 SSE 或一整包 JSON。
  * 每次回應的 id 都不同（同 id 會被上層當成重複）。
+ * 設了 `NEXUS_REQUEST_BASELINE_OUT` 時，收到的每份 body 也交給請求基準檔錄製。
  */
 export async function fakeEndpoint(
   script: Script,
@@ -155,6 +157,7 @@ export async function fakeEndpoint(
   hold?: (body: Body) => boolean,
 ): Promise<FakeEndpoint> {
   const bodies: Body[] = [];
+  const recorded = openEndpointCollection();
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -168,6 +171,7 @@ export async function fakeEndpoint(
       }
       const index = bodies.length;
       bodies.push(body);
+      recorded?.push(body);
       const reply = script(index, body);
       if (reply.delay !== undefined)
         await new Promise((resolve) => setTimeout(resolve, reply.delay));

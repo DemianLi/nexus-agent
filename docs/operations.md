@@ -726,9 +726,9 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 計劃模式，以及對話——模型歷史從日誌推出來、在第一輪之前灌回模型。**推不出完整歷史的就不灌半截**，
 模型從空的開始，入口會講原因。
 
-**回不來的**：虛擬檔案系統、摘要器的會話歷史檔，以及停在核准點還沒答的那張卡——它們只在 graph state 裡。
+**回不來的**：虛擬檔案系統（含 `/conversation_history/` 底下的檔），以及停在核准點還沒答的那張卡——它們只在 graph state 裡。
 
-**被摘掉的原文回得來**：摘要器的會話歷史檔（`/conversation_history/<會話>.md`）回不來，但原文本來就在會話日誌裡。模型有兩個唯讀工具從日誌讀回：`history_read` 照摘要 `<index>` 裡的條目序號讀那一段的逐字稿（每頁至多 16,000 字元，結尾一行給下一頁的位移），`history_search` 在被摘掉的段落裡做不分大小寫的字面比對。讀的是呼叫者自己那份日誌，子代理讀到的是它自己被摘掉的那幾段。兩樣限制：被外溢層換過的工具結果，日誌裡只有預覽，讀回來的也是預覽；沒接會話日誌的組裝（直接叫 `createNexusAgent`）工具還在，呼叫時回一句「沒有日誌」。`summarization` 那一列關掉時這兩個工具不掛。
+**被摘掉的原文回得來**：原文本來就在會話日誌裡，摘要器不另存一份，摘要訊息的前言指向兩個從日誌讀回的唯讀工具：`history_read` 照摘要 `<index>` 裡的條目序號讀那一段的逐字稿（每頁至多 16,000 字元，結尾一行給下一頁的位移），`history_search` 在被摘掉的段落裡做不分大小寫的字面比對。讀的是呼叫者自己那份日誌，子代理讀到的是它自己被摘掉的那幾段。兩樣限制：被外溢層換過的工具結果，日誌裡只有預覽，讀回來的也是預覽；沒接會話日誌的組裝（直接叫 `createNexusAgent`、沒有另外接日誌）工具還在，呼叫時回一句「沒有日誌」；那種組裝的摘要器照舊把原文寫進 `/conversation_history/session_<id>.md`（`summarization` 那一列的 `historyPathPrefix`），摘要訊息指向那個檔。`summarization` 那一列關掉時這兩個工具不掛。
 
 **工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清；啟動時在背景清一次過期的檔，不擋服務，關機時等它清完）；根目錄寫不進去時退回記憶體暫存並講一聲。
 
@@ -1769,7 +1769,7 @@ nexus-agent serve --process-model per-thread
 
 **只在成對執行時適用**：監督行程起一對（組合行程 `nexus-composition` 加對話行程，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）時，對話行程的命令列多一個 `--pair-socket <路徑>`。沒有這個旗標的對話行程，這一節的東西一行都不會執行（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）。
 
-- **連線與登記**：對話行程連組合行程的橋、驗過之後登記空的 `tools` 與 `hooks`，並替組合行程做 `attach`（綁 thread，`payload` 是 `{ "threadId": … }`）。`attach` 的 result 在 `handler.open` 結束之後才回，組合行程收到才送 `bound`。已綁別條 thread 或 payload 不對時回錯，組合行程不送 `bound`、不重試。
+- **連線與登記**：對話行程連組合行程的橋、驗過之後登記空的 `tools` 與 `hooks`，並替組合行程做 `attach`（綁 thread，`payload` 是 `{ "threadId": … }`）。`attach` 的 result 在 `handler.open` 結束之後才回，組合行程收到才送 `bound`。payload 的 threadId 不是非空字串、或葉子已綁別條 thread 時回錯，組合行程不送 `bound`，自己以 4 結束；監督行程整對收，前台收到 `down`（死因 `crash`，`supervisor-audit.jsonl` 裡組合行程那一行 `exit_code` 是 4）。
 - **前台的連線不走橋**：組合行程聽前台的 `--socket`，原樣轉到對話行程自己聽的 `--socket`。橋斷了，前台流量照通。
 - **橋斷了，對話行程自己結束**：組合行程在葉子斷線後不收同一個葉子重連，留著沒有路能恢復。
   - 還沒 `attach` 成功（沒綁，或 `handler.open` 還在跑）：立刻結束。
@@ -1782,7 +1782,7 @@ nexus-agent serve --process-model per-thread
   | 70     | 橋斷了，對話行程自己結束                                                       |
   | 71     | 20 秒內連不上橋（暫定值），對話行程自己結束；沒有橋就沒有 `attach`，這一對廢了 |
 
-- **已知限制**：橋斷到結束之間，這個對話行程在監督行程眼中仍是活的、仍佔名額；`stopAdmission` 之後進來的新一輪被拒，前台回 `server_closing`（web 照既有的 `SERVER_CLOSING_TEXT` 顯示「伺服器正在重新啟動，這次沒有送出。請稍後再送一次。」），使用者的那個請求失敗，不會被分到別的對話行程。分流在監督行程與組合行程那一側（[#2858](https://github.com/DemianLi/nexus-agent/issues/2858)）。被拒時前台拿到什麼是讀碼的結論，沒有實跑。
+- **已知限制**：橋斷到結束之間，這個對話行程在監督行程眼中仍是活的、仍佔名額；`stopAdmission` 之後進來的新一輪被拒，前台回 `server_closing`（web 照既有的 `SERVER_CLOSING_TEXT` 顯示「伺服器正在重新啟動，這次沒有送出。請稍後再送一次。」），使用者的那個請求失敗，不會被分到別的對話行程。分流在監督行程與組合行程那一側（[#2878](https://github.com/DemianLi/nexus-agent/issues/2878)）。被拒時前台拿到什麼是讀碼的結論，沒有實跑。
 
 ## 用 systemd 常駐
 
@@ -2548,7 +2548,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------ |
 | `repeat-reminder`           | 連續重複同參數呼叫同一個工具時提醒模型                                                                                         | 有（四格）                       | 關得掉                   |
 | `tool-result-pruner`        | 摘要之前先剪掉過長工具結果的中段                                                                                               | 有（三格）                       | 關得掉                   |
-| `summarization`             | 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend                                                                          | 有（四格）                       | 關得掉                   |
+| `summarization`             | 壓力達標時把舊訊息摘要成一則，原文讀不回來時歷史 offload 到 backend                                                                         | 有（四格）                       | 關得掉                   |
 | `observation-policy`        | 先讀後改：沒讀過的檔不准改                                                                                                     | **沒有**                         | 關得掉                   |
 | `model-usage`               | 每一次模型呼叫的 token 帳目記進會話日誌                                                                                        | **沒有**                         | 關得掉                   |
 | `session-checkpoint-policy` | 模型請求與工具動手之前（root 與子代理都是），先把會話日誌排空到磁碟                                                            | **沒有**                         | 關得掉                   |

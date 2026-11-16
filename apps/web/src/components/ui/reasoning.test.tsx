@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { MarkdownText } from '@/components/markdown-text';
+import { MarkdownText } from '@/shared/markdown/text';
 import { Reasoning } from '@/components/ui/reasoning';
 
 afterEach(() => {
@@ -11,7 +11,7 @@ afterEach(() => {
 
 /**
  * SG 的 Reasoning（#1683）。vendor 檔套了兩個 patch（README「本地修改」第 67、68 條），包裝層補中文預設字（第 69 條）。
- * 這裡只驗元件本身；接到推理列之後的行為在 `components/reasoning-row.test.tsx`，畫出來的樣子（箭頭、44px、減少動態、
+ * 這裡只驗元件本身；接到推理列之後的行為在 `shared/blocks/reasoning-row.test.tsx`，畫出來的樣子（箭頭、44px、減少動態、
  * shimmer、`white-space`）在 `guard/` 量。
  */
 

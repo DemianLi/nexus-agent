@@ -71,7 +71,7 @@ describe('可點的元件不縮成小字（#1281）', () => {
 
   test('量具有掃到東西（不是空過）', () => {
     expect(files.length).toBeGreaterThan(80);
-    expect(files.some((f) => f.endsWith('components/row-trigger.tsx'))).toBe(true);
+    expect(files.some((f) => f.endsWith('shared/blocks/row-trigger.tsx'))).toBe(true);
   });
 
   test('判得出跨行的開頭標籤、cn() 的參數、樣板字串與三元；子元素與不可點的元素不算', () => {

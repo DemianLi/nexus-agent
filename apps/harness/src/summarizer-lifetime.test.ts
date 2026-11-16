@@ -1,8 +1,8 @@
 /**
- * 摘要器狀態的壽命：切點與歷史檔的會話名跟著哪一段生命走。
+ * 摘要器狀態的壽命：切點與讀回原文的那份日誌跟著哪一段生命走。
  *
- * - 前景子代理：同型的子代理委派兩次，各是一段生命，身分（去尾的 `checkpoint_ns`，切點跟著它）不同；歷史檔的會話名跟著
- *   同一個身分，每次委派各一份檔、跟 root 的不同。同一步派出的兩次各寫各的檔，回到 root 時兩段都在。
+ * - 前景子代理：同型的子代理委派兩次，各是一段生命，身分（去尾的 `checkpoint_ns`，切點跟著它）不同；每次委派各一份日誌，
+ *   被摘掉的原文只在自己那份裡讀得回來（`recallHistory`、`history_search`），不寫歷史檔。同一步派出的兩次也各讀各的。
  * - 續接：壓縮過、重啟、續接之後又壓縮，新的那次從灌回串的座標算起。
  * - 沒有 checkpointer：切點的壽命等於訊息 state 的壽命。langgraph 沒有 checkpointer 時 invoke 之間 state 不延續；native 的
  *   per-thread state 在實例裡，沒有 checkpointer 也延續。同一張表上留著舊切點、這一次交進來的串比切點短，也不套。
@@ -13,7 +13,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import { SUMMARY_ENTRY_INSTRUCTION, SUMMARY_PROMPT } from '@nexus/core';
+import { recallHistory, SUMMARY_ENTRY_INSTRUCTION, SUMMARY_PROMPT } from '@nexus/core';
 import type { ModelContextLimits, SessionEvent } from '@nexus/core';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -52,6 +52,18 @@ const PAD = '內容'.repeat(100);
 const echo = (id: string, message: string) => ({ id, name: 'echo', args: { message } });
 const summaries = (events: readonly SessionEvent[]) =>
   events.filter((e): e is SessionEvent<'compaction/summary'> => e.type === 'compaction/summary');
+/** 一份日誌裡被摘掉的原文，各段逐字稿接起來；推不下去就紅。 */
+const recalled = (events: readonly SessionEvent[]): string => {
+  const { segments, failure } = recallHistory(events);
+  expect(failure).toBeUndefined();
+  return segments.map((segment) => segment.text).join('\n\n');
+};
+
+/** 子代理的日誌屬於哪次委派：第一則使用者訊息（委派的描述）裡的記號。 */
+const markOfLog = (events: readonly SessionEvent[]): string | undefined =>
+  /CHILD-[A-Z]/.exec(
+    JSON.stringify(events.find((e) => e.type === 'user/message')?.data ?? ''),
+  )?.[0];
 
 /** 請求屬於誰：第一則使用者訊息（摘要過的話是摘要）裡的記號。 */
 const markerOf = (body: Body): string => {
@@ -64,7 +76,7 @@ const markerOf = (body: Body): string => {
 };
 
 describe('前景子代理：每次委派各一段生命', () => {
-  it('同型子代理連兩次前景委派：兩份日誌、身分不同、各自摘要；歷史檔各一份、跟 root 的不同', async () => {
+  it('同型子代理連兩次前景委派：兩份日誌、身分不同、各自摘要；被摘掉的原文各在自己的日誌裡', async () => {
     const counters = new Map<string, number>();
     const child = (mark: string, k: number): Reply => {
       if (k <= 2) return { tools: [echo(`call_${mark}${String(k)}`, `小${String(k)}${PAD}`)] };
@@ -90,7 +102,7 @@ describe('前景子代理：每次委派各一段生命', () => {
       // 委派的描述要夠長：摘要加上框架之後必須比它取代的那一段小（#1396），root 被取代的只有這兩次委派。
       if (k === 0) return task('call_ta', `CHILD-A 做事${PAD}${PAD}`);
       if (k === 1) return task('call_tb', `CHILD-B 做事${PAD}${PAD}`);
-      // root 自己也摘要一次，才有它的歷史檔可比。
+      // root 自己也摘要一次，才有它被摘掉的原文可比。
       if (k === 2) return { tools: [echo('call_root_big', '根'.repeat(10_000))] };
       if (k === 3) return { tools: [echo('call_root_after', '根之後')] };
       return {};
@@ -123,21 +135,30 @@ describe('前景子代理：每次委派各一段生命', () => {
     expect(new Set(ids).size, `子代理身分：${ids.join(', ')}`).toBe(2);
     expect(ids).not.toContain(rootLogOf(run).id);
 
-    const filePaths = children.map((log) => {
-      const found = summaries(log.events);
-      expect(found.length, `${log.id} 應該摘要過`).toBeGreaterThan(0);
-      return found.at(-1)!.data.filePath;
-    });
-    expect(filePaths.every((path) => typeof path === 'string')).toBe(true);
-    expect(new Set(filePaths).size, `歷史檔：${filePaths.join(', ')}`).toBe(2);
-    const rootSummaries = summaries(rootLogOf(run).events);
-    expect(rootSummaries.length, 'root 應該摘要過').toBeGreaterThan(0);
-    expect(filePaths).not.toContain(rootSummaries.at(-1)!.data.filePath);
+    const rootEvents = rootLogOf(run).events;
+    for (const events of [...children.map((log) => log.events), rootEvents]) {
+      const found = summaries(events);
+      expect(found.length, '每一份日誌都應該摘要過').toBeGreaterThan(0);
+      // 接了日誌：原文從日誌讀回，不寫歷史檔。
+      expect(found.map((e) => e.data.filePath)).toEqual(found.map(() => null));
+    }
+    // 每次委派被摘掉的原文只在它自己的日誌裡：從它的委派描述起頭，不含另一次的記號。
+    expect(children.map((log) => markOfLog(log.events)).sort()).toEqual(['CHILD-A', 'CHILD-B']);
+    for (const log of children) {
+      const mark = markOfLog(log.events)!;
+      const text = recalled(log.events);
+      expect(text.startsWith(`User: ${mark} 做事`), `${log.id}：${text.slice(0, 80)}`).toBe(true);
+      expect(text).toContain('回聲：小1');
+      expect(text).not.toContain(mark === 'CHILD-A' ? 'CHILD-B' : 'CHILD-A');
+    }
+    // root 被摘掉的是兩次委派本身，子代理裡面的步驟不在 root 的日誌裡。
+    const rootText = recalled(rootEvents);
+    expect(rootText).toContain('Tool result (task): CHILD-A 完成。');
+    expect(rootText).toContain('Tool result (task): CHILD-B 完成。');
+    expect(rootText).not.toContain('回聲：小');
 
     for (const log of children) {
-      const mark = /CHILD-[A-Z]/.exec(
-        JSON.stringify(log.events.find((e) => e.type === 'user/message')?.data ?? ''),
-      )?.[0];
+      const mark = markOfLog(log.events);
       const verdicts = await compareToLog(
         log.events,
         run.mainBodies.filter((body) => markerOf(body) === mark),
@@ -147,7 +168,7 @@ describe('前景子代理：每次委派各一段生命', () => {
   }, 180_000);
 });
 
-describe('前景子代理：歷史檔每次委派各一份', () => {
+describe('前景子代理：被摘掉的原文每次委派各一份', () => {
   /** 一個子代理：第一句帶暗號，接著撐到摘要，摘要之後再一步收尾。 */
   const child = (mark: string, k: number): Reply => {
     if (k === 0) return { tools: [echo(`call_${mark}0`, `暗號-${mark}${PAD}`)] };
@@ -190,7 +211,7 @@ describe('前景子代理：歷史檔每次委派各一份', () => {
       ].join('\n'),
     );
 
-  it('同一步派兩次同型前景委派：兩段歷史都留在 root 的 backend 上', async () => {
+  it('同一步派兩次同型前景委派：各自被摘掉的原文只在自己的日誌裡讀得回來', async () => {
     const counters = new Map<string, number>();
     const script: Script = (_index, body) => {
       if (!isMainCall(body)) return summaryOf(body);
@@ -200,36 +221,25 @@ describe('前景子代理：歷史檔每次委派各一份', () => {
       if (mark !== 'ROOT') return child(mark, k);
       if (k === 0)
         return { tools: [task('call_ta', 'CHILD-A 做事'), task('call_tb', 'CHILD-B 做事')] };
-      if (k === 1)
-        return {
-          tools: [
-            { id: 'call_ls', name: 'ls', args: { path: '/conversation_history' } },
-            {
-              id: 'call_grep',
-              name: 'grep',
-              args: { pattern: '暗號-CHILD-', path: '/conversation_history' },
-            },
-          ],
-        };
       return {};
     };
     const run = await serve(script, '同一步派兩次');
 
     const children = childLogsOf(run);
     expect(children.length).toBe(2);
-    for (const log of children)
-      expect(summaries(log.events).length, `${log.id} 應該摘要過`).toBeGreaterThan(0);
-    const results = toolResults(rootLogOf(run).events);
-    const listing = results.find((text) => text.includes('call_ls')) ?? results.join('\n');
-    // backend 上的鍵就是歷史檔路徑：每次委派一個 `session_<8hex>.md`。
-    const keys = new Set(listing.match(/\/conversation_history\/session_[0-9a-f]{8}\.md/g) ?? []);
-    expect(keys.size, `root 的 /conversation_history：${listing}`).toBe(2);
-    const grep = results.find((text) => text.includes('call_grep')) ?? results.join('\n');
-    expect(grep).toContain('暗號-CHILD-A');
-    expect(grep).toContain('暗號-CHILD-B');
+    expect(children.map((log) => markOfLog(log.events)).sort()).toEqual(['CHILD-A', 'CHILD-B']);
+    for (const log of children) {
+      const found = summaries(log.events);
+      expect(found.length, `${log.id} 應該摘要過`).toBeGreaterThan(0);
+      expect(found.map((e) => e.data.filePath)).toEqual(found.map(() => null));
+      const mark = markOfLog(log.events)!;
+      const text = recalled(log.events);
+      expect(text).toContain(`回聲：暗號-${mark}`);
+      expect(text).not.toContain(`暗號-${mark === 'CHILD-A' ? 'CHILD-B' : 'CHILD-A'}`);
+    }
   }, 180_000);
 
-  it('同型前景委派兩次：第二次的歷史檔不含第一次的暗號', async () => {
+  it('同型前景委派兩次：第二次用 history_search 只搜得到自己的暗號', async () => {
     const counters = new Map<string, number>();
     const script: Script = (_index, body) => {
       if (!isMainCall(body)) return summaryOf(body);
@@ -241,12 +251,15 @@ describe('前景子代理：歷史檔每次委派各一份', () => {
         if (k === 1) return { tools: [task('call_tb', 'CHILD-B 做事')] };
         return {};
       }
-      if (mark === 'CHILD-B' && k === 4) {
-        // 摘要過的串裡有那句「完整歷史存在 <路徑>」：照它讀回自己的歷史檔。
-        const path = /saved to (\S+?\.md)/.exec(JSON.stringify(body.messages))?.[1];
-        if (path !== undefined)
-          return { tools: [{ id: 'call_read', name: 'read_file', args: { file_path: path } }] };
-      }
+      // 摘要過的串裡有指向讀回工具的那句前言：照它在自己被摘掉的原文裡搜兩次委派共用的暗號前綴。
+      if (
+        mark === 'CHILD-B' &&
+        k === 4 &&
+        JSON.stringify(body.messages).includes('Originals also stay in the session log')
+      )
+        return {
+          tools: [{ id: 'call_search', name: 'history_search', args: { query: '暗號-CHILD-' } }],
+        };
       return child(mark, mark === 'CHILD-B' && k > 4 ? k - 1 : k);
     };
     const run = await serve(script, '派兩次');
@@ -257,10 +270,10 @@ describe('前景子代理：歷史檔每次委派各一份', () => {
       ),
     );
     expect(second, '找不到第二次委派的日誌').toBeDefined();
-    const read = toolResults(second!.events).find((text) => text.includes('call_read'));
-    expect(read, '第二次委派沒有讀到自己的歷史檔').toBeDefined();
-    expect(read).toContain('暗號-CHILD-B');
-    expect(read).not.toContain('暗號-CHILD-A');
+    const search = toolResults(second!.events).find((text) => text.includes('call_search'));
+    expect(search, '第二次委派沒有搜過自己被摘掉的原文').toBeDefined();
+    expect(search).toContain('暗號-CHILD-B');
+    expect(search).not.toContain('暗號-CHILD-A');
   }, 180_000);
 });
 

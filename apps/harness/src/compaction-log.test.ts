@@ -13,12 +13,12 @@
  * 而且**不能拿模型被叫幾次當判準**——判準一律放在日誌內容上。
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { fromLoggedMessage, SessionLog, SessionRegistry } from '@nexus/core';
+import { fromLoggedMessage, recallHistory, SessionLog, SessionRegistry } from '@nexus/core';
 import type { AgentLoopKind, PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -55,13 +55,10 @@ interface RunResult {
   /** 有的 `invoke` 拋了（模型那一輪故意失敗）：丟出來的錯誤訊息，照呼叫順序。 */
   readonly failures: readonly string[];
   readonly subagents: CompactionSummary[][];
-  /** backend 的根，用來核對 `filePath` 指到的檔真的在。 */
+  /** backend 的根（工作區目錄），用來核對歷史檔沒落在磁碟上。 */
   readonly backendRoot: string;
-  /** 模型每一輪讀到的 prompt。摘要訊息寫不寫出歷史路徑，從這裡看。 */
+  /** 模型每一輪讀到的 prompt。模型收沒收到摘要、摘要的前言指向哪裡，從這裡看。 */
   readonly prompts: readonly (readonly BaseMessage[])[];
-  /** 同一個 backend 與 checkpointer：歷史在 graph state 裡（#348），要讀回得接同一個 thread。 */
-  readonly backend: ContainedFilesystemBackend;
-  readonly saver: MemorySaver;
   /** 最後一次 `invoke` 之後 root thread 的 `state.messages`（`getState`，兩個 loop 都有）。 */
   readonly messages: readonly BaseMessage[];
   /** 同一刻 root thread 的 `state.files`：路徑對到內容。 */
@@ -85,6 +82,11 @@ async function run(
     tolerateFailures?: boolean;
     /** 省略就照設定檔（`vitest.native.config.ts` 換成 native）。 */
     agentLoop?: AgentLoopKind;
+    /**
+     * 為真時每一句先照回合驅動層的樣子記一筆 `turn/start`：`invoke` 自己不寫它（寫它的是 runRepl／pump），少了它日誌推不出
+     * 歷史，`recallHistory` 會停在第一顆摘要（`compaction-misaligned`）。
+     */
+    logTurns?: boolean;
   } = {},
 ): Promise<RunResult> {
   const backendRoot = await mkdtemp(join(tmpdir(), 'nexus-compaction-'));
@@ -106,8 +108,10 @@ async function run(
   let files: RunResult['files'] = {};
   try {
     for (let index = 0; index < (options.invocations ?? 1); index += 1) {
+      const text = `第 ${index + 1} 句。${USER_PAD}`;
+      if (options.logTurns === true) sessions.root.append('turn/start', { kind: 'message', text });
       try {
-        await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${USER_PAD}`), {
+        await agent.invoke(toAgentInvocation(text), {
           configurable: { thread_id: ROOT_ID },
         });
       } catch (error) {
@@ -135,8 +139,6 @@ async function run(
     failures,
     backendRoot,
     prompts: model.prompts,
-    backend,
-    saver,
     messages,
     files,
     root: compactionsOf(rootEvents),
@@ -222,58 +224,40 @@ describe('壓縮發生時，日誌裡留得下來', () => {
   });
 
   /**
-   * `filePath` 要指到 backend 裡真的存在的那個檔，不是一個看起來像路徑的字串。
+   * **接了日誌時，被摘掉的原文從日誌讀回，不另存歷史檔。** 每一筆的 `filePath` 是 `null`；thread 的 `files` 與工作區目錄都沒有
+   * 歷史檔；模型收到的摘要前言指向讀回工具，不指向任何路徑。原文在日誌裡：`recallHistory` 推出來的段落一筆摘要一段，
+   * 第一段從第一句使用者訊息逐字起頭。
    *
-   * **langgraph 從模型那一側讀回來**：另一個 agent 接同一個 thread，照日誌記的路徑 `read_file`。那一格在 graph state 裡（#348），
-   * 而「模型照摘要那句話讀得到」本來就是這個路徑存在的理由。`summarization: false` 讓這一輪不再壓一次——壓了的話摘要那次呼叫會吃掉
-   * 讀檔那一回合。
-   *
-   * **native 讀同一個 agent 那條 thread 的 `files`**：沒有 checkpointer，state 只在那個 agent 的快取裡，另一個 agent 看不到。
-   * 歷史那一格路由時剝掉了前綴，所以對的是檔名。
+   * native 沒有 checkpointer，`files` 讀的是同一個 agent 快取裡那條 thread；langgraph 讀 checkpoint。歷史那一格路由時剝掉了
+   * 前綴（`agent-factory.ts` 的 `withConversationHistory`），所以對的是檔名。
    */
   it.each(['langgraph', 'native'] as const)(
-    '`filePath` 指到的檔真的寫出來了（%s）',
+    '接了日誌：`filePath` 是 null、沒有歷史檔，原文從日誌讀得回來（%s）',
     async (agentLoop) => {
-      const { root, backend, saver, files } = await run(chatter(), {
+      const { root, rootEvents, files, prompts, backendRoot } = await run(chatter(), {
         summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
         invocations: 12,
         agentLoop,
+        logTurns: true,
       });
 
-      const path = root[0]?.filePath;
-      expect(path).toMatch(/^\/conversation_history\//);
-      if (agentLoop === 'native') {
-        const name = path!.slice(path!.lastIndexOf('/'));
-        const stored = Object.entries(files).find(([key]) => key.endsWith(name))?.[1]?.content;
-        expect(Array.isArray(stored) ? stored.join('\n') : String(stored)).toContain(
-          'Summarized at',
-        );
-        return;
+      expect(root.length).toBeGreaterThan(0);
+      for (const record of root) expect(record.filePath).toBeNull();
+      expect(Object.keys(files).filter((key) => /session_[0-9a-f]+\.md$/.test(key))).toEqual([]);
+      expect(await readdir(backendRoot)).not.toContain('conversation_history');
+      const summaries = prompts.flatMap((prompt) =>
+        prompt.filter((message) => message.additional_kwargs.lc_source === 'summarization'),
+      );
+      expect(summaries.length).toBeGreaterThan(0);
+      for (const summary of summaries) {
+        expect(summary.text).toContain('Originals also stay in the session log');
+        expect(summary.text).not.toContain('/conversation_history/');
       }
 
-      const reader = new ScriptedChatModel({
-        turns: [
-          { content: '', toolCalls: [{ name: 'read_file', args: { file_path: path, limit: 5 } }] },
-          { content: '讀完了。' },
-        ],
-      });
-      const { agent, dispose } = await createNexusAgent({
-        model: reader,
-        backend,
-        checkpointer: saver,
-        agentLoop: 'langgraph',
-        plugins: [],
-        summarization: false,
-      });
-      try {
-        await agent.invoke(toAgentInvocation('讀一下之前的歷史。'), {
-          configurable: { thread_id: ROOT_ID },
-        });
-      } finally {
-        await dispose();
-      }
-      const read = reader.lastPrompt.filter((message) => message.getType() === 'tool').at(-1);
-      expect(read?.text).toContain('Summarized at');
+      const { segments, failure } = recallHistory(rootEvents);
+      expect(failure).toBeUndefined();
+      expect(segments).toHaveLength(root.length);
+      expect(segments[0]!.text.startsWith(`User: 第 1 句。${USER_PAD}`)).toBe(true);
     },
   );
 
@@ -381,9 +365,9 @@ describe('subagent 那側', () => {
 /**
  * **摘要記不進去，這次摘要不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：照 dsh 自動壓縮的 pressure 路徑
  * （`compaction-basic/src/index.ts:163-173`），記 warn、這一輪照原樣繼續。真的跑一整場：只讓 `compaction/summary` 寫不進去，
- * 其餘照真的寫——門檻每次都到、每次都摘不成，整場照樣跑完，模型一次都沒收到摘要，歷史檔一次都沒寫出路徑。
+ * 其餘照真的寫——門檻每次都到、每次都摘不成，整場照樣跑完，模型一次都沒收到摘要。
  *
- * 以前這一格釘的是相反的事（記不進去吞掉、摘要照樣生效），那就是日誌與模型看到的分家。
+ * 記不進去卻讓摘要照樣生效的話，日誌與模型看到的就分家了。
  */
 describe('日誌寫不進去的時候', () => {
   it('compaction/summary 拋了：那一輪照樣跑完，模型沒收到摘要，日誌也沒有', async () => {
@@ -410,13 +394,10 @@ describe('日誌寫不進去的時候', () => {
       expect(attempts).toBeGreaterThan(0);
       expect(root).toEqual([]);
       expect(rootEvents.some((event) => event.type === 'compaction/summary')).toBe(false);
-      // 模型一次都沒收到摘要：摘要訊息只有在 offload 寫成功時才寫出路徑（基座 `buildSummaryMessage` 看 `filePath`），
-      // 而歷史檔在暫存層等「有沒有生出摘要」才提交（#1389）。
+      // 模型一次都沒收到摘要：沒有任何一則 prompt 帶著換上去的摘要訊息。
       expect(
         prompts.some((prompt) =>
-          prompt.some((message) =>
-            message.text.includes('has been saved to /conversation_history/'),
-          ),
+          prompt.some((message) => message.additional_kwargs.lc_source === 'summarization'),
         ),
       ).toBe(false);
       // 整場跑完：每一次呼叫都有起訖。
@@ -487,13 +468,14 @@ describe('摘要事件的位置與內容（#1301）', () => {
     expect(seen).toEqual(
       messages.slice(last.cutoffIndex, last.cutoffIndex + seen.length).map((m) => m.id),
     );
-    expect(typeof last.filePath).toBe('string');
+    // 接了日誌：原文從日誌讀回，這一筆沒有歷史檔。
+    expect(last.filePath).toBeNull();
   });
 
   /**
    * **摘要之後模型那一輪失敗：事件已經記下，下一次呼叫從那一筆接著，不從原始的串重摘**（[#1390](https://github.com/DemianLi/nexus-agent/issues/1390)）。
    *
-   * 失敗那輪模型沒回來。切點若只在呼叫回來後才落，下一次呼叫會從沒摘要過的串再摘一次，日誌緊接著第二筆、歷史檔疊一份重複的區段；
+   * 失敗那輪模型沒回來。切點若只在呼叫回來後才落，下一次呼叫會從沒摘要過的串再摘一次，日誌緊接著第二筆、同一段原文被摘兩次；
    * 切點在日誌寫進去的同一刻落在切點表，下一次呼叫直接拿那份摘要送出去，沒有第二次摘要。後面照常門檻到了再摘（切點接著第一筆往後走，由「單調」那條管）。
    * 重放那一頭在 `packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史。
    */

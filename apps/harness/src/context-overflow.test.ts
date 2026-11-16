@@ -22,8 +22,13 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseChatModelParams } from '@langchain/core/language_models/chat_models';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { deriveSessionStats, SessionRegistry, SUMMARY_ENTRY_INSTRUCTION } from '@nexus/core';
-import type { SessionEvent, SummarizationSettings } from '@nexus/core';
+import {
+  deriveSessionStats,
+  recallHistory,
+  SessionRegistry,
+  SUMMARY_ENTRY_INSTRUCTION,
+} from '@nexus/core';
+import type { RecalledHistory, SessionEvent, SummarizationSettings } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -34,6 +39,17 @@ import { toAgentInvocation } from './messages.js';
  * 墊到比摘要框架大，這一檔才走得到「摘要真的提交」那條路。
  */
 const PAD = '內容'.repeat(60);
+
+/**
+ * 前 `count` 句一問一答的逐字稿，`recallHistory` 渲染的樣子：使用者句墊兩份（{@link runUntilThrow}），回話墊一份
+ * （{@link ThrowingChatModel}），回話的序號就是呼叫次數——溢出之前每句只叫一次模型。
+ */
+const transcript = (count: number): string =>
+  Array.from(
+    { length: count },
+    (_, index) =>
+      `User: 第 ${index + 1} 句。${PAD}${PAD}\n\nAssistant: 第 ${index + 1} 次回話。${PAD}`,
+  ).join('\n\n');
 
 interface ThrowingState {
   calls: number;
@@ -122,7 +138,10 @@ async function runUntilThrow(
 ): Promise<{
   rejected: unknown;
   calls: number;
-  historyFiles: string[];
+  /** 每一筆 `compaction/summary` 的 `filePath`，照日誌順序。 */
+  filePaths: (string | null)[];
+  /** 從日誌讀回的、被摘掉的原文（`recallHistory`）。 */
+  recalled: RecalledHistory;
   events: readonly SessionEvent[];
 }> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-overflow-'));
@@ -144,7 +163,10 @@ async function runUntilThrow(
   try {
     for (let index = 0; index < invocations; index += 1) {
       // 使用者句墊兩份：框好的摘要（含索引）要比被取代的那一段小（#1396），第一次摘要取代的只有這一問一答。
-      await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${PAD}${PAD}`), {
+      const text = `第 ${index + 1} 句。${PAD}${PAD}`;
+      // `invoke` 自己不寫 `turn/start`（寫它的是 runRepl／pump），少了它日誌推不出歷史，這裡照它的樣子先記人話。
+      sessions.root.append('turn/start', { kind: 'message', text });
+      await agent.invoke(toAgentInvocation(text), {
         configurable: { thread_id: 'overflow' },
       });
     }
@@ -154,14 +176,11 @@ async function runUntilThrow(
     detach();
     await dispose();
   }
-  // 摘要真的寫出了歷史：看日誌上那顆 `compaction/summary` 的 `filePath`（`null` ＝ 沒寫成功）。
-  // 以前讀的是工作區裡的 `conversation_history/`，#348 之後歷史不落在那裡了。
   const events = sessions.root.events;
-  const historyFiles = events
+  const filePaths = events
     .filter((event) => event.type === 'compaction/summary')
-    .map((event) => (event.data as { filePath: string | null }).filePath)
-    .filter((path): path is string => path !== null);
-  return { rejected, calls: model.calls, historyFiles, events };
+    .map((event) => (event.data as { filePath: string | null }).filePath);
+  return { rejected, calls: model.calls, filePaths, recalled: recallHistory(events), events };
 }
 
 describe('供應商回上下文溢出', () => {
@@ -172,7 +191,7 @@ describe('供應商回上下文溢出', () => {
    * 這條綠 ＝ 錯誤真的沿著 `cause` 鏈到得了 `isContextOverflow`，基座的緊急摘要接住了它。
    */
   it('拋 ContextOverflowError → 整場活下來，而且真的摘要了一次', async () => {
-    const { rejected, calls, historyFiles } = await runUntilThrow(
+    const { rejected, calls, filePaths, recalled } = await runUntilThrow(
       new ContextOverflowError('Input exceeded the model context window.'),
       4,
       4,
@@ -181,8 +200,11 @@ describe('供應商回上下文溢出', () => {
     expect(rejected).toBeNull();
     // 第 4 次拋掉，恢復又叫了至少一次（產摘要）＋ 重試那一次。
     expect(calls).toBeGreaterThan(4);
-    // 摘要真的落了地——「活下來」若是靠別的路徑，這裡會是空的。
-    expect(historyFiles.length).toBeGreaterThan(0);
+    // 摘要真的生效了：被摘掉的前三問三答在日誌裡逐字讀得回來——「活下來」若是靠別的路徑，這裡會是空的。
+    expect(recalled.failure).toBeUndefined();
+    expect(recalled.segments.map((segment) => segment.text)).toEqual([transcript(3)]);
+    // 接了日誌，原文從日誌讀回，不另寫歷史檔。
+    expect(filePaths).toEqual([null]);
   });
 
   /**
@@ -251,10 +273,11 @@ describe('供應商回上下文溢出', () => {
     const buried = new Error('400 Bad Request', {
       cause: new ContextOverflowError('Input exceeded the model context window.'),
     });
-    const { rejected, historyFiles } = await runUntilThrow(buried, 4, 4);
+    const { rejected, recalled } = await runUntilThrow(buried, 4, 4);
 
     expect(rejected).toBeNull();
-    expect(historyFiles.length).toBeGreaterThan(0);
+    expect(recalled.failure).toBeUndefined();
+    expect(recalled.segments.map((segment) => segment.text)).toEqual([transcript(3)]);
   });
 });
 
@@ -267,8 +290,8 @@ describe('供應商回上下文溢出', () => {
  * 對照是預算層合成的超窗（上面「尾巴蓋住全部」那條）：我們自己的門檻到了不繞過保留量。
  */
 describe('端點超窗：retain 0', () => {
-  it('尾巴蓋住全部時端點回超窗：仍然摘要一次，歷史檔落了地，整場活下來', async () => {
-    const { rejected, calls, historyFiles, events } = await runUntilThrow(
+  it('尾巴蓋住全部時端點回超窗：仍然摘要一次，被摘掉的原文讀得回來，整場活下來', async () => {
+    const { rejected, calls, recalled, events } = await runUntilThrow(
       new ContextOverflowError('Input exceeded the model context window.'),
       4,
       4,
@@ -280,8 +303,10 @@ describe('端點超窗：retain 0', () => {
     expect(rejected).toBeNull();
     // 三次正常、溢出一次、摘要兩次（索引條目、現況）、摘要之後重送一次。
     expect(calls).toBe(7);
-    expect(historyFiles.length).toBeGreaterThan(0);
     expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(1);
+    // 只留最新一則：第 4 句之前的三問三答都被摘掉，逐字讀得回來。
+    expect(recalled.failure).toBeUndefined();
+    expect(recalled.segments.map((segment) => segment.text)).toEqual([transcript(3)]);
   });
 });
 
@@ -292,7 +317,7 @@ describe('端點超窗：retain 0', () => {
  */
 describe('尾巴蓋住全部', () => {
   it('訊息數門檻到了、沒有可摘的東西：模型只被叫 4 次，日誌上沒有壓縮事件', async () => {
-    const { rejected, calls, events, historyFiles } = await runUntilThrow(
+    const { rejected, calls, events, recalled } = await runUntilThrow(
       null,
       0,
       4,
@@ -302,7 +327,7 @@ describe('尾巴蓋住全部', () => {
     );
     expect(rejected).toBeNull();
     expect(calls).toBe(4);
-    expect(historyFiles).toEqual([]);
+    expect(recalled).toEqual({ segments: [] });
     expect(events.filter((event) => event.type === 'compaction/summary')).toEqual([]);
   });
 });

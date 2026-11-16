@@ -60,7 +60,7 @@
  *   （摘要很長，量 375 寬往左裁）、夾在一段打開的工具段裡的一列（`StepList` 的 `--panel` 上）。量字的對比（頁面與 `--panel` 兩種底、
  *   「思考中」的漸層與減少動態時停住的那一格）、焦點、AX 樹、箭頭、44px、shimmer、`white-space`；三塊各包一層 `data-guard-reasoning`
  *   （`done`、`running`、`panel`）。
- * - `?overlay=turn-status` 畫產品的狀態列（`StatusLine`，#1684）：就緒、執行中、等你回答三種各一列，寬度與左右留白同 `App.tsx`
+ * - `?overlay=turn-status` 畫產品的狀態列（`StatusLine`，#1684）：就緒、執行中、等你回答三種各一列，寬度與左右留白同 `app/App.tsx`
  *   （最寬 42rem、左右 24px）。執行中那一列是 SG 的 `TurnStatus`，帶經過時間（server 時鐘樣本在載入時補一次、這一輪 75 秒前開始）；
  *   三塊各包一層 `data-guard-status`（`idle`、`running`、`awaiting`）。`&only=running` 只畫執行中那一列（量 AX 樹、live region）。
  *   執行中那一列的 activity 由 `window.__setTurnActivity('thinking' | 'searching' | 'running' | 'writing')` 換；
@@ -69,7 +69,7 @@
  *   fetch，路徑故意很長）；測試再點開審查頁與選檔器。量 `+`／`−` 在四種底上的對比、算出來的顏色是 `--success`／`--destructive`（第 75 條）、
  *   375 寬不被擠（第 76 條）；三塊各包一層 `data-guard-diffstats`（`page`、`panel`、`changes`）。
  * - `?overlay=transcript-rows` 畫對話流裡用到 SG `DotLoader`／`Empty` 的三種列（#1695 PR A）：輪尾的重試提示、往前翻的待命／讀取中／
- *   失敗三格（各包一層 `data-guard-pager`，寬度同 `App.tsx` 的對話欄，最寬 42rem），一格按得動的往前翻（`live`：按下去讀取
+ *   失敗三格（各包一層 `data-guard-pager`，寬度同 `app/App.tsx` 的對話欄，最寬 42rem），一格按得動的往前翻（`live`：按下去讀取
  *   300ms 再回到待命），以及空白畫面。量字的對比、焦點、點的大小與顏色、減少動態時停住，待命、讀取中與 `live` 一樣高。
  * - `?overlay=transcript-refs` 畫產品的 `Transcript`（#1695 PR B）：一則人話帶兩個會話引用（`@部署腳本除錯` 能點、`@月報` 不能點）、
  *   一則壓縮標記與一則決定紀錄（置中的 chip），前面墊幾輪對話讓它捲得動（捲到底的鈕）；底下一條斷線中的狀態列（「立刻重連」）
@@ -130,47 +130,51 @@ import { toast } from 'sonner';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
-import { AgentMentionChip } from '@/components/agent-mention-chip';
-import { ApprovalCard } from '@/components/approval-card';
-import { ArchivedBanner } from '@/components/archived-banner';
-import { CompactionRow } from '@/components/compaction-row';
-import { EarlierPager } from '@/components/earlier-pager';
-import type { EarlierHistory } from '@/components/earlier-pager';
-import { DelegatedChip } from '@/components/delegated-chip';
-import { EmptyHero } from '@/components/empty-hero';
-import { SessionUsage } from '@/components/cost/session-usage';
-import { Composer } from '@/components/composer';
-import { ContextMeter } from '@/components/context-meter';
-import { PendingSwap } from '@/components/pending-swap';
-import { PlanChip } from '@/components/plan/chip';
-import { PlanReviewPanel, PlanToolCard } from '@/components/plan/review';
-import { GoalBar } from '@/components/goal-bar';
-import { QuestionPanel } from '@/components/question-panel';
-import { QueueDock } from '@/components/queue-dock';
-import { ReasoningRow } from '@/components/reasoning-row';
-import { SessionReferenceContext } from '@/components/session-reference';
-import { StatusLine } from '@/components/status-line';
-import { RetryNotice } from '@/components/retry-notice';
-import { Surface } from '@/components/surface';
-import { TodoPanel } from '@/components/todo/panel';
-import { Transcript } from '@/components/transcript';
-import { ToolCard } from '@/components/tool/card';
-import { SubagentControlContext } from '@/components/tool/subagent-control';
-import type { SubagentControl } from '@/components/tool/subagent-control';
-import { ToolRun } from '@/components/tool-run';
+import { AgentMentionChip } from '@/features/composer/agent-mention-chip';
+import { ApprovalCard } from '@/features/approval/card';
+import { ArchivedBanner } from '@/features/threads/archived-banner';
+import { CompactionRow } from '@/shared/blocks/compaction-row';
+import { EarlierPager } from '@/features/transcript/earlier-pager';
+import type { EarlierHistory } from '@/features/transcript/earlier-pager';
+import { DelegatedChip } from '@/shared/blocks/delegated-chip';
+import { EmptyHero } from '@/features/transcript/empty-hero';
+import { SessionUsage } from '@/features/cost/session-usage';
+import { Composer } from '@/features/composer/composer';
+import { ContextMeter } from '@/features/cost/context-meter';
+import { PendingSwap } from '@/features/status/pending-swap';
+import { PlanChip } from '@/features/plan/chip';
+import { PlanReviewPanel, PlanToolCard } from '@/features/plan/review';
+import { GoalBar } from '@/features/goal/bar';
+import { QuestionPanel } from '@/features/question/panel';
+import { QueueDock } from '@/features/queue/dock';
+import { ReasoningRow } from '@/shared/blocks/reasoning-row';
+import { SessionReferenceContext } from '@/features/transcript/session-reference';
+import { StatusLine } from '@/features/status/line';
+import { RetryNotice } from '@/features/transcript/retry-notice';
+import { Surface } from '@/shared/blocks/surface';
+import { TodoPanel } from '@/features/tool/todo-panel';
+import { Transcript } from '@/features/transcript/transcript';
+import { ToolCard } from '@/features/tool/card';
+import { SubagentControlContext } from '@/features/tool/subagent-control';
+import type { SubagentControl } from '@/features/tool/subagent-control';
+import { ToolRun } from '@/features/transcript/tool-run';
 import {
   MessageScroller,
   MessageScrollerContent,
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
-import { createChangesStores } from '@/lib/changes-diff';
-import type { LocatedFile } from '@/lib/deliverables-view';
-import { PARTIAL_OUTPUT_HEADING, SUBAGENT_MAX_TOKENS_REASON } from '@/lib/max-tokens-view';
-import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
-import { planDocument, planReviewOf } from '@/lib/plan-review';
-import { serverClock } from '@/lib/server-clock';
-import type { SubagentUsageLoader } from '@/lib/subagent-usage';
+import { createChangesStores } from '@/features/changes/diff';
+import type { LocatedFile } from '@/shared/lib/located-file';
+import {
+  PARTIAL_OUTPUT_HEADING,
+  SUBAGENT_MAX_TOKENS_REASON,
+} from '@/features/tool/max-tokens-view';
+import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
+import { planReviewOf } from '@/features/plan/review-view';
+import { planDocument } from '@/shared/connection/plan-document';
+import { serverClock } from '@/shared/connection/server-clock';
+import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
 import { Script } from '@/test/conversation-frames';
 import {
   call,
@@ -181,26 +185,26 @@ import {
   view,
   withTrajectory,
 } from '@/test/trajectory-fixtures';
-import { AttachmentRail } from '@/components/attachment-rail';
-import { SentAttachments } from '@/components/sent-attachments';
-import { ChangesCard } from '@/components/changes/card';
-import { DeliverablesCard } from '@/components/deliverable/card';
-import { MarkdownText } from '@/components/markdown-text';
+import { AttachmentRail } from '@/features/attachments/rail';
+import { SentAttachments } from '@/features/attachments/sent';
+import { ChangesCard } from '@/features/changes/card';
+import { DeliverablesCard } from '@/features/deliverable/card';
+import { MarkdownText } from '@/shared/markdown/text';
 import {
   RightSidebarPanel,
   RightSidebarProvider,
   RightSidebarToggle,
-} from '@/components/sidebar/right-sidebar';
-import { AppSidebar } from '@/components/sidebar/app-sidebar';
-import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
-import { TurnHeader } from '@/components/trace/turn-head';
-import { createConversationStore } from '@/lib/conversation-store';
-import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
-import type { ThreadDirectory } from '@/hooks/use-thread-directory';
-import type { ThreadManagement } from '@/lib/thread-management';
-import type { RowStatus } from '@/lib/thread-status';
-import type { TurnHead } from '@/lib/trace-view';
-import { createTrajectoryPuller } from '@/lib/trajectory-pull';
+} from '@/app/right-sidebar/right-sidebar';
+import { AppSidebar } from '@/features/threads/app-sidebar';
+import { useRightSidebar } from '@/shared/right-sidebar/context';
+import { TurnHeader } from '@/features/trace/turn-head';
+import { createConversationStore } from '@/shared/connection/conversation-store';
+import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
+import type { ThreadDirectory } from '@/features/threads/use-directory';
+import type { ThreadManagement } from '@/features/threads/management';
+import type { RowStatus } from '@/features/threads/status';
+import type { TurnHead } from '@/features/trace/view';
+import { createTrajectoryPuller } from '@/features/trace/trajectory-pull';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -217,9 +221,9 @@ import {
   InputGroupText,
   InputGroupTextarea,
 } from '@/components/ui/input-group';
-import { FeedbackDialog } from '@/components/feedback-dialog';
-import { ModelSeat } from '@/components/model-seat';
-import { PermissionSeat } from '@/components/permission-seat';
+import { FeedbackDialog } from '@/features/feedback/dialog';
+import { ModelSeat } from '@/features/seats/model-seat';
+import { PermissionSeat } from '@/features/seats/permission-seat';
 import {
   Command,
   CommandGroup,
@@ -1714,7 +1718,7 @@ function ReasoningPage() {
   );
 }
 
-/** 狀態列（#1684）：執行中那一列每種 activity 一個本輪的樣子（判法見 `lib/turn-activity.ts`）。 */
+/** 狀態列（#1684）：執行中那一列每種 activity 一個本輪的樣子（判法見 `features/status/turn-activity.ts`）。 */
 const TURN_ENTRIES: Readonly<Record<string, readonly ConversationEntry[]>> = {
   thinking: [],
   searching: [RUN_TOOLS[0]!].map((t) => ({ ...t, name: 'grep', status: 'running' as const })),
@@ -1724,7 +1728,7 @@ const TURN_ENTRIES: Readonly<Record<string, readonly ConversationEntry[]>> = {
   ],
 };
 
-/** 這一輪 75 秒前開始（軌跡投影的 `turn/start`），server 時鐘樣本在畫面載入時補一次，經過時間才畫得出來（`lib/running-turn.ts`）。 */
+/** 這一輪 75 秒前開始（軌跡投影的 `turn/start`），server 時鐘樣本在畫面載入時補一次，經過時間才畫得出來（`features/status/running-turn.ts`）。 */
 function runningState(activity: string) {
   const { end: _end, durationMs: _duration, ...open } = turn(1, { time: Date.now() - 75_000 });
   const state = withTrajectory(emptyConversation(), new Script(), view([turn(0), open]));

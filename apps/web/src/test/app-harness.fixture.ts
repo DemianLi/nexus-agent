@@ -1,6 +1,6 @@
 /**
- * `App` 的畫面測試（`src/App*.test.tsx`）共用的東西：假的 `WireClient`、幀的 helper、每條測試的隔離 hook。
- * 每個測試檔 import 這裡時各自登記一組 `beforeEach`／`afterEach`。附件開關的 `vi.mock` 要留在測試檔：只有寫在測試檔才會提升到該檔所有 import 之前，寫在這裡會晚於 `@/App` 的 import，App 拿到真的。這裡只放它讀的 `attachmentGate`。
+ * `App` 的畫面測試（`src/app/App*.test.tsx`）共用的東西：假的 `WireClient`、幀的 helper、每條測試的隔離 hook。
+ * 每個測試檔 import 這裡時各自登記一組 `beforeEach`／`afterEach`。附件開關的 `vi.mock` 要留在測試檔：只有寫在測試檔才會提升到該檔所有 import 之前，寫在這裡會晚於 `@/app/App` 的 import，App 拿到真的。這裡只放它讀的 `attachmentGate`。
  *
  * 這些測試只驗「折出來的東西有沒有畫出來」，所以 client 是假的、frame 是手餵的；折疊的正確性驗在 `@nexus/wire`（單元）與
  * `@nexus/harness`（對著真的 agent 跑過真的線）。
@@ -8,8 +8,8 @@
 import type { Event, SlashDescriptor, SlashRunOutcome, WireClient } from '@nexus/wire';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
-import { CLEAR_SEARCH_LABEL } from '@/components/sidebar/thread-list';
-import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
+import { CLEAR_SEARCH_LABEL } from '@/features/threads/list';
+import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
 import { fakeDownlink } from '@/test/downlink';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
@@ -119,7 +119,7 @@ export function textFrames(id: string, namespace: readonly string[], body: strin
 }
 
 /**
- * 回饋那四個 method 在 `fakeClient` 裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；`App*.test.tsx` 的測試
+ * 回饋那四個 method 在 `fakeClient` 裡一律「收不了」。**評分的畫面驗在 `app/feedback-ui.test.tsx`**；`App*.test.tsx` 的測試
  * 不碰它們，碰到就是測試寫錯了，所以回拒絕而不是回成功。
  */
 export const UNWIRED_FEEDBACK: Pick<

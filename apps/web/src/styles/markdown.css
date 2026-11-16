@@ -1,5 +1,5 @@
 /*
- * 助理回覆的 markdown 排版（`components/markdown-text.tsx`，#405）。規則見 `.docs/web-ui-spec.md` §5：
+ * 助理回覆的 markdown 排版（`shared/markdown/text.tsx`，#405）。規則見 `.docs/web-ui-spec.md` §5：
  * 連結用 `--brand`；程式碼區塊是內層 stage、圓角 2xl（16px）；字重只用 400／500。
  * 放在 components layer：元件自己寫的 utility 蓋得過它。`.md-code` 不限在 `.markdown` 裡：工具卡的參數也用它。
  */
@@ -132,13 +132,13 @@
     font-weight: 500;
     background: var(--muted);
   }
-  /* 數字欄（#1330，判定見 `lib/markdown/numeric-columns.ts`）：位數等寬、靠右。作者寫明的對齊是行內樣式，蓋得過這裡。 */
+  /* 數字欄（#1330，判定見 `shared/markdown/numeric-columns.ts`）：位數等寬、靠右。作者寫明的對齊是行內樣式，蓋得過這裡。 */
   .markdown .md-num {
     font-variant-numeric: tabular-nums;
     text-align: end;
   }
   /*
-   * 中文格子（#1332，判定見 `lib/markdown/cjk-cells.ts`）：中文欄的最小寬度只有一個字，表格比框寬時人名被拆成一字一行。
+   * 中文格子（#1332，判定見 `shared/markdown/cjk-cells.ts`）：中文欄的最小寬度只有一個字，表格比框寬時人名被拆成一字一行。
    * 短值（人名、部門、狀態）整格不斷行；長描述給 10em 的最小寬度照常換行（一行約八九個字；實測 8em 一行六七個字太碎、
    * 12em 多撐寬表格）。只掛在含中日文字的格子上，數字、英文、網址維持上面的 break-word。
    */

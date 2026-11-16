@@ -48,8 +48,8 @@ export interface CompactionPayload {
   /** 前幾則原始訊息已被換成摘要（日誌的 `cutoffIndex`）。 */
   readonly cutoff: number;
   /**
-   * 被壓掉的原文有沒有留一條讀回去的路：存成了檔（日誌的 `filePath` 不是 `null`；續接後讀不到），或留在會話日誌裡由
-   * `history_read`／`history_search` 讀（摘要的前言指向它們）。`false`＝兩條都沒有。
+   * 被壓掉的原文有沒有留一條讀回去的路：留在會話日誌裡由 `history_read`／`history_search` 讀（摘要的前言指向它們），
+   * 或存成了檔（日誌的 `filePath` 不是 `null`；原文讀不回來的呼叫才寫檔，續接後讀不到）。`false`＝兩條都沒有。
    */
   readonly saved: boolean;
   /** 摘要全文，已拿掉外框、套過位元組上限。日誌上沒有（舊格式）或拿不出文字就不放。 */

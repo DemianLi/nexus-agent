@@ -225,7 +225,7 @@ nexus 另外兩處不在指令本文：前面接 `{conversation}` 和分隔線�
 
 結論：外框由基座決定，規則只能跟著它的兩種形狀寫。
 
-#2777 之後前言多一種：組裝裡有 `history_read`、而且這次呼叫查得到會話日誌時，前言多一句指向讀回工具；歷史檔沒寫成時不退成那一句不包標籤的，而是只指向讀回工具、照樣包 `<summary>`（`summarizer-engine.ts` 的 `buildSummaryMessage`）。規則認的標籤沒變。
+#2777 之後前言多一種：組裝裡有 `history_read`、而且這次呼叫查得到會話日誌時，摘要器不寫歷史檔，前言只指向讀回工具、照樣包 `<summary>`（`summarizer-engine.ts`：寫不寫檔在 `summarizeMessages`，前言在 `buildSummaryMessage`）。規則認的標籤沒變。
 
 ## 20. 摘要呼叫的形狀：重播前綴，還是模板
 

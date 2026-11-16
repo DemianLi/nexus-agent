@@ -61,7 +61,7 @@ describe('共用元件一覽（COMPONENTS.md）', () => {
 
   test('共用元件那張表寫的檔存在，而且匯出那個名字', () => {
     const wrong = shared.filter((row) => {
-      const file = new URL(`../${row.file}`, here);
+      const file = new URL(`../../${row.file}`, here);
       return (
         !existsSync(file) ||
         !new RegExp(`export (function|const) ${row.name}\\b`).test(readFileSync(file, 'utf8'))
