@@ -37,10 +37,9 @@ import {
 } from '@/features/deliverable';
 import { TODO_WRITE, todosOf, todoSummary } from '@/features/tool/todo-view';
 import type { TodoItem } from '@/features/tool/todo-view';
-import { toolDiffView } from '@/shared/lib/tool-diff';
+import type { ToolResultView } from '@/features/tool/adapter';
+import { adapterOf } from '@/features/tool/tools';
 import { abortedToolLabel, STOPPED_STATUS_LABEL } from '@/features/tool/aborted';
-import { readCardOf, searchCardOf } from '@/features/tool/result-card';
-import type { ReadCard, SearchCard } from '@/features/tool/result-card';
 import { SUBAGENT_MAX_TOKENS_TEXT, subagentMaxTokensOf } from '@/features/tool/max-tokens-view';
 import { clipMiddle, omittedLabel, showsInput, toolOutput } from '@/shared/lib/tool-output';
 import type { ToolOutput } from '@/shared/lib/tool-output';
@@ -92,9 +91,8 @@ export interface ToolStep {
   readonly todos: readonly TodoItem[] | undefined;
   /** 待辦摘要另起的那一格「+N」：同時進行的其餘幾項（照 dsh `planSummary`）。 */
   readonly todoExtra: number;
-  readonly diffView: ReturnType<typeof toolDiffView>;
-  readonly readCard: ReadCard | undefined;
-  readonly searchCard: SearchCard | undefined;
+  /** 這一類畫法專屬的結果檢視（讀檔卡、搜尋卡、diff），由 adapter 決定；沒有就走通用的結果文字。 */
+  readonly result: ToolResultView | undefined;
   readonly truncated: ReturnType<typeof subagentMaxTokensOf>;
   readonly backgroundRunId: string | undefined;
   readonly subagentModel: string | undefined;
@@ -148,9 +146,7 @@ export function toStep(
     DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)
       ? entry.meta
       : undefined;
-  const diffView = toolDiffView(entry);
-  const readCard = readCardOf(entry);
-  const searchCard = searchCardOf(entry);
+  const result = adapterOf(entry.name).result?.(entry);
   const truncated = subagentMaxTokensOf(entry);
   const showsError = failed && entry.error !== undefined;
 
@@ -176,9 +172,7 @@ export function toStep(
     questions !== undefined ||
     (presented !== undefined && presented.length > 0) ||
     todos !== undefined ||
-    diffView !== undefined ||
-    readCard !== undefined ||
-    searchCard !== undefined;
+    result !== undefined;
   const resultInChildren = ownView || truncated !== undefined;
   const body = toolInputBody(entry.name, entry.input);
   const output = toolOutput(entry);
@@ -200,7 +194,7 @@ export function toStep(
     status: sgStatus(entry, stopped || interrupted !== undefined),
     // 寫檔／改檔交給 SG 畫（#1685 B）：列上的 +N −M 與展開後的 `DiffView` 都由 vendor 從這一份算。字串是 `toolDiffView` 記住的那一個，
     // 工具段（`tool-run.tsx`）拿到的是同一個實例。
-    ...(diffView === undefined ? {} : { patch: diffView.patch }),
+    ...(result?.kind === 'diff' ? { patch: result.view.patch } : {}),
     ...(inputShown && body !== undefined ? { detail: inputText(body.text) } : {}),
     ...(resultInChildren
       ? {}
@@ -222,9 +216,7 @@ export function toStep(
     presented,
     todos,
     todoExtra: todoLine !== undefined && !showsError ? todoLine.extra : 0,
-    diffView,
-    readCard,
-    searchCard,
+    result,
     truncated,
     backgroundRunId: background?.runId,
     subagentModel: background === undefined ? undefined : subagentModelText(background),

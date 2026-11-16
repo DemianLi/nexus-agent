@@ -68,5 +68,6 @@ src/
 - **只有一個功能用**：放那個切片。
 - **第二個切片也要用**：下沉到 `shared/`（元件放 `blocks/`，純邏輯放 `lib/`），不要從切片 A 深層 import，也不要為了它讓兩個切片互相 import。
 - **右側欄的新分頁**：它要的資料來源，在自己切片的 `sidebar-tab.tsx` 用 declaration merging 加到 `RightSidebarSources`，由 `app/App.tsx` 提供；`shared/right-sidebar/` 不認得任何切片。
+- **新工具**：在 `features/tool/tools.ts` 那張表加一列（工具名、用哪種畫法、專屬標題）；只有標題的歸 `others`。要專屬的畫法（專屬摘要欄位、展開的參數、結果檢視）就在 `features/tool/adapters.ts` 加一個 adapter，表上指過去。`features/tool/` 的其他檔不按工具名分支，`features/tool/adapter.test.ts` 會擋；對話層的特例（提問、交付、待辦、委派）逐處列在那個測試裡。
 - **新功能**：開新切片 `features/<名字>/`，加 `index.ts`，在 `app/` 接上。
 - **要認得好幾個切片才寫得出來的**：那是組裝，放 `app/`。
