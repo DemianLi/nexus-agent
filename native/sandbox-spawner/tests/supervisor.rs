@@ -2398,6 +2398,13 @@ fn a_quarantined_conversation_is_audited_on_every_later_rejection() {
         host: real_host(),
         ..Options::default()
     });
+    // b 的第一個動作就是被拒的連線，不能前面加重試；先起 a 連到宿主收下，再起 b，那時宿主一定 bind 了。
+    let a = h.up("a,host-retry:15000");
+    assert!(
+        wait_until(|| log(&a).contains(&"host hello".to_string())),
+        "{:?}",
+        raw_log(&a)
+    );
     let b = h.up("b,host-bad-token,host-garbage,host-hello");
     assert!(wait_until(|| log(&b).len() >= 5), "{:?}", log(&b));
     assert_eq!(
