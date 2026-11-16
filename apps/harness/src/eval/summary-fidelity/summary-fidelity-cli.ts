@@ -7,12 +7,15 @@
  *
  * **不進 CI。** 需要 `NVIDIA_API_KEY`，會打真模型。每個變體是「段數 × 2 + 題數」個請求（每段的摘要兩次：索引條目、現況），
  * `--count` 只印不跑；不含傳輸重試、索引條目不成立或現況超過上限時多叫的那一次，也不含摘要後仍到門檻時摘要器的那一次重摘。
+ * `--recall`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）帶著 `history_read`／`history_search` 答題：每題 1 到
+ * `FIDELITY_RECALL_MAX_REQUESTS` 個請求，看模型叫不叫工具，`--count` 印的是下限與上限。
  * 摘要與答題用同一顆模型（出貨預設那顆）；摘要器是出貨的那一顆，prompt、切點、重試都沒有另外寫。
  *
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 題庫的對話、摘要與答案會跟著 trace 出境。
  */
 
-import type { BaseMessage } from '@langchain/core/messages';
+import type { AIMessage, BaseMessage } from '@langchain/core/messages';
+import type { NexusTool } from '@nexus/tools';
 import { retryModelCall } from '@nexus/core';
 import { installLaunchProxy } from '../../http-proxy-boot.js';
 import {
@@ -30,19 +33,21 @@ import { parseSamples } from '../cli-args.js';
 import { FIDELITY_VARIANTS } from './dataset.js';
 import type { FidelityVariant } from './dataset.js';
 import { formatFidelityReport } from './report.js';
-import { runFidelityVariant } from './runner.js';
+import { FIDELITY_RECALL_MAX_REQUESTS, runFidelityVariant } from './runner.js';
 import type { FidelityVariantResult } from './runner.js';
 
 /** eval 的重試政策：跟出貨預設同一份（同 `../survey-cli.ts`）。 */
 const EVAL_RETRY_POLICY = streamRetryOptionsOf(liveModelConfigSchema.parse({}).retryPolicy);
 
-const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,...>] [--summary-call <template|replay>] [--answers] [--count]
+const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,...>] [--summary-call <template|replay>] [--recall] [--answers] [--count]
 
   --samples <n>        每個變體重複幾次，預設 1。摘要是取樣出來的，每次不同。
   --variants <id,...>  只跑指定的變體，預設全部：
                        ${FIDELITY_VARIANTS.map((variant) => `${variant.id}（${variant.title}）`).join(' / ')}
   --summary-call <形狀> 生摘要的請求形狀：template（預設，要摘的那段攤成一個字串）或 replay
                        （系統訊息、原訊息、最後接摘要指令，同 history-source: log 的出貨路徑）。
+  --recall             帶著 history_read／history_search 答題：模型可以從日誌讀回被摘掉的原文，
+                       每題最多 ${FIDELITY_RECALL_MAX_REQUESTS} 個請求。
   --answers            報表之後逐題印出模型的答案。
   --count              只印這一輪會送幾個模型請求，不跑、不需要金鑰。
 
@@ -72,7 +77,7 @@ function parseSummaryCall(argv: readonly string[]): 'template' | 'replay' {
 }
 
 /**
- * 一個變體跑一次送幾個模型請求：每段兩次摘要（索引條目、現況），每題一次。不含重試、索引條目不成立或現況超過上限時多叫的那一次，
+ * 一個變體跑一次送幾個模型請求：每段兩次摘要（索引條目、現況），每題一次（帶 `--recall` 時這是下限）。不含重試、索引條目不成立或現況超過上限時多叫的那一次，
  * 也不含摘要器的重摘。
  */
 function requestsOf(variant: FidelityVariant): number {
@@ -87,10 +92,15 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const variants = parseVariants(argv);
   const summaryCall = parseSummaryCall(argv);
+  const recall = argv.includes('--recall');
   const requests = variants.reduce((sum, variant) => sum + requestsOf(variant), 0) * samples;
+  const questions = variants.reduce((sum, variant) => sum + variant.questions.length, 0) * samples;
+  const total = recall
+    ? `${requests} 到 ${requests + questions * (FIDELITY_RECALL_MAX_REQUESTS - 1)} 個模型請求（帶讀回工具，每題 1 到 ${FIDELITY_RECALL_MAX_REQUESTS} 個；`
+    : `${requests} 個模型請求（`;
   console.log(
     `交接保真度評估：${variants.length}/${FIDELITY_VARIANTS.length} 個變體 × ${samples} 次，` +
-      `共 ${requests} 個模型請求（不含重試；${variants.map((variant) => `${variant.id} ${requestsOf(variant)}`).join('、')}）。模型 ${DEFAULT_LIVE_MODEL_ID}，生摘要的請求形狀 ${summaryCall}。`,
+      `共 ${total}不含重試；${variants.map((variant) => `${variant.id} ${requestsOf(variant)}`).join('、')}）。模型 ${DEFAULT_LIVE_MODEL_ID}，生摘要的請求形狀 ${summaryCall}。`,
   );
   if (argv.includes('--count')) return;
 
@@ -109,6 +119,24 @@ async function main(argv: readonly string[]): Promise<void> {
   );
   const ask = (messages: readonly BaseMessage[]) =>
     retryModelCall(EVAL_RETRY_POLICY, {}, async () => (await model.invoke([...messages])).text);
+  const answerStep = (messages: readonly BaseMessage[], tools: readonly NexusTool[]) =>
+    retryModelCall(
+      EVAL_RETRY_POLICY,
+      {},
+      async () =>
+        (await model
+          .bindTools(
+            tools.map((tool) => ({
+              type: 'function' as const,
+              function: {
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters,
+              },
+            })),
+          )
+          .invoke([...messages])) as AIMessage,
+    );
 
   const rounds: FidelityVariantResult[][] = [];
   let failed = 0;
@@ -121,11 +149,15 @@ async function main(argv: readonly string[]): Promise<void> {
           ask,
           retry: EVAL_RETRY_POLICY,
           summaryCall,
+          ...(recall && { answerStep }),
         });
         round.push(result);
         console.log(
           `  · 第 ${sample + 1} 次 ${variant.id} 得分 ${result.score?.toFixed(2) ?? '—'}` +
             ` 過時命中 ${result.staleHits}` +
+            (recall
+              ? ` 讀回工具 ${result.questions.reduce((sum, question) => sum + question.recallCalls, 0)} 次／答題請求 ${result.questions.reduce((sum, question) => sum + question.requests, 0)} 個`
+              : '') +
             ` 摘要 ${result.summaries.map((summary) => `${(summary.summarizeMs / 1000).toFixed(1)}s／${summary.summaryChars} 字元`).join('、')}`,
         );
       } catch (error) {
