@@ -12,7 +12,7 @@ description: "`process-model` 設成 `per-thread` 時，對話行程起來後 30
 - **起動期限。**
   - 舊行為：`nexus-agent serve` 起的對話行程是不成對的，從起來到回 `ready` 之間沒有任何期限。載插件、建根的時候卡死的行程會一直佔著名額，那條 thread 的請求一直等不到。
   - 新行為：從監督行程 spawn 對話行程起算，超過 `--start-timeout-ms`（預設 30000）還沒讀到 `ready`，監督行程直接殺掉它，死因 `stalled`、稽核那一行帶 `error: "ready 之前逾時"`。已指派 thread 的，前台對那條 thread 的請求回 `unknown_error`，訊息是「thread "…" 的對話行程沒起來（stalled），原因記在監督行程的稽核檔。」；名額讓出來，下一個請求會起新的行程。
-  - 預熱池裡的行程（`--warm`）同樣受限：逾時被殺、不回錯誤（沒有 thread），隔 `--front-restart-ms` 再補一個。一直起不來的會這樣一輪一輪重來。
+  - 預熱池裡的行程（`--warm`）同樣受限：逾時被殺、不回錯誤（沒有 thread），之後再補一個，等待從 `--front-restart-ms` 起、每失敗一次加倍、最多 30 秒；一直起不來的會慢慢退到約每期限加 30 秒補一次。
 - **設定。** `process-model` 的 `startTimeoutMs`（毫秒，`0` 不判）本來就能設，之前對 `nexus-agent serve` 沒有作用，現在有。
 
 受影響的：
