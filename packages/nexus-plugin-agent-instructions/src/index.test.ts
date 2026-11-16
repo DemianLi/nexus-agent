@@ -127,7 +127,7 @@ describe('設定', () => {
     expect((await listener([], INVOCATION))?.[0]?.additionalKwargs).toEqual({
       [AGENT_INSTRUCTIONS_MARKER]: true,
     });
-    // 窗口夠大時是 maxBytes 生效；沒交窗口（1.3.0 以前的宿主、沒有型錄）也只看 maxBytes。
+    // 窗口夠大時是 maxBytes 生效；宿主沒交窗口（沒有型錄、腳本模型）也只看 maxBytes。
     for (const invocation of [{ ...INVOCATION, contextWindow: 1_000_000 }, INVOCATION]) {
       expect(String((await listener([], invocation))?.[0]?.content)).toContain('x'.repeat(2000));
     }

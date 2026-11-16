@@ -1245,9 +1245,11 @@ export interface SessionEventMap {
      * - `bytes`：接上的文字的 UTF-8 位元組數（接在最前面時補的空行不算）。放在訊息串裡的源（`agent-instructions`、`skill-invocation`）是這次送出的串裡
      *   同源幾則相加。
      * - `limit`：這個窗口下的上限（`injectionLimitFor`）。表上沒有的源、每台一個上限的源（`mcp:servers`）沒有這一格。
-     *   可延後的四個源（`agent-instructions`、`skill-catalog`、`skill-invocation`、`memory`）照它延後，見 `deferredBytes`；必要的三個源
-     *   超過時組裝失敗，走不到這裡。
-     * - `deferredBytes`：這一次放不下、沒放進去的原文位元組數（正整數），原地留了一行指標叫模型用讀檔工具讀。沒有這一格 ＝ 沒有延後。
+     *   可延後的四個源（`agent-instructions`、`skill-catalog`、`skill-invocation`、`memory`）出廠時照同一張表延後，見 `deferredBytes`；
+     *   `agent-instructions`、`skill-invocation` 兩列的設定改了 `maxBytes`／`contextFraction` 時照設定延後，這一格仍是表上的數。
+     *   必要的三個源超過時組裝或載入設定失敗，走不到這裡。
+     * - `deferredBytes`：這一次放不下、沒放進去的原文位元組數（正整數），原地留了一行指標叫模型用讀檔工具讀。沒有這一格 ＝ 這一次
+     *   沒有延後（或是這一格出現以前的日誌）。
      *   放在訊息串裡的源是送出的串裡同源幾則相加：延後的那一則被摘要切掉之前，每次請求都會列。
      *
      * 跟 `breakdown` 不能相加比對：單位是位元組不是 token；`systemTokens` 只算摘要器看得到的那一份系統提示，內層接的段不在裡面

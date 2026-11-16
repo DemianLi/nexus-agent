@@ -232,6 +232,12 @@ describe('正文放不下：整份不放，留一行指標（#2777）', () => {
     // 1000 × 4 × 0.1 = 400，比那一份（六百多位元組）小。
     const narrow = await listener(visible, { configurable: {}, contextWindow: 1000 });
     expect(narrow![0]!.content).toContain('over the 400-byte budget');
+    // 有窗口、但 maxBytes 比較小：絕對上限生效。
+    const capped = await limited(ws, { maxBytes: 500, contextFraction: 0.1 })(visible, {
+      configurable: {},
+      contextWindow: 100_000,
+    });
+    expect(capped![0]!.content).toContain('over the 500-byte budget');
     // 宿主沒交窗口：只看 maxBytes。
     expect((await run(listener, visible))![0]!.content).toContain('<skill_instructions>');
   });

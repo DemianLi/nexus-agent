@@ -42,7 +42,7 @@
  * 3. **防重複的判準放在訊息上**（同理由 1）：dsh 的收件匣領走就不會再領；我們每次 invoke 都重看那一段，所以注入的訊息帶
  *    `nexus_skill_invocation: { name }`，這一段已有同名的注入就不再注入（上一輪中途停掉、沒有模型回覆時會走到）。看的是段落、不是
  *    哪一句人話：一輪開頭那句人話的 id 是 reducer 補的，日誌不記，續接重放回來就換了一個
- *    （[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）。所以同一段裡人再打一次 `/名字` 也不再注入——那份正文模型在這一段看得到。
+ *    （[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）。所以同一段裡人再打一次 `/名字` 也不再注入——那份正文（放不下時是指向它的那一行）模型在這一段看得到。
  *
  * ## 代價
  *
@@ -68,8 +68,8 @@ import { z } from 'zod';
 export const name = 'skill-invocation';
 
 /**
- * 要的服務：`agentLoop`（`^1.4.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上；1.4.0 起讀呼叫上的
- * `contextWindow`）、
+ * 要的服務：`agentLoop`（`^1.4.0`，登記 listener；注入要帶自己的 `source`，1.2.0 起才有，1.1.0 的宿主會靜靜記成 `plugin`；
+ * 1.4.0 起讀呼叫上的 `contextWindow`）、
  * `fs`（`^2.2.0`，呼叫當下拿這條 thread 的 backend、位址與技能來源；來源是 2.2.0 加的 `skillSources`，#1919）。範圍在這裡宣告，經
  * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */

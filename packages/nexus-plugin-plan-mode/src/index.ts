@@ -323,6 +323,9 @@ export const planModeConfigSchema = z.strictObject({
    * 計劃模式生效時夾進 system prompt 的指引。**必填，`trim()` 後不能是空白**，缺席或空白在載入時失敗
    * （[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)，照 dsh `resolveConfig`，`plan-mode/src/index.ts:97-117`）。
    *
+   * 超過 {@link MAX_GUIDANCE_BYTES} 個 UTF-8 位元組也在載入時失敗：這一段是必要來源，不截斷也不延後
+   * （[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
+   *
    * **它是部署持有的原樣文本**，照 dsh：這個套件不替部署決定要怎麼講話，所以沒有預設值。出貨的那一句寫在
    * `apps/harness/cordis.yml` 的 `plan-mode` 那一列（以前是這裡的 `DEFAULT_PLAN_GUIDANCE`）：
    * 說清楚現在在計劃模式、先探索與設計、完成後經 `exit_plan_mode` 交出去。

@@ -1,12 +1,10 @@
 /**
  * 把工作區指令渲染成模型看得到的那一則訊息，**在一個明確的位元組預算之內**。
  *
- * 外框、引言、每一檔的標頭與跳脫照抄 dsh `packages/context/agent-instructions/src/render.ts`（`ddefc45`）：這些字串**是模型看到的
- * 東西**，改一個字就是改了一次提示詞。
+ * 外框、引言、每一檔的標頭與跳脫的字串**是模型看到的東西**，改一個字就是改了一次提示詞。
  *
- * **預算超出時跟 dsh 不同**（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：dsh 先整份省略較寬的檔、再截斷最具體的
- * 那一份。這裡不截斷：放不下的檔整份不放，通知行寫出是哪一份、多大、用什麼讀。比較與取捨在
- * `.docs/injection-source-budgets-design-2026-11-16.md`。
+ * **預算超出時不截斷**（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：放不下的檔整份不放，通知行寫出是哪一份、
+ * 多大、用什麼讀。取捨見 `.docs/injection-source-budgets-design-2026-11-16.md`。
  *
  * 沒有抄過來的三段，都是這裡不做的（見 `index.ts` 檔頭；刷新與巢狀發現的
  * [#389](https://github.com/DemianLi/nexus-agent/issues/389) 已以 not planned 關閉）：

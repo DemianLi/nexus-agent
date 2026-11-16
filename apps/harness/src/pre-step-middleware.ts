@@ -21,6 +21,7 @@
  *    與子代理各從自己的日誌推同一個視圖（`createVisibleHistoryReader`，#2355），不讀 state。
  * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal, contextWindow }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。
+ *    `contextWindow` 是這條 thread 下一步會走的模型的窗口（契約 1.4.0，#2777），取不到時省略。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
  *    比對）；不加 `id`。`source` 是 listener 給的那一格（契約 1.2.0，#1574），沒給是 `{ kind: 'plugin', plugin: <名字> }`；
  *    給了 listener 不能交的來源就拋，見 {@link injectionSource}。

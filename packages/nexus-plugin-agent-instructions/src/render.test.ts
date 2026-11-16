@@ -1,6 +1,5 @@
 /**
- * 渲染與預算——外框、引言、標頭逐條對 dsh `packages/context/agent-instructions/src/render.ts`（`ddefc45`）；預算超出時不照 dsh
- * 截斷，整份延後（#2777）。
+ * 渲染與預算：外框、引言、標頭的字串寫死在這裡；預算超出時整份延後、不截斷（#2777）。
  *
  * 這些字串是**模型看到的東西**，所以測試把它們寫死：改一個字就是改了一次提示詞，那要是一個決定，
  * 不是重構的副作用。
@@ -64,7 +63,20 @@ describe('基線的樣子', () => {
 });
 
 describe('預算：放不下的檔整份延後、留一行指標，不截斷（#2777）', () => {
-  it('從最具體的那一份往寬的挑：寬的放不下就整份延後，通知寫出是誰、多大、怎麼讀', () => {
+  it('兩份各自放得下、合起來放不下：留最具體的那一份，較寬的延後', () => {
+    const wide = { displayPath: 'AGENTS.md', content: 'W'.repeat(300) };
+    const narrow = { displayPath: 'AGENTS.local.md', content: 'N'.repeat(300) };
+    const alone = (file: typeof wide) => bytes(renderAgentInstructions([file], 100_000)!.text);
+    // 一份加通知行（一百多位元組）放得下，兩份放不下。
+    const budget = Math.max(alone(wide), alone(narrow)) + 200;
+    const rendered = renderAgentInstructions([wide, narrow], budget);
+    expect(rendered?.deferred).toEqual([{ displayPath: 'AGENTS.md', bytes: 300 }]);
+    expect(rendered?.text).toContain('N'.repeat(300));
+    expect(rendered?.text).not.toContain('WWW');
+    expect(bytes(rendered?.text ?? '')).toBeLessThanOrEqual(budget);
+  });
+
+  it('寬的放不下就整份延後，通知寫出讀檔路徑、大小與讀法', () => {
     const wide = {
       displayPath: 'AGENTS.md',
       readPath: '/shared/AGENTS.md',

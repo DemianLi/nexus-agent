@@ -5,6 +5,9 @@
  * `formatSkillsList`、`formatSkillAnnotations`、`MEMORY_SYSTEM_PROMPT`、`formatMemoryContents`）：基座不匯出它們，模型看到的位元組
  * 又不能變。`base-prompt-text.test.ts` 拿基座自己的 middleware 渲染同一份資料逐位元組比，基座升版改了措辭會紅。
  *
+ * 放得下時兩個 `…Within` 跟不設上限的那一段逐位元組相同；放不下時加的指標行是這裡自己的文字
+ * （[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)），基座沒有。
+ *
  * @module
  */
 
@@ -189,7 +192,7 @@ const bytesOf = (text: string): number => Buffer.byteLength(text, 'utf8');
 
 /**
  * skills 那一段，整段不超過 `budget`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：放不下時從清單尾端
- * （後登記的來源，同名時贏的那一邊）往前留，留不下的條目整條不列，清單最後補一行說有幾條沒列、怎麼找。段的固定文字不縮：
+ * 往前留（清單照每個名字第一次出現的先後排，後登記的來源才有的技能在尾端），留不下的條目整條不列，清單最後補一行說有幾條沒列、怎麼找。段的固定文字不縮：
  * 一條都留不下時仍是固定文字加那一行，可能超過 `budget`。
  *
  * @param skills - 清單上的技能，照掃描的先後。

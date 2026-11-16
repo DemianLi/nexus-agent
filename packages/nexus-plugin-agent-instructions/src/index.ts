@@ -395,7 +395,7 @@ export const manifest = defineManifest({
     { token: fsToken.name, range: '^2.1.0' },
   ],
   config: Config,
-  // 換程式碼要重啟行程；設定（`maxBytes`、`maxSourceBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
+  // 換程式碼要重啟行程；設定（`maxBytes`、`contextFraction`、`maxSourceBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
   reload: { code: 'restart', config: 'next-thread' },
   capabilities: [],
 });
