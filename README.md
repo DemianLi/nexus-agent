@@ -87,7 +87,6 @@ pnpm lint         # eslint（遞迴全部套件）
 pnpm typecheck    # 型別檢查（跟 CI 同一支 .github/scripts/typecheck.sh）
 pnpm test         # vitest run
 pnpm build        # vite build
-pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 元件
 ```
 
 程式碼規範見 [`docs/standards.md`](docs/standards.md)。分支策略、PR 標題格式、發版流程與設計方法論
