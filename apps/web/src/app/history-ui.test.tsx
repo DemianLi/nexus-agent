@@ -683,7 +683,7 @@ describe('進場動效與報讀', () => {
     expect(screen.getByRole('region', { name: '對話訊息' }).contains(log)).toBe(true);
   });
 
-  it('報讀字串沒有留下 registry 的英文', async () => {
+  it('報讀字串沒有留下 vendor 元件的英文', async () => {
     const { client } = fakeClient(async () => ({
       kind: 'ok',
       result: page(turn(0, '一句', '回覆')),

@@ -149,7 +149,7 @@
 出處：[設計 token 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)；改用 SG 之後的顏色、字型、圓角見 [#1468 的拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)（Q5、Q6、Q8、Q10），落地在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)。**色碼與完整對比度表不在這裡**，在 `apps/web/tokengen/token-table.md` 與 `apps/web/src/styles/tokens.generated.css`（產生器 `apps/web/tokengen/generate.mjs`，`pnpm --filter @nexus/web tokens:gen`）。
 
 **顏色**
-- 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
+- 全部 oklch，**語意 token 直接寫值**，不另建色板層；`--sidebar-*` 也是 oklch 值。
 - `--primary` **無彩**。`--brand` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
 - **帶色相的 token 都是 SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。用量環 70% 以下是 `--status-done`（vendor README 本地修改第 37 條）。
 - 原型另加的名字（SG 也沒有）：`--beam-*`。
@@ -180,11 +180,11 @@
 - 介面 **Geist**；等寬 **Geist Mono**，只用在程式碼、工具輸入輸出、終端機；中文兩者都退 **Noto Sans TC**（所以介面上的中文實際是 Noto Sans TC），再退系統的 PingFang TC、Microsoft JhengHei；SG 原本的三個簡體中文字型拿掉（Q6）。等寬在 Noto Sans TC 前面先接**系統等寬**：Geist Mono → Consolas（Windows）→ Menlo（macOS）→ Noto Sans TC → 系統後備，只列名字、不打包。系統等寬接住 Geist Mono 兩個子集都沒有的字（← → 之類）；它們退到中文字型會是全形寬，程式碼的欄位就對不齊（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。等寬堆疊尾端保留三個 emoji 字型（#979）。
 - 三套都用 `@fontsource-variable/*` 打包（OFL）。Geist／Geist Mono **打包 latin 子集**，Geist Mono 另加 **symbols2 子集**（方框字元 U+2500–259F，5.7 KB；程式碼的樹狀圖與框線，demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）：`apps/web/src/styles/fonts.css` 只寫這三條 `@font-face`，不 import 套件入口（入口會帶進 cyrillic 等子集）；Noto Sans TC 照套件入口，自帶 unicode-range 切片。零外部請求。堆疊在 `solid-glass.overrides.css` 的 `@theme inline`，`font-stack.test.ts` 釘住堆疊順序與打包的三條子集。
 - 字級 UI 13、內文 14／23、tooltip 12、微標籤 11（`@theme` 的 `text-ui`／`text-body`／`text-tip`／`text-micro`）；**字重只用 400／500**（`semibold`、`bold` 落在 500）。
-- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 registry 原文也照改（它們裝進來就是我們的原始碼）；換成 vendor 的 SG 元件之後（#1523 起，名單在 `src/test/vendor-upstream.ts`），vendor 檔照 SG 原樣用 `text-sm`／`text-xs`，不改（Q8）。例外：`text-base`、`text-lg` 沒有對應的階，還留在 registry 原文裡的（dialog 標題等）保留。要用第五個尺寸，先在這裡加一階，不要寫任意值。
+- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 nexus 層照改；vendor 的 SG 元件（名單在 `src/test/vendor-upstream.ts`）照 SG 原樣用 `text-sm`／`text-xs`，不改（Q8）。要用第五個尺寸，先在這裡加一階，不要寫任意值。
 - **主次**（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)）：**可以點的與當標題的小字用 `text-ui`（13）**（`xs` 按鈕、小字的可展開列、輸入框底列的膠囊鈕、群組與區段標題、卡片標頭）；**小字說明、附註、時間、計數用 `text-tip`（12）**（tooltip、`Badge`、快捷鍵、工具名與摘要、等寬的輸出）；內文 `text-body`（14）與本來就是 14 的按鈕、選單項不變。逐處怎麼判與護欄見 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「字級的主次」。`text-micro`（11）只用在程式碼區塊的語言標籤（`markdown.css` 的 `.md-code-lang` 用 `var(--text-micro)`，從 #419 起），保留（demian 2026-10-12 決定；#1278 拍板第 8 點「沒人用再刪」的前提不成立）。
 
 **互動狀態**
-- 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；registry 的 `ring-[3px]` 關掉。SG 用 `--focus-line`（灰）畫的焦點全部換回文字色：SG 把 ring 帶回來的選擇器照抄壓回透明，**文字欄位的聚焦是邊框換成文字色**（SG 原本是灰線，Q5 優先於 Q8）。
+- 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；vendor 元件的 `focus-visible:ring-*` 關掉。SG 用 `--focus-line`（灰）畫的焦點全部換回文字色：SG 把 ring 帶回來的選擇器照抄壓回透明，**文字欄位的聚焦是邊框換成文字色**（SG 原本是灰線，Q5 優先於 Q8）。
 - chip 階梯（rest／hover／pressed）、主按鈕 hover／active。
 - 停用（disabled）的透明度是 50（`disabled:opacity-50`，SG 元件的現值；[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）。不靠透明度變淡的寫 `opacity-100`（例如送出鈕停用時改用字色）。護欄與例外見 §13.4。
 
@@ -207,7 +207,7 @@
 
 **底層**
 - **純 CSS**，`thinking-orbs`、`border-beam` 不進 `apps/web`。**例外：狀態列執行中那一列的 SG `StatusGlyph`**（#1684）是 JS `requestAnimationFrame` 每幀畫，vendor 原樣。「純 CSS」是 demian 2026-09-18 在 [#378](https://github.com/DemianLi/nexus-agent/issues/378) 拍板的；後來 #1468 的 Q12（status-line 換成 `TurnStatus`，它硬依賴 `StatusGlyph`）與 Q16（SG 的 AI 元件 vendor 原樣）蓋過了這一條，#1468 §6 的牴觸表當時沒列到它（#1684 PM 定，demian 可推翻）。
-- **裝 `tw-animate-css`**：registry 的 dialog／sheet／tooltip 寫了 `animate-in` 等 class，沒裝時建置出來一筆都沒有，也不報錯。
+- **裝 `tw-animate-css`**：vendor 的 dialog／alert-dialog／dropdown-menu／popover／tooltip 寫了 `animate-in` 等 class，沒裝時建置出來一筆都沒有，也不報錯。
 - 進出場照 SG 的機制（#1687）：`--animate-in`／`--animate-out` 讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。`@theme` **不用 `inline`**（inline 會讓 reduced-motion 換掉的變數沒人讀）；值逐元素宣告在 `styles/motion.css` 的 `*` 上，因為只宣告在 `:root` 的話 `var(--tw-duration)` 在 `:root` 就解掉了（vendor README 本地修改第 81 條，`guard/` 與 `check-built-css` 量）。
 - 進場 fill-mode `backwards`，退場 `both`。
 
@@ -309,7 +309,7 @@
 ## 9. 版面與 RWD
 
 - **驗收寬度 375／768／1280**。
-- **斷點 1024**：以下收成抽屜。registry 的 `use-mobile.ts` 是 768（`max-width: 767px`），**要改**——768 剛好是驗收寬度，不改會顯示成桌面側欄。
+- **斷點 1024**：以下收成抽屜。`src/hooks/use-mobile.ts` 是 1024（`max-width: 1023px`）；shadcn registry 版是 768，而 768 剛好是驗收寬度，用 768 會顯示成桌面側欄。
 - 觸控目標 44px。
 - `message-scroller` 的兩個坑：
   - `scroll-fade-b`、`scrollbar-none` 在建置出的 CSS 裡**沒有產出**，底部漸層與捲動時隱藏捲軸都沒作用。
@@ -411,7 +411,7 @@
 
 - **三樣齊**：成文的規範、對應的 token 或元件、會變紅的測試。規則與擋它的測試同一張 PR 進。
 - **在哪一刻擋**：
-  - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/registry-edits.test.ts`）在合併前擋：PR 動到 `apps/web/src` 的 tsx、css 或 `apps/web/tokengen/` 時，CI 輕的模式會跑它們（`.github/scripts/plan_ci.py`）。
+  - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/local-edits.test.ts`）在合併前擋：PR 動到 `apps/web/src` 的 tsx、css 或 `apps/web/tokengen/` 時，CI 輕的模式會跑它們（`.github/scripts/plan_ci.py`）。
   - 真瀏覽器的 `apps/web/guard/`、視覺回歸在合併後那一輪。axe 跑兩層：jsdom 那一層（`src/test/axe.ts`）跟著元件測試在合併前跑，算不了看像素與尺寸的規則；真瀏覽器那一層（`guard/guard.test.ts`，[#2765](https://github.com/DemianLi/nexus-agent/issues/2765)）對 `guard/` 的測試頁跑全部規則，含 `color-contrast` 與 `target-size`，總覽與每個子頁（浮層開著、選單展開的樣子在子頁上）亮暗各一次。子頁只畫一塊元件，問整份文件結構的規則（有沒有 main、h1、landmark）在子頁上不跑，清單在 `AXE_PAGE_RULES`。已知的違規列在 `guard/harness.ts` 的 `AXE_KNOWN` 與 `AXE_KNOWN_OVERLAYS`，清單只會變短。
 - **無障礙**：WCAG 2.2 AA 是硬門檻（§8）。每個共用元件要有鍵盤與焦點的測試。
 - **定期複驗**：每完成一個 Phase，照檢驗報告的量尺抽 5 個元件重評，至少 2 個是上次沒過的。分數只當複驗的量尺，不當合併的條件。

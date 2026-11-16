@@ -36,7 +36,7 @@
 - **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
-真的要例外：列進該測試的 `ALLOWED`，附理由。**例外只會變少**：列了卻不再命中的條目會報錯。registry 原文的例外（`ui/`）等它們被改掉或確認要留再處理。
+真的要例外：列進該測試的 `ALLOWED`，附理由。**例外只會變少**：列了卻不再命中的條目會報錯。
 
 ## 外觀原則
 
@@ -227,7 +227,7 @@ node apps/web/visual/compare.ts <上一個的截圖> <這一個的截圖> <輸�
 `cn`（class 合併）不認得自訂的 `text-*`／`rounded-*` 名，會把字級當字色互相吃掉（2026-10-07 發生過，PR #1144）。所以：
 
 - `index.css` 加了 `--text-<名>` 或 `--radius-<名>`，就到 `src/lib/utils.ts` 的 `createCn` 登記同一個名字。
-- **全站只從 `@/lib/utils` 取 `cn`**，不要 `from 'cn'`（`utils.test.ts` 會擋，registry 檔裝進來也要改）。vendor 的 SG 元件放行：它們原樣 `from "cn"`，由別名解析到 `@/lib/utils`（vendor README「本地修改」第 14 條）。
+- **全站只從 `@/lib/utils` 取 `cn`**，不要 `from 'cn'`（`utils.test.ts` 會擋）。vendor 的 SG 元件放行：它們原樣 `from "cn"`，由別名解析到 `@/lib/utils`（vendor README「本地修改」第 14 條）。
 - 改 class 名的重構，前後比對要量**字級、字色、寬度**的計算樣式，不只高度與截圖。
 
 ## 什麼時候抽共用元件
@@ -272,7 +272,7 @@ node apps/web/visual/compare.ts <上一個的截圖> <這一個的截圖> <輸�
 
 ## 加元件與更新 vendor
 
-`ui/` 的元件來自 vendor 的 solid-glass，不用 `shadcn add`：加元件、更新上游照 [vendor README](src/vendor/solid-glass/README.md) 的「清單」與「同步」（`sync.mjs`），本地修改照「本地修改」登記。改了覆寫檔或包裝層、而且改回去畫面不會報錯的地方，補進 `ui/registry-edits.test.ts`（它同時看 vendor 原文還是當初覆寫所針對的樣子）。AI Elements 一律不裝（規格 §4.1）。
+`ui/` 的元件來自 vendor 的 solid-glass，不用 `shadcn add`：加元件、更新上游照 [vendor README](src/vendor/solid-glass/README.md) 的「清單」與「同步」（`sync.mjs`），本地修改照「本地修改」登記。改了覆寫檔或包裝層、而且改回去畫面不會報錯的地方，補進 `ui/local-edits.test.ts`（它同時看 vendor 原文還是當初覆寫所針對的樣子）。AI Elements 一律不裝（規格 §4.1）。
 
 ## 測試與說明文件裡的類別名
 
