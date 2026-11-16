@@ -8,6 +8,9 @@
  *
  * 題目的 `mentions` 是答案裡必須出現的字串（比對不看空白），交給 `../scorers.ts` 的 `scoreMentions` 計分；所以事實盡量挑寫法固定的
  * （編號、路徑、不帶千分位的數字），題目也要求照寫。`stale` 是被推翻的舊結論，答案裡出現就記一筆過時命中，不進分數。
+ *
+ * {@link DETAIL_VARIANTS} 是另一組（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）：事實是幾十列清冊或一份名單裡的某一筆，
+ * 設計成摘要帶不走整張表，題目問的那一筆要從日誌讀回才答得出來。它量的是讀回工具，不是摘要寫得全不全。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -25,12 +28,13 @@ export interface FidelityQuestion {
   /** 這題的事實在第幾段（從 0 起算）。段數減去它，就是這個事實經過幾次摘要。 */
   readonly segment: number;
   /** 事實的種類，逐題報表印成一欄。 */
-  readonly kind: 'path' | 'value' | 'correction' | 'todo' | 'overturned';
+  readonly kind: 'path' | 'value' | 'correction' | 'todo' | 'overturned' | 'detail';
 }
 
 /** 一個變體。 */
 export interface FidelityVariant {
-  readonly id: 'single' | 'double' | 'quad' | 'zh' | 'overturned';
+  readonly id:
+    'single' | 'double' | 'quad' | 'zh' | 'overturned' | 'rows' | 'rows-zh' | 'rows-deep';
   readonly title: string;
   /** 一段一次摘要；每一段以使用者的話結尾。 */
   readonly segments: readonly (readonly BaseMessage[])[];
@@ -407,4 +411,192 @@ export const FIDELITY_VARIANTS: readonly FidelityVariant[] = [
     segments: [[...OVERTURNED_FACTS, ...englishFiller(500, 8)]],
     questions: OVERTURNED_QUESTIONS,
   },
+];
+
+/** 清冊的列數。要多到摘要帶不走整張表；不能超過 60，{@link propertyRow} 的保管人姓名每 60 列循環一次。 */
+const INVENTORY_ROWS = 60;
+
+/** 英文資產清冊的一列：資產標籤、序號、機櫃位置。同一個 `seed` 裡標籤與序號都不重複。 */
+function assetRow(seed: number, index: number): { tag: string; serial: string; line: string } {
+  const tag = `AT-${seed * 100 + index}`;
+  const serial = `SN-${10_000 + ((seed * 104_729 + index * 7_919) % 90_000)}`;
+  const rack = `R${1 + (index % 14)}-U${1 + ((index * 5) % 40)}`;
+  return { tag, serial, line: `${tag} | serial ${serial} | rack ${rack} | status in service` };
+}
+
+const ON_CALL_FIRST = ['Avery', 'Bruno', 'Celia', 'Dmitri', 'Elena', 'Farid'];
+const ON_CALL_LAST = ['Lindqvist', 'Okafor', 'Marchetti', 'Sandoval', 'Whitlock'];
+/** 值班名單的人數。不能超過 30：{@link onCallEntry} 的姓名每 30 筆循環一次。 */
+const ON_CALL_PEOPLE = 24;
+
+/** 值班名單的一筆：姓名與分機。{@link ON_CALL_PEOPLE} 人裡姓名與分機都不重複。 */
+function onCallEntry(index: number): { name: string; extension: string } {
+  return {
+    name: `${ON_CALL_FIRST[index % ON_CALL_FIRST.length]} ${ON_CALL_LAST[index % ON_CALL_LAST.length]}`,
+    extension: `EXT-${4_100 + ((index * 37) % 900)}`,
+  };
+}
+
+/** 英文清冊那一段的事實：工具讀回的一張資產表，可選再加一則使用者念的值班名單。 */
+function assetFacts(seed: number, withOnCall: boolean): BaseMessage[] {
+  const table = Array.from({ length: INVENTORY_ROWS }, (_, index) => assetRow(seed, index).line);
+  const messages: BaseMessage[] = [
+    new HumanMessage(
+      'We are auditing the hardware inventory. Read /srv/it/inventory/assets.csv and keep it at hand, I will ask about single rows later.',
+    ),
+    ...toolRound('read_file', { path: '/srv/it/inventory/assets.csv' }, table.join('\n')),
+    new AIMessage(`The inventory has ${INVENTORY_ROWS} assets, all in service.`),
+  ];
+  if (withOnCall) {
+    const roster = Array.from({ length: ON_CALL_PEOPLE }, (_, index) => {
+      const { name, extension } = onCallEntry(index);
+      return `${name} ${extension}`;
+    });
+    messages.push(
+      new HumanMessage(
+        `For later, these are the on-call extensions this month: ${roster.join('; ')}.`,
+      ),
+      new AIMessage(`Noted, ${ON_CALL_PEOPLE} on-call extensions.`),
+    );
+  }
+  return messages;
+}
+
+function serialQuestion(seed: number, index: number): FidelityQuestion {
+  const { tag, serial } = assetRow(seed, index);
+  return {
+    id: `serial-${index}`,
+    prompt: `What is the serial number of asset ${tag}? Write it exactly.`,
+    mentions: [serial],
+    segment: 0,
+    kind: 'detail',
+  };
+}
+
+function extensionQuestion(index: number): FidelityQuestion {
+  const { name, extension } = onCallEntry(index);
+  return {
+    id: `extension-${index}`,
+    prompt: `What is the on-call extension of ${name}? Write it exactly.`,
+    mentions: [extension],
+    segment: 0,
+    kind: 'detail',
+  };
+}
+
+const KEEPER_SURNAMES = ['王', '陳', '張', '黃', '吳', '蔡', '楊', '許', '鄭', '謝'];
+const KEEPER_GIVEN = [
+  '志明',
+  '雅婷',
+  '建宏',
+  '怡君',
+  '俊傑',
+  '佩珊',
+  '家豪',
+  '惠雯',
+  '冠宇',
+  '詩涵',
+  '柏翰',
+  '宜蓁',
+];
+const PROPERTY_ITEMS = ['筆記型電腦', '桌上型電腦', '雷射印表機', '投影機', '網路交換器'];
+
+/** 中文財產清冊的一列：財產編號、品名、保管人。{@link INVENTORY_ROWS} 列裡編號與保管人姓名都不重複。 */
+function propertyRow(index: number): { tag: string; keeper: string; line: string } {
+  const tag = `P31-${String(1_000 + index)}`;
+  const keeper = `${KEEPER_SURNAMES[index % KEEPER_SURNAMES.length]}${KEEPER_GIVEN[(index * 7) % KEEPER_GIVEN.length]}`;
+  return {
+    tag,
+    keeper,
+    line: `財產編號 ${tag}｜品名 ${PROPERTY_ITEMS[index % PROPERTY_ITEMS.length]}｜保管人 ${keeper}｜存置 ${2 + (index % 5)} 樓`,
+  };
+}
+
+const PROPERTY_FACTS: BaseMessage[] = [
+  new HumanMessage(
+    '我們要盤點財產。請讀 /data/總務/財產清冊/113年度.txt，先放著，我之後會問其中幾筆。',
+  ),
+  ...toolRound(
+    'read_file',
+    { path: '/data/總務/財產清冊/113年度.txt' },
+    Array.from({ length: INVENTORY_ROWS }, (_, index) => propertyRow(index).line).join('\n'),
+  ),
+  new AIMessage(`財產清冊共 ${INVENTORY_ROWS} 筆，都有保管人。`),
+];
+
+function keeperQuestion(index: number): FidelityQuestion {
+  const { tag, keeper } = propertyRow(index);
+  return {
+    id: `keeper-${index}`,
+    prompt: `財產編號 ${tag} 的保管人是誰？請寫出姓名。`,
+    mentions: [keeper],
+    segment: 0,
+    kind: 'detail',
+  };
+}
+
+function propertyTagQuestion(index: number): FidelityQuestion {
+  const { tag, keeper } = propertyRow(index);
+  return {
+    id: `tag-${index}`,
+    prompt: `保管人${keeper}保管的那一筆，財產編號是幾號？請原樣寫出。`,
+    mentions: [tag],
+    segment: 0,
+    kind: 'detail',
+  };
+}
+
+/**
+ * 摘要留不住答案的三個變體（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）。不在 {@link FIDELITY_VARIANTS} 裡：
+ * 那五個量摘要保真度；這三個要配讀回工具看，預設不跑。
+ */
+export const DETAIL_VARIANTS: readonly FidelityVariant[] = [
+  {
+    id: 'rows',
+    title: '清冊裡的某一列',
+    segments: [[...assetFacts(31, true), ...englishFiller(1100, 8)]],
+    questions: [
+      serialQuestion(31, 7),
+      serialQuestion(31, 23),
+      serialQuestion(31, 38),
+      serialQuestion(31, 52),
+      extensionQuestion(5),
+      extensionQuestion(17),
+    ],
+  },
+  {
+    id: 'rows-zh',
+    title: '中文清冊裡的某一列',
+    segments: [[...PROPERTY_FACTS, ...chineseFiller(1200, 8)]],
+    questions: [
+      keeperQuestion(9),
+      keeperQuestion(26),
+      keeperQuestion(47),
+      propertyTagQuestion(14),
+      propertyTagQuestion(41),
+    ],
+  },
+  {
+    // 後兩段只有雜訊：清冊所在的第一段經過三次摘要。
+    id: 'rows-deep',
+    title: '清冊在三次摘要之前',
+    segments: [
+      [...assetFacts(57, false), ...englishFiller(1300, 8)],
+      englishFiller(1400, 8),
+      englishFiller(1500, 8),
+    ],
+    questions: [
+      serialQuestion(57, 4),
+      serialQuestion(57, 19),
+      serialQuestion(57, 33),
+      serialQuestion(57, 46),
+      serialQuestion(57, 58),
+    ],
+  },
+];
+
+/** 兩組合起來；`--variants` 認得的就是這些。 */
+export const ALL_FIDELITY_VARIANTS: readonly FidelityVariant[] = [
+  ...FIDELITY_VARIANTS,
+  ...DETAIL_VARIANTS,
 ];

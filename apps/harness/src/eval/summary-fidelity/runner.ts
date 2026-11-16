@@ -16,6 +16,9 @@
  * **帶讀回工具的量法**（`answerStep`，[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：每一段對話先寫進日誌，摘要的前言
  * 指向 `history_read`／`history_search`，問題目那一步變成工具迴圈，模型叫工具就從日誌讀回被摘掉的原文。系統提示與題目不變，
  * 所以量到的是模型拿到讀回前言和兩個工具的定義之後，會不會自己去讀。
+ *
+ * **成對的量法**（`paired`，[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）：同一份摘要、同一題問兩次，一次不帶工具、
+ * 一次帶。兩次的訊息逐則相同，差別只有請求上有沒有工具定義；不帶工具那一次的前言仍然指向讀回工具（摘要只生一次）。
  */
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
@@ -39,10 +42,13 @@ export const FIDELITY_TRIGGER_TOKENS = 8_000;
 /** 摘要之後逐字留下的量（token）：門檻的兩成，等於出貨在預設模型上的封頂比例。 */
 export const FIDELITY_RETAIN_TOKENS = 1_600;
 
-/** 問題目時的系統提示。 */
+/**
+ * 問題目時的系統提示。最後一句只說「找不到就說不知道」，不說去哪裡找：帶讀回工具時，摘要前言要模型缺細節就去讀回，
+ * 這裡不能先叫它看對話裡沒有就放棄。
+ */
 const ANSWER_SYSTEM_PROMPT =
-  'You are an assistant continuing an ongoing conversation. Answer the next question using only what is in the conversation so far. ' +
-  'Reply in the language of the question, in one short sentence. If the conversation does not contain the answer, say you do not know.';
+  'You are an assistant continuing an ongoing conversation. Answer the next question from this conversation. ' +
+  'Reply in the language of the question, in one short sentence. If you cannot find the answer, say you do not know.';
 
 /** 帶讀回工具答一題最多送幾次請求。到了這個數還在叫工具，最後那一則的文字就是答案，它的工具呼叫不執行、不算進 `recallCalls`。 */
 export const FIDELITY_RECALL_MAX_REQUESTS = 4;
@@ -69,6 +75,11 @@ export interface FidelityModels {
    * 接回去再送，一題最多 {@link FIDELITY_RECALL_MAX_REQUESTS} 次請求。
    */
   answerStep?(messages: readonly BaseMessage[], tools: readonly NexusTool[]): Promise<AIMessage>;
+  /**
+   * 成對：每一題在帶工具那一次之前，先用 `ask` 不帶工具問一次，結果記在 {@link FidelityQuestionResult.withoutTools}。
+   * 沒給 `answerStep` 時不起作用。
+   */
+  readonly paired?: boolean;
 }
 
 /** 一題的結果。 */
@@ -90,6 +101,12 @@ export interface FidelityQuestionResult {
   readonly requests: number;
   /** 跑者執行了幾次工具呼叫（名字不認得的也算；到上限那一則回覆裡的呼叫不執行、不算）。不帶讀回工具時恆為 0。 */
   readonly recallCalls: number;
+  /** 成對時不帶工具那一次的結果；不成對時沒有這一格。 */
+  readonly withoutTools?: {
+    readonly answer: string;
+    readonly score: number;
+    readonly staleHit: boolean;
+  };
 }
 
 /** 一個變體跑一次的結果。 */
@@ -105,6 +122,8 @@ export interface FidelityVariantResult {
   readonly questions: readonly FidelityQuestionResult[];
   /** 沒洩漏的題目的平均分；全洩漏時是 `undefined`。 */
   readonly score: number | undefined;
+  /** 成對時，同一批題目不帶工具那一次的平均分；不成對或全洩漏時是 `undefined`。 */
+  readonly scoreWithoutTools: number | undefined;
   /** 過時命中的題數。 */
   readonly staleHits: number;
 }
@@ -318,34 +337,42 @@ export async function runFidelityVariant(
       new AIMessage(CANNED_REPLY),
       new HumanMessage(question.prompt),
     ];
+    const graded = (answer: string) => ({
+      answer,
+      score:
+        scoreMentions(
+          {
+            id: question.id,
+            prompt: question.prompt,
+            expected: { toolCalls: [], mentions: question.mentions.map(squash) },
+          },
+          { caseId: question.id, toolCalls: [], finalText: squash(answer) },
+        ) ?? 0,
+      staleHit: (question.stale ?? []).some((needle) => squash(answer).includes(squash(needle))),
+    });
+    const recall = models.answerStep !== undefined && recallTools !== undefined;
+    const withoutTools = recall && models.paired === true ? await models.ask(asked) : undefined;
     const { answer, requests, recallCalls } =
       models.answerStep === undefined || recallTools === undefined
         ? { answer: await models.ask(asked), requests: 1, recallCalls: 0 }
         : await answerWithRecall(models.answerStep.bind(models), recallTools, asked);
-    const score =
-      scoreMentions(
-        {
-          id: question.id,
-          prompt: question.prompt,
-          expected: { toolCalls: [], mentions: question.mentions.map(squash) },
-        },
-        { caseId: question.id, toolCalls: [], finalText: squash(answer) },
-      ) ?? 0;
     questions.push({
       questionId: question.id,
       kind: question.kind,
       summariesCrossed: variant.segments.length - question.segment,
-      score,
-      staleHit: (question.stale ?? []).some((needle) => squash(answer).includes(squash(needle))),
+      ...graded(answer),
       inSummary: question.mentions.every((needle) => summaryText.includes(squash(needle))),
       leaked: question.mentions.some((needle) => squashedTail.includes(squash(needle))),
-      answer,
       requests,
       recallCalls,
+      ...(withoutTools !== undefined && { withoutTools: graded(withoutTools) }),
     });
   }
 
   const counted = questions.filter((result) => !result.leaked);
+  const paired = counted.flatMap((result) =>
+    result.withoutTools === undefined ? [] : [result.withoutTools.score],
+  );
   return {
     variantId: variant.id,
     title: variant.title,
@@ -355,6 +382,10 @@ export async function runFidelityVariant(
       counted.length === 0
         ? undefined
         : counted.reduce((sum, result) => sum + result.score, 0) / counted.length,
+    scoreWithoutTools:
+      paired.length === 0
+        ? undefined
+        : paired.reduce((sum, score) => sum + score, 0) / paired.length,
     staleHits: questions.filter((result) => result.staleHit).length,
   };
 }
