@@ -2,6 +2,11 @@ import type { Event, SkillEntry, SlashDescriptor, SlashListOutcome, WireClient }
 import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
+import {
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
+} from '@/shared/connection/refusal-text';
 import { commandsFailedText, useConversation } from '@/shared/connection/use-conversation';
 
 /**
@@ -307,5 +312,32 @@ describe('useConversation 的兩個回饋接點', () => {
     act(() => result.current.setStatusLine({}));
     expect(result.current.slashNotice).toBeUndefined();
     expect(result.current.setStatusLine).toBe(first);
+  });
+
+  it.each([
+    [THREAD_AT_CAPACITY, THREAD_AT_CAPACITY_TEXT],
+    [THREAD_HISTORY_TOO_DEEP, THREAD_HISTORY_TOO_DEEP_TEXT],
+  ])('斜線命令被拒，碼是 %s：講專用那一句，不接 server 的原文', async (code, text) => {
+    const fake = scriptedClient(ok, noSkills);
+    vi.spyOn(fake.client, 'slashRun').mockResolvedValue({
+      kind: 'rejected',
+      code,
+      message: '給管理者的原文',
+    });
+    const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+    await tick();
+    let outcome: Awaited<ReturnType<typeof result.current.send>>;
+    await act(async () => {
+      outcome = await result.current.send(
+        '/plan',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'command',
+      );
+    });
+    expect(outcome!).toEqual({ message: text });
+    expect(result.current.commandError).toBe(text);
   });
 });

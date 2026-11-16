@@ -30,20 +30,20 @@ import {
   RECOVERED_NOTICE_MS,
   SLOW_CONNECT_MS,
 } from '@/shared/connection/reconnect';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
-import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/shared/connection/thread-history-too-deep';
-import { THREAD_PROTOCOL_ERROR_TEXT } from '@/shared/connection/thread-protocol-error';
 import {
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
+  THREAD_IS_SUBAGENT_TEXT,
   THREAD_LOG_BUSY_TEXT,
   THREAD_LOG_TOO_LARGE_TEXT,
-} from '@/shared/connection/thread-log-budget';
+  THREAD_NOT_EMBEDDED_TEXT,
+  THREAD_NOT_OWNED_TEXT,
+  THREAD_ROOT_MISMATCH_TEXT,
+  THREAD_WRITER_HELD_TEXT,
+} from '@/shared/connection/refusal-text';
+import { THREAD_PROTOCOL_ERROR_TEXT } from '@/shared/connection/thread-protocol-error';
 import { THREAD_REFUSED_TEXT } from '@/shared/connection/thread-refused';
 import { StreamHaltedError } from '@/shared/connection/stream-halted';
-import { THREAD_ROOT_MISMATCH_TEXT } from '@/shared/connection/thread-root-mismatch';
-import { THREAD_NOT_EMBEDDED_TEXT } from '@/shared/connection/thread-not-embedded';
-import { THREAD_NOT_OWNED_TEXT } from '@/shared/connection/thread-not-owned';
-import { THREAD_IS_SUBAGENT_TEXT } from '@/shared/connection/thread-subagent';
-import { THREAD_WRITER_HELD_TEXT } from '@/shared/connection/thread-writer-held';
 
 /**
  * 斷線與重接（#593）。退避公式本身驗在 `shared/connection/reconnect.test.ts`；這裡驗 hook 真的在斷線時翻回沒連上、照退避排

@@ -40,18 +40,18 @@ import {
 import { STOPPED_QUESTION_TEXT } from '@/features/question/view';
 import { REMEMBERED_THREAD_KEY } from '@/features/threads/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/features/queue/steer-view';
-import { SERVER_CLOSING_TEXT } from '@/shared/connection/server-closing';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
-import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/shared/connection/thread-history-too-deep';
 import {
+  SERVER_CLOSING_TEXT,
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
+  THREAD_IS_SUBAGENT_TEXT,
   THREAD_LOG_BUSY_TEXT,
   THREAD_LOG_TOO_LARGE_TEXT,
-} from '@/shared/connection/thread-log-budget';
+  THREAD_ROOT_MISMATCH_TEXT,
+  THREAD_WRITER_HELD_TEXT,
+} from '@/shared/connection/refusal-text';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/shared/connection/thread-protocol-error';
 import { THREAD_REFUSED_TEXT } from '@/shared/connection/thread-refused';
-import { THREAD_ROOT_MISMATCH_TEXT } from '@/shared/connection/thread-root-mismatch';
-import { THREAD_IS_SUBAGENT_TEXT } from '@/shared/connection/thread-subagent';
-import { THREAD_WRITER_HELD_TEXT } from '@/shared/connection/thread-writer-held';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';

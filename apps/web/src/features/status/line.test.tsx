@@ -11,8 +11,7 @@ import {
 } from '@/features/status/line';
 import { serverClock } from '@/shared/connection/server-clock';
 import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT } from '@/shared/lib/stop-cause';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
-import { THREAD_IS_SUBAGENT_TEXT } from '@/shared/connection/thread-subagent';
+import { THREAD_AT_CAPACITY_TEXT, THREAD_IS_SUBAGENT_TEXT } from '@/shared/connection/refusal-text';
 import type { Activity } from '@/components/ui/status-glyph';
 import { Script } from '@/test/conversation-frames';
 import { drawnPose, openingPose, stubGlyphEnvironment } from '@/test/glyph-env';

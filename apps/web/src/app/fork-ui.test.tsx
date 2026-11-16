@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '@/app/App';
 import { REMEMBERED_THREAD_KEY } from '@/features/threads/remembered-thread';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
+import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/refusal-text';
 import {
   FORK_FAILED_TEXT,
   FORK_LABEL,
