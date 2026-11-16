@@ -2207,6 +2207,8 @@ fn fake_host(args: &[&str]) -> Option<(PathBuf, Vec<String>)> {
     ))
 }
 
+/// 真宿主：對話行程不等宿主 `ready` 就起，第一次連線可能早於宿主 bind，拿到 `host error 2`（ENOENT）；用它起宿主的測試，
+/// 第一個連線都走 `host-retry`，不是在斷言第一次就連得上。
 fn real_host() -> Option<(PathBuf, Vec<String>)> {
     Some((host_bin(), Vec::new()))
 }
@@ -2652,6 +2654,7 @@ fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf
         extra: vec!["--host-start-failures", start_failures],
         ..Options::default()
     });
+    // 第一個連線可能早於宿主 bind，見 `real_host`。
     let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
