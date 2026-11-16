@@ -685,6 +685,52 @@ serve 上那條對話建不起來，回應與伺服器日誌照上面「對話�
 暫停自動寫入、這一輪照跑，等到收尾才響亮地失敗；現在檢查點排空被拒時：模型不被叫，這一輪以失敗
 收尾；工具不動手，圍堵把它收成一則錯誤結果交給模型。同 dsh：寧可不做，也不要做出一段沒有紀錄的事。
 
+### 各注入源的用量（`context/measure` 的 `sources`）
+
+對話與工具結果以外，還有一批來源會把文字放進送給模型的請求（工作區的指示檔、技能目錄、system prompt 的頭尾段……）。
+摘要只動對話，動不了它們。每次模型呼叫落盤的 `context/measure` 多帶一格 `sources`
+（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)），列出這一次請求裡每個來源實際佔了幾個 UTF-8 位元組：
+
+```json
+"sources": [
+  { "id": "agent-instructions", "bytes": 4120, "limit": 65536 },
+  { "id": "sandbox:policy", "bytes": 512 },
+  { "id": "skill-catalog", "bytes": 1893, "limit": 32768 }
+]
+```
+
+- 照 `id` 排序；這一次請求裡沒出現的來源不列。
+- `limit` 只有下表有、而且不是「每台」那一類的來源才帶，值是這一次請求走的模型窗口下算出來的上限。
+- system prompt 中段的來源用段名當 `id`（例如 `sandbox:policy`、`nexus:approval-policy`、`file-reference`），表上沒有的就沒有 `limit`。
+- `mcp:servers` 量的是所有 server 的指示合起來那一塊，分不出各台。
+- 這一格只落盤，不送到 web。
+
+**今天這一格只量、不擋**：超過 `limit` 的來源照舊整份放進請求，各源原有的行為（指示檔的截斷、技能描述的截斷、MCP 每台的上限）都沒有變。
+
+預算表（`@nexus/core` 的 `INJECTION_SOURCE_BUDGETS`）：
+
+<!-- injection-source-budgets:start -->
+
+| `id` | 來源 | 類別 | 絕對上限（位元組） | 佔窗口比例 |
+| --- | --- | --- | --- | --- |
+| `agent-instructions` | 工作區的指示檔（`AGENTS.md` 等） | 可延後 | 65,536 | 10% |
+| `skill-catalog` | 技能目錄 | 可延後 | 32,768 | 5% |
+| `skill-invocation` | `/名字` 叫用的技能正文 | 可延後 | 65,536 | 10% |
+| `memory` | 記憶檔 | 可延後 | 32,768 | 5% |
+| `system-prompt-prefix` | system prompt 頭段 | 必帶 | 16,384 | — |
+| `system-prompt-suffix` | system prompt 尾段 | 必帶 | 16,384 | — |
+| `plan:policy` | 計劃模式指引 | 必帶 | 16,384 | — |
+| `mcp:servers` | MCP server 的指示 | 每台 | 32,768 | — |
+
+<!-- injection-source-budgets:end -->
+
+- **可延後**：模型有別的路讀全（讀檔工具）。上限是 `min(絕對上限, floor(模型窗口 × 4 × 比例))`，一個 token 估 4 個位元組；取不到窗口時用絕對上限。
+  預設模型上是絕對上限生效；窗口 32,768 的模型上，10% 那幾列是 13,107、5% 那幾列是 6,553。
+- **必帶**：沒有它請求不成立，上限不看窗口。
+- **每台**：每台 MCP server 各一個上限，由 MCP 插件執行（超過的那一台算連線失敗）。
+
+各源的上限彼此不共用；總量仍由摘要門檻管。
+
 ### 不變量量測記錄
 
 不變量配套入口的違規原本只進 `console.error`（CLI 是 stderr 的 `[不變量] …`，serve 起初也是 `console.error`，#1534 起走伺服器日誌的 `error` 等級，見〈伺服器日誌的等級與格式〉），

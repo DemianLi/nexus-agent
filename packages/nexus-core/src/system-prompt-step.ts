@@ -13,6 +13,12 @@ import { SystemMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
+import {
+  carriedInjectionSources,
+  INJECTION_SOURCES,
+  reportInjectionSources,
+  utf8Bytes,
+} from './injection-sources.js';
 
 /**
  * 接上的一塊。三種接法送出的位元組各不相同：`append` 給中段段格、Skills 與尾段，`prepend` 給 `nexusSystemPrompt` 的頭段，`block` 給記憶（同基座）。
@@ -21,8 +27,12 @@ import type { AgentMiddleware } from './base-types.js';
  * - `prepend`：接在最前面，後面空一行；字串內容接成 `${text}\n\n${content}`，區塊陣列就在最前面加一塊 `${text}\n\n`。
  * - `block`：另建一則內容是區塊陣列的系統訊息，原本的內容（字串先包成一塊）之後加一塊 `text`。
  */
-export type SystemPromptPiece =
-  { readonly append: string } | { readonly prepend: string } | { readonly block: string };
+export type SystemPromptPiece = (
+  { readonly append: string } | { readonly prepend: string } | { readonly block: string }
+) & {
+  /** 這一塊屬於哪個注入源（`injection-budget.ts` 的鍵，或中段的段名）。給了就量它的位元組，見 `injection-sources.ts`；不影響接法。 */
+  readonly source?: string;
+};
 
 /** 一次模型呼叫：`wrapModelCall` 的請求上，一步用得到的那幾格。其餘欄位原樣讀穿。 */
 export interface SystemPromptRequest {
@@ -87,8 +97,16 @@ export function applySystemPromptPieces(
   return next;
 }
 
+function pieceText(piece: SystemPromptPiece): string {
+  if ('append' in piece) return piece.append;
+  return 'prepend' in piece ? piece.prepend : piece.block;
+}
+
 /**
  * 把登記的一格轉成 `wrapModelCall`：一步回的那幾塊接上系統訊息再往內交，沒有要接的就交原本那個請求。
+ *
+ * 帶 `source` 的塊照 UTF-8 位元組回報（`reportInjectionSources`）；沒有開著的收集格時，改把回報累加在交給 `handler` 的請求的
+ * `INJECTION_SOURCES` 上。回報不影響接法。
  *
  * @param cell - 登記的那一格。
  * @returns 可以放進 `createMiddleware({ wrapModelCall })` 的函式。
@@ -107,7 +125,16 @@ export function systemPromptWrapWith<Request extends SystemPromptRequest, Result
       missing && cell.withoutSystemMessage === 'empty'
         ? new SystemMessage('')
         : (request.systemMessage as SystemMessage);
-    return handler({ ...request, systemMessage: applySystemPromptPieces(base, pieces) });
+    const next = { ...request, systemMessage: applySystemPromptPieces(base, pieces) };
+    const reports = pieces.flatMap((piece) =>
+      piece.source === undefined ? [] : [{ id: piece.source, bytes: utf8Bytes(pieceText(piece)) }],
+    );
+    if (reports.length === 0 || reportInjectionSources(reports)) return handler(next);
+    // 沒有開著的收集格（這一步在摘要器外層，或沒掛摘要器）：掛在請求上往內帶，摘要器開格子時拿它當底。
+    return handler({
+      ...next,
+      [INJECTION_SOURCES]: [...(carriedInjectionSources(request) ?? []), ...reports],
+    });
   };
 }
 

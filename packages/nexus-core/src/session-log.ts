@@ -1238,6 +1238,25 @@ export interface SessionEventMap {
       };
     };
     /**
+     * 這份請求裡各注入源放了多少（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)），照 `id` 排序、`id` 不重複。
+     * 只列這一次實際接上、而且有回報的源；沒接上的不列，不是 `0`。
+     *
+     * - `id`：`injection-budget.ts` 預算表的鍵，或系統提示中段的段名（表上沒有的中段也列）。
+     * - `bytes`：接上的文字的 UTF-8 位元組數（接在最前面時補的空行不算）。放在訊息串裡的源（`agent-instructions`、`skill-invocation`）是這次送出的串裡
+     *   同源幾則相加。
+     * - `limit`：這個窗口下的上限（`injectionLimitFor`）。表上沒有的源、每台一個上限的源（`mcp:servers`）沒有這一格。
+     *   **只是對照用的數字，超過不會有任何動作。**
+     *
+     * 跟 `breakdown` 不能相加比對：單位是位元組不是 token；`systemTokens` 只算摘要器看得到的那一份系統提示，內層接的段不在裡面
+     * （`prompt-sections.ts` 檔頭），這裡有。沒有這一格 ＝ 沒量（這一格出現以前的日誌），不是空的。加它沒有升日誌格式版本，紀錄見
+     * `docs/persistence-changes/2026-11-16-context-measure-sources.md`。
+     */
+    readonly sources?: readonly {
+      readonly id: string;
+      readonly bytes: number;
+      readonly limit?: number;
+    }[];
+    /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
      */

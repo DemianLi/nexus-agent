@@ -112,6 +112,12 @@ import {
 import { isFileBlock } from './attachment-ref.js';
 import { lastSentRequestOf } from './last-sent-request.js';
 import { toLoggedMessage } from './logged-message.js';
+import {
+  captureInjectionSources,
+  carriedInjectionSources,
+  measuredInjectionSources,
+  messageInjectionSources,
+} from './injection-sources.js';
 import { isMachineMessage } from './langchain-message-adapter.js';
 import { isMaxTokensFinish } from './max-tokens.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
@@ -2132,7 +2138,8 @@ function withTokenBudget(
     ...base,
     wrapModelCall: (request, handler) => {
       // 門檻逐步算：換模型之後窗口跟著換（#723）。沒有夾住時 `effective` 就是 `trigger` 本身。
-      const effective = effectiveTrigger(trigger, limitsOf?.(request.model));
+      const limits = limitsOf?.(request.model);
+      const effective = effectiveTrigger(trigger, limits);
       const thresholds = effective.map(({ type, value }) => ({ type, value }));
       const budgets = effective.filter((t) => t.type === 'tokens').map((t) => t.value);
       const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
@@ -2183,14 +2190,20 @@ function withTokenBudget(
           }
         }
         // 夾住下一層，拿回它裡面那次模型呼叫的識別：量測寫在 `model/end` 之後，位置歸不對（#1021）。
-        const { result: response, call } = await captureModelCall(async () => {
-          try {
-            return await handler(sent);
-          } catch (error) {
-            if (isContextOverflowError(error)) endpointOverflow ??= error;
-            throw error;
-          }
-        });
+        // 同一層再開一格，收內層各注入源接上的位元組（#2777）；外層已經接上的掛在請求上，當底。
+        const {
+          result: { result: response, call },
+          reports: injected,
+        } = await captureInjectionSources(carriedInjectionSources(sent), () =>
+          captureModelCall(async () => {
+            try {
+              return await handler(sent);
+            } catch (error) {
+              if (isContextOverflowError(error)) endpointOverflow ??= error;
+              throw error;
+            }
+          }),
+        );
         if (estimate === undefined) return response;
         try {
           book.record(response, sent, estimate.estimated, estimate.basis);
@@ -2236,6 +2249,11 @@ function withTokenBudget(
                       sent.messages ?? [],
                     ),
                   },
+                  // 各注入源放了多少位元組（#2777）：系統提示那邊是收集格收到的（外層帶來的底加內層回報的），訊息那邊從送出的串上認。
+                  sources: measuredInjectionSources(
+                    [...injected, ...messageInjectionSources(sent.messages ?? [])],
+                    limits?.contextWindow,
+                  ),
                 },
                 call.of(found.log),
               ),

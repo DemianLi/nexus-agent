@@ -218,7 +218,7 @@ function sectionPieces(
   const context = sectionContextOf(request);
   return sections.flatMap((section) => {
     const block = renderMiddleSection(section, context);
-    return block === undefined ? [] : [{ append: block }];
+    return block === undefined ? [] : [{ append: block, source: section.name }];
   });
 }
 
