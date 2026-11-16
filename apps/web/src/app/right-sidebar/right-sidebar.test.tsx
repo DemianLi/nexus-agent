@@ -5,24 +5,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChangesCard } from '@/features/changes/card';
 import { DeliverablesCard } from '@/features/deliverable/card';
-import { PANELS } from '@/app/right-sidebar/panels';
+import { layoutOps } from '@/app/right-sidebar/tabs';
+import { changesTabTitle } from '@/features/changes';
+import { COST_TAB } from '@/features/cost';
+import { TRACE_TAB } from '@/features/trace';
 import {
   RIGHT_SIDEBAR_EMPTY_TEXT,
   RightSidebarPanel,
   RightSidebarProvider,
   RightSidebarToggle,
-  changesTabTitle,
 } from '@/app/right-sidebar/right-sidebar';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { TRACE_EMPTY_HINT, TRACE_EMPTY_TEXT } from '@/features/trace/panel';
 import { createChangesStores } from '@/features/changes/diff';
 import { createDeliverableFileStore } from '@/features/deliverable/file';
 import type { LocatedFile } from '@/features/deliverable/view';
-import { LAYOUT_KEY_PREFIX, WIDTH_KEY, openTab, EMPTY_LAYOUT } from '@/shared/right-sidebar/layout';
+import { LAYOUT_KEY_PREFIX, WIDTH_KEY, EMPTY_LAYOUT } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import { axeViolations } from '@/test/axe';
 import { pageReply } from '@/test/deliverable-commands';
 import { memoryStorage } from '@/test/right-sidebar';
+
+const { openTab } = layoutOps;
 
 /** 預覽捲到底才接下一段；這裡只讀第一段，觀察器什麼都不做。 */
 class IdleObserver {
@@ -482,9 +486,10 @@ describe('單例面板：觀測與成本（#1031）', () => {
   it('串流中的重畫不連累面板：父層無關地重畫多次，已掛上的分頁（含藏起來的）都不重畫', async () => {
     // 數兩個面板內容各畫了幾次：它們沒有 `memo`，面板外殼一旦被重畫就會跟著重畫。
     const renders = { trace: 0, cost: 0 };
-    const real = { trace: PANELS.trace.Body, cost: PANELS.cost.Body };
+    const tabs = { trace: TRACE_TAB, cost: COST_TAB };
+    const real = { trace: TRACE_TAB.Body, cost: COST_TAB.Body };
     for (const kind of ['trace', 'cost'] as const) {
-      (PANELS[kind] as unknown as { Body: () => null }).Body = () => {
+      (tabs[kind] as unknown as { Body: () => null }).Body = () => {
         renders[kind] += 1;
         return null;
       };
@@ -521,8 +526,8 @@ describe('單例面板：觀測與成本（#1031）', () => {
       await click(screen.getByRole('tab', { name: '成本' }));
       expect(renders.cost).toBeGreaterThan(before.cost);
     } finally {
-      (PANELS.trace as unknown as { Body: unknown }).Body = real.trace;
-      (PANELS.cost as unknown as { Body: unknown }).Body = real.cost;
+      (TRACE_TAB as unknown as { Body: unknown }).Body = real.trace;
+      (COST_TAB as unknown as { Body: unknown }).Body = real.cost;
     }
   });
 

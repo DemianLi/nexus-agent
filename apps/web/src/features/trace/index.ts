@@ -9,3 +9,4 @@ export {
   trajectoryOf,
   viewOf,
 } from './trajectory-view';
+export { TRACE_TAB } from './sidebar-tab';

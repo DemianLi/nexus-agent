@@ -6,25 +6,36 @@ import {
   LAYOUT_KEY_PREFIX,
   MAX_REMEMBERED_THREADS,
   MIN_PANEL_WIDTH,
-  PANEL_KINDS,
   RECENT_KEY,
   WIDTH_KEY,
   clampPanelWidth,
-  closeTab,
-  openTab,
-  parseLayout,
-  planTab,
-  readLayout,
   readWidth,
-  selectTab,
-  setChangesIndex,
-  setPlanTitle,
-  tabKey,
   writeLayout,
   writeWidth,
 } from '@/shared/right-sidebar/layout';
-import type { SidebarLayout, SidebarTab } from '@/shared/right-sidebar/layout';
+import type { SidebarLayout } from '@/shared/right-sidebar/layout';
+import type { SidebarTab } from '@/shared/right-sidebar/tab';
 import { memoryStorage } from '@/test/right-sidebar';
+import { TAB_DEFINITIONS, layoutOps } from '@/app/right-sidebar/tabs';
+import { planTab } from '@/features/plan';
+import type { ChangesSidebarTab } from '@/features/changes';
+
+const { closeTab, openTab, parseLayout, readLayout, replaceTab, selectTab, tabKey } = layoutOps;
+
+/** 改動分頁換檔（選檔器）：身分不變，只換 `index`。 */
+const setChangesIndex = (layout: SidebarLayout, seq: number, index: number): SidebarLayout =>
+  replaceTab(layout, `changes:${seq}`, (tab) => ({ ...(tab as ChangesSidebarTab), index }));
+
+/** 記下或清掉計劃分頁的標題，同 `PLAN_TAB` 的 `refine` 用法。 */
+const setPlanTitle = (
+  layout: SidebarLayout,
+  id: string,
+  title: string | undefined,
+): SidebarLayout =>
+  replaceTab(layout, `plan:${id}`, (tab) => {
+    const next = planTab(id, title);
+    return next.title === (tab as { title?: string }).title ? tab : next;
+  });
 
 const changes = (seq: number, index = 0): SidebarTab => ({ kind: 'changes', seq, index });
 const deliverable = (seq: number, index: number, path = 'out/a.md'): SidebarTab => ({
@@ -84,9 +95,16 @@ describe('開分頁', () => {
   });
 
   it('單例面板的名字不跟有座標的三種撞', () => {
+    const panelKinds = TAB_DEFINITIONS.filter((definition) => definition.entry !== undefined).map(
+      (definition) => definition.kind,
+    );
+    // 量具自檢：真的有單例面板（空清單會讓下面的斷言空過）。
+    expect(panelKinds).toEqual(['trace', 'cost']);
     for (const reserved of ['changes', 'deliverable', 'plan']) {
-      expect(PANEL_KINDS as readonly string[]).not.toContain(reserved);
+      expect(panelKinds).not.toContain(reserved);
     }
+    const kinds = TAB_DEFINITIONS.map((definition) => definition.kind);
+    expect(new Set(kinds).size).toBe(kinds.length);
   });
 
   it('收起時開分頁會展開', () => {
@@ -119,7 +137,9 @@ describe('關分頁', () => {
 
   it('改動分頁換檔只動那一輪', () => {
     const layout = setChangesIndex(three, 2, 5);
-    expect(layout.tabs.map((tab) => (tab.kind === 'changes' ? tab.index : -1))).toEqual([0, 5, 0]);
+    expect(
+      layout.tabs.map((tab) => (tab.kind === 'changes' ? (tab as ChangesSidebarTab).index : -1)),
+    ).toEqual([0, 5, 0]);
   });
 });
 

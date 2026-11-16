@@ -33,11 +33,18 @@ export const PLAN_TAB_STILL_MISSING_TEXT =
  * 計劃分頁（#654）。那一份不在載入的對話裡時（重新整理後還原的分頁、計劃在更早的輪），另外往前讀歷史找它
  *（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
  * （同觀測分頁，#1601）、計劃出現在對話裡之後再捲到那張計劃卡。掃完沒有、讀取失敗都只講一句。**「待定位」記在這一層**：載完之後
- * 計劃庫裡有了它，鈕那一格卸掉。知道標題（條目裡有、或掃到了）就記進版面（`notePlanTitle`，#2014），分頁標籤在定位之前、
+ * 計劃庫裡有了它，鈕那一格卸掉。知道標題（條目裡有、或掃到了）就記進版面（`noteTitle`，#2014），分頁標籤在定位之前、
  * 重新整理之後都寫得出標題；掃完沒有就清掉，標籤退回「計劃」，跟分頁裡「找不到」那一句（`PLAN_TAB_MISSING_TEXT`）一致。讀取失敗不清：讀不到不代表它不在了。
  */
-export function PlanTab({ id }: { id: string }) {
-  const { api, sources, isMobile, notePlanTitle } = useControl();
+export function PlanTab({
+  id,
+  noteTitle,
+}: {
+  id: string;
+  /** 記下或清掉這份計劃的標題（`undefined` 是清掉）。身分要穩定：它在 effect 的依賴裡。 */
+  noteTitle: (title: string | undefined) => void;
+}) {
+  const { api, sources, isMobile } = useControl();
   /** 對話條目裡的那一份：有它才定位得到。 */
   const entriesPlan = sources.plans?.get(id);
   const { findPlan, loadThrough } = sources;
@@ -68,9 +75,9 @@ export function PlanTab({ id }: { id: string }) {
   const knownTitle = shown?.title;
   const gone = entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'not-found';
   useEffect(() => {
-    if (knownTitle !== undefined) notePlanTitle(id, knownTitle);
-    else if (gone) notePlanTitle(id, undefined);
-  }, [knownTitle, gone, id, notePlanTitle]);
+    if (knownTitle !== undefined) noteTitle(knownTitle);
+    else if (gone) noteTitle(undefined);
+  }, [knownTitle, gone, noteTitle]);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'settled' | 'missing'>('idle');
   const preview = useRef<HTMLElement>(null);
   const stillMissing = useRef<HTMLParagraphElement>(null);

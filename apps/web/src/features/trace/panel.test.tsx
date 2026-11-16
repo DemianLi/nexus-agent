@@ -10,8 +10,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PANELS } from '@/app/right-sidebar/panels';
-import type { PanelBodyProps } from '@/shared/right-sidebar/api';
+import { TRACE_TAB } from './sidebar-tab';
+import type { TabBodyProps } from '@/shared/right-sidebar/tab';
 import {
   REANNOUNCE_MS,
   TRACE_EMPTY_HINT,
@@ -181,13 +181,13 @@ describe('觀測分頁：藏起來就不重算', () => {
   /** 數面板內容被畫了幾次：把真的內容包進 `Profiler`，只有它底下有東西提交才算。 */
   function countCommits() {
     const counter = { commits: 0 };
-    const Real = PANELS.trace.Body;
-    (PANELS.trace as unknown as { Body: unknown }).Body = (props: PanelBodyProps) => (
+    const Real = TRACE_TAB.Body;
+    (TRACE_TAB as unknown as { Body: unknown }).Body = (props: TabBodyProps<{ kind: string }>) => (
       <Profiler id="trace" onRender={() => (counter.commits += 1)}>
         <Real {...props} />
       </Profiler>
     );
-    return { counter, restore: () => ((PANELS.trace as unknown as { Body: unknown }).Body = Real) };
+    return { counter, restore: () => ((TRACE_TAB as unknown as { Body: unknown }).Body = Real) };
   }
 
   function stream(script: Script, state: ConversationState, text: string) {

@@ -9,6 +9,7 @@ import type { RefObject } from 'react';
 
 import type { RightSidebarApi, RightSidebarSources, TurnReveal } from '@/shared/right-sidebar/api';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
+import type { SidebarTab } from '@/shared/right-sidebar/tab';
 
 export interface RightSidebarControl {
   readonly api: RightSidebarApi;
@@ -25,11 +26,11 @@ export interface RightSidebarControl {
   /** 1024 以下定位之後，抽屜關掉時焦點要去的那一格（`locate`）。 */
   readonly locateFocus: RefObject<HTMLElement | null>;
   /**
-   * 把計劃分頁的標題記進版面（`undefined` 是清掉，#2014），給 `PlanTab` 在知道標題或掃完沒有時呼叫。**不算人動過**（不設
-   * `touched`）：已經動過的話，隨這次版面變動一起寫進去；還沒動過（只是還原後掛上）就不寫，等人下次動右側欄時一起寫。分頁標籤
-   * 先讀計劃庫（`sources.plans`，只有載入的對話），沒有才讀記下的標題。
+   * 把 `key` 那個分頁換成 `change` 的結果，給分頁內容用（`TabBodyProps` 的 `replace`、`refine`）。`touch` 為真算人動過、會寫進
+   * `localStorage`；為假是分頁自己補記資訊（#2014 的計劃標題），已經動過的話隨這次版面變動一起寫進去，還沒動過（只是還原後
+   * 掛上）就不寫，等人下次動右側欄時一起寫。`change` 回傳同一個參考表示沒變。
    */
-  notePlanTitle(id: string, title: string | undefined): void;
+  replaceTab(key: string, change: (current: SidebarTab) => SidebarTab, touch: boolean): void;
   /** 還沒被觀測分頁消費的「顯示某一輪」請求。 */
   readonly reveal: TurnReveal | undefined;
   settleReveal(nonce: number): void;

@@ -13,6 +13,7 @@
  * 檔案分工：契約型別（`RightSidebarSources`、`RightSidebarApi`、`PanelBodyProps`、`TurnReveal`）在 `shared/right-sidebar/api.ts`，
  * context 與卡片用的 `useRightSidebar` 在 `right-sidebar-context.ts`；面板與卡片只取這兩處，不 import 回這個檔（#1127）。
  *
+ * 有哪些分頁由 `tabs.ts` 的清單決定，每種分頁的身分、標籤、圖示與內容由各切片登記（`shared/right-sidebar/tab.ts`），這個檔不認得任何一種。
  * 狀態與記在 `localStorage` 的那一半在 `shared/right-sidebar/layout.ts`。面向參考 dsh `ui-sidebar-right`（面板沒有標題行、
  * 分頁列就是上緣、收起鈕在分頁列末端），分格、浮窗、拖放、復原、快捷鍵、引導頁不做（#640 決定 1）。
  *
@@ -22,24 +23,16 @@
  * 鍵盤在分頁上按 Delete 關（`aria-keyshortcuts` 讓讀屏講出來）。
  */
 
-import { FileDiff, FileText, PanelRight, PanelRightClose, ScrollText, X } from 'lucide-react';
-import {
-  useCallback,
-  memo,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { PanelRight, PanelRightClose, X } from 'lucide-react';
+import { useCallback, memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 
-import { ChangesReviewTab } from '@/features/changes';
-import { DeliverablePreviewTab, basename } from '@/features/deliverable';
-import { PlanTab } from '@/features/plan';
+import { changesTab } from '@/features/changes';
+import { deliverableTab } from '@/features/deliverable';
+import { planTab } from '@/features/plan';
 import { Control, useControl } from '@/shared/right-sidebar/context';
 import type { RightSidebarControl } from '@/shared/right-sidebar/context';
-import { PANELS } from '@/app/right-sidebar/panels';
+import { TAB_DEFINITIONS, TAB_REGISTRY, layoutOps } from '@/app/right-sidebar/tabs';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -51,23 +44,19 @@ import {
 import {
   MIN_PANEL_WIDTH,
   clampPanelWidth,
-  closeTab,
-  isPanelTab,
-  openTab,
-  planTab,
-  readLayout,
   readWidth,
-  selectTab,
-  setChangesIndex,
   setOpen,
-  setPlanTitle,
-  tabKey,
   writeLayout,
   writeWidth,
 } from '@/shared/right-sidebar/layout';
-import { PANEL_KINDS } from '@/shared/right-sidebar/layout';
-import type { RightSidebarApi, RightSidebarSources, TurnReveal } from '@/shared/right-sidebar/api';
-import type { SidebarLayout, SidebarTab } from '@/shared/right-sidebar/layout';
+import type {
+  PanelKind,
+  RightSidebarApi,
+  RightSidebarSources,
+  TurnReveal,
+} from '@/shared/right-sidebar/api';
+import type { SidebarLayout } from '@/shared/right-sidebar/layout';
+import type { SidebarTab } from '@/shared/right-sidebar/tab';
 import { cn } from '@/lib/utils';
 
 /** 停靠面板的 id：開關鈕的 `aria-controls` 指它。 */
@@ -79,6 +68,11 @@ export const RIGHT_SIDEBAR_EMPTY_TEXT =
 
 /** 鍵盤調寬一次幾像素。 */
 const KEYBOARD_STEP = 16;
+
+const { tabKey, openTab, closeTab, selectTab } = layoutOps;
+
+/** 觀測分頁：「看這一輪」的兩個入口（成本分頁、回覆底下）都要先打開它。 */
+const TRACE_TAB_VALUE: SidebarTab = { kind: 'trace' };
 
 export function RightSidebarProvider({
   threadId,
@@ -92,7 +86,7 @@ export function RightSidebarProvider({
   const isMobile = useIsMobile();
   // 初始化器只讀不寫（StrictMode 會跑兩次）。窄螢幕從收起開始，見檔頭。
   const [layout, setLayout] = useState(() => {
-    const saved = readLayout(threadId);
+    const saved = layoutOps.readLayout(threadId);
     return isMobile ? setOpen(saved, false) : saved;
   });
   const [width, setWidthState] = useState(readWidth);
@@ -104,11 +98,6 @@ export function RightSidebarProvider({
   const locateFocus = useRef<HTMLElement | null>(null);
   const [reveal, setReveal] = useState<TurnReveal | undefined>(undefined);
   const revealCount = useRef(0);
-  const notePlanTitle = useCallback(
-    (id: string, title: string | undefined) =>
-      setLayout((current) => setPlanTitle(current, id, title)),
-    [],
-  );
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -117,6 +106,14 @@ export function RightSidebarProvider({
     touched.current = true;
     setLayout(change);
   }, []);
+  const replaceTab = useCallback(
+    (key: string, change: (current: SidebarTab) => SidebarTab, touch: boolean) => {
+      const apply = (layout: SidebarLayout) => layoutOps.replaceTab(layout, key, change);
+      if (touch) update(apply);
+      else setLayout(apply);
+    },
+    [update],
+  );
   const setWidth = useCallback((next: number, commit: boolean) => {
     setWidthState(next);
     if (commit) writeWidth(next);
@@ -128,20 +125,19 @@ export function RightSidebarProvider({
   );
   const canPreview = sources.deliverableFiles !== undefined;
   const api = useMemo<RightSidebarApi>(() => {
-    /** 已經開著就留著它記下的標題：再打開不該把它洗掉。標題由掛上之後的 `PlanTab` 記（`notePlanTitle`）。 */
-    const openPlanTab = (current: SidebarLayout, id: string) =>
-      openTab(
-        current,
-        current.tabs.find((tab) => tab.kind === 'plan' && tab.id === id) ?? planTab(id, undefined),
-      );
+    /** 已經開著就留著它記下的標題：再打開不該把它洗掉。標題由掛上之後的計劃分頁記（`TabBodyProps.refine`）。 */
+    const openPlanTab = (current: SidebarLayout, id: string) => {
+      const fresh = planTab(id, undefined);
+      const key = tabKey(fresh);
+      return openTab(current, current.tabs.find((tab) => tabKey(tab) === key) ?? fresh);
+    };
     return {
-      openChanges: (seq, index) =>
-        update((current) => openTab(current, { kind: 'changes', seq, index })),
+      openChanges: (seq, index) => update((current) => openTab(current, changesTab(seq, index))),
       openDeliverable: canPreview
-        ? (file) => update((current) => openTab(current, { kind: 'deliverable', file }))
+        ? (file) => update((current) => openTab(current, deliverableTab(file)))
         : undefined,
       openPlan: (id, from) => {
-        focusTab.current = tabKey({ kind: 'plan', id });
+        focusTab.current = tabKey(planTab(id, undefined));
         returnFocus.current = from ?? null;
         update((current) => openPlanTab(current, id));
       },
@@ -159,15 +155,15 @@ export function RightSidebarProvider({
       revealTurn: (seq) => {
         revealCount.current += 1;
         setReveal({ seq, nonce: revealCount.current });
-        update((current) => openTab(current, { kind: 'trace' }));
+        update((current) => openTab(current, TRACE_TAB_VALUE));
       },
       revealReply: (messageId, from) => {
         // 先把焦點交給分頁（那一輪找不到時就停在這）；找得到時觀測分頁隨後把焦點放到那一輪的標題。
-        focusTab.current = tabKey({ kind: 'trace' });
+        focusTab.current = tabKey(TRACE_TAB_VALUE);
         returnFocus.current = from ?? null;
         revealCount.current += 1;
         setReveal({ messageId, nonce: revealCount.current });
-        update((current) => openTab(current, { kind: 'trace' }));
+        update((current) => openTab(current, TRACE_TAB_VALUE));
       },
       locate: (entryId) => {
         // 收在一段工具呼叫裡的（#1309）先展開再捲過去。
@@ -193,13 +189,13 @@ export function RightSidebarProvider({
       focusTab,
       returnFocus,
       locateFocus,
-      notePlanTitle,
+      replaceTab,
       reveal,
       settleReveal,
       update,
       setWidth,
     }),
-    [api, layout, sources, isMobile, width, notePlanTitle, reveal, settleReveal, update, setWidth],
+    [api, layout, sources, isMobile, width, replaceTab, reveal, settleReveal, update, setWidth],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
 }
@@ -435,8 +431,8 @@ function EmptyState() {
         {RIGHT_SIDEBAR_EMPTY_TEXT}
       </p>
       <div className="flex gap-2">
-        {PANEL_KINDS.map((kind) => {
-          const { title, Icon } = PANELS[kind];
+        {TAB_DEFINITIONS.map(({ kind, entry, Icon }) => {
+          if (entry === undefined) return null;
           return (
             <Button
               key={kind}
@@ -444,10 +440,10 @@ function EmptyState() {
               variant="outline"
               className="h-11 lg:h-9"
               data-testid={`right-sidebar-open-${kind}`}
-              onClick={(event) => api.openPanel(kind, event.currentTarget)}
+              onClick={(event) => api.openPanel(kind as PanelKind, event.currentTarget)}
             >
               <Icon aria-hidden />
-              {title}
+              {entry.label}
             </Button>
           );
         })}
@@ -457,38 +453,18 @@ function EmptyState() {
 }
 
 function TabBody({ tab, visible }: { tab: SidebarTab; visible: boolean }) {
-  const { api, sources, update, reveal, settleReveal } = useControl();
-  if (isPanelTab(tab)) {
-    const { Body } = PANELS[tab.kind];
-    const mine = tab.kind === 'trace' ? reveal : undefined;
-    return (
-      <Body
-        visible={visible}
-        sources={sources}
-        locate={api.locate}
-        reveal={mine}
-        onRevealed={settleReveal}
-      />
-    );
-  }
-  if (tab.kind === 'plan') return <PlanTab id={tab.id} />;
-  if (tab.kind === 'changes') {
-    return sources.changes === undefined ? null : (
-      <ChangesReviewTab
-        seq={tab.seq}
-        index={tab.index}
-        changes={sources.changes}
-        onSelect={(index) => update((current) => setChangesIndex(current, tab.seq, index))}
-      />
-    );
-  }
-  return sources.deliverableFiles === undefined ? null : (
-    <DeliverablePreviewTab
-      file={tab.file}
-      store={sources.deliverableFiles}
-      downloader={sources.deliverableDownload}
-    />
+  const { replaceTab } = useControl();
+  const key = tabKey(tab);
+  const { Body } = TAB_REGISTRY.definitionOf(tab);
+  const replace = useCallback(
+    (change: (current: SidebarTab) => SidebarTab) => replaceTab(key, change, true),
+    [replaceTab, key],
   );
+  const refine = useCallback(
+    (change: (current: SidebarTab) => SidebarTab) => replaceTab(key, change, false),
+    [replaceTab, key],
+  );
+  return <Body tab={tab} visible={visible} replace={replace} refine={refine} />;
 }
 
 function TabStrip({ collapseRef }: { collapseRef: RefObject<HTMLButtonElement | null> }) {
@@ -564,43 +540,6 @@ function TabStrip({ collapseRef }: { collapseRef: RefObject<HTMLButtonElement | 
   );
 }
 
-/** 改動分頁的標題：光靠摘要算得出來，不需要輪次（#640 決定 11）。 */
-export function changesTabTitle(
-  summary: { files: readonly { display: string }[]; total: number } | undefined,
-): { label: string; detail: string | undefined } {
-  const first = summary?.files[0];
-  if (summary === undefined || first === undefined) return { label: '改動', detail: undefined };
-  const name = basename(first.display);
-  const label = summary.total > 1 ? `改動 · ${name} 等 ${summary.total} 個` : `改動 · ${name}`;
-  const unlisted = summary.total - summary.files.length;
-  const detail = [
-    ...summary.files.map((file) => file.display),
-    ...(unlisted > 0 ? [`另有 ${unlisted} 個檔沒有列出`] : []),
-  ].join('\n');
-  return { label, detail };
-}
-
-function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefined } {
-  const { sources } = useControl();
-  const store = sources.changes?.summary;
-  const seq = tab.kind === 'changes' ? tab.seq : undefined;
-  const summary = useSyncExternalStore(store?.subscribe ?? noSubscribe, () =>
-    store === undefined || seq === undefined ? undefined : store.read(seq),
-  );
-  useEffect(() => {
-    if (store !== undefined && seq !== undefined) store.load(seq);
-  }, [store, seq]);
-  if (isPanelTab(tab)) return { label: PANELS[tab.kind].title, detail: undefined };
-  if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
-  if (tab.kind === 'plan') {
-    const title = sources.plans?.get(tab.id)?.title ?? tab.title ?? '計劃';
-    return { label: title, detail: title };
-  }
-  return changesTabTitle(typeof summary === 'object' ? summary : undefined);
-}
-
-const noSubscribe = () => () => {};
-
 function TabChip({
   tab,
   selected,
@@ -615,14 +554,8 @@ function TabChip({
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
   const key = tabKey(tab);
-  const { label, detail } = useTabTitle(tab);
-  const Icon = isPanelTab(tab)
-    ? PANELS[tab.kind].Icon
-    : tab.kind === 'changes'
-      ? FileDiff
-      : tab.kind === 'plan'
-        ? ScrollText
-        : FileText;
+  const { Icon, useTitle } = TAB_REGISTRY.definitionOf(tab);
+  const { label, detail } = useTitle(tab);
   return (
     <div
       role="none"
