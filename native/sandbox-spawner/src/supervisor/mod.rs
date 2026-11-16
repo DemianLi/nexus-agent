@@ -1524,6 +1524,11 @@ impl Supervisor {
         }
     }
 
+    /// 第二次連續失敗的窗長，也是之後加倍的起點。
+    fn thread_backoff_start(&self) -> Duration {
+        self.args.front_restart
+    }
+
     /// 一條 thread 失敗了一次。距這條上一次失敗不到 [`args::THREAD_BACKOFF_FORGET`] 才算連續，不然從第一次數。第一次不等（不把 #2905 修掉的那次
     /// 失敗長回來）；第二次起等 `--front-restart-ms`，每次加倍到 [`args::THREAD_BACKOFF_MAX`]（比 `--front-restart-ms` 小就用後者）。
     /// 不放棄。`--front-restart-ms 0` 時沒有間隔，也不會加倍。順手清掉過期的；表滿了丟最舊的。
@@ -1542,7 +1547,7 @@ impl Supervisor {
                 self.thread_backoff.remove(&oldest);
             }
         }
-        let start = self.args.front_restart;
+        let start = self.thread_backoff_start();
         let cap = args::THREAD_BACKOFF_MAX.max(start);
         let (failures, wait, next_wait) = match self.thread_backoff.get(&thread) {
             None => (1, Duration::ZERO, start),
