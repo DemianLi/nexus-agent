@@ -1,6 +1,7 @@
 /**
  * **第一次已經摘要過、送出去端點還是回超窗：三處的樣子**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)
- * PM 要求量清楚的邊界；歷史檔那一格在 [#1389](https://github.com/DemianLi/nexus-agent/issues/1389) 翻面）。
+ * 量清楚的邊界；讀回那一格見 [#1389](https://github.com/DemianLi/nexus-agent/issues/1389)、
+ * [#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
  *
  * 情境：訊息數門檻先到，基座用 N 則的保留量摘要一次（attempt 1），摘要之後的請求送出去，**端點回超窗**；
  * 分派器換上 retain 0 的實例，**從同一份 graph state 重新摘要**（attempt 2），再送一次。
@@ -11,14 +12,7 @@
  * | --- | --- |
  * | 日誌 | 兩筆 `compaction/summary` 都在（attempt 1 的先記在它那次 `model/start` 之前，那次超窗了）。**每一次主呼叫，從日誌推出的歷史都等於實際送出的**，包括升級之後那一次 |
  * | graph state | 訊息串沒有被動到（切點在組裝的切點表，同一步裡落定的是最後一次：單元見 `packages/nexus-core/src/summary-cutoffs.test.ts`「同一步 note 兩次」，整合見 `summary-shrink.test.ts`「不打摘要模型、不提交」那條） |
- * | 歷史檔 | **一個區段**：attempt 2 卸載的（含 attempt 1 那一則）。attempt 1 的寫入在同一步內被 attempt 2 取代，第 1 句只出現一次 |
- *
- * ## 歷史檔那一格的前後
- *
- * #1389 之前是兩個區段、第 1 句出現兩次。原因在基座：摘要之後的 handler 超窗它會再接一次、再摘要一次，而 attempt 1 的
- * 卸載已經寫進檔了（dsh 沒有這個形狀：壓縮是不寫檔的交易）。現在摘要器的 backend 換成暫存層
- * （`packages/nexus-core/src/summary-history-staging.ts`）：同一步內同一個路徑最後一次寫入勝出，這一步結束時才寫。
- * 兩個 attempt 都讀「已提交的」內容，所以第二個區段不含第一個的。
+ * | 讀回的原文 | 沒有歷史檔（兩筆的 `filePath` 都是 `null`，`files` 是空的）。從日誌讀回**一段**：attempt 2 卸下的（含 attempt 1 那一則）。兩筆帶同一個條目序號，後面那筆取代前面那筆，第 1 句只出現一次 |
  */
 
 import { mkdtemp } from 'node:fs/promises';
@@ -30,7 +24,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { replayConversation } from '@nexus/core';
+import { recallHistory, replayConversation } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -73,10 +67,8 @@ class RecordingModel extends BaseChatModel {
  * 摘要呼叫（沒有系統訊息的那種）反過來回短字串，不然摘要本身就比被取代的大。
  */
 const PAD = '內容'.repeat(80);
-/** 使用者那句墊得更長：第一次摘要取代的就是它一則，要比「框架＋歷史檔路徑」大得多。 */
+/** 使用者那句墊得更長：第一次摘要取代的就是它一則，要比框好的摘要大得多。 */
 const USER_PAD = '內容'.repeat(200);
-
-const SECTION = /## Summarized at [^\n]+\n\n/;
 
 async function converse(overflowOn: number) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-after-summary-'));
@@ -100,7 +92,7 @@ async function converse(overflowOn: number) {
     built.stepInbox,
   );
   const detach = built.attachSession(pump.sessions);
-  type Snapshot = { messages: number; history: string | undefined };
+  type Snapshot = { messages: number; files: string[] };
   const afterTurn: Snapshot[] = [];
   try {
     for (let turn = 1; turn <= 2; turn += 1) {
@@ -113,11 +105,11 @@ async function converse(overflowOn: number) {
       ).getState({ configurable: { thread_id: 'after-summary' } });
       const values = state.values as {
         messages: BaseMessage[];
-        files?: Record<string, { content?: string }>;
+        files?: Record<string, unknown>;
       };
       afterTurn.push({
         messages: values.messages.length,
-        history: Object.values(values.files ?? {})[0]?.content,
+        files: Object.keys(values.files ?? {}),
       });
     }
     return { events: [...pump.sessionLog.events], shared, afterTurn };
@@ -131,7 +123,7 @@ async function converse(overflowOn: number) {
 describe('第一次已經摘要過、送出去端點還是回超窗', () => {
   // 第 1 輪：呼叫 1。第 2 輪：呼叫 2、3 是摘要（索引條目、現況），呼叫 4 是摘要之後的請求——在這裡超窗；
   // 升級之後呼叫 5、6 是 retain 0 的摘要，呼叫 7 是重送。
-  it('日誌兩筆都在、推導與實送逐呼叫相等；state 的訊息串沒動；歷史檔一個區段', async () => {
+  it('日誌兩筆都在、推導與實送逐呼叫相等；state 的訊息串沒動；沒有歷史檔，日誌讀回一段', async () => {
     const { events, shared, afterTurn } = await converse(4);
 
     // 前提：真的走到了升級（第 5、6 次呼叫是摘要，第 7 次是重送）。
@@ -166,22 +158,34 @@ describe('第一次已經摘要過、送出去端點還是回超窗', () => {
     // 2. graph state：訊息串長度就是兩輪四則。
     expect(afterTurn[1]).toMatchObject({ messages: 4 });
 
-    // 3. 歷史檔：一個區段（attempt 2 的），第 1 句只出現一次（見檔頭，#1389）。
-    const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
-    expect(sections.map((text) => text.trim())).toEqual([
-      `Human: 第 1 句。${USER_PAD}\nAI: model, 第 1 次回話。${PAD}`,
+    // 3. 讀回的原文：沒有歷史檔；日誌讀回一段（attempt 2 的），第 1 句只出現一次（見檔頭）。
+    expect(summaries.map((event) => (event.data as { filePath: string | null }).filePath)).toEqual([
+      null,
+      null,
+    ]);
+    expect(afterTurn.map((snapshot) => snapshot.files)).toEqual([[], []]);
+    const recalled = recallHistory(events);
+    expect(recalled.failure).toBeUndefined();
+    expect(recalled.segments.map((segment) => segment.text)).toEqual([
+      `User: 第 1 句。${USER_PAD}\n\nAssistant: 第 1 次回話。${PAD}`,
     ]);
   });
 
-  it('對照：沒有超窗時只有一筆摘要事件、歷史檔一個區段', async () => {
+  it('對照：沒有超窗時只有一筆摘要事件、日誌讀回一段', async () => {
     const { events, afterTurn } = await converse(0);
 
     const summaries = events.filter((event) => event.type === 'compaction/summary');
     expect(summaries.map((event) => (event.data as { cutoffIndex: number }).cutoffIndex)).toEqual([
       1,
     ]);
-    expect(afterTurn[1]).toMatchObject({ messages: 4 });
-    const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
-    expect(sections.map((text) => text.trim())).toEqual([`Human: 第 1 句。${USER_PAD}`]);
+    expect(summaries.map((event) => (event.data as { filePath: string | null }).filePath)).toEqual([
+      null,
+    ]);
+    expect(afterTurn[1]).toMatchObject({ messages: 4, files: [] });
+    const recalled = recallHistory(events);
+    expect(recalled.failure).toBeUndefined();
+    expect(recalled.segments.map((segment) => segment.text)).toEqual([
+      `User: 第 1 句。${USER_PAD}`,
+    ]);
   });
 });

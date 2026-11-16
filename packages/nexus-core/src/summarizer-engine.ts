@@ -67,8 +67,8 @@ export interface SummarizerEngineOptions {
     readonly truncationText?: string;
   };
   /**
-   * 這次請求被摘掉的原文讀不讀得回來（會話日誌接上了，而且讀回的工具註冊了）。回 `true` 時前言指向那兩個工具：歷史檔寫成時，
-   * 這一句接在路徑那句後面；沒寫成時，改用只有這一句的前言，本文照樣包在 `<summary>` 裡。歷史檔照寫。省略等於一律 `false`。
+   * 這次請求被摘掉的原文讀不讀得回來（會話日誌接上了，而且讀回的工具註冊了）。回 `true` 時不寫歷史檔，前言只指向那兩個工具，
+   * 本文照樣包在 `<summary>` 裡。省略等於一律 `false`：寫歷史檔，寫成時前言指向那個檔。
    */
   readonly originalsRecallable?: (request: SessionRequest) => boolean;
   /**
@@ -118,12 +118,10 @@ const SUMMARY_PREAMBLE_HEAD =
 const SUMMARY_PREAMBLE_TAIL =
   ' should you need to refer back to it for details.\n\nA condensed summary follows:\n\n<summary>\n';
 const SUMMARY_CLOSE = '\n</summary>';
-// 原文讀得回來時（`originalsRecallable`）前言裡的那一句：歷史檔續接之後讀不到，會話日誌讀得到。`summaryPointsToRecall` 認的是這句的
-// 字面值，改了字，已寫進日誌的摘要在 wire 上的 `saved` 會變成 false。句子短：前言每多一個 token，
-// 「摘要要比被取代的原文小」（#1396）就多擋下一些短的摘要。
+// 原文讀得回來時（`originalsRecallable`）前言裡的那一句。`summaryPointsToRecall` 認的是這句的字面值，改了字，已寫進日誌的摘要在
+// wire 上的 `saved` 會變成 false。句子短：前言每多一個 token，「摘要要比被取代的原文小」（#1396）就多擋下一些短的摘要。
 const SUMMARY_RECALL_HINT = `Originals also stay in the session log: ${HISTORY_READ_TOOL_NAME} reads an <index> entry verbatim, ${HISTORY_SEARCH_TOOL_NAME} finds a literal string.`;
-const SUMMARY_RECALL_TAIL = ` should you need to refer back to it for details. ${SUMMARY_RECALL_HINT}\n\nA condensed summary follows:\n\n<summary>\n`;
-// 歷史檔沒寫成、但原文讀得回來時的前言。
+// 原文讀得回來時的前言：不寫歷史檔，只指向讀回工具。
 const SUMMARY_RECALL_PREAMBLE = `You are in the middle of a conversation that has been summarized.\n\n${SUMMARY_RECALL_HINT}\n\nA condensed summary follows:\n\n<summary>\n`;
 const SUMMARY_PLAIN_PREFIX = 'Here is a summary of the conversation to date:\n\n';
 
@@ -575,10 +573,10 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     filePath: string | null,
     recallable: boolean,
   ): HumanMessage {
-    const content = filePath
-      ? `${SUMMARY_PREAMBLE_HEAD}${filePath}${recallable ? SUMMARY_RECALL_TAIL : SUMMARY_PREAMBLE_TAIL}${summary}${SUMMARY_CLOSE}`
-      : recallable
-        ? `${SUMMARY_RECALL_PREAMBLE}${summary}${SUMMARY_CLOSE}`
+    const content = recallable
+      ? `${SUMMARY_RECALL_PREAMBLE}${summary}${SUMMARY_CLOSE}`
+      : filePath
+        ? `${SUMMARY_PREAMBLE_HEAD}${filePath}${SUMMARY_PREAMBLE_TAIL}${summary}${SUMMARY_CLOSE}`
         : `${SUMMARY_PLAIN_PREFIX}${summary}`;
     return new HumanMessage({ content, additional_kwargs: { lc_source: 'summarization' } });
   }
@@ -590,8 +588,9 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     total: number,
   ): Promise<{ summaryMessage: HumanMessage; filePath: string | null }> {
     const recallable = originalsRecallable?.(request) === true;
-    const filePath = await offloadToBackend(messagesToSummarize, request);
-    if (filePath === null)
+    // 原文讀得回來時不另存一份：日誌那份續接之後照樣讀得到，同一份原文不留兩個來源。
+    const filePath = recallable ? null : await offloadToBackend(messagesToSummarize, request);
+    if (filePath === null && !recallable)
       console.warn(
         '[SummarizationMiddleware] Backend offload failed during summarization. Proceeding with summary generation.',
       );

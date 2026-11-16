@@ -524,23 +524,8 @@ describe('摘要器引擎', () => {
     ]);
   });
 
-  it('原文讀得回來：前言在歷史檔那一句後面多一句指向讀回工具，歷史檔照寫', async () => {
+  it('原文讀得回來：不寫歷史檔，前言只指向讀回工具，本文照樣包在 <summary> 裡', async () => {
     const { engine, store } = engineWith({ originalsRecallable: () => true });
-    const step = await engineStep(engine, turns(8));
-    const head = step.contents[0]!;
-    expect(head).toBe(
-      'You are in the middle of a conversation that has been summarized.\n\n' +
-        `The full conversation history has been saved to ${PATH} should you need to refer back to it for details. ` +
-        'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
-        `A condensed summary follows:\n\n<summary>\n${ENTRY_1}\n<state>\n摘要 1\n</state>\n</summary>`,
-    );
-    expect(summaryPointsToRecall(head)).toBe(true);
-    expect(summaryFilePathOf(step.sent[0]!)).toBe(PATH);
-    expect(store.calls).toEqual([`download ${PATH}`, `write ${PATH}`]);
-  });
-
-  it('原文讀得回來、歷史檔寫不進去：前言只指向讀回工具，本文照樣包在 <summary> 裡', async () => {
-    const { engine } = engineWith({ failWrite: true, originalsRecallable: () => true });
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const step = await engineStep(engine, turns(8));
@@ -552,6 +537,8 @@ describe('摘要器引擎', () => {
       );
       expect(summaryPointsToRecall(head)).toBe(true);
       expect(summaryFilePathOf(step.sent[0]!)).toBeNull();
+      expect(store.calls).toEqual([]);
+      expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }

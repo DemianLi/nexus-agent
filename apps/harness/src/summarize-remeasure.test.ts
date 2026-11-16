@@ -17,7 +17,7 @@ import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry, SUMMARY_ENTRY_INSTRUCTION } from '@nexus/core';
+import { recallHistory, SessionRegistry, SUMMARY_ENTRY_INSTRUCTION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -81,9 +81,6 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** 歷史檔在 checkpoint `files` 裡的鍵（同 `summary-history-staging.test.ts`）。 */
-const HISTORY_FILE = /^\/session_[^/]+\.md$/;
-
 async function converse(options: {
   readonly users: readonly string[];
   readonly replies: string[];
@@ -93,7 +90,8 @@ async function converse(options: {
 }): Promise<{
   readonly calls: readonly Call[];
   readonly events: readonly SessionEvent[];
-  readonly history: readonly string[];
+  /** checkpoint `files` 的鍵。 */
+  readonly files: readonly string[];
   readonly warns: readonly string[];
 }> {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -114,20 +112,19 @@ async function converse(options: {
   const sessions = new SessionRegistry('remeasure');
   const detach = attachSession(sessions);
   try {
-    for (const text of options.users)
+    for (const text of options.users) {
+      // 照回合驅動層的樣子先記一筆 `turn/start`：`invoke` 自己不寫，少了它日誌推不出被摘掉的原文。
+      sessions.root.append('turn/start', { kind: 'message', text });
       await agent.invoke(toAgentInvocation(text), { configurable: { thread_id: 'remeasure' } });
+    }
     const state = await (
       agent as unknown as { getState(config: unknown): Promise<{ values: unknown }> }
     ).getState({ configurable: { thread_id: 'remeasure' } });
-    const history = Object.entries(
-      (state.values as { files?: Record<string, { content?: string }> }).files ?? {},
-    )
-      .filter(([path]) => HISTORY_FILE.test(path))
-      .map(([, data]) => data.content ?? '');
+    const files = Object.keys((state.values as { files?: Record<string, unknown> }).files ?? {});
     return {
       calls: [...model.log],
       events: [...sessions.root.events],
-      history,
+      files,
       warns: warn.mock.calls.map((call) => String(call[0])),
     };
   } finally {
@@ -155,7 +152,7 @@ describe('摘要完仍超過門檻：換 retain 0 再摘一次', () => {
     expect(remeasureWarns(run.warns)).toEqual([]);
   });
 
-  it('白做的第一次摘要不留痕：日誌只有一筆 compaction/summary，歷史檔只有一段、原文不重複', async () => {
+  it('白做的第一次摘要不留痕：日誌只有一筆 compaction/summary，讀回一段、原文不重複', async () => {
     const run = await converse({
       users: [FIRST, '短句'],
       replies: [BIG, '收到。'],
@@ -166,9 +163,14 @@ describe('摘要完仍超過門檻：換 retain 0 再摘一次', () => {
     // 交出去的是第二次（retain 0）的那份。
     expect(JSON.stringify(logged[0]!.data)).toContain('摘要二。');
     expect(JSON.stringify(logged[0]!.data)).not.toContain('摘要一。');
-    expect(run.history).toHaveLength(1);
-    expect(occurrences(run.history[0]!, '第一句')).toBe(1);
-    expect(occurrences(run.history[0]!, '大段')).toBe(1);
+    // 原文從日誌讀回，不寫歷史檔。
+    expect((logged[0]!.data as { filePath: string | null }).filePath).toBeNull();
+    expect(run.files).toEqual([]);
+    const recalled = recallHistory(run.events);
+    expect(recalled.failure).toBeUndefined();
+    expect(recalled.segments).toHaveLength(1);
+    expect(occurrences(recalled.segments[0]!.text, '第一句')).toBe(1);
+    expect(occurrences(recalled.segments[0]!.text, '大段')).toBe(1);
   });
 
   it('第一次摘要後已經低於門檻 → 只摘要一次', async () => {

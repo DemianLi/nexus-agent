@@ -6,10 +6,11 @@
  *
  * 1. 下一輪不再摘要（窗口換大、或重新量過沒到門檻）：模型收到完整原文，日誌推出來的卻套用了那筆事件
  *    —— 推導與實送對不上（#1339 的驗收條件）。
- * 2. 下一輪又要摘要：從沒摘要過的狀態重摘，歷史檔疊一份重複的區段（#1389）。
+ * 2. 下一輪又要摘要：從沒摘要過的狀態重摘，日誌讀回的段落把同一段原文疊兩份（#1389）。
  *
  * 切點表見 `packages/nexus-core/src/summary-cutoffs.ts`。這裡走產品路徑（`ThreadPump` 管日誌、
- * 使用者訊息也進日誌，日誌推導才有東西可比），零憑證、零外部連線。
+ * 使用者訊息也進日誌，日誌推導才有東西可比）。這條路徑不寫歷史檔，被摘掉的原文從日誌讀回（`recallHistory`），
+ * 量的是讀回的段落。零憑證、零外部連線。
  *
  * ## 窗口怎麼變
  *
@@ -24,12 +25,13 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   ModelSelectionController,
+  recallHistory,
   replayConversation,
   SUMMARY_ENTRY_INSTRUCTION,
   SUMMARY_PROMPT,
   tagModelRoute,
 } from '@nexus/core';
-import type { ModelContextLimits } from '@nexus/core';
+import type { ModelContextLimits, RecalledHistory } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -42,7 +44,6 @@ import type { PumpAgent } from './thread-pump.js';
 const SMALL: ModelContextLimits = { contextWindow: 4_200, maxOutputTokens: 200 };
 const BIG: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
 
-const SECTION = /## Summarized at [^\n]+\n\n/;
 const SUMMARY_MARK = SUMMARY_PROMPT.split('\n')[0]!;
 const ENTRY_MARK = SUMMARY_ENTRY_INSTRUCTION.split('\n')[0]!;
 /** 摘要的兩次呼叫：索引條目、現況。 */
@@ -87,8 +88,13 @@ interface Snapshot {
   readonly reason: string | undefined;
   /** 這一輪日誌上新增的 `compaction/summary` 切點。 */
   readonly logCutoffs: number[];
-  /** 這一輪結束後歷史檔的各個區段（去掉標題行、換行換成 ` | `）。 */
-  readonly sections: string[];
+  /** 同上那幾筆的 `filePath`。 */
+  readonly filePaths: (string | null)[];
+  /** 這一輪結束後 checkpoint `files` 的鍵。 */
+  readonly files: string[];
+  /** 這一輪結束時從日誌讀回的段落（一則訊息一行，以 ` | ` 相接）。 */
+  readonly segments: string[];
+  readonly failure: RecalledHistory['failure'];
 }
 
 async function converse(options: {
@@ -152,24 +158,21 @@ async function converse(options: {
       const state = await (
         built.agent as unknown as { getState(config: unknown): Promise<{ values: unknown }> }
       ).getState({ configurable: { thread_id: 'catch-up' } });
-      const values = state.values as {
-        files?: Record<string, { content?: string }>;
-      };
+      const values = state.values as { files?: Record<string, unknown> };
       const slice = pump.sessionLog.events.slice(before);
       const end = [...slice]
         .reverse()
         .find((event) => event.type === 'turn/end' || event.type === 'turn/failed');
+      const summaries = slice.filter((event) => event.type === 'compaction/summary');
+      const recalled = recallHistory(pump.sessionLog.events);
       snapshots.push({
         end: end?.type,
         reason: (end?.data as { reason?: { kind?: string } } | undefined)?.reason?.kind,
-        logCutoffs: slice
-          .filter((event) => event.type === 'compaction/summary')
-          .map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
-        sections: (Object.values(values.files ?? {})[0]?.content ?? '')
-          .split(SECTION)
-          .map((text) => text.trim())
-          .filter((text) => text !== '')
-          .map((text) => text.replace(/\n/g, ' | ')),
+        logCutoffs: summaries.map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
+        filePaths: summaries.map((event) => (event.data as { filePath: string | null }).filePath),
+        files: Object.keys(values.files ?? {}),
+        segments: recalled.segments.map((segment) => segment.text.replace(/\n\n/g, ' | ')),
+        failure: recalled.failure,
       });
     }
     return { model, snapshots, events: [...pump.sessionLog.events] };
@@ -181,6 +184,18 @@ async function converse(options: {
 }
 
 type Run = Awaited<ReturnType<typeof converse>>;
+
+/** 每一輪：沒有歷史檔、日誌上每一筆的 `filePath` 是 `null`、日誌推得到底（段落沒有在半途斷掉）。 */
+function expectReadBackFromLog(run: Run): void {
+  for (const [index, snapshot] of run.snapshots.entries()) {
+    expect(snapshot.files, `第 ${index + 1} 輪`).toEqual([]);
+    expect(snapshot.filePaths.every((path) => path === null)).toBe(true);
+    expect(snapshot.failure, `第 ${index + 1} 輪`).toBeUndefined();
+  }
+}
+
+/** 第 2 輪那次摘要卸下的：第 1 輪的一問一答。 */
+const FIRST_SEGMENT = `User: ${H1} | Assistant: ${A1}`;
 
 /** 每一次主呼叫：從日誌推出的歷史，是不是實際送出的那一串。回逐次的結果（`'EQ'` 或差在哪）。 */
 function derivedVersusActual(run: Run): string[] {
@@ -220,11 +235,12 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
     expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
 
-    // 日誌推導＝實送：第 3 輪那次呼叫是修之前對不上的那一次。
+    // 日誌推導＝實送：第 3 輪那次呼叫是切點沒接上時會對不上的那一次。
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
 
-    // 歷史檔只有第 2 輪摘要卸下的那一段。
-    expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
+    // 日誌讀回的只有第 2 輪摘要卸下的那一段。
+    expectReadBackFromLog(run);
+    expect(run.snapshots[2]!.segments).toEqual([FIRST_SEGMENT]);
   });
 
   /**
@@ -250,14 +266,15 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
 
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
-    expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
+    expectReadBackFromLog(run);
+    expect(run.snapshots[2]!.segments).toEqual([FIRST_SEGMENT]);
   });
 
   /**
-   * 下一輪又要摘要：切點接著提交過的那一筆，不從頭重摘。**沒接上的話第二個區段會把第一個區段的內容再抄一遍。**
+   * 下一輪又要摘要：切點接著提交過的那一筆，不從頭重摘。**沒接上的話第二段會把第一段的內容再讀回一遍。**
    * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要、4 ＝ 請求（503）、5、6 ＝ 第 3 輪的摘要、7 ＝ 第 3 輪的請求。
    */
-  it('503 之後下一輪又摘要：歷史檔不疊區段，兩段內容互不重複', async () => {
+  it('503 之後下一輪又摘要：日誌讀回兩段，內容互不重複', async () => {
     const run = await converse({
       script: [
         ok(A1),
@@ -274,12 +291,13 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
     expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(4);
 
-    const sections = run.snapshots[2]!.sections;
-    expect(sections).toHaveLength(2);
+    expectReadBackFromLog(run);
+    const segments = run.snapshots[2]!.segments;
+    expect(segments).toHaveLength(2);
     // 第一段：第 2 輪卸下的；第二段：第 3 輪新卸下的（第 2 輪那句長的），不含第一段的任何一則。
-    expect(sections[0]).toBe(`Human: ${H1} | AI: model, ${A1}`);
-    expect(sections[1]).toBe(`Human: ${LONG}`);
-    expect(sections[1]).not.toContain('第 1 句');
+    expect(segments[0]).toBe(FIRST_SEGMENT);
+    expect(segments[1]).toBe(`User: ${LONG}`);
+    expect(segments[1]).not.toContain('第 1 句');
 
     // 第 3 輪的切點接著第 2 輪那筆（2）往後走。
     const [first, second] = [run.snapshots[1]!.logCutoffs[0]!, run.snapshots[2]!.logCutoffs[0]!];
@@ -287,8 +305,8 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
   });
 
-  /** 沒有失敗：一筆事件、一個區段。 */
-  it('沒有失敗：一筆事件、一個區段', async () => {
+  /** 沒有失敗：一筆事件、讀回一段。 */
+  it('沒有失敗：一筆事件、讀回一段', async () => {
     const run = await converse({
       script: [ok(A1), ENTRY, ok('摘要一'), ok('好 2'), ok('好 3')],
       rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
@@ -297,7 +315,8 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/end', 'turn/end']);
     expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
-    expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
+    expectReadBackFromLog(run);
+    expect(run.snapshots[2]!.segments).toEqual([FIRST_SEGMENT]);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
   });
 

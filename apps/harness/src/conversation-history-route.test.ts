@@ -7,6 +7,9 @@
  * 的 default backend，所以修在同一個地方：{@link ./agent-factory.ts} 把這個前綴跟工具結果暫存一樣
  * 路由到獨立的 `StateBackend`。
  *
+ * 摘要器只在查不到會話日誌的呼叫寫歷史檔：接了日誌時被摘掉的原文從日誌讀回（`history_read`／`history_search`），
+ * 不另存一份。所以量路由的組裝不接日誌；接了日誌的那一組另外量「沒有歷史檔、原文從日誌讀得回來」。
+ *
  * **判準一律是兩件事一起：工作區裡沒有那個目錄，而且下一輪讀得回來。** 只看前一件會把
  * 「搬走了而且留得住」與「整個丟了」讀成同一件事——後者也會讓工作區是空的。
  *
@@ -22,8 +25,8 @@ import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
 import type { AgentLoopKind } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
-import type { SessionEventMap } from '@nexus/core';
+import { recallHistory, SessionRegistry } from '@nexus/core';
+import type { SessionEvent, SessionEventMap } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -72,7 +75,7 @@ async function assembly(mode: SandboxMode, loop: AgentLoopKind): Promise<Assembl
   };
 }
 
-/** native 那條 thread 的 `files` 裡每一份的路徑與內容，一份一行接起來。 */
+/** 那條 thread 的 `files` 裡每一份的路徑與內容，一份一行接起來。 */
 async function threadFiles(agent: object): Promise<string> {
   const snapshot = await (
     agent as { getState(config: unknown): Promise<{ readonly values: unknown }> }
@@ -89,14 +92,31 @@ async function threadFiles(agent: object): Promise<string> {
     .join('\n');
 }
 
+/** 摘要前言裡歷史檔的路徑：`The full conversation history has been saved to <路徑> should you need …`。 */
+const SAVED_TO = /has been saved to (\S+) should you need/;
+
+interface Summarized {
+  /** 模型收到的每一則摘要訊息前言裡的歷史檔路徑；前言沒有路徑的記 `undefined`。 */
+  readonly savedTo: (string | undefined)[];
+  /** 日誌上的 `compaction/summary`；沒接日誌是空的。 */
+  readonly summaries: CompactionSummary[];
+  /** 日誌的全部事件；沒接日誌是空的。 */
+  readonly events: readonly SessionEvent[];
+  /** 那條 thread 的 `files`（{@link threadFiles}）。 */
+  readonly files: string;
+}
+
 /**
  * 用 fold 自己建的摘要器跑到壓縮發生。**不是 plugin 同名換掉的那一顆**：那一顆自帶 backend，
  * 歷史去哪是它自己選的，不經過組裝點。
+ *
+ * @param options.log - 接不接會話日誌。接了的話每一句先照回合驅動層的樣子記一筆 `turn/start`（`invoke` 自己不寫它），
+ *   日誌才推得出被摘掉的那幾段。
  */
 async function summarize(
   target: Assembly,
-  historyPathPrefix?: string,
-): Promise<{ readonly summaries: CompactionSummary[]; readonly files: string }> {
+  options: { readonly log: boolean; readonly historyPathPrefix?: string },
+): Promise<Summarized> {
   const model = new ScriptedChatModel({
     turns: Array.from({ length: 12 }, (_, index) => ({
       content: `第 ${index + 1} 次回話。${PAD}`,
@@ -111,27 +131,35 @@ async function summarize(
     summarization: {
       trigger: [{ type: 'messages', value: 3 }],
       retainTokens: 1,
-      ...(historyPathPrefix !== undefined && { historyPathPrefix }),
+      ...(options.historyPathPrefix !== undefined && {
+        historyPathPrefix: options.historyPathPrefix,
+      }),
     },
   });
-  const sessions = new SessionRegistry(THREAD);
-  const detach = attachSession(sessions);
+  const sessions = options.log ? new SessionRegistry(THREAD) : undefined;
+  const detach = sessions === undefined ? undefined : attachSession(sessions);
   let files = '';
   try {
     for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-      await agent.invoke(toAgentInvocation(`${line}${PAD}`), {
-        configurable: { thread_id: THREAD },
-      });
+      const text = `${line}${PAD}`;
+      sessions?.root.append('turn/start', { kind: 'message', text });
+      await agent.invoke(toAgentInvocation(text), { configurable: { thread_id: THREAD } });
     }
-    if (target.loop === 'native') files = await threadFiles(agent);
+    files = await threadFiles(agent);
   } finally {
-    detach();
+    detach?.();
     await dispose();
   }
-  const summaries = sessions.root.events
+  const savedTo = model.prompts.flatMap((prompt) =>
+    prompt
+      .filter((message) => message.additional_kwargs.lc_source === 'summarization')
+      .map((message) => SAVED_TO.exec(message.text)?.[1]),
+  );
+  const events = sessions?.root.events ?? [];
+  const summaries = events
     .filter((event) => event.type === 'compaction/summary')
     .map((event) => event.data as CompactionSummary);
-  return { summaries, files };
+  return { savedTo, summaries, events, files };
 }
 
 /**
@@ -169,14 +197,15 @@ const LOOPS = ['langgraph', 'native'] as const;
 const CELLS = MODES.flatMap((mode) => LOOPS.map((loop) => [mode, loop] as const));
 
 describe.each(CELLS)('摘要器的歷史（%s，%s）', (mode, loop) => {
-  it('不落進工作區，下一輪讀得回來', async () => {
+  it('沒接日誌：不落進工作區，下一輪讀得回來', async () => {
     const target = await assembly(mode, loop);
-    const { summaries, files } = await summarize(target);
+    const { savedTo, files } = await summarize(target, { log: false });
 
-    // 先證明壓縮真的發生了，而且記下的路徑就是那個前綴——少了這一句，沒觸發摘要也會讓
+    // 先證明壓縮真的發生了，而且模型收到的摘要指向的就是那個前綴——少了這一句，沒觸發摘要也會讓
     // 下面兩條通過。
-    expect(summaries.length).toBeGreaterThan(0);
-    for (const summary of summaries) expect(summary.filePath).toMatch(/^\/conversation_history\//);
+    expect(savedTo.length).toBeGreaterThan(0);
+    for (const path of savedTo)
+      expect(path).toMatch(/^\/conversation_history\/session_[0-9a-f]+\.md$/);
 
     expect(await entries(target.root)).not.toContain('conversation_history');
     // **斷言的是命中的那一行，不是字串本身**：找不到時 `grep` 回的是
@@ -188,6 +217,24 @@ describe.each(CELLS)('摘要器的歷史（%s，%s）', (mode, loop) => {
     expect(await grepFromNextTurn(target, 'Summarized at', '/conversation_history')).toMatch(
       /\d+: ## Summarized at/,
     );
+  });
+
+  it('接了日誌：不寫歷史檔，工作區也沒有，原文從日誌讀得回來', async () => {
+    const target = await assembly(mode, loop);
+    const { savedTo, summaries, events, files } = await summarize(target, { log: true });
+
+    expect(summaries.length).toBeGreaterThan(0);
+    for (const summary of summaries) expect(summary.filePath).toBeNull();
+    // 模型收到的摘要前言不指向任何路徑。
+    expect(savedTo.length).toBeGreaterThan(0);
+    expect(savedTo.every((path) => path === undefined)).toBe(true);
+    expect(await entries(target.root)).not.toContain('conversation_history');
+    expect(files).not.toContain('Summarized at');
+    // 不是整個丟了：第一句在日誌推出來的第一段裡逐字讀得回來。
+    const { segments, failure } = recallHistory(events);
+    expect(failure).toBeUndefined();
+    expect(segments).toHaveLength(summaries.length);
+    expect(segments[0]!.text.startsWith(`User: 第一句。${PAD}`)).toBe(true);
   });
 });
 
@@ -230,14 +277,29 @@ describe.each(MODES)('超大 human message（%s，langgraph）', (mode) => {
 });
 
 /**
- * **自訂前綴不路由，照舊落在它自己的 backend 上。** 只路由基座的那個常數：那是兩個寫入者
+ * **沒接日誌時，自訂前綴不路由，落在它自己的 backend 上。** 只路由基座的那個常數：那是兩個寫入者
  * 共用、而且 eviction 寫死的那一個。明著換掉前綴等於明著選了去向，這條逃生口留著。
  */
 it('自訂的 historyPathPrefix 照舊落在工作區', async () => {
   const target = await assembly('workspace-write', 'langgraph');
-  const { summaries } = await summarize(target, '/ours');
+  const { savedTo } = await summarize(target, { log: false, historyPathPrefix: '/ours' });
 
-  expect(summaries.length).toBeGreaterThan(0);
+  expect(savedTo.length).toBeGreaterThan(0);
+  for (const path of savedTo) expect(path).toMatch(/^\/ours\//);
   expect((await entries(target.root, 'ours')).length).toBeGreaterThan(0);
   expect(await entries(target.root)).not.toContain('conversation_history');
+});
+
+/**
+ * 預設前綴路由到 thread state，工作區本來就看不到它；自訂前綴落在工作區，接了日誌時沒寫歷史檔才看得出來。
+ */
+it('接了日誌：自訂的 historyPathPrefix 底下也沒有歷史檔', async () => {
+  const target = await assembly('workspace-write', 'langgraph');
+  const { savedTo, summaries } = await summarize(target, { log: true, historyPathPrefix: '/ours' });
+
+  expect(summaries.length).toBeGreaterThan(0);
+  for (const summary of summaries) expect(summary.filePath).toBeNull();
+  expect(savedTo.length).toBeGreaterThan(0);
+  expect(savedTo.every((path) => path === undefined)).toBe(true);
+  expect(await entries(target.root, 'ours')).toEqual([]);
 });
