@@ -15,8 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { COST_NO_USAGE, COST_RELOAD_LABEL } from '@/features/cost/panel';
 import { RightSidebarToggle } from '@/app/right-sidebar/right-sidebar';
-import { PANELS } from '@/app/right-sidebar/panels';
-import type { PanelBodyProps } from '@/shared/right-sidebar/api';
+import { COST_TAB } from './sidebar-tab';
+import type { TabBodyProps } from '@/shared/right-sidebar/tab';
 import { COST_HEADLINE, COST_LIMITS } from '@/features/cost/view';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
@@ -312,13 +312,13 @@ describe('成本分頁：藏起來就不讀、不重算', () => {
   /** 數面板內容被畫了幾次：把真的內容包進 `Profiler`，只有它底下有東西提交才算。 */
   function countCommits() {
     const counter = { commits: 0 };
-    const Real = PANELS.cost.Body;
-    (PANELS.cost as unknown as { Body: unknown }).Body = (props: PanelBodyProps) => (
+    const Real = COST_TAB.Body;
+    (COST_TAB as unknown as { Body: unknown }).Body = (props: TabBodyProps<{ kind: string }>) => (
       <Profiler id="cost" onRender={() => (counter.commits += 1)}>
         <Real {...props} />
       </Profiler>
     );
-    return { counter, restore: () => ((PANELS.cost as unknown as { Body: unknown }).Body = Real) };
+    return { counter, restore: () => ((COST_TAB as unknown as { Body: unknown }).Body = Real) };
   }
 
   it('看得見時：逐字片段照畫但不重讀子代理；切走之後不畫也不讀；切回來讀一次最新的', async () => {

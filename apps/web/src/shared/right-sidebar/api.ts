@@ -1,5 +1,5 @@
 /**
- * 右側欄的契約型別：內容從哪讀（`RightSidebarSources`）、卡片用得到的那一半（`RightSidebarApi`）、面板內容拿到的東西
+ * 右側欄的契約型別：內容從哪讀（`RightSidebarSources`）、卡片用得到的那一半（`RightSidebarApi`）、單例面板內容拿到的東西
  * （`PanelBodyProps`）、「顯示某一輪」的請求（`TurnReveal`）。全是型別，沒有執行期內容。
  *
  * 放在 `shared/right-sidebar/` 而不是 `app/right-sidebar/`：側欄是樞紐，面板與卡片都要用這幾個型別，型別若住在側欄元件裡，
@@ -12,16 +12,18 @@ import type { DeliverableDownloader } from '@/features/deliverable/download';
 import type { DeliverableFileStore } from '@/features/deliverable/file';
 import type { LocatedFile } from '@/features/deliverable/view';
 import type { PlanDocument, PlanScanOutcome } from '@/shared/connection/plan-document';
-import type { PanelKind } from '@/shared/right-sidebar/layout';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
 import type { TrajectoryPuller } from '@/features/trace/trajectory-pull';
+
+/** 單例面板的種類（觀測、成本）：`openPanel` 的參數。 */
+export type PanelKind = 'trace' | 'cost';
 
 /** 內容從哪裡讀：跟著這條會話的畫面走（`app/App.tsx` 建）。 */
 export interface RightSidebarSources {
   readonly changes?: ChangesStores | undefined;
   readonly deliverableFiles?: DeliverableFileStore | undefined;
   readonly deliverableDownload?: DeliverableDownloader | undefined;
-  /** 對話裡的計劃，以 {@link SidebarTab} 的 `plan` id 為鍵（#654）。 */
+  /** 對話裡的計劃，以計劃分頁的 id 為鍵（#654）。 */
   readonly plans?: ReadonlyMap<string, PlanDocument> | undefined;
   /**
    * 對話狀態的可訂閱 store（#1033），觀測分頁讀它。**放的是 store 不是 `ConversationState`**：`sources` 一變身分，
@@ -89,7 +91,7 @@ export interface RightSidebarApi {
   revealReply(messageId: string, from?: HTMLElement | null): void;
 }
 
-/** 面板內容拿到的東西，由 `right-sidebar.tsx` 的 `TabBody` 給。 */
+/** 單例面板內容拿到的東西，由各切片的 `sidebar-tab.tsx` 從 `TabBodyProps` 與 context 組出來。 */
 export interface PanelBodyProps {
   /**
    * 現在看得見嗎：右側欄開著、而且是選中的這一個分頁。分頁藏起來時不卸載（保住捲動位置），所以內容要靠它判斷

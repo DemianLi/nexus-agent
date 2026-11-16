@@ -46,11 +46,6 @@ const EXCEPTIONS: readonly Exception[] = [
     ],
     why: '右側欄的契約型別直接指向各分頁的資料型別；走入口會讓契約檔跟著載入各切片的元件。等 #2883 的右側欄分頁登記',
   },
-  {
-    file: 'shared/right-sidebar/layout.ts',
-    targets: ['features/deliverable/view', 'features/plan/review-view'],
-    why: '右側欄的版面推導直接讀分頁的檢視模型。等 #2883 的右側欄分頁登記',
-  },
 ];
 
 type Zone = { kind: 'slice'; name: string } | { kind: 'app' } | { kind: 'shared' };
