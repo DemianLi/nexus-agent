@@ -213,9 +213,10 @@ function toolBody(entry: ToolEntry, view: ReturnType<typeof toStep>): ReactNode 
   } else if (view.presented !== undefined && view.presented.length > 0)
     parts.push(<PresentedFileList key="presented" files={view.presented} />);
   else if (view.todos !== undefined) parts.push(<TodoList key="todos" todos={view.todos} />);
-  else if (view.readCard !== undefined) parts.push(<ToolRead key="read" card={view.readCard} />);
-  else if (view.searchCard !== undefined)
-    parts.push(<ToolSearch key="search" card={view.searchCard} />);
+  else if (view.result?.kind === 'read')
+    parts.push(<ToolRead key="read" card={view.result.card} />);
+  else if (view.result?.kind === 'search')
+    parts.push(<ToolSearch key="search" card={view.result.card} />);
   if (view.truncated !== undefined) {
     const partial = view.truncated.partial.trim() !== '';
     parts.push(
