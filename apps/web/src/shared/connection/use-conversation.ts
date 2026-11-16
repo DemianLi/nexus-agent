@@ -53,13 +53,13 @@ import {
   EMBED_UNAUTHORIZED_TEXT,
   StreamUnauthorizedError,
 } from '@/shared/connection/embed-unauthorized';
-import { sendRejectionText } from '@/features/attachments/send';
 import { resolvedClientTimeZone } from '@/shared/connection/client-time-zone';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import type { ConversationStore } from '@/shared/connection/conversation-store';
+import { goalPauseFailureText } from '@/shared/connection/goal-pause';
 import { FramePublisher, publicationOf } from '@/shared/connection/frame-publisher';
 import type { Publication } from '@/shared/connection/frame-publisher';
-import { goalPauseFailureText } from '@/features/goal/bar-view';
+import { sendRejectionText } from '@/shared/connection/send-rejection';
 import {
   FEEDBACK_COMMAND_LINE,
   PLAN_EXIT_LINE,

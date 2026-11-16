@@ -61,11 +61,10 @@ src/
 
 ### 例外
 
-兩處共用層的檔還在 import 切片，登記在 `src/architecture.test.ts` 的例外清單。清單只能變短，列了卻沒命中會紅。
+共用層還有右側欄的兩個檔在 import 切片，登記在 `src/architecture.test.ts` 的例外清單。清單只能變短，列了卻沒命中會紅。
 
 | 檔                                                              | 為什麼                                               | 什麼時候拿掉                                                                                       |
 | --------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `shared/connection/use-conversation.ts`                         | 連線核心還拉著兩條錯誤文案（送出被拒、暫停目標失敗） | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「下行錯誤碼轉文案收成一個 module」 |
 | `shared/right-sidebar/api.ts`、`shared/right-sidebar/layout.ts` | 分頁要的資料來源集中在一個型別裡，用到各分頁的型別   | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「右側欄分頁登記」                  |
 
 ## 新東西放哪
