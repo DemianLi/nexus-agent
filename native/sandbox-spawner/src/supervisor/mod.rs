@@ -203,6 +203,11 @@ struct Conversation {
     idle_since: Option<Instant>,
     /// 最後一次被 `ensure` 要到、被起、或從預熱池指派的時間；逐出的先後與閒置時限都從它與 `idle_since` 較晚的那個算。
     used_at: Instant,
+    /// spawn 它的時間，等 `ready` 的期限（`--start-timeout-ms`）從這裡算。不用 `used_at`：它在 `ensure` 要到、從預熱池指派時都會更新，
+    /// 預熱池裡的一被指派就等於重新起算。只有監督行程被停住過時才重設（[`Supervisor::check_resumed`]）。
+    started_at: Instant,
+    /// 等 `ready` 超過期限被監督行程殺的；稽核記 `error`。
+    timed_out: bool,
     /// 送出 `drain`、還沒收到回答的時間點。
     drain: Option<Instant>,
     /// 只讀開啟時被前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 或收到 `turn(begin)` 就清掉。
@@ -289,6 +294,12 @@ impl Conversation {
     /// 預熱池裡的（還沒指派 thread、沒在收）。
     fn warm(&self) -> bool {
         self.thread.is_none() && self.proc.stop.is_none()
+    }
+
+    /// 還在等 `ready`、沒在收、也不是一對的葉子（那一種由組合行程的 `ready` 管，見 [`Composition::starting_since`]）：從什麼時候起。
+    fn starting_since(&self) -> Option<Instant> {
+        (self.phase == Phase::Starting && self.pair.is_none() && self.proc.stop.is_none())
+            .then_some(self.started_at)
     }
 
     /// 送出 `bind` 之後、還沒在收，而且已經 `stall` 沒聽到它（壓住時停住的時間不算，見 [`cpu::Guard::silence`]）。
@@ -1586,6 +1597,8 @@ impl Supervisor {
                     read_only: open == OpenMode::ReadOnly,
                     idle_since: None,
                     used_at: Instant::now(),
+                    started_at: Instant::now(),
+                    timed_out: false,
                     drain: None,
                     released: false,
                     rss_now_kb: 0,
@@ -2485,6 +2498,8 @@ mod tests {
             read_only: false,
             idle_since: None,
             used_at: Instant::now(),
+            started_at: Instant::now(),
+            timed_out: false,
             drain: None,
             released: false,
             rss_now_kb: 0,
@@ -3279,6 +3294,41 @@ mod tests {
             supervisor.check_starts(now);
             assert!(supervisor.compositions[0].proc.stop.is_none(), "{tag}");
         }
+    }
+
+    /// 不成對的對話行程等 `ready` 的起點：停在 `Starting`、不是一對的葉子、沒在收才有；一對的葉子由組合行程那一條管，兩邊都算會殺兩次。
+    #[test]
+    fn only_an_unpaired_conversation_waiting_for_ready_has_a_start_time() {
+        let mut starting = conversation(1, 1, false);
+        starting.phase = Phase::Starting;
+        assert_eq!(starting.starting_since(), Some(starting.started_at));
+
+        let mut leaf = conversation(2, 1, false);
+        leaf.phase = Phase::Starting;
+        leaf.pair = Some(1);
+        assert_eq!(leaf.starting_since(), None);
+
+        for phase in [Phase::Warm, Phase::Binding, Phase::Up] {
+            let mut past = conversation(3, 1, false);
+            past.phase = phase;
+            assert_eq!(past.starting_since(), None);
+        }
+
+        let mut stopping = conversation(4, 1, false);
+        stopping.phase = Phase::Starting;
+        stopping.proc.begin_stop(Instant::now(), Duration::from_secs(1));
+        assert_eq!(stopping.starting_since(), None);
+    }
+
+    /// 等 `ready` 的起點不是 `used_at`：同一條 thread 在 `Starting` 時又被 `ensure` 要到，`used_at` 會更新，期限不能跟著延後。
+    #[test]
+    fn asking_again_while_starting_does_not_move_the_start_time() {
+        let mut starting = conversation(1, 1, false);
+        starting.phase = Phase::Starting;
+        let started = Instant::now() - Duration::from_secs(10);
+        starting.started_at = started;
+        starting.used_at = Instant::now();
+        assert_eq!(starting.starting_since(), Some(started));
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
