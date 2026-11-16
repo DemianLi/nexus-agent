@@ -12,7 +12,7 @@ import { jsxAttributes, tsxFiles } from '@/test/jsx-scan';
  * 也寫進規格 §8 的例外清單。
  *
  * 掃 JSX 語法樹（`@/test/jsx-scan`）上每個元素的 `role` 屬性：值裡任何一個字串字面值是 `status` 就算，
- * 所以 `role={busy ? 'status' : undefined}` 也抓得到。連 `ui/` 一起掃：registry 重裝可能帶進新的。
+ * 所以 `role={busy ? 'status' : undefined}` 也抓得到。連 `ui/` 與 vendor 上游檔一起掃（不放行）：同步 vendor 可能帶進新的。
  */
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
