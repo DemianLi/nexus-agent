@@ -17,6 +17,7 @@ description: "`process-model` 設成 `per-thread` 時，對話行程起來後 30
 
 受影響的：
 - 對話行程冷起動本來就超過 30 秒的部署（外掛很多、磁碟或 CPU 很慢的主機）：以前慢慢起得來，現在會被殺、請求失敗。
+- 同時起很多條對話、主機很忙的部署：每個行程的期限從自己的 spawn 起算，主機忙到健康但慢的行程也可能超過期限被殺；請求失敗後再試又會起新的行程，讓主機更忙，一直重試會把這種狀況放大。對策是調大 `startTimeoutMs`。
 - 在稽核檔或日誌裡比對對話行程死因的腳本：多了 `stalled` 搭 `ready 之前逾時` 這一種。
 
 ## 遷移
@@ -24,4 +25,4 @@ description: "`process-model` 設成 `per-thread` 時，對話行程起來後 30
 1. 看你的主機冷起動要多久：照 [#2852](https://github.com/DemianLi/nexus-agent/issues/2852) 留言裡的量測做法，或直接看 `apps/harness/src/per-thread.integration.test.ts` 的冷起動量測測試。
 2. 起得比 30 秒慢的，把 `~/.nexus-agent/cordis.patch.yml` 的 `process-model` 加 `startTimeoutMs`，設成冷起動時間的數倍；想維持舊行為就設 `0`。
 3. 比對死因的腳本，把 `stalled` 加進「對話行程沒起來」的處理。
-4. 確認改好：重啟 serve，開一條 thread，檢查它回 `up`；要驗期限，把 `startTimeoutMs` 暫時設成 `1`，請求應該回「對話行程沒起來（stalled）」，稽核檔有 `ready 之前逾時` 那一行，驗完改回去。
+4. 確認改好：重啟 serve，開一條 thread，檢查它回 `up`。期限會不會生效不要靠把 `startTimeoutMs` 設得很小來驗：期限小到一輪的處理時間就超過它的一半時，監督行程每一輪都重算，可能一直不逾時。
