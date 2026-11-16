@@ -6,7 +6,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
+import { TOOL_NOT_STARTED_TEXT, TOOL_OUTCOME_UNKNOWN_TEXT } from '@nexus/core';
 import {
   createMuxFetch,
   createWireClient,
@@ -37,7 +38,7 @@ import {
   liveModelPatch,
   mainOnly,
 } from './log-derived-history.fixture.js';
-import type { Body, FakeEndpoint, WireMessage } from './log-derived-history.fixture.js';
+import type { Body, FakeEndpoint, Reply, WireMessage } from './log-derived-history.fixture.js';
 import { FrontForwarder } from './front-forward.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { composeEntries, defaultSources } from './plugin-config.js';
@@ -1015,23 +1016,25 @@ describe.skipIf(SUPERVISOR === undefined)(
         .join('');
     }
 
-    /** 主呼叫裡最後一則人話含 `prompt` 的那一次，回它每一則（系統以外）的角色與文字。 */
-    function requestFor(upstream: FakeEndpoint, prompt: string): string[] {
+    /** 主呼叫裡最後一則人話含 `prompt` 的那一次，回它每一則（系統以外）。 */
+    function messagesFor(upstream: FakeEndpoint, prompt: string): WireMessage[] {
       const body = upstream.bodies.findLast(
         (candidate) => isMainCall(candidate) && textOf(candidate.messages.at(-1)!).includes(prompt),
       );
       if (body === undefined) throw new Error(`模型沒收到「${prompt}」那一次`);
-      return body.messages
-        .filter((message) => message.role !== 'system')
-        .map((message) => `${message.role}:${textOf(message)}`);
+      return body.messages.filter((message) => message.role !== 'system');
     }
 
-    async function upstream(hold?: (body: Body) => boolean): Promise<FakeEndpoint> {
-      const endpoint = await fakeEndpoint(
-        mainOnly((k) => ({ content: `第 ${k} 次回覆` })),
-        true,
-        hold,
-      );
+    /** {@link messagesFor} 的每一則寫成「角色:文字」。 */
+    function requestFor(upstream: FakeEndpoint, prompt: string): string[] {
+      return messagesFor(upstream, prompt).map((message) => `${message.role}:${textOf(message)}`);
+    }
+
+    async function upstream(
+      hold?: (body: Body) => boolean,
+      script: (k: number) => Reply = (k) => ({ content: `第 ${k} 次回覆` }),
+    ): Promise<FakeEndpoint> {
+      const endpoint = await fakeEndpoint(mainOnly(script), true, hold);
       cleanupEndpoints.push(endpoint);
       return endpoint;
     }
@@ -1204,6 +1207,123 @@ describe.skipIf(SUPERVISOR === undefined)(
         ]);
 
         // 補的是葉子，不是整對：組合行程一個都沒換，新葉子接在同一條橋後面。
+        expect(
+          childrenRunning(supervisor, 'conversation-process').filter((pid) =>
+            argvOf(pid).some((arg) => arg.endsWith(`/${bridge}`)),
+          ),
+        ).toHaveLength(1);
+        for (const pid of compositions) {
+          expect(auditOf(running.home, pid)).toBeUndefined();
+        }
+        expect(childrenRunning(supervisor, 'nexus-composition')).toEqual(
+          expect.arrayContaining(compositions),
+        );
+      },
+      240_000,
+    );
+
+    /**
+     * 外掛的工具：建一個檔、然後不返回。純物件、不 import 任何東西：home 在暫存目錄，從那裡解析不到 `zod` 與 `@langchain/core`。
+     * 檔出現的時候 `tool/call` 已經落盤（工具本體之前先排空這條 thread 的日誌），所以可以看著它殺。
+     */
+    const HANG_PROBE = [
+      'export default {',
+      "  name: 'probe',",
+      '  apply(registry, config) {',
+      '    registry.tools.register({',
+      "      name: 'hang',",
+      "      description: '建一個檔，然後不返回。',",
+      "      parameters: { type: 'object', properties: {} },",
+      '      async execute() {',
+      "        const { writeFileSync } = await import('node:fs');",
+      "        writeFileSync(config.marker, '');",
+      '        return new Promise(() => {});',
+      '      },',
+      '    });',
+      '  },',
+      '};',
+      '',
+    ].join('\n');
+
+    it.skipIf(COMPOSITION === undefined)(
+      '一對：葉子在跑工具時被殺，補上的結果說「結果不明」，工具不重跑（#2806）',
+      async () => {
+        const THREAD = 'thread-pair-kill-in-tool';
+        // 第一次主呼叫叫 `hang`，之後回文字；工具那一輪沒有第二次主呼叫，所以第二句拿到的是第 1 次回覆。
+        const model = await upstream(undefined, (k) =>
+          k === 0
+            ? { tools: [{ id: 'call-hang', name: 'hang', args: {} }] }
+            : { content: `第 ${k} 次回覆` },
+        );
+        let marker = '';
+        const running = await start(
+          [],
+          '',
+          async (home) => {
+            marker = join(home, 'hang.marker');
+            await writeFile(join(home, 'probe.ts'), HANG_PROBE, { mode: 0o600 });
+            seedHomePatch(
+              home,
+              `- insert:\n    - id: probe\n      name: './probe.ts'\n      config:\n        marker: ${marker}\n`,
+            );
+          },
+          ['--composition', COMPOSITION!],
+          { liveBaseUrl: model.baseURL, serveArgs: NATIVE },
+        );
+        const supervisor = running.child.pid!;
+        const client = await clientOf(await running.loginUrl(1));
+        const warm = await settled(supervisor, 'conversation-process', WARM);
+        expect(warm).toHaveLength(WARM);
+        const killed = warm[0]!;
+        const compositions = childrenRunning(supervisor, 'nexus-composition');
+        expect(compositions).toHaveLength(WARM);
+
+        const downlink = new AbortController();
+        await client.openEvents(THREAD, { signal: downlink.signal });
+        await client.runStart(THREAD, '暗號是藍鯨，然後呼叫 hang');
+        // 檔出現就是工具本體已經開始跑。沒出現先看葉子的 stderr（工具有沒有載入、模型有沒有叫它、會不會停在核准閘門）。
+        try {
+          await expect.poll(() => existsSync(marker), { timeout: 60_000 }).toBe(true);
+        } catch (error: unknown) {
+          throw new Error(`60 秒內工具沒開始跑：\n${running.log()}`, { cause: error });
+        }
+        // 刪掉它：之後再出現就是續接把工具重跑了。
+        rmSync(marker);
+
+        // 前台收到 `down` 會了結這條 thread 所有在等的 `ensure`，所以下一句要等前台處理過舊葉子的 `down`（同上一支）。
+        await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([THREAD]);
+        expect(signalPid(killed, 'SIGKILL')).toBe(true);
+        await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([]);
+
+        const record = auditOf(running.home, killed);
+        expect(record).toMatchObject({
+          role: 'conversation',
+          thread: THREAD,
+          cause: 'crash',
+          exit_code: null,
+          signal: 9,
+        });
+        const bridge = `c${String(record?.pair)}.p.sock`;
+        downlink.abort();
+
+        expect(replies(await turn(client, THREAD, '剛才的暗號是什麼'))).toEqual(['第 1 次回覆']);
+        // 被殺的那一輪：人話、帶著 `hang` 的呼叫、補上的「結果不明」、第二句人話。`tool/call` 落了盤，所以不是「沒開始」。
+        const messages = messagesFor(model, '剛才的暗號是什麼');
+        expect(messages.map((message) => message.role)).toEqual([
+          'user',
+          'assistant',
+          'tool',
+          'user',
+        ]);
+        expect(textOf(messages[0]!)).toContain('暗號是藍鯨');
+        const calls = messages[1]!.tool_calls as { function: { name: string } }[] | undefined;
+        expect(calls?.map((call) => call.function.name)).toEqual(['hang']);
+        expect(textOf(messages[2]!)).toContain(TOOL_OUTCOME_UNKNOWN_TEXT);
+        expect(textOf(messages[2]!)).not.toContain(TOOL_NOT_STARTED_TEXT);
+        expect(textOf(messages[3]!)).toContain('剛才的暗號是什麼');
+        // 續接不重進工具。
+        expect(existsSync(marker)).toBe(false);
+
         expect(
           childrenRunning(supervisor, 'conversation-process').filter((pid) =>
             argvOf(pid).some((arg) => arg.endsWith(`/${bridge}`)),
