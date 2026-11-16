@@ -2,11 +2,7 @@ import type { CommandOutcome, ThreadActivityKind, ThreadListResult, WireClient }
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ThreadDirectory } from '@/features/threads/use-directory';
-import { threadCapacityText } from '@/shared/connection/thread-capacity';
-import { threadHistoryTooDeepText } from '@/shared/connection/thread-history-too-deep';
-import { threadLogBudgetText } from '@/shared/connection/thread-log-budget';
-import { threadRootMismatchText } from '@/shared/connection/thread-root-mismatch';
-import { threadWriterHeldText } from '@/shared/connection/thread-writer-held';
+import { refusalText } from '@/shared/connection/refusal-text';
 import { explainThreadFailure, normalizeTitle, readSets } from '@/features/threads/management';
 import type {
   ThreadActionResult,
@@ -60,11 +56,7 @@ async function settle<V>(
     // 歷史太深（#1753）、日誌超過額度（#2203）、被別處握著（#2214）、開在別的 home 或工作區（#2222）同理。
     return {
       message:
-        threadCapacityText(outcome.code) ??
-        threadHistoryTooDeepText(outcome.code) ??
-        threadLogBudgetText(outcome.code) ??
-        threadWriterHeldText(outcome.code) ??
-        threadRootMismatchText(outcome.code) ??
+        refusalText(outcome.code, 'reading') ??
         (outcome.code === 'not_supported' ? '這個伺服器還不支援這個動作。' : outcome.message),
     };
   }

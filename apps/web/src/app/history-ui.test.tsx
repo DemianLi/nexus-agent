@@ -16,14 +16,14 @@ import {
   LOAD_EARLIER_LABEL,
   RETRY_EARLIER_LABEL,
 } from '@/features/transcript/earlier-pager';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
-import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/shared/connection/thread-history-too-deep';
 import {
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
   THREAD_LOG_BUSY_TEXT,
   THREAD_LOG_TOO_LARGE_TEXT,
-} from '@/shared/connection/thread-log-budget';
-import { THREAD_ROOT_MISMATCH_TEXT } from '@/shared/connection/thread-root-mismatch';
-import { THREAD_WRITER_HELD_TEXT } from '@/shared/connection/thread-writer-held';
+  THREAD_ROOT_MISMATCH_TEXT,
+  THREAD_WRITER_HELD_TEXT,
+} from '@/shared/connection/refusal-text';
 import { fakeDownlink } from '@/test/downlink';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 

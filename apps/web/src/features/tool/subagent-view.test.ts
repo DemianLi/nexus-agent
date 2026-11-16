@@ -1,6 +1,8 @@
 import {
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_AT_CAPACITY,
+  THREAD_HISTORY_TOO_DEEP,
   THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
 } from '@nexus/wire';
@@ -8,11 +10,13 @@ import type { Attribution, ConversationEntry, ToolEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
   THREAD_LOG_BUSY_TEXT,
   THREAD_LOG_TOO_LARGE_TEXT,
-} from '@/shared/connection/thread-log-budget';
-import { THREAD_ROOT_MISMATCH_TEXT } from '@/shared/connection/thread-root-mismatch';
-import { THREAD_WRITER_HELD_TEXT } from '@/shared/connection/thread-writer-held';
+  THREAD_ROOT_MISMATCH_TEXT,
+  THREAD_WRITER_HELD_TEXT,
+} from '@/shared/connection/refusal-text';
 
 import {
   agentMessageCaption,
@@ -163,6 +167,13 @@ describe('背景子代理的狀態與輸入框（#869）', () => {
 
   it('主對話開在別的 home 或工作區（#2222）：講那一句，不接 server 的原文', () => {
     expect(subagentSendError(THREAD_ROOT_MISMATCH, 'home')).toBe(THREAD_ROOT_MISMATCH_TEXT);
+  });
+
+  it('主對話的 thread 數滿了、歷史太深：講專用那一句，不接 server 的原文', () => {
+    expect(subagentSendError(THREAD_AT_CAPACITY, '3／3')).toBe(THREAD_AT_CAPACITY_TEXT);
+    expect(subagentSendError(THREAD_HISTORY_TOO_DEEP, '第 7 顆')).toBe(
+      THREAD_HISTORY_TOO_DEEP_TEXT,
+    );
   });
 
   it('主對話被別的寫入者握著（#2214）：講那一句，不接 server 的原文', () => {

@@ -12,8 +12,7 @@ import {
   EMBED_UNAUTHORIZED_TEXT,
   StreamUnauthorizedError,
 } from '@/shared/connection/embed-unauthorized';
-import { THREAD_NOT_EMBEDDED_TEXT } from '@/shared/connection/thread-not-embedded';
-import { THREAD_NOT_OWNED_TEXT } from '@/shared/connection/thread-not-owned';
+import { THREAD_NOT_EMBEDDED_TEXT, THREAD_NOT_OWNED_TEXT } from '@/shared/connection/refusal-text';
 import { fakeClient } from '@/test/app-harness.fixture';
 import { Script } from '@/test/conversation-frames';
 

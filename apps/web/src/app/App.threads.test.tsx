@@ -41,8 +41,10 @@ import {
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/features/threads/list';
 import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/shared/connection/stall';
 import { REMEMBERED_THREAD_KEY } from '@/features/threads/remembered-thread';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
-import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/shared/connection/thread-history-too-deep';
+import {
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
+} from '@/shared/connection/refusal-text';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/shared/connection/thread-protocol-error';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';

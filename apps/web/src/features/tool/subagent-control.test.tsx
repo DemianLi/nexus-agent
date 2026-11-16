@@ -18,7 +18,7 @@ import {
 } from '@/features/transcript/use-scroll-button-clearance';
 import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/shared/connection/stall';
 import type { ConnectionStall } from '@/shared/connection/stall';
-import { SERVER_CLOSING_TEXT } from '@/shared/connection/server-closing';
+import { SERVER_CLOSING_TEXT } from '@/shared/connection/refusal-text';
 import { stubGlyphEnvironment } from '@/test/glyph-env';
 
 /**

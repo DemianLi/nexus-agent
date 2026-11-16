@@ -12,14 +12,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useAcceptedTitles, useThreadManagement } from '@/features/threads/use-management';
 import type { Listing, ThreadDirectory } from '@/features/threads/use-directory';
-import { THREAD_AT_CAPACITY_TEXT } from '@/shared/connection/thread-capacity';
 import {
+  THREAD_AT_CAPACITY_TEXT,
+  THREAD_HISTORY_TOO_DEEP_TEXT,
   THREAD_LOG_BUSY_TEXT,
   THREAD_LOG_TOO_LARGE_TEXT,
-} from '@/shared/connection/thread-log-budget';
-import { THREAD_ROOT_MISMATCH_TEXT } from '@/shared/connection/thread-root-mismatch';
-import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/shared/connection/thread-history-too-deep';
-import { THREAD_WRITER_HELD_TEXT } from '@/shared/connection/thread-writer-held';
+  THREAD_ROOT_MISMATCH_TEXT,
+  THREAD_WRITER_HELD_TEXT,
+} from '@/shared/connection/refusal-text';
 
 /** 側欄會話管理的接線（#633）：集合以 server 回的為準、舊回應不蓋新的、列表一來蓋在上面的就作廢。 */
 

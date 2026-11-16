@@ -5,11 +5,7 @@
 
 import { StatusLine } from '@/features/status/line';
 import type { Conversation, ConversationLink } from '@/shared/connection/use-conversation';
-import { threadCapacityText } from '@/shared/connection/thread-capacity';
-import { threadHistoryTooDeepText } from '@/shared/connection/thread-history-too-deep';
-import { threadLogBudgetText } from '@/shared/connection/thread-log-budget';
-import { threadRootMismatchText } from '@/shared/connection/thread-root-mismatch';
-import { threadWriterHeldText } from '@/shared/connection/thread-writer-held';
+import { refusalText } from '@/shared/connection/refusal-text';
 
 /**
  * 舊格式的會話（格式 9 以前寫的，#306）：日誌不記模型的回覆，畫面重播得出來的只有人打的字與工具卡，模型也
@@ -69,11 +65,7 @@ export function ConversationNotices({
       {conversation.historyError !== undefined && (
         <p className="text-destructive text-tip">
           {/* thread 數滿了、歷史太深、日誌超過額度、被別處握著、開在別的 home 或工作區都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753、#2203、#2214、#2222）。 */}
-          {threadCapacityText(conversation.historyError.code) ??
-            threadHistoryTooDeepText(conversation.historyError.code) ??
-            threadLogBudgetText(conversation.historyError.code) ??
-            threadWriterHeldText(conversation.historyError.code) ??
-            threadRootMismatchText(conversation.historyError.code) ??
+          {refusalText(conversation.historyError.code, 'reading') ??
             `之前說過的話拿不回來：${conversation.historyError.message}`}
         </p>
       )}

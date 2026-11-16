@@ -78,24 +78,12 @@ import {
 } from '@/shared/connection/reconnect';
 import { StreamHaltedError } from '@/shared/connection/stream-halted';
 import { mayHaveArrived, newRequestId } from '@/shared/connection/request-id';
-import { serverClosingText } from '@/shared/connection/server-closing';
-import { threadCapacityText } from '@/shared/connection/thread-capacity';
-import { threadHistoryTooDeepText } from '@/shared/connection/thread-history-too-deep';
-import {
-  threadLogBudgetText,
-  threadLogBusyText,
-  threadLogTooLargeText,
-} from '@/shared/connection/thread-log-budget';
+import { refusal as refusalFor, refusalText } from '@/shared/connection/refusal-text';
 import { THREAD_REFUSED_TEXT } from '@/shared/connection/thread-refused';
-import { threadNotEmbeddedText } from '@/shared/connection/thread-not-embedded';
-import { threadNotOwnedText } from '@/shared/connection/thread-not-owned';
-import { threadRootMismatchText } from '@/shared/connection/thread-root-mismatch';
-import { threadWriterHeldText } from '@/shared/connection/thread-writer-held';
 import {
   THREAD_PROTOCOL_ERROR_PAGE_TEXT,
   THREAD_PROTOCOL_ERROR_TEXT,
 } from '@/shared/connection/thread-protocol-error';
-import { threadSubagentText } from '@/shared/connection/thread-subagent';
 import { randomUuid } from '@/shared/lib/uuid';
 
 /**
@@ -836,27 +824,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
-          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）、
-          // 嵌入的對話框碰到獨立頁面開的（#2382）、別人開的（#2370）。
-          const permanent =
-            error instanceof WireRejectedError
-              ? (threadSubagentText(error.code) ??
-                threadHistoryTooDeepText(error.code) ??
-                threadLogTooLargeText(error.code) ??
-                threadRootMismatchText(error.code) ??
-                threadNotEmbeddedText(error.code) ??
-                threadNotOwnedText(error.code))
-              : undefined;
-          if (permanent !== undefined) {
-            refuse(permanent);
+          // 永久或暫時由 refusal-text 的表決定；認不得的碼當暫時的，退到 THREAD_REFUSED_TEXT。
+          const rejection =
+            error instanceof WireRejectedError ? refusalFor(error.code, 'opening') : undefined;
+          if (rejection?.permanent === true) {
+            refuse(rejection.text);
             return;
           }
           const refused =
             error instanceof WireRejectedError
-              ? (threadCapacityText(error.code) ??
-                threadLogBusyText(error.code) ??
-                threadWriterHeldText(error.code) ??
-                THREAD_REFUSED_TEXT)
+              ? (rejection?.text ?? THREAD_REFUSED_TEXT)
               : undefined;
           lose(
             refused !== undefined
@@ -911,12 +888,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       }
       if (outcome.kind === 'rejected') {
         // 這條線拒絕發派，不是命令自己失敗，所以走 commandError，不走 slashError。
-        const message =
-          serverClosingText(outcome.code) ??
-          threadLogBudgetText(outcome.code) ??
-          threadWriterHeldText(outcome.code) ??
-          threadRootMismatchText(outcome.code) ??
-          outcome.message;
+        const message = refusalText(outcome.code, 'sending') ?? outcome.message;
         setCommandError(message);
         return refuse(message);
       }
@@ -1068,12 +1040,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         setAttempted(false);
         return {
           message:
-            threadCapacityText(result.error) ??
-            serverClosingText(result.error) ??
-            threadHistoryTooDeepText(result.error) ??
-            threadLogBudgetText(result.error) ??
-            threadWriterHeldText(result.error) ??
-            threadRootMismatchText(result.error) ??
+            refusalText(result.error, 'sending') ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };
