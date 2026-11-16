@@ -414,6 +414,31 @@ describe('摘要留不住答案的題目與成對的量法（#2908）', () => {
     },
   );
 
+  it('rows-zh 的反查題：history_search 回的片段裡，人名那一行就是答案那一列', async () => {
+    const zh = DETAIL_VARIANTS.find((variant) => variant.id === 'rows-zh')!;
+    const result = await runFidelityVariant(zh, {
+      ...models(DROPS_EVERYTHING),
+      // 只念人名所在的那一行：片段把列併在一起的話，這一行會帶到別列的編號。
+      answerStep: async (messages, tools) => {
+        const last = messages.at(-1)!;
+        if (!ToolMessage.isInstance(last)) return searchesKey(messages, tools);
+        const key = /"(.+?)"/.exec(contentOf(last))![1]!;
+        const line = contentOf(last)
+          .split('\n')
+          .slice(1)
+          .find((each) => each.includes(key));
+        return new AIMessage(line ?? '');
+      },
+    });
+
+    const reverse = result.questions.filter((question) => question.questionId.startsWith('tag-'));
+    expect(reverse).toHaveLength(2);
+    for (const question of reverse) {
+      expect(question.score, question.questionId).toBe(1);
+      expect(question.answer.match(/P31-\d+/g), question.questionId).toHaveLength(1);
+    }
+  });
+
   it('成對：同一題先不帶工具問一次，兩次看到的訊息相同，各記各的分數', async () => {
     const order: string[] = [];
     const withoutTools: string[] = [];
