@@ -21,7 +21,7 @@ description: "`process-model` 設成 `per-thread` 時，對話行程起來後 30
 
 ## 遷移
 
-1. 看你的主機冷起動要多久：從稽核檔與前台日誌找第一次請求到 `up` 的間隔，或照 [`docs/operations.md`](../../../operations.md) 的 process-model 一節量。
+1. 看你的主機冷起動要多久：照 [#2852](https://github.com/DemianLi/nexus-agent/issues/2852) 留言裡的量測做法，或直接看 `apps/harness/src/per-thread.integration.test.ts` 的冷起動量測測試。
 2. 起得比 30 秒慢的，把 `~/.nexus-agent/cordis.patch.yml` 的 `process-model` 加 `startTimeoutMs`，設成冷起動時間的數倍；想維持舊行為就設 `0`。
 3. 比對死因的腳本，把 `stalled` 加進「對話行程沒起來」的處理。
 4. 確認改好：重啟 serve，開一條 thread，檢查它回 `up`；要驗期限，把 `startTimeoutMs` 暫時設成 `1`，請求應該回「對話行程沒起來（stalled）」，稽核檔有 `ready 之前逾時` 那一行，驗完改回去。

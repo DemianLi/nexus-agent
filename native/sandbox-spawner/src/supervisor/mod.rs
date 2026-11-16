@@ -942,7 +942,7 @@ impl Supervisor {
     /// 同步等待可能跨過門檻）。凍住前對話行程照常送心跳時，會造成誤判的停住，它所在那一段量到的 `late` 至少是 `stall` 的四分之三減一個心跳間隔：
     /// 每一段准許的時間最多是 poll 的 timeout，[`Self::next_deadline`] 讓它不超過 `stall` 的四分之一。所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
     ///
-    /// 一對等 `ready` 的時間（`--start-timeout-ms`）也從 `now` 重新起算，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
+    /// 一對（含不成對的對話行程與預熱池裡的）等 `ready` 的時間（`--start-timeout-ms`）也從 `now` 重新起算，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
     /// 這裡沒有 `stall` 四分之一那樣的上限：有一對時 poll 最晚每 `--rss-poll-ms` 醒一次，停在 poll 裡的停頓要扣掉那一段才算 `late`。
     fn check_resumed(&mut self, now: Instant, late: Duration) {
         let waiting = self
@@ -960,7 +960,7 @@ impl Supervisor {
                 .is_some_and(|limit| late >= limit / 2)
         {
             say!(
-                "監督行程比准許的晚了 {} ms，判定自己被停住過；每一對等 ready 的時間從現在重新起算",
+                "監督行程比准許的晚了 {} ms，判定自己被停住過；每一個等 ready 的行程的時間從現在重新起算",
                 late.as_millis()
             );
             for composition in &mut self.compositions {

@@ -274,7 +274,7 @@ export interface SupervisorLaunchInput {
   readonly serveArgv: readonly string[];
   /** 對話行程閒置多久收掉（毫秒，`0` 不收）；省略用監督行程的預設。 */
   readonly idleMs?: number;
-  /** 傳給 `--start-timeout-ms`：一對起到組合行程回 `ready` 的上限（毫秒，`0` 不判；不成對的不判）；省略用監督行程的預設。 */
+  /** 傳給 `--start-timeout-ms`：對話行程（成對的是組合行程）從起到回 `ready` 的上限（毫秒，`0` 不判）；省略用監督行程的預設。 */
   readonly startTimeoutMs?: number;
 }
 
