@@ -86,7 +86,7 @@ dsh **沒有跨源的預算表，也沒有「整項延後、留指標」**。它
 
 ### 3. 延後的樣子
 
-指標一行，寫三件事：哪一項、多大、怎麼讀。
+指標一行，寫三件事：哪一項、多大、怎麼讀。下面是草案；實際的順序與指標原文以〈B2 實際落地的樣子〉與 `docs/operations.md` 為準。
 
 - agent-instructions：由寬到窄逐檔放，放不下的檔整份不放（不截斷，**包含最具體的那份**）。
   `Workspace instruction budget 13107 bytes: not loaded AGENTS.md (48210 bytes); read it with read_file before acting on this workspace.`
@@ -139,6 +139,19 @@ skills 每則描述的 1,024 字元截斷不動：那是目錄的摘要欄，正
 
 B1 先合，可以先在真實會話上看到各源實際多大，再回頭校 B2 的數字。
 
+## B2 實際落地的樣子（2026-11-16）
+
+跟上面草案不同或當時沒定的，以這一段為準；送出的指標原文見 `docs/operations.md`〈各注入源的用量〉。
+
+- **上限怎麼交到插件手上**：`@nexus/agent-loop` 契約 1.4.0，`agent/pre-step` 的 listener 多收一格選填的 `contextWindow`（這條 thread 下一步會走的模型的窗口）。宿主從 `model-selection` 那一列問（`model-selection-host.ts` 的 `nextContextWindowOf`），每次呼叫問一次。插件照抄預設值與算法，`apps/harness/src/injection-budget-pins.test.ts` 把它們跟 core 的表釘成相等。
+- **agent-instructions 的順序**：從最具體的那一層往外放（草案寫的是由寬到窄）。最具體的那一份最該留，所以先放它；放不下的那一份整份延後，後面較小的照樣試。
+- **skills 目錄**：整段放不下時從清單尾端往前留（草案寫的是照現有順序逐則放）。清單照每個名字第一次出現的先後排，後登記的來源才有的技能在尾端。
+- **記憶檔攔得到**：渲染在我們自己的 `memory-middleware.ts`，不在基座裡；照登記的先後一份一份放。
+- **system prompt 上兩段的窗口**：`FoldedAgentParams.contextWindowOf`（取自 `FoldOptions.modelLimits`），用的是那一次請求實際走的模型。
+- **必帶項**：頭尾段在 `createSystemPromptMiddleware`（組 thread 時）檢查，拋 `SystemPromptBudgetError`；`plan:policy` 在 plan-mode 的設定驗證檢查。換模型後重新代入 `{{model}}` 的那一份不再檢查。
+- **`deferred` 那一格**：叫 `deferredBytes`，是沒放進去的原文位元組數。訊息上的兩個源由插件寫在那一則訊息 `additional_kwargs` 的 `nexus_injection_deferred_bytes`，摘要器從送出的串上讀。
+- **沒做的**：`skill-catalog`、`memory` 沒有設定鍵，只用表上的值；兩段各自的固定說明文字不縮，小窗口上整段仍可能超過上限。
+
 ## 已決定的（2026-11-16，四項都照建議）
 
 1. **最具體的那份 instructions 放不下時整份延後**（卡的寫法），還是照 dsh 截斷。建議：延後。
@@ -150,5 +163,4 @@ B1 先合，可以先在真實會話上看到各源實際多大，再回頭校 B
 
 - 子代理結算通知、goal 續行輪的頭有沒有大小上限：沒找到，產生處沒讀。它們不在上面的表裡。
 - `toolsTokens` 與實際送出的工具描述差多少：沒驗。
-- 記憶檔插件不在出廠清單，它的讀取點在基座裡（子代理報告），能不能在那裡攔下整項延後沒有確認；做不到的話記憶檔退成「只量」。
-- skills 目錄在 system prompt、而且在摘要器外層：少列幾則會改變 `systemTokens`，也就改變摘要的時機。影響多大沒有量。
+- skills 目錄在 system prompt、而且在摘要器外層：少列幾則會改變 `systemTokens`，也就改變摘要的時機。影響多大沒有量（B2 落地後仍沒有量）。

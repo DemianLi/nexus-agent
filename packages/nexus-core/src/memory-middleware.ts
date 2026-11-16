@@ -14,7 +14,9 @@ import { createMemoryMiddleware as createBaseMemoryMiddleware } from 'deepagents
 import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
-import { renderMemorySection } from './base-prompt-text.js';
+import { renderMemorySectionWithin } from './base-prompt-text.js';
+import { injectionLimitFor } from './injection-budget.js';
+import type { ContextWindowOf } from './skills-middleware.js';
 import { createSystemPromptStepMiddleware } from './system-prompt-step.js';
 import type { SystemPromptCell } from './system-prompt-step.js';
 
@@ -89,11 +91,14 @@ export interface MemoryMiddlewareParts {
  * @param options.backend - 讀記憶檔的後端。
  * @param options.sources - 來源路徑，照登記的先後。
  * @param contents - 讀到的內容記在這裡；省略就自己建一份。
+ * @param contextWindowOf - 這次請求走的模型的窗口；不給就只看絕對上限。整段超過預算表 `memory` 那一列的上限時，放不下的那一份
+ *   整份不放、留一行指標（{@link renderMemorySectionWithin}，[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
  * @returns 兩半。
  */
 export function createMemoryMiddleware(
   options: { readonly backend: AnyBackendProtocol; readonly sources: readonly string[] },
   contents: MemoryContents = createMemoryContents(),
+  contextWindowOf?: ContextWindowOf,
 ): MemoryMiddlewareParts {
   const base = createBaseMemoryMiddleware({
     backend: options.backend,
@@ -102,12 +107,14 @@ export function createMemoryMiddleware(
   }) as unknown as BaseHooks;
   // 用 `block` 不用 `append`：記憶自己一塊，位元組同基座。
   const cell: SystemPromptCell = {
-    step: (request) => [
-      {
-        block: renderMemorySection(contents.of(threadOf(request.runtime)) ?? {}, options.sources),
-        source: 'memory',
-      },
-    ],
+    step: (request) => {
+      const { text, deferredBytes } = renderMemorySectionWithin(
+        contents.of(threadOf(request.runtime)) ?? {},
+        options.sources,
+        injectionLimitFor('memory', contextWindowOf?.(request.model)),
+      );
+      return [{ block: text, source: 'memory', ...(deferredBytes > 0 && { deferredBytes }) }];
+    },
   };
   const hook = createHookStepMiddleware({
     name: base.name,

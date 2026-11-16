@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applySystemPromptParts,
   createSystemPromptMiddleware,
+  SystemPromptBudgetError,
   systemPromptDefaultsEntry,
   systemPromptDefaultsOf,
 } from './system-prompt-middleware.js';
@@ -134,6 +135,39 @@ describe('middleware（從插件搬來）', () => {
     // 三格以內的兩格（前後綴）登記著，只是文字是空的
     expect(assembly.sections.map((section) => section.text)).toEqual(['', '']);
     expect(createSystemPromptMiddleware(assembly, DEFAULTS)).toBeUndefined();
+  });
+});
+
+describe('前後段是必要來源：超過預算表的上限就組裝失敗（#2777）', () => {
+  it('前段剛好 16384 位元組照掛；多一個位元組拋 SystemPromptBudgetError，訊息說是哪一段、多大、上限多少', () => {
+    expect(
+      createSystemPromptMiddleware(
+        assemblyOf({ includeHarnessIdentity: false, personaPrefix: 'a'.repeat(16_384) }),
+        DEFAULTS,
+      ),
+    ).toBeDefined();
+    const build = () =>
+      createSystemPromptMiddleware(
+        assemblyOf({ includeHarnessIdentity: false, personaPrefix: 'a'.repeat(16_385) }),
+        DEFAULTS,
+      );
+    expect(build).toThrow(SystemPromptBudgetError);
+    expect(build).toThrow(/前段有 16385 個 UTF-8 位元組，超過上限 16384/);
+  });
+
+  it('後段照送出的那一塊量（含接上時前面那一個空行）', () => {
+    expect(
+      createSystemPromptMiddleware(
+        assemblyOf({ includeHarnessIdentity: false, personaSuffix: '字'.repeat(5460) }),
+        DEFAULTS,
+      ),
+    ).toBeDefined();
+    expect(() =>
+      createSystemPromptMiddleware(
+        assemblyOf({ includeHarnessIdentity: false, personaSuffix: '字'.repeat(5461) }),
+        DEFAULTS,
+      ),
+    ).toThrow(/後段有 16385 個 UTF-8 位元組，超過上限 16384/);
   });
 });
 

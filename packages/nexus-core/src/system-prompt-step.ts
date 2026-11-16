@@ -32,6 +32,8 @@ export type SystemPromptPiece = (
 ) & {
   /** 這一塊屬於哪個注入源（`injection-budget.ts` 的鍵，或中段的段名）。給了就量它的位元組，見 `injection-sources.ts`；不影響接法。 */
   readonly source?: string;
+  /** 這一塊有多少原文位元組放不下、沒放進去（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）；跟著 `source` 一起回報。 */
+  readonly deferredBytes?: number;
 };
 
 /** 一次模型呼叫：`wrapModelCall` 的請求上，一步用得到的那幾格。其餘欄位原樣讀穿。 */
@@ -127,7 +129,15 @@ export function systemPromptWrapWith<Request extends SystemPromptRequest, Result
         : (request.systemMessage as SystemMessage);
     const next = { ...request, systemMessage: applySystemPromptPieces(base, pieces) };
     const reports = pieces.flatMap((piece) =>
-      piece.source === undefined ? [] : [{ id: piece.source, bytes: utf8Bytes(pieceText(piece)) }],
+      piece.source === undefined
+        ? []
+        : [
+            {
+              id: piece.source,
+              bytes: utf8Bytes(pieceText(piece)),
+              ...(piece.deferredBytes !== undefined && { deferredBytes: piece.deferredBytes }),
+            },
+          ],
     );
     if (reports.length === 0 || reportInjectionSources(reports)) return handler(next);
     // 沒有開著的收集格（這一步在摘要器外層，或沒掛摘要器）：掛在請求上往內帶，摘要器開格子時拿它當底。

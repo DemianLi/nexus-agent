@@ -273,6 +273,13 @@ export {
   systemPromptWrapWith,
   withSystemPromptStep,
 } from './system-prompt-step.js';
+export type {
+  InjectionSourceBudget,
+  InjectionSourceId,
+  InjectionSourceKind,
+} from './injection-budget.js';
+export { INJECTION_SOURCE_BUDGETS, injectionLimitFor } from './injection-budget.js';
+export { INJECTION_DEFERRED_BYTES_KEY } from './injection-sources.js';
 export type { ModelCallNext, ModelCallRequest, ModelCallStep } from './model-call-step.js';
 export { modelCallStepOf, withModelCallStep, wrapModelCallFromStep } from './model-call-step.js';
 export type { ToolAddition, ToolAdmission } from './tool-resolution.js';

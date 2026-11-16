@@ -19,8 +19,9 @@
  *    跟摘要器問的是同一張表；這裡在一次 invoke 開始時（第一步之前）問一次，讀到的跟摘要器在這次 invoke 第一步開始時讀到的是同一個值；
  *    同一次 invoke 後面幾步不再問。`history-source=log` 時 root
  *    與子代理各從自己的日誌推同一個視圖（`createVisibleHistoryReader`，#2355），不讀 state。
- * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
+ * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal, contextWindow }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。
+ *    `contextWindow` 是這條 thread 下一步會走的模型的窗口（契約 1.4.0，#2777），取不到時省略。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
  *    比對）；不加 `id`。`source` 是 listener 給的那一格（契約 1.2.0，#1574），沒給是 `{ kind: 'plugin', plugin: <名字> }`；
  *    給了 listener 不能交的來源就拋，見 {@link injectionSource}。
@@ -86,6 +87,7 @@ const LISTENER_SOURCE = z.discriminatedUnion('kind', [
  * @param listener - 要叫的 listener。
  * @param sessions - **這條 thread 的**會話註冊表的 `forCall`（`registry.sessions`）：注入的訊息也記進日誌。
  * @param cutoffOf - 這次呼叫的摘要切點，見 {@link SummaryCutoffOf}。
+ * @param contextWindowOf - 這條 thread 下一步會走的模型的窗口（契約 1.4.0，#2777）；每次呼叫問一次。不給或回 `undefined` 就不交那一格。
  * @returns 可以掛在任意多個 agent 上的 middleware。
  */
 export function createPreStepMiddleware(
@@ -93,6 +95,7 @@ export function createPreStepMiddleware(
   listener: PreStepListener,
   sessions: { forCall(config: unknown): SessionLookup },
   cutoffOf: SummaryCutoffOf,
+  contextWindowOf?: () => number | undefined,
 ): AgentMiddleware {
   const fromLog = createVisibleHistoryReader(toolResultAsSeen);
   return createHookStepMiddleware({
@@ -105,9 +108,11 @@ export function createPreStepMiddleware(
         visibleFromLog(sessions, runtime?.configurable, fromLog) ??
         applySummaryCutoff(current, cutoffOf({ configurable: runtime?.configurable }, current));
       const signal = stepSignal(runtime);
+      const contextWindow = contextWindowOf?.();
       const injections = await listener(visible, {
         configurable: runtime?.configurable,
         ...(signal !== undefined && { signal }),
+        ...(contextWindow !== undefined && { contextWindow }),
       });
       if (injections === undefined || injections.length === 0) return undefined;
       // 先驗完全部的來源再記：一則被拒時，前面那幾則也不落盤（不然日誌上有、state 裡沒有）。

@@ -31,6 +31,7 @@ import type { FsLookup } from '@nexus/fs';
 import { isAgentInstructionsMessage } from '@nexus/plugin-agent-instructions';
 import {
   createSkillInvocationListener,
+  INJECTION_DEFERRED_BYTES_KEY,
   SKILL_INVOCATION_MARKER,
 } from '@nexus/plugin-skills/invocation';
 import { TIME_CONTEXT_MARKER } from '@nexus/plugin-time-context';
@@ -191,6 +192,54 @@ describe('listener：注入什麼', () => {
       human('再一次 /release-notes', 'h2'),
     ]);
     expect(namesOf(injections)).toEqual(['release-notes', 'deploy']);
+  });
+});
+
+describe('正文放不下：整份不放，留一行指標（#2777）', () => {
+  const big = { skills: { big: { body: '步'.repeat(200) }, deploy: { body: '部署的步驟。' } } };
+  const limited = (ws: string, limits: { maxBytes: number; contextFraction?: number }) =>
+    createSkillInvocationListener({ fs: lookupOf(backendOf(ws)) }, limits);
+
+  it('超過 maxBytes 的那一份換成指標；記號與來源照舊，放得下的那一份原樣', async () => {
+    const ws = workspace(big);
+    const injections = await run(limited(ws, { maxBytes: 500 }), [human('/big 再 /deploy', 'h1')]);
+    expect(namesOf(injections)).toEqual(['big', 'deploy']);
+    const [deferred, kept] = injections!;
+    expect(deferred!.content).toMatch(
+      /^Skill "big" is \d+ bytes, over the 500-byte budget: read \/skills\/big\/SKILL\.md with read_file and follow it\.$/,
+    );
+    const bodyBytes = Number(/is (\d+) bytes/.exec(deferred!.content)![1]);
+    expect(bodyBytes).toBeGreaterThan(600);
+    expect(deferred!.additionalKwargs).toEqual({
+      [SKILL_INVOCATION_MARKER]: { name: 'big' },
+      [INJECTION_DEFERRED_BYTES_KEY]: bodyBytes,
+    });
+    expect(kept!.additionalKwargs).toEqual({ [SKILL_INVOCATION_MARKER]: { name: 'deploy' } });
+    expect(deferred!.source).toEqual({
+      kind: 'skill-invocation',
+      name: 'big',
+      form: 'instructions',
+    });
+    expect(kept!.content).toContain('<skill_instructions>\n部署的步驟。');
+  });
+
+  it('上限跟著宿主交來的窗口縮：min(maxBytes, floor(窗口 × 4 × contextFraction))', async () => {
+    const ws = workspace(big);
+    const listener = limited(ws, { maxBytes: 65536, contextFraction: 0.1 });
+    const visible = [human('/big', 'h1')];
+    const wide = await listener(visible, { configurable: {}, contextWindow: 100_000 });
+    expect(wide![0]!.content).toContain('<skill_instructions>');
+    // 1000 × 4 × 0.1 = 400，比那一份（六百多位元組）小。
+    const narrow = await listener(visible, { configurable: {}, contextWindow: 1000 });
+    expect(narrow![0]!.content).toContain('over the 400-byte budget');
+    // 有窗口、但 maxBytes 比較小：絕對上限生效。
+    const capped = await limited(ws, { maxBytes: 500, contextFraction: 0.1 })(visible, {
+      configurable: {},
+      contextWindow: 100_000,
+    });
+    expect(capped![0]!.content).toContain('over the 500-byte budget');
+    // 宿主沒交窗口：只看 maxBytes。
+    expect((await run(listener, visible))![0]!.content).toContain('<skill_instructions>');
   });
 });
 
@@ -621,6 +670,37 @@ describe('各注入源的用量（#2777）', () => {
     ]);
     for (const source of measures[0] as { bytes: number }[])
       expect(source.bytes).toBeGreaterThan(0);
+    await thread.close();
+  }, 60000);
+
+  it('serve 的樹：放不下的 AGENTS.md 整份延後，sources 上那一列多一格 deferredBytes', async () => {
+    const booted = await boot(home());
+    const agentsMd = 'x'.repeat(70_000);
+    const thread = await openThread(
+      booted,
+      't-deferred',
+      [{ content: '好。' }],
+      workspace(STANDARD, agentsMd),
+    );
+    await thread.say('你好');
+    const humans = (thread.model.prompts[0] ?? []).filter((m) => m.getType() === 'human');
+    const pointer = humans.find((m) => m.text.includes('not loaded'));
+    expect(pointer?.text).toContain('not loaded /AGENTS.md (70000 bytes)');
+    expect(pointer?.text).not.toContain('xxxx');
+    const sources = thread
+      .rootLog()
+      .events.filter((event) => event.type === 'context/measure')
+      .flatMap((event) => (event.data as { sources?: { id: string }[] }).sources ?? []);
+    expect(sources.filter((source) => source.id === 'agent-instructions')).toEqual([
+      {
+        id: 'agent-instructions',
+        bytes: Buffer.byteLength(pointer!.text, 'utf8'),
+        limit: 65536,
+        deferredBytes: 70_000,
+      },
+    ]);
+    // 沒延後的源沒有這一格。
+    expect(sources.filter((source) => 'deferredBytes' in source)).toHaveLength(1);
     await thread.close();
   }, 60000);
 });

@@ -24,6 +24,7 @@ import type {
   ModelRoute,
   NexusPlugin,
   PluginEntry,
+  PluginRegistry,
   ProjectionUnit,
   SessionEvent,
 } from '@nexus/core';
@@ -277,8 +278,24 @@ export function foldModelSelection(events: readonly SessionEvent[]): ModelSelect
   return events.reduce(applyModelSelectionEvent, EMPTY);
 }
 
+/** 這次組裝的「下一步會走的那顆的窗口」。鍵是 `registry.middleware`，理由同 `system-prompt-middleware.ts` 的 `DEFAULTS`。 */
+const NEXT_CONTEXT_WINDOWS = new WeakMap<object, () => number | undefined>();
+
 /**
- * 掛上模型選擇的 plugin：把控制器接上 root 的日誌、登記投影。**子代理的日誌不接**（模型選擇只管 root）。
+ * 這次組裝下一步會走的模型的窗口（token），見 {@link ModelSelectionHost.nextContextWindow}。
+ *
+ * @param registry - 這條 thread（這次組裝）的 registry。
+ * @returns 窗口；這次組裝沒有掛模型選擇（腳本模型、沒帶 `--live`）或型錄沒有那一顆就是 `undefined`。
+ */
+export function nextContextWindowOf(
+  registry: Pick<PluginRegistry, 'middleware'>,
+): number | undefined {
+  return NEXT_CONTEXT_WINDOWS.get(registry.middleware)?.();
+}
+
+/**
+ * 掛上模型選擇的 plugin：把控制器接上 root 的日誌、登記投影，並把「下一步的窗口」記在這次組裝上（{@link nextContextWindowOf}）。
+ * **子代理的日誌不接**（模型選擇只管 root）。
  *
  * @param host - {@link createModelSelectionHost} 的產物。
  */
@@ -286,6 +303,7 @@ export function createModelSelectionPlugin(host: ModelSelectionHost): PluginEntr
   const plugin: NexusPlugin = {
     name: 'model-selection',
     apply(registry) {
+      NEXT_CONTEXT_WINDOWS.set(registry.middleware, () => host.nextContextWindow());
       registry.projections.register(modelSelectionUnit);
       registry.sessions.join((subject) => {
         if (subject.address.kind === 'root') host.controller.attach(subject.log);
