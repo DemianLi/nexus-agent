@@ -37,14 +37,14 @@ import {
   liveModelPatch,
   mainOnly,
 } from './log-derived-history.fixture.js';
-import type { FakeEndpoint, WireMessage } from './log-derived-history.fixture.js';
+import type { Body, FakeEndpoint, WireMessage } from './log-derived-history.fixture.js';
 import { FrontForwarder } from './front-forward.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { composeEntries, defaultSources } from './plugin-config.js';
 import { appendRaw, journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
-import { HOST_PLUGINS_FILE } from './process-launcher.js';
+import { HOST_PLUGINS_FILE, SUPERVISOR_AUDIT_FILE } from './process-launcher.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { signalPid } from './test-pids.fixture.js';
@@ -238,6 +238,16 @@ function childrenRunning(parent: number, entry: string): number[] {
     }
   }
   return found;
+}
+
+/** 前台的 plugin 對照快照上列著的 thread：前台收到 `up` 之後綁上的才列，收到 `down` 就拿掉。 */
+async function liveThreadsOf(home: string): Promise<string[]> {
+  const rows = (
+    JSON.parse(await readFile(join(home, PLUGIN_SNAPSHOT_FILE_NAME), 'utf8')) as {
+      rows: { live?: { threads: string[] }[] }[];
+    }
+  ).rows;
+  return [...new Set(rows.flatMap((row) => row.live ?? []).flatMap(({ threads }) => threads))];
 }
 
 /** 監督行程預設補一個還沒綁 thread 的預熱行程（`--warm 1`）。 */
@@ -480,15 +490,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
       '1500',
     ]);
     const client = await clientOf(await running.loginUrl(1));
-    const snapshot = join(running.home, PLUGIN_SNAPSHOT_FILE_NAME);
-    const liveThreads = async (): Promise<string[]> => {
-      const rows = (
-        JSON.parse(await readFile(snapshot, 'utf8')) as {
-          rows: { live?: { threads: string[] }[] }[];
-        }
-      ).rows;
-      return [...new Set(rows.flatMap((row) => row.live ?? []).flatMap(({ threads }) => threads))];
-    };
+    const liveThreads = (): Promise<string[]> => liveThreadsOf(running.home);
     expect(await liveThreads()).toEqual([]);
 
     expect((await client.threadHistory('thread-p')).kind).toBe('ok');
@@ -997,7 +999,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', 
 /**
  * native 下對話只從日誌推（[#2360](https://github.com/DemianLi/nexus-agent/issues/2360)），per-thread 那一半：single 的在 `native-log-restore.test.ts`。
  *
- * 對話行程換了一個（pid 不同），行程內的快取就一定是空的；下一輪模型收到的請求帶著前一個行程那一輪的人話與回覆，就是從日誌灌回的。
+ * 對話行程換了一個（pid 不同），行程內的快取就一定是空的；下一輪模型收到的請求帶著前一個行程那一輪的人話（那一輪答完了的連同回覆），就是從日誌灌回的。
  * 模型是假 OpenAI 端點（`--live`），請求在這個測試行程裡看得到。
  */
 describe.skipIf(SUPERVISOR === undefined)(
@@ -1024,10 +1026,11 @@ describe.skipIf(SUPERVISOR === undefined)(
         .map((message) => `${message.role}:${textOf(message)}`);
     }
 
-    async function upstream(): Promise<FakeEndpoint> {
+    async function upstream(hold?: (body: Body) => boolean): Promise<FakeEndpoint> {
       const endpoint = await fakeEndpoint(
         mainOnly((k) => ({ content: `第 ${k} 次回覆` })),
         true,
+        hold,
       );
       cleanupEndpoints.push(endpoint);
       return endpoint;
@@ -1109,6 +1112,112 @@ describe.skipIf(SUPERVISOR === undefined)(
         expect.stringContaining('撤之前的暗號是什麼'),
       ]);
     }, 240_000);
+
+    /** 監督行程的稽核紀錄裡這個 pid 結束的那一行（事件行與還沒寫完的殘行不算）；還沒寫就是 `undefined`。 */
+    function auditOf(home: string, pid: number): Record<string, unknown> | undefined {
+      let text: string;
+      try {
+        text = readFileSync(join(home, SUPERVISOR_AUDIT_FILE), 'utf8');
+      } catch {
+        return undefined;
+      }
+      for (const line of text.split('\n')) {
+        let record: Record<string, unknown>;
+        try {
+          record = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (record.event === undefined && record.pid === pid) return record;
+      }
+      return undefined;
+    }
+
+    const argvOf = (pid: number): string[] =>
+      readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').split('\0');
+
+    it.skipIf(COMPOSITION === undefined)(
+      '一對：葉子在等模型時被殺，留著的組合行程補新葉子，下一句從日誌接上（#2806）',
+      async () => {
+        const THREAD = 'thread-pair-kill';
+        // 第一次主呼叫扣住不回：葉子停在等模型，日誌上有那句人話與開著的 `model/start`。扣住的那一刻由這裡看到，不靠等時間。
+        let waiting = true;
+        let reached!: () => void;
+        const held = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        const model = await upstream((body) => {
+          if (!waiting || !isMainCall(body)) return false;
+          waiting = false;
+          reached();
+          return true;
+        });
+        const running = await start([], '', undefined, ['--composition', COMPOSITION!], {
+          liveBaseUrl: model.baseURL,
+          serveArgs: NATIVE,
+        });
+        const supervisor = running.child.pid!;
+        const client = await clientOf(await running.loginUrl(1));
+        // 送第一句之前只有預熱的那一對；綁上這條 thread 的就是它的葉子（下面用稽核那一行的 `thread` 核對）。
+        const warm = await settled(supervisor, 'conversation-process', WARM);
+        expect(warm).toHaveLength(WARM);
+        const killed = warm[0]!;
+        const compositions = childrenRunning(supervisor, 'nexus-composition');
+        expect(compositions).toHaveLength(WARM);
+
+        const downlink = new AbortController();
+        await client.openEvents(THREAD, { signal: downlink.signal });
+        await client.runStart(THREAD, '暗號是藍鯨');
+        await Promise.race([
+          held,
+          new Promise<never>((_resolve, reject) =>
+            setTimeout(
+              () => reject(new Error(`60 秒內模型沒收到第一次主呼叫：\n${running.log()}`)),
+              60_000,
+            ).unref(),
+          ),
+        ]);
+        // 前台收到 `down` 會了結這條 thread 所有在等的 `ensure`，連 `down` 之後才問的也算。所以下一句要等前台處理過舊葉子的 `down` 才送：
+        // 快照先列出這條，殺掉之後等它被拿掉。
+        await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([THREAD]);
+        expect(signalPid(killed, 'SIGKILL')).toBe(true);
+        await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([]);
+
+        // 監督行程收屍時先寫稽核那一行才送 `down`：前台處理過 `down`，這一行就已經在了。收完屍之後的 `ensure` 才會補葉子。
+        const record = auditOf(running.home, killed);
+        expect(record).toMatchObject({
+          role: 'conversation',
+          thread: THREAD,
+          cause: 'crash',
+          exit_code: null,
+          signal: 9,
+        });
+        const bridge = `c${String(record?.pair)}.p.sock`;
+        downlink.abort();
+
+        // 扣住的那一次不進 `bodies`、不佔 `mainOnly` 的號，所以這一句拿到的是第 0 次回覆。
+        expect(replies(await turn(client, THREAD, '剛才的暗號是什麼'))).toEqual(['第 0 次回覆']);
+        // 被殺的那一輪沒有回覆，續接補上的收尾不進模型：系統訊息以外，模型看到的是兩句人話，前一句來自日誌。
+        expect(requestFor(model, '剛才的暗號是什麼')).toEqual([
+          expect.stringContaining('暗號是藍鯨'),
+          expect.stringContaining('剛才的暗號是什麼'),
+        ]);
+
+        // 補的是葉子，不是整對：組合行程一個都沒換，新葉子接在同一條橋後面。
+        expect(
+          childrenRunning(supervisor, 'conversation-process').filter((pid) =>
+            argvOf(pid).some((arg) => arg.endsWith(`/${bridge}`)),
+          ),
+        ).toHaveLength(1);
+        for (const pid of compositions) {
+          expect(auditOf(running.home, pid)).toBeUndefined();
+        }
+        expect(childrenRunning(supervisor, 'nexus-composition')).toEqual(
+          expect.arrayContaining(compositions),
+        );
+      },
+      240_000,
+    );
   },
 );
 
