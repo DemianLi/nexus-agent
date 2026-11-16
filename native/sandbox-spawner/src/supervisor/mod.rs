@@ -27,7 +27,7 @@
 //! 只讀的先，同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
 //! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度；逾時之後才到的也照收）；回 `busy` 或
 //! `--drain-timeout-ms` 內沒回答都不收，當它不閒置，等它下次回報閒置。閒置超過 `--idle-ms`（只讀的 `--read-only-idle-ms`）也送 `drain`。
-//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補，每失敗一次加倍到 30 秒（[`Supervisor::warm_failed`]）。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
+//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補，每失敗一次加倍到上限（[`args::WARM_BACKOFF_MAX`]，[`Supervisor::warm_failed`]）。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
@@ -350,7 +350,7 @@ struct Supervisor {
     capacity: u32,
     /// 名額滿而排著的 thread 與開啟方式，先排的在前；有行程收完就從前面起。
     pending: Vec<(Vec<u8>, OpenMode)>,
-    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。只由 [`Supervisor::warm_failed`] 設：直接寫它就繞過退避，沒有測試會紅。
+    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。只由 [`Supervisor::warm_failed`] 設。現有四處由 `every_place_that_schedules_a_warm_retry_goes_through_warm_failed` 釘；之後新增的寫法直接寫它就繞過退避，沒有測試會紅。
     warm_retry_at: Option<Instant>,
     /// 下一次預熱失敗要等多久；初值是 `--front-restart-ms`，每失敗一次加倍到 [`args::WARM_BACKOFF_MAX`]。
     warm_backoff: Duration,
