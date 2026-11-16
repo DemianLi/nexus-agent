@@ -1,5 +1,5 @@
 /**
- * 渲染與預算——字串與位元組帳逐條對 dsh `packages/context/agent-instructions/src/render.ts`（`ddefc45`）。
+ * 渲染與預算：外框、引言、標頭的字串寫死在這裡；預算超出時整份延後、不截斷（#2777）。
  *
  * 這些字串是**模型看到的東西**，所以測試把它們寫死：改一個字就是改了一次提示詞，那要是一個決定，
  * 不是重構的副作用。
@@ -7,11 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  AGENT_INSTRUCTIONS_INTRO,
-  COMPACT_AGENT_INSTRUCTIONS_INTRO,
-  renderAgentInstructions,
-} from './render.js';
+import { AGENT_INSTRUCTIONS_INTRO, renderAgentInstructions } from './render.js';
 
 const bytes = (value: string): number => Buffer.byteLength(value, 'utf8');
 
@@ -39,8 +35,7 @@ describe('基線的樣子', () => {
         '</system-reminder>',
       ].join('\n'),
     );
-    expect(rendered?.omitted).toEqual([]);
-    expect(rendered?.truncated).toEqual([]);
+    expect(rendered?.deferred).toEqual([]);
   });
 
   it('空鏈不加任何東西', () => {
@@ -67,67 +62,79 @@ describe('基線的樣子', () => {
   });
 });
 
-describe('預算：寬的先整份省略，最具體的最後才截斷', () => {
-  it('塞不下就從最寬的開始整份省略，通知寫出是誰', () => {
-    const wide = { displayPath: 'AGENTS.md', content: 'W'.repeat(400) };
+describe('預算：放不下的檔整份延後、留一行指標，不截斷（#2777）', () => {
+  it('兩份各自放得下、合起來放不下：留最具體的那一份，較寬的延後', () => {
+    const wide = { displayPath: 'AGENTS.md', content: 'W'.repeat(300) };
+    const narrow = { displayPath: 'AGENTS.local.md', content: 'N'.repeat(300) };
+    const alone = (file: typeof wide) => bytes(renderAgentInstructions([file], 100_000)!.text);
+    // 一份加通知行（一百多位元組）放得下，兩份放不下。
+    const budget = Math.max(alone(wide), alone(narrow)) + 200;
+    const rendered = renderAgentInstructions([wide, narrow], budget);
+    expect(rendered?.deferred).toEqual([{ displayPath: 'AGENTS.md', bytes: 300 }]);
+    expect(rendered?.text).toContain('N'.repeat(300));
+    expect(rendered?.text).not.toContain('WWW');
+    expect(bytes(rendered?.text ?? '')).toBeLessThanOrEqual(budget);
+  });
+
+  it('寬的放不下就整份延後，通知寫出讀檔路徑、大小與讀法', () => {
+    const wide = {
+      displayPath: 'AGENTS.md',
+      readPath: '/shared/AGENTS.md',
+      content: 'W'.repeat(400),
+    };
     const narrow = { displayPath: 'AGENTS.local.md', content: 'N'.repeat(100) };
-    // 500：**剛好夠**讓「省略寬的那一份」這條路成立。再緊一點就會掉進截斷分支（引言自己就吃 240
-    // 個位元組），而那是下一條在量的東西。
-    const rendered = renderAgentInstructions([wide, narrow], 500);
-    expect(rendered?.omitted).toEqual(['AGENTS.md']);
-    expect(rendered?.truncated).toEqual([]);
-    expect(rendered?.text).toContain('Workspace instruction budget 500 bytes: omitted AGENTS.md');
+    const rendered = renderAgentInstructions([wide, narrow], 560);
+    expect(rendered?.deferred).toEqual([{ displayPath: 'AGENTS.md', bytes: 400 }]);
+    expect(rendered?.text).toContain(
+      'Workspace instruction budget 560 bytes: not loaded /shared/AGENTS.md (400 bytes); ' +
+        'read each with read_file before acting on this workspace.',
+    );
+    expect(rendered?.text).toContain(AGENT_INSTRUCTIONS_INTRO);
     expect(rendered?.text).toContain('N'.repeat(100));
     expect(rendered?.text).not.toContain('W'.repeat(10));
-    expect(bytes(rendered?.text ?? '')).toBeLessThanOrEqual(500);
+    expect(bytes(rendered?.text ?? '')).toBeLessThanOrEqual(560);
   });
 
-  it('剩最後一份還是塞不下就截它，通知寫出原本與留下的位元組數', () => {
+  it('最具體的那一份放不下也整份延後：內容一個字都不放，沒有引言，外框還在', () => {
     const only = { displayPath: 'AGENTS.md', content: 'x'.repeat(2000) };
     const rendered = renderAgentInstructions([only], 500);
-    expect(rendered?.omitted).toEqual([]);
-    expect(rendered?.truncated).toHaveLength(1);
-    expect(rendered?.truncated[0]?.originalBytes).toBe(2000);
-    expect(rendered?.truncated[0]?.includedBytes).toBeGreaterThan(0);
-    expect(rendered?.text).toContain(
-      `Workspace instruction budget 500 bytes: truncated AGENTS.md from 2000 to ${String(
-        rendered?.truncated[0]?.includedBytes,
-      )} bytes`,
+    expect(rendered?.deferred).toEqual([{ displayPath: 'AGENTS.md', bytes: 2000 }]);
+    expect(rendered?.text).toBe(
+      '<system-reminder>\n' +
+        'Workspace instruction budget 500 bytes: not loaded AGENTS.md (2000 bytes); ' +
+        'read each with read_file before acting on this workspace.\n' +
+        '</system-reminder>',
     );
-    expect(bytes(rendered?.text ?? '')).toBeLessThanOrEqual(500);
   });
 
-  it('截斷不會切碎一個字元', () => {
+  it('最具體的放不下、較寬的放得下：寬的照放，延後的只有放不下的那一份', () => {
+    const wide = { displayPath: 'AGENTS.md', content: 'W'.repeat(50) };
+    const narrow = { displayPath: 'AGENTS.local.md', content: 'N'.repeat(2000) };
+    const rendered = renderAgentInstructions([wide, narrow], 600);
+    expect(rendered?.deferred).toEqual([{ displayPath: 'AGENTS.local.md', bytes: 2000 }]);
+    expect(rendered?.text).toContain('W'.repeat(50));
+    expect(rendered?.text).not.toContain('N'.repeat(10));
+    expect(bytes(rendered?.text ?? '')).toBeLessThanOrEqual(600);
+  });
+
+  it('位元組數算的是 UTF-8：中文一個字三個位元組', () => {
     const rendered = renderAgentInstructions(
       [{ displayPath: 'AGENTS.md', content: '中'.repeat(500) }],
       420,
     );
-    const text = rendered?.text ?? '';
-    expect(text).not.toContain('�');
-    expect(bytes(text)).toBeLessThanOrEqual(420);
-    // 留下來的位元組數一定是 3 的倍數：每個「中」三個位元組，切一半就會出現替換字元。
-    expect((rendered?.truncated[0]?.includedBytes ?? 0) % 3).toBe(0);
+    expect(rendered?.deferred).toEqual([{ displayPath: 'AGENTS.md', bytes: 1500 }]);
+    expect(rendered?.text).not.toContain('中');
   });
 
-  it('預算緊到連引言都放不下時換成短引言', () => {
+  it('連帶外框的通知都放不下就退成沒有外框的通知，照樣不超過預算、不切碎字元', () => {
     const rendered = renderAgentInstructions(
-      [{ displayPath: 'AGENTS.md', content: 'x'.repeat(2000) }],
-      260,
+      [{ displayPath: '指示.md', content: 'x'.repeat(2000) }],
+      60,
     );
     const text = rendered?.text ?? '';
-    expect(text).toContain(COMPACT_AGENT_INSTRUCTIONS_INTRO);
-    expect(text).not.toContain(AGENT_INSTRUCTIONS_INTRO);
-    expect(bytes(text)).toBeLessThanOrEqual(260);
-  });
-
-  it('連短引言都放不下就退成一則沒有外框的通知，而且照樣不超過預算', () => {
-    const rendered = renderAgentInstructions(
-      [{ displayPath: 'AGENTS.md', content: 'x'.repeat(2000) }],
-      80,
-    );
-    const text = rendered?.text ?? '';
-    expect(bytes(text)).toBeLessThanOrEqual(80);
-    expect(text).toContain('Workspace instruction budget 80 bytes:');
+    expect(bytes(text)).toBeLessThanOrEqual(60);
+    expect(text).toContain('Workspace instruction budget 60 bytes:');
     expect(text).not.toContain('<system-reminder>');
+    expect(text).not.toContain('\uFFFD');
   });
 });

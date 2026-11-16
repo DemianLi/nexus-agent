@@ -5,8 +5,10 @@
  * 照樣量位元組，只是沒有上限。靠摘要壓不住這些來源的大小：系統提示上的摘要碰不到，訊息串裡的工作區指示被切掉之後會再放一則。
  * 所以它們各自有上限，彼此不共用。
  *
- * 這裡只有表與算法，是純函式，窗口由呼叫端給。量在 `injection-sources.ts`；上限目前只出現在 `context/measure` 的 `sources`
- * 當對照，沒有地方照這張表擋。
+ * 這裡只有表與算法，是純函式，窗口由呼叫端給。量在 `injection-sources.ts`。執行在各源自己那裡：
+ * 可延後的源放不下時整項不放、留一行指標（`base-prompt-text.ts` 的兩個 `…Within`，與 agent-instructions、skill-invocation 兩個插件）；
+ * 必要的源超過時組裝或載入失敗（`apps/harness` 的 `system-prompt-middleware.ts`、plan-mode 的設定）。插件不 import core，
+ * 預設值與算法各抄一份，`apps/harness/src/injection-budget-pins.test.ts` 把兩邊釘成相等。
  *
  * @module
  */

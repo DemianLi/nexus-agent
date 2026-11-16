@@ -79,6 +79,7 @@ import type { FoldedThreadSource } from '@nexus/tool-adapter';
 import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
+import { nextContextWindowOf } from './model-selection-host.js';
 import { createPreStepMiddleware } from './pre-step-middleware.js';
 import {
   createSystemPromptMiddleware,
@@ -1023,8 +1024,13 @@ function registerFolded(
   const cutoffs = summaryCutoffsOf(registry);
   for (const { name, listener } of contributions.preSteps) {
     registry.middleware.use(
-      createPreStepMiddleware(name, listener, registry.sessions, (config, messages) =>
-        cutoffs.lookup(config, messages),
+      createPreStepMiddleware(
+        name,
+        listener,
+        registry.sessions,
+        (config, messages) => cutoffs.lookup(config, messages),
+        // 每次呼叫才問：模型選擇那一列可能排在這一列之後才掛，使用者也可能在兩輪之間換模型（#2777）。
+        () => nextContextWindowOf(registry),
       ),
     );
   }

@@ -30,13 +30,17 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：agentLoop（^1.2.0，要帶 source）、fs（^2.2.0，來源讀把手）；沒有設定、沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：agentLoop（^1.4.0，要帶 source、讀 contextWindow）、fs（^2.2.0，來源讀把手）；設定只有上限兩格、沒有 default 匯出', () => {
     expect(invocation.manifest.consumes).toEqual([
-      { token: 'agentLoop', range: '^1.2.0' },
+      { token: 'agentLoop', range: '^1.4.0' },
       { token: 'fs', range: '^2.2.0' },
     ]);
     expect(invocation.manifest.provides).toEqual([]);
     expect(() => invocation.Config.parse({ sources: ['/skills/'] })).toThrow(/sources/);
+    expect(invocation.Config.parse({})).toEqual({ maxBytes: 65536, contextFraction: 0.1 });
+    for (const bad of [{ maxBytes: 0 }, { contextFraction: 0 }, { contextFraction: 1.5 }]) {
+      expect(invocation.Config.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
     expect('default' in invocation).toBe(false);
     expect(SKILL_INVOCATION_LISTENER_NAME).toBe('SkillInvocationMiddleware');
   });

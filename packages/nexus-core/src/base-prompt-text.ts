@@ -5,6 +5,9 @@
  * `formatSkillsList`、`formatSkillAnnotations`、`MEMORY_SYSTEM_PROMPT`、`formatMemoryContents`）：基座不匯出它們，模型看到的位元組
  * 又不能變。`base-prompt-text.test.ts` 拿基座自己的 middleware 渲染同一份資料逐位元組比，基座升版改了措辭會紅。
  *
+ * 放得下時兩個 `…Within` 跟不設上限的那一段逐位元組相同；放不下時加的指標行是這裡自己的文字
+ * （[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)），基座沒有。
+ *
  * @module
  */
 
@@ -159,21 +162,79 @@ function formatSkillsList(skills: readonly SkillListing[], sources: readonly str
   if (skills.length === 0) {
     return `(No skills available yet. You can create skills in ${sources.map((s) => `\`${s}\``).join(' or ')})`;
   }
-  const lines: string[] = [];
-  for (const skill of skills) {
-    const annotations = formatSkillAnnotations(skill);
-    let descLine = `- **${skill.name}**: ${skill.description}`;
-    if (annotations) descLine += ` (${annotations})`;
-    lines.push(descLine);
-    if (skill.allowedTools && skill.allowedTools.length > 0) {
-      lines.push(`  → Allowed tools: ${skill.allowedTools.join(', ')}`);
-    }
-    lines.push(`  → Read \`${skill.path}\` for full instructions`);
-    if (skill.module !== undefined) {
-      lines.push(`  → Import: \`await import("@/skills/${skill.name}")\``);
-    }
+  return skills.map(formatSkillEntry).join('\n');
+}
+
+/** 清單上的一條：名字與說明、允許的工具、讀哪個檔。 */
+function formatSkillEntry(skill: SkillListing): string {
+  const annotations = formatSkillAnnotations(skill);
+  let descLine = `- **${skill.name}**: ${skill.description}`;
+  if (annotations) descLine += ` (${annotations})`;
+  const lines = [descLine];
+  if (skill.allowedTools && skill.allowedTools.length > 0) {
+    lines.push(`  → Allowed tools: ${skill.allowedTools.join(', ')}`);
+  }
+  lines.push(`  → Read \`${skill.path}\` for full instructions`);
+  if (skill.module !== undefined) {
+    lines.push(`  → Import: \`await import("@/skills/${skill.name}")\``);
   }
   return lines.join('\n');
+}
+
+/** 一段在上限內渲染的結果。 */
+export interface BudgetedSection {
+  readonly text: string;
+  /** 沒放進去的原文位元組數；全放進去是 `0`。 */
+  readonly deferredBytes: number;
+}
+
+const bytesOf = (text: string): number => Buffer.byteLength(text, 'utf8');
+
+/**
+ * skills 那一段，整段不超過 `budget`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：放不下時從清單尾端
+ * 往前留（清單照每個名字第一次出現的先後排，後登記的來源才有的技能在尾端），留不下的條目整條不列，清單最後補一行說有幾條沒列、怎麼找。段的固定文字不縮：
+ * 一條都留不下時仍是固定文字加那一行，可能超過 `budget`。
+ *
+ * @param skills - 清單上的技能，照掃描的先後。
+ * @param sources - 來源目錄，照登記的先後。
+ * @param budget - 整段的上限，UTF-8 位元組。
+ */
+export function renderSkillsSectionWithin(
+  skills: readonly SkillListing[],
+  sources: readonly string[],
+  budget: number,
+): BudgetedSection {
+  const full = renderSkillsSection(skills, sources);
+  if (skills.length === 0 || bytesOf(full) <= budget) return { text: full, deferredBytes: 0 };
+  const entries = skills.map(formatSkillEntry);
+  const frame = (list: string) =>
+    SKILLS_SYSTEM_PROMPT.replace('{skills_locations}', formatSkillsLocations(sources)).replace(
+      '{skills_list}',
+      list,
+    );
+  const pointer = (count: number) =>
+    `- (${count} more skill${count === 1 ? '' : 's'} not listed: skills section budget ${budget} bytes. ` +
+    `List ${sources.map((s) => `\`${s}\``).join(' or ')} with ls and read a SKILL.md with read_file.)`;
+  let kept = 0;
+  // 少留一條，指標那一行的數字可能多一位數，所以每一步都用實際會送出的文字量。
+  while (
+    kept < entries.length &&
+    bytesOf(
+      frame(
+        [...entries.slice(entries.length - kept - 1), pointer(entries.length - kept - 1)].join(
+          '\n',
+        ),
+      ),
+    ) <= budget
+  ) {
+    kept++;
+  }
+  if (kept === entries.length) return { text: full, deferredBytes: 0 };
+  const dropped = entries.slice(0, entries.length - kept);
+  return {
+    text: frame([...entries.slice(entries.length - kept), pointer(dropped.length)].join('\n')),
+    deferredBytes: dropped.reduce((sum, entry) => sum + bytesOf(entry), 0),
+  };
 }
 
 /**
@@ -209,4 +270,41 @@ export function renderMemorySection(
     if (sections.length > 0) formatted = sections.join('\n\n');
   }
   return MEMORY_SYSTEM_PROMPT.replace('{memory_contents}', formatted);
+}
+
+/**
+ * 記憶那一段，整段不超過 `budget`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：照登記的先後一份一份放，
+ * 放了會超過的那一份整份不放，原地留一行說它多大、用什麼讀；後面較小的照樣試。段的固定文字不縮：一份都放不下時仍是固定文字
+ * 加各份的那一行，可能超過 `budget`。
+ *
+ * @param contents - 來源路徑 → 內容。
+ * @param sources - 來源路徑，照登記的先後。
+ * @param budget - 整段的上限，UTF-8 位元組。
+ */
+export function renderMemorySectionWithin(
+  contents: Readonly<Record<string, string>>,
+  sources: readonly string[],
+  budget: number,
+): BudgetedSection {
+  const full = renderMemorySection(contents, sources);
+  if (bytesOf(full) <= budget) return { text: full, deferredBytes: 0 };
+  const loaded = sources.filter((path) => contents[path]);
+  const pointerOf = (path: string) =>
+    `${path}\n(Not loaded: ${bytesOf(contents[path]!)} bytes, memory section budget ${budget} bytes. Read it with read_file when you need it.)`;
+  const deferred = new Set(loaded);
+  const render = () =>
+    MEMORY_SYSTEM_PROMPT.replace(
+      '{memory_contents}',
+      loaded
+        .map((path) => (deferred.has(path) ? pointerOf(path) : `${path}\n${contents[path]}`))
+        .join('\n\n'),
+    );
+  for (const path of loaded) {
+    deferred.delete(path);
+    if (bytesOf(render()) > budget) deferred.add(path);
+  }
+  return {
+    text: render(),
+    deferredBytes: [...deferred].reduce((sum, path) => sum + bytesOf(contents[path]!), 0),
+  };
 }

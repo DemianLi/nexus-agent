@@ -30,6 +30,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as module from './index.js';
 import {
   AGENT_INSTRUCTIONS_MARKER,
+  INJECTION_DEFERRED_BYTES_KEY,
   AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
   agentInstructionsConfigSchema,
   Config,
@@ -93,13 +94,53 @@ function baselineMessage(): HumanMessage {
 }
 
 describe('設定', () => {
-  it('合法的覆寫會生效——上限換小之後，同一份基線就被截了', async () => {
-    const long = 'x'.repeat(200);
+  it('合法的覆寫會生效——上限換小之後，同一份檔整份延後、留一行指標，內容一個字都不放（#2777）', async () => {
+    const long = 'x'.repeat(400);
     const full = await inject({ '/AGENTS.md': long });
-    const capped = await inject({ '/AGENTS.md': long }, [], 32);
+    const capped = await inject({ '/AGENTS.md': long }, [], 200);
 
     expect(String(full?.[0]?.content)).toContain(long);
-    expect(String(capped?.[0]?.content)).not.toContain(long);
+    expect(String(capped?.[0]?.content)).toBe(
+      '<system-reminder>\n' +
+        'Workspace instruction budget 200 bytes: not loaded /AGENTS.md (400 bytes); ' +
+        'read each with read_file before acting on this workspace.\n' +
+        '</system-reminder>',
+    );
+  });
+
+  it('宿主交了窗口：上限是 min(maxBytes, floor(窗口 × 4 × contextFraction))，窗口小就整份延後', async () => {
+    const files = { '/AGENTS.md': 'x'.repeat(2000) };
+    const listener = createAgentInstructionsListener(
+      { ...LIMITS, contextFraction: 0.1 },
+      { fs: () => ({ kind: 'ok', fs: handleOf(fakeBackend(files)), address: { kind: 'root' } }) },
+    );
+    // 1000 × 4 × 0.1 = 400 個位元組：2000 位元組的檔放不下。
+    const small = await listener([], { ...INVOCATION, contextWindow: 1000 });
+    expect(String(small?.[0]?.content)).toContain(
+      'Workspace instruction budget 400 bytes: not loaded /AGENTS.md (2000 bytes)',
+    );
+    // 沒放進去的位元組記在訊息上，量測從這一格讀；全放進去的那一則沒有這一格。
+    expect(small?.[0]?.additionalKwargs).toEqual({
+      [AGENT_INSTRUCTIONS_MARKER]: true,
+      [INJECTION_DEFERRED_BYTES_KEY]: 2000,
+    });
+    expect((await listener([], INVOCATION))?.[0]?.additionalKwargs).toEqual({
+      [AGENT_INSTRUCTIONS_MARKER]: true,
+    });
+    // 窗口夠大時是 maxBytes 生效；宿主沒交窗口（沒有型錄、腳本模型）也只看 maxBytes。
+    for (const invocation of [{ ...INVOCATION, contextWindow: 1_000_000 }, INVOCATION]) {
+      expect(String((await listener([], invocation))?.[0]?.content)).toContain('x'.repeat(2000));
+    }
+  });
+
+  it('窗口比例要大於 0、不超過 1，不是就讓設定驗證失敗；省略是 0.1', () => {
+    for (const contextFraction of [0, -0.1, 1.5, Number.NaN]) {
+      const result = agentInstructionsConfigSchema.safeParse({ contextFraction });
+      expect(result.success, String(contextFraction)).toBe(false);
+      expect(JSON.stringify(result.error?.issues)).toContain('contextFraction');
+    }
+    expect(Config.parse({}).contextFraction).toBe(0.1);
+    expect(Config.parse({ contextFraction: 1 }).contextFraction).toBe(1);
   });
 
   // **翻面過的絆索**（#453）：驗在載入的時候，訊息因此指得出條目。
@@ -554,14 +595,14 @@ describe('樹上這一列（#1474）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：agentLoop（^1.3.0）、fs（^2.1.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：agentLoop（^1.4.0）、fs（^2.1.0）；沒有 default 匯出', () => {
     expect(module.manifest.consumes).toEqual([
-      { token: 'agentLoop', range: '^1.3.0' },
+      { token: 'agentLoop', range: '^1.4.0' },
       { token: 'fs', range: '^2.1.0' },
     ]);
     expect(module.manifest.provides).toEqual([]);
     expect(module.inject).toEqual({
-      agentLoop: { range: '^1.3.0' },
+      agentLoop: { range: '^1.4.0' },
       fs: { range: '^2.1.0' },
     });
     expect(agentLoopToken.name).toBe('agentLoop');

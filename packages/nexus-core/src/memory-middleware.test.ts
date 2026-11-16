@@ -70,3 +70,30 @@ describe('記憶的內容每條 thread 一份', () => {
     expect(lastBlock(middleware, 'a')).toContain('state 裡的。');
   });
 });
+
+describe('記憶段的上限跟著模型的窗口（#2777）', () => {
+  it('窗口小到放不下：那一份換成一行指標；查不到窗口的模型照放', async () => {
+    const parts = createMemoryMiddleware(
+      { backend: backendOf({ '/AGENTS.md': '甲的記憶。' }), sources: ['/AGENTS.md'] },
+      undefined,
+      (model) => (model === 'small' ? 100 : undefined),
+    );
+    await (parts.hook as unknown as { beforeAgent: Hook }).beforeAgent({}, runtimeOf('a'));
+    const blockFor = (model: string) => {
+      let sent: SystemMessage | undefined;
+      (parts.prompt as unknown as { wrapModelCall: Wrap }).wrapModelCall(
+        { systemMessage: new SystemMessage('前面'), runtime: runtimeOf('a'), model },
+        (request) => {
+          sent = (request as { systemMessage: SystemMessage }).systemMessage;
+        },
+      );
+      return (sent!.content as { text: string }[]).at(-1)!.text;
+    };
+    // 100 × 4 × 0.05 = 20 位元組。
+    expect(blockFor('small')).toContain(
+      '/AGENTS.md\n(Not loaded: 15 bytes, memory section budget 20 bytes. Read it with read_file when you need it.)',
+    );
+    expect(blockFor('small')).not.toContain('甲的記憶。');
+    expect(blockFor('unknown')).toContain('/AGENTS.md\n甲的記憶。');
+  });
+});

@@ -693,19 +693,41 @@ serve 上那條對話建不起來，回應與伺服器日誌照上面「對話�
 
 ```json
 "sources": [
-  { "id": "agent-instructions", "bytes": 4120, "limit": 65536 },
+  { "id": "agent-instructions", "bytes": 188, "limit": 13107, "deferredBytes": 48210 },
   { "id": "sandbox:policy", "bytes": 512 },
-  { "id": "skill-catalog", "bytes": 1893, "limit": 32768 }
+  { "id": "skill-catalog", "bytes": 1893, "limit": 6553 }
 ]
 ```
 
 - 照 `id` 排序；這一次請求裡沒出現的來源不列。
 - `limit` 只有下表有、而且不是「每台」那一類的來源才帶，值是這一次請求走的模型窗口下算出來的上限。
 - system prompt 中段的來源用段名當 `id`（例如 `sandbox:policy`、`nexus:approval-policy`、`file-reference`），表上沒有的就沒有 `limit`。
+- `deferredBytes` 是這一次放不下、沒放進請求的原文位元組數；沒有延後的來源沒有這一格。
 - `mcp:servers` 量的是所有 server 的指示合起來那一塊，分不出各台。
 - 這一格只落盤，不送到 web。
 
-**今天這一格只量、不擋**：超過 `limit` 的來源照舊整份放進請求，各源原有的行為（指示檔的截斷、技能描述的截斷、MCP 每台的上限）都沒有變。
+**超過上限時怎麼辦，看來源的類別**（下表的「類別」欄）：
+
+- **可延後**的四個來源不截斷：放不下的那一項整項不放，原地留一行英文指標，寫明哪一項、多大、上限多少、用哪個讀檔工具讀。
+  - `agent-instructions`：從最具體的那一層指示檔往外，一份一份放；放了會超過的那一份整份不放（包含最具體的那一份），後面較小的照樣試。
+    指標是 `Workspace instruction budget 13107 bytes: not loaded /AGENTS.md (48210 bytes); read each with read_file before acting on this workspace.`
+  - `skill-catalog`：整段放不下時，從清單尾端往前留（清單照每個名字第一次出現的先後排，後登記的來源才有的技能在尾端），留不下的條目整條不列，清單最後一行是
+    ``- (12 more skills not listed: skills section budget 6553 bytes. List `/skills/` with ls and read a SKILL.md with read_file.)``
+  - `skill-invocation`：那一份技能的正文整份不放，換成 `Skill "report" is 91200 bytes, over the 65536-byte budget: read /skills/report/SKILL.md with read_file and follow it.`
+  - `memory`：照登記的先後一份一份放，放了會超過的那一份換成 `(Not loaded: 48210 bytes, memory section budget 6553 bytes. Read it with read_file when you need it.)`
+- **必帶**的三個來源不截斷也不延後，超過就起不來：system prompt 的頭段或尾段超過時，`system-prompt` 那一列在組 thread 時失敗
+  （`SystemPromptBudgetError`，訊息寫明哪一段、多大、上限多少）；計劃模式的 `guidance` 超過時，`plan-mode` 那一列在載入設定時失敗。
+- **每台**：行為沒有變。
+
+三件要知道的事：
+
+- `skill-catalog` 與 `memory` 那兩段各有一塊固定的說明文字（幾千位元組），不會縮。窗口很小的模型上，就算條目全部延後，
+  這一段的 `bytes` 仍可能大於 `limit`。
+- 技能目錄裡每一條描述原有的字數截斷沒有變：那是摘要欄，正文本來就要另外讀。
+- 延後之後模型要多一次讀檔才看得到內容，也可能不讀。`deferredBytes` 一直出現在同一個來源上，就該縮那份檔，或調它的上限。
+
+`agent-instructions` 與 `skill-invocation` 的上限可以在各自那一列改：`maxBytes`（絕對上限）與 `contextFraction`（佔窗口比例，大於 0、不超過 1）。
+`skill-catalog`、`memory` 與必帶的三項用下表的值，沒有設定鍵。窗口取的是這條 thread 下一步會走的模型；型錄沒有宣告窗口的模型只看絕對上限。
 
 預算表（`@nexus/core` 的 `INJECTION_SOURCE_BUDGETS`）：
 
@@ -726,7 +748,7 @@ serve 上那條對話建不起來，回應與伺服器日誌照上面「對話�
 
 - **可延後**：模型有別的路讀全（讀檔工具）。上限是 `min(絕對上限, floor(模型窗口 × 4 × 比例))`，一個 token 估 4 個位元組；取不到窗口時用絕對上限。
   預設模型上是絕對上限生效；窗口 32,768 的模型上，10% 那幾列是 13,107、5% 那幾列是 6,553。
-- **必帶**：沒有它請求不成立，上限不看窗口。
+- **必帶**：沒有它請求不成立，上限不看窗口。頭尾段在組 thread 時用當時的模型代入 `{{model}}` 之後量；之後換模型重新代入的那一份不再檢查。
 - **每台**：每台 MCP server 各一個上限，由 MCP 插件執行（超過的那一台算連線失敗）。
 
 各源的上限彼此不共用；總量仍由摘要門檻管。

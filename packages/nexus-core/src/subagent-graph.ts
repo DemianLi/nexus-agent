@@ -72,6 +72,7 @@ export type SubagentGraphParams = Pick<
   | 'fileTools'
   | 'fileToolDescriptions'
   | 'patchToolCallsStateFix'
+  | 'contextWindowOf'
 >;
 
 /**
@@ -187,6 +188,7 @@ export function compileSubagentGraph(
       ...(params.patchToolCallsStateFix !== undefined && {
         patchToolCallsStateFix: params.patchToolCallsStateFix,
       }),
+      ...(params.contextWindowOf !== undefined && { contextWindowOf: params.contextWindowOf }),
     }),
     // 背景版插話載體（#858）：host 經 `configurable` 交 handle 進來才有作用，沒交就什麼都不做。
     createStepInboxMiddleware('background'),

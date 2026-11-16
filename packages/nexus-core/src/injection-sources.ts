@@ -30,12 +30,26 @@ export interface InjectionSourceReport {
   readonly id: string;
   /** UTF-8 位元組數。 */
   readonly bytes: number;
+  /** 放不下、沒放進去的原文位元組數；沒有延後就不給。 */
+  readonly deferredBytes?: number;
+}
+
+/**
+ * 訊息 `additional_kwargs` 上的鍵：這一則注入有多少原文位元組放不下、沒放進去（正整數）。放在訊息串裡的源（插件的
+ * `agent/pre-step` listener）用它回報；插件不能 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
+ */
+export const INJECTION_DEFERRED_BYTES_KEY = 'nexus_injection_deferred_bytes';
+
+/** 格子裡一個源的數。 */
+interface Tally {
+  bytes: number;
+  deferredBytes: number;
 }
 
 /** 請求上的鍵：收集格還沒開時回報的那幾筆，見檔頭。 */
 export const INJECTION_SOURCES: unique symbol = Symbol('nexus.injectionSources');
 
-const collectors = new AsyncLocalStorage<Map<string, number>>();
+const collectors = new AsyncLocalStorage<Map<string, Tally>>();
 
 /** 一段文字的 UTF-8 位元組數。 */
 export function utf8Bytes(text: string): number {
@@ -43,10 +57,23 @@ export function utf8Bytes(text: string): number {
 }
 
 /** 把同一批裡同名的加起來。 */
-function totals(reports: readonly InjectionSourceReport[]): Map<string, number> {
-  const sums = new Map<string, number>();
-  for (const { id, bytes } of reports) sums.set(id, (sums.get(id) ?? 0) + bytes);
+function totals(reports: readonly InjectionSourceReport[]): Map<string, Tally> {
+  const sums = new Map<string, Tally>();
+  for (const { id, bytes, deferredBytes } of reports) {
+    const tally = sums.get(id) ?? { bytes: 0, deferredBytes: 0 };
+    tally.bytes += bytes;
+    tally.deferredBytes += deferredBytes ?? 0;
+    sums.set(id, tally);
+  }
   return sums;
+}
+
+function reportsOf(sums: Map<string, Tally>): InjectionSourceReport[] {
+  return [...sums].map(([id, { bytes, deferredBytes }]) => ({
+    id,
+    bytes,
+    ...(deferredBytes > 0 && { deferredBytes }),
+  }));
 }
 
 /**
@@ -58,7 +85,7 @@ function totals(reports: readonly InjectionSourceReport[]): Map<string, number> 
 export function reportInjectionSources(reports: readonly InjectionSourceReport[]): boolean {
   const collector = collectors.getStore();
   if (collector === undefined) return false;
-  for (const [id, bytes] of totals(reports)) collector.set(id, bytes);
+  for (const [id, tally] of totals(reports)) collector.set(id, tally);
   return true;
 }
 
@@ -75,7 +102,7 @@ export async function captureInjectionSources<T>(
 ): Promise<{ readonly result: T; readonly reports: readonly InjectionSourceReport[] }> {
   const collector = totals(seed ?? []);
   const result = await collectors.run(collector, call);
-  return { result, reports: [...collector].map(([id, bytes]) => ({ id, bytes })) };
+  return { result, reports: reportsOf(collector) };
 }
 
 /** 請求上掛著的那幾筆；沒有就是 `undefined`。 */
@@ -122,9 +149,17 @@ export function messageInjectionSources(
   const reports: InjectionSourceReport[] = [];
   for (const message of messages) {
     const id = sourceIdOf(messageSourceOf(message));
-    if (id !== undefined) reports.push({ id, bytes: contentBytes(message.content) });
+    if (id === undefined) continue;
+    const deferred = message.additional_kwargs?.[INJECTION_DEFERRED_BYTES_KEY];
+    reports.push({
+      id,
+      bytes: contentBytes(message.content),
+      ...(typeof deferred === 'number' &&
+        Number.isSafeInteger(deferred) &&
+        deferred > 0 && { deferredBytes: deferred }),
+    });
   }
-  return [...totals(reports)].map(([id, bytes]) => ({ id, bytes }));
+  return reportsOf(totals(reports));
 }
 
 /**
@@ -139,10 +174,16 @@ export function measuredInjectionSources(
 ): NonNullable<SessionEventMap['context/measure']['sources']> {
   return [...reports]
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .map(({ id, bytes }) => {
+    .map(({ id, bytes, deferredBytes }) => {
       const budget = (INJECTION_SOURCE_BUDGETS as Record<string, { kind: string } | undefined>)[id];
-      return budget === undefined || budget.kind === 'per-server'
-        ? { id, bytes }
-        : { id, bytes, limit: injectionLimitFor(id as InjectionSourceId, contextWindow) };
+      return {
+        id,
+        bytes,
+        ...(budget !== undefined &&
+          budget.kind !== 'per-server' && {
+            limit: injectionLimitFor(id as InjectionSourceId, contextWindow),
+          }),
+        ...(deferredBytes !== undefined && deferredBytes > 0 && { deferredBytes }),
+      };
     });
 }

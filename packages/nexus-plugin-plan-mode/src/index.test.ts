@@ -33,6 +33,7 @@ import * as planModeModule from './index.js';
 import { createPlanModeState } from './plan-mode-state.js';
 import {
   mountPlanMode,
+  MAX_GUIDANCE_BYTES,
   planModeConfigSchema,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
@@ -924,6 +925,16 @@ describe('設定（#453）', () => {
       guidance: GUIDANCE,
       startActive: false,
     });
+  });
+
+  it('指引超過 16384 個 UTF-8 位元組在載入時失敗；剛好 16384 收（#2777）', () => {
+    expect(MAX_GUIDANCE_BYTES).toBe(16384);
+    expect(planModeConfigSchema.safeParse({ guidance: '字'.repeat(5461) + 'a' }).success).toBe(
+      true,
+    );
+    const over = planModeConfigSchema.safeParse({ guidance: '字'.repeat(5461) + 'ab' });
+    expect(over.success).toBe(false);
+    expect(JSON.stringify(over.error?.issues)).toContain('guidance 超過 16384 個 UTF-8 位元組');
   });
 
   /** #1607（驗收 8），照 dsh `resolveConfig`：缺席與空白都在載入時失敗，訊息指得到欄位。 */
