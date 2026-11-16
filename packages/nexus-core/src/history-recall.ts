@@ -223,7 +223,7 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
  *
  * @param events - 這次呼叫所屬的那份日誌的事件。
  * @param args - `query` 是要找的字串；`entry`／`segment` 把範圍限在一段；`limit` 是至多回幾筆。
- * @returns 每個命中的位置（可直接當 `history_read` 的 `offset`）與前後文。前後文照原文的行分行，每行縮兩格、行內連續空白併成一個、空行不印。
+ * @returns 每個命中的位置（可直接當 `history_read` 的 `offset`）與前後文。前後文照原文的行分行：每行去掉頭尾空白、行內連續空白併成一個，空白行不印，印出的每行縮兩格；窗口沒到段首或段尾時，第一行前或最後一行後加 `…`。
  */
 export function historySearch(
   events: readonly SessionEvent[],

@@ -339,9 +339,9 @@ describe('historySearch', () => {
     // 行內的 tab 與連續空白併成一個空白，列與列各自一行、縮兩格。
     expect(lines).toContain('  id P-104 | item 4 | keeper K4X');
     expect(lines).toContain('  id P-105 | item 5 | keeper K5X');
-    expect(lines.filter((line) => line.includes('K4X'))).toHaveLength(2);
+    expect(lines.slice(1).filter((line) => line.includes('K4X'))).toHaveLength(1);
     expect(lines[1]).toMatch(/^- entry 1, offset \d+:$/);
-    // 窗口切在列中間時，頭尾各帶一個刪節號。
+    // 窗口沒到段首、段尾，頭尾各帶一個刪節號（這裡兩頭都切在列中間）。
     expect(lines[2]).toMatch(/^ {2}…/);
     expect(lines.at(-1)).toMatch(/…$/);
   });
