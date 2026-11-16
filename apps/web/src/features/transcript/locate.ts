@@ -9,6 +9,9 @@
  * （實測：1280 寬那一格始終進不了視野）。原語的 `scrollToMessage` 會把它的狀態機切到 `settling-jump`，自動捲到底才讓開。
  * 沒登記（對話區還沒掛、測試）時退回 `scrollIntoView`。捲動一律瞬間（`auto`），不做平滑。
  *
+ * **限制**：捲動、展開兩個登記都是 module 層的單一份，一頁只支援一個對話區。找格子走 `document.querySelector`，穿不進 shadow DOM，
+ * 所以嵌入版 `<nexus-chat>`（沒有右側欄）不走這條。
+ *
  * @module
  */
 
@@ -58,16 +61,6 @@ export function registerRunExpander(expand: ExpandRun): () => void {
   };
 }
 
-/**
- * 找那一格；它收在一段工具呼叫裡（#1309）就先展開那一段再找。只在使用者按下去的那一刻呼叫（展開會同步重畫）。
- * 找不到（沒載入、畫不出來）是 `undefined`。
- */
-export function findOrExpandTranscriptItem(id: string): HTMLElement | undefined {
-  const found = findTranscriptItem(id);
-  if (found !== undefined) return found;
-  return expander?.(id) === true ? findTranscriptItem(id) : undefined;
-}
-
 /** 這一格被標示的計時器：同一格連按不疊，換一格就收掉上一格。 */
 let marked: { item: HTMLElement; timer: ReturnType<typeof setTimeout> } | undefined;
 
@@ -86,13 +79,17 @@ function mark(item: HTMLElement): void {
   };
 }
 
-/** 捲到那一格並標示它（焦點另外給，見 {@link focusTranscriptItem}）。 */
-export function revealTranscriptItem(item: HTMLElement): void {
-  const id = item.getAttribute('data-message-id');
-  if (id === null || scroller?.(id) !== true) {
-    item.scrollIntoView?.({ block: 'center', behavior: 'auto' });
-  }
+/**
+ * 找到那一格（收在一段工具呼叫裡〔#1309〕就先展開）、捲過去並標示；回傳那一格，找不到（沒載入、畫不出來）是 `undefined`。
+ * 只在使用者按下去的那一刻呼叫（展開會同步重畫）。焦點另外給，見 {@link focusTranscriptItem}。
+ */
+export function locateTranscriptItem(id: string): HTMLElement | undefined {
+  const item =
+    findTranscriptItem(id) ?? (expander?.(id) === true ? findTranscriptItem(id) : undefined);
+  if (item === undefined) return undefined;
+  if (scroller?.(id) !== true) item.scrollIntoView?.({ block: 'center', behavior: 'auto' });
   mark(item);
+  return item;
 }
 
 /**

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ToolRun } from '@/features/transcript/tool-run';
 import { Transcript } from '@/features/transcript/transcript';
 import { MIN_TOOLS } from '@/features/transcript/tool-runs';
-import { findOrExpandTranscriptItem, findTranscriptItem } from '@/features/transcript/locate';
+import { locateTranscriptItem, findTranscriptItem } from '@/features/transcript/locate';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
 
@@ -94,20 +94,20 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     expect(findTranscriptItem('tool-c3')).toBeUndefined();
     let item: HTMLElement | undefined;
     act(() => {
-      item = findOrExpandTranscriptItem('tool-c3');
+      item = locateTranscriptItem('tool-c3');
     });
     expect(item?.getAttribute('data-message-id')).toBe('tool-c3');
     expect(item?.querySelector('[data-testid=tool-entry]')).not.toBeNull();
     expect(runButton().getAttribute('aria-expanded')).toBe('true');
     expect(item?.closest('[data-slot="step-list"]')).not.toBeNull();
     // 不在任何一段裡、也不在畫面上的：照舊找不到。
-    expect(findOrExpandTranscriptItem('tool-nope')).toBeUndefined();
+    expect(locateTranscriptItem('tool-nope')).toBeUndefined();
   });
 
   it('使用者收起那一段之後再定位一次，照樣打開、找得到（開關狀態在呼叫端，patch 0017）', () => {
     show(turn({ steps: 4 }));
     act(() => {
-      findOrExpandTranscriptItem('tool-c2');
+      locateTranscriptItem('tool-c2');
     });
     expect(runButton().getAttribute('aria-expanded')).toBe('true');
     fireEvent.click(runButton());
@@ -115,7 +115,7 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     expect(findTranscriptItem('tool-c2')).toBeUndefined();
     let item: HTMLElement | undefined;
     act(() => {
-      item = findOrExpandTranscriptItem('tool-c2');
+      item = locateTranscriptItem('tool-c2');
     });
     expect(runButton().getAttribute('aria-expanded')).toBe('true');
     expect(item?.getAttribute('data-message-id')).toBe('tool-c2');
