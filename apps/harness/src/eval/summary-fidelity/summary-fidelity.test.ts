@@ -2,7 +2,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { estimateMessageTokens, SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import { FIDELITY_VARIANTS } from './dataset.js';
+import { ALL_FIDELITY_VARIANTS, DETAIL_VARIANTS, FIDELITY_VARIANTS } from './dataset.js';
 import { formatFidelityReport } from './report.js';
 import {
   FIDELITY_RECALL_MAX_REQUESTS,
@@ -71,7 +71,7 @@ describe('交接保真度評估（#2774）', () => {
   });
 
   it('每一段都長過摘要門檻，而且以使用者的話結尾', () => {
-    for (const variant of FIDELITY_VARIANTS) {
+    for (const variant of ALL_FIDELITY_VARIANTS) {
       for (const segment of variant.segments) {
         const tokens = segment.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
         expect(tokens, variant.id).toBeGreaterThan(FIDELITY_TRIGGER_TOKENS);
@@ -81,7 +81,7 @@ describe('交接保真度評估（#2774）', () => {
   });
 
   it('題目的 segment 都指得到一段，該提到的字串在那一段裡找得到', () => {
-    for (const variant of FIDELITY_VARIANTS) {
+    for (const variant of ALL_FIDELITY_VARIANTS) {
       for (const question of variant.questions) {
         const segment = variant.segments[question.segment];
         expect(segment, `${variant.id}/${question.id}`).toBeDefined();
@@ -93,7 +93,7 @@ describe('交接保真度評估（#2774）', () => {
     }
   });
 
-  it.each(FIDELITY_VARIANTS)('$id：摘要留住事實時滿分，沒有一題落在尾巴裡', async (variant) => {
+  it.each(ALL_FIDELITY_VARIANTS)('$id：摘要留住事實時滿分，沒有一題落在尾巴裡', async (variant) => {
     const result = await runFidelityVariant(variant, models(KEEPS_EVERYTHING));
 
     expect(result.summaries).toHaveLength(variant.segments.length);
@@ -102,7 +102,7 @@ describe('交接保真度評估（#2774）', () => {
     expect(result.score).toBe(1);
   });
 
-  it.each(FIDELITY_VARIANTS)('$id：摘要什麼都沒留時零分', async (variant) => {
+  it.each(ALL_FIDELITY_VARIANTS)('$id：摘要什麼都沒留時零分', async (variant) => {
     const result = await runFidelityVariant(variant, models(DROPS_EVERYTHING));
 
     expect(result.questions.map((question) => question.inSummary)).not.toContain(true);
@@ -111,7 +111,7 @@ describe('交接保真度評估（#2774）', () => {
   });
 
   it('問題目的那串不含工具訊息', async () => {
-    for (const variant of FIDELITY_VARIANTS) {
+    for (const variant of ALL_FIDELITY_VARIANTS) {
       const asked: (readonly BaseMessage[])[] = [];
       await runFidelityVariant(variant, {
         summaryModel: DROPS_EVERYTHING,
@@ -193,7 +193,7 @@ describe('交接保真度評估（#2774）', () => {
   });
 
   it('該提到的字串與過時的字串只出現在事實裡，雜訊裡沒有', () => {
-    for (const variant of FIDELITY_VARIANTS) {
+    for (const variant of ALL_FIDELITY_VARIANTS) {
       const noise = variant.segments
         .flat()
         .map(contentOf)
@@ -340,5 +340,114 @@ describe('帶讀回工具答題（#2777）', () => {
     expect(seen[0]).not.toContain('history_read');
     expect(seen).toHaveLength(single.questions.length);
     expect(result.questions.every((q) => q.requests === 1 && q.recallCalls === 0)).toBe(true);
+  });
+});
+
+describe('摘要留不住答案的題目與成對的量法（#2908）', () => {
+  const rows = DETAIL_VARIANTS.find((variant) => variant.id === 'rows')!;
+
+  /** 每一題搜題目裡點名的那個鍵（資產標籤、人名、財產編號），再把工具結果念回來。 */
+  const searchesKey: NonNullable<FidelityModels['answerStep']> = async (messages) => {
+    const last = messages.at(-1)!;
+    if (ToolMessage.isInstance(last)) return new AIMessage(contentOf(last));
+    const key = /AT-\d+|P31-\d+|(?<=extension of )[A-Z]\w+ \w+|(?<=保管人)\S{3}(?=保管)/.exec(
+      contentOf(last),
+    )![0];
+    return new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'q', name: 'history_search', args: { query: key, limit: 1 } }],
+    });
+  };
+
+  it('三個變體要點名才跑，不在預設的五個裡', () => {
+    expect(DETAIL_VARIANTS.map((variant) => variant.id)).toEqual(['rows', 'rows-zh', 'rows-deep']);
+    expect(ALL_FIDELITY_VARIANTS).toEqual([...FIDELITY_VARIANTS, ...DETAIL_VARIANTS]);
+    expect(DETAIL_VARIANTS.find((variant) => variant.id === 'rows-deep')?.segments).toHaveLength(3);
+  });
+
+  it('答案只出現在清冊的那一列或名單的那一筆：題目本身與別的訊息裡都沒有', () => {
+    for (const variant of DETAIL_VARIANTS) {
+      const text = variant.segments.flat().map(contentOf).join('\n');
+      for (const question of variant.questions) {
+        expect(question.kind).toBe('detail');
+        for (const needle of question.mentions) {
+          expect(question.prompt, `${variant.id}/${question.id}`).not.toContain(needle);
+          expect(text.split(needle), `${variant.id}/${question.id}`).toHaveLength(2);
+        }
+      }
+    }
+  });
+
+  it.each(DETAIL_VARIANTS)(
+    '$id：摘要什麼都沒留，照題目裡的鍵搜得回那一列，滿分',
+    async (variant) => {
+      const result = await runFidelityVariant(variant, {
+        ...models(DROPS_EVERYTHING),
+        answerStep: searchesKey,
+      });
+      expect(result.questions.map((question) => question.inSummary)).not.toContain(true);
+      expect(result.questions.map((question) => question.recallCalls)).not.toContain(0);
+      expect(result.score).toBe(1);
+    },
+  );
+
+  it('成對：同一題先不帶工具問一次，兩次看到的訊息相同，各記各的分數', async () => {
+    const withoutTools: string[] = [];
+    const withTools: string[] = [];
+    const result = await runFidelityVariant(rows, {
+      summaryModel: DROPS_EVERYTHING,
+      ask: async (messages) => {
+        withoutTools.push(messages.map(contentOf).join('\n'));
+        return 'I do not know.';
+      },
+      answerStep: async (messages, tools) => {
+        if (!ToolMessage.isInstance(messages.at(-1)!)) {
+          withTools.push(messages.map(contentOf).join('\n'));
+        }
+        return searchesKey(messages, tools);
+      },
+      paired: true,
+    });
+
+    expect(withoutTools).toEqual(withTools);
+    expect(withoutTools).toHaveLength(rows.questions.length);
+    expect(result.score).toBe(1);
+    expect(result.scoreWithoutTools).toBe(0);
+    expect(result.questions[0]?.withoutTools).toEqual({
+      answer: 'I do not know.',
+      score: 0,
+      staleHit: false,
+    });
+  });
+
+  it('不成對時沒有不帶工具那一格', async () => {
+    const result = await runFidelityVariant(rows, {
+      ...models(DROPS_EVERYTHING),
+      answerStep: searchesKey,
+    });
+    expect(result.scoreWithoutTools).toBeUndefined();
+    expect(result.questions.every((question) => question.withoutTools === undefined)).toBe(true);
+  });
+
+  it('報表照摘要裡有沒有答案分開算，成對時多印不帶工具的分數', async () => {
+    const kept = await runFidelityVariant(rows, models(KEEPS_EVERYTHING));
+    const dropped = await runFidelityVariant(rows, {
+      summaryModel: DROPS_EVERYTHING,
+      ask: async () => 'I do not know.',
+      answerStep: searchesKey,
+      paired: true,
+    });
+    const report = formatFidelityReport([[kept], [dropped]]);
+    const count = rows.questions.length;
+
+    expect(report).toContain(`摘要裡有答案  ${count} 題次  得分 1.00`);
+    expect(report).toContain(
+      `摘要裡沒有答案  ${count} 題次  得分 1.00  不帶工具 0.00  叫了讀回工具 ${count}/${count}（叫了的得分 1.00）`,
+    );
+  });
+
+  it('報表：沒有一題摘要裡沒有答案時，那一類印 0 題次', async () => {
+    const kept = await runFidelityVariant(rows, models(KEEPS_EVERYTHING));
+    expect(formatFidelityReport([[kept]])).toContain('摘要裡沒有答案  0 題次');
   });
 });

@@ -9,6 +9,7 @@
  * `--count` 只印不跑；不含傳輸重試、索引條目不成立或現況超過上限時多叫的那一次，也不含摘要後仍到門檻時摘要器的那一次重摘。
  * `--recall`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）帶著 `history_read`／`history_search` 答題：每題 1 到
  * `FIDELITY_RECALL_MAX_REQUESTS` 個請求，看模型叫不叫工具，`--count` 印的是下限與上限。
+ * `--paired`（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）每題另外不帶工具問一次，同一份摘要上比有沒有工具的差別。
  * 摘要與答題用同一顆模型（出貨預設那顆）；摘要器是出貨的那一顆，prompt、切點、重試都沒有另外寫。
  *
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 題庫的對話、摘要與答案會跟著 trace 出境。
@@ -30,7 +31,7 @@ import {
   streamRetryOptionsOf,
 } from '../../settings/live-model.js';
 import { parseSamples } from '../cli-args.js';
-import { FIDELITY_VARIANTS } from './dataset.js';
+import { ALL_FIDELITY_VARIANTS, DETAIL_VARIANTS, FIDELITY_VARIANTS } from './dataset.js';
 import type { FidelityVariant } from './dataset.js';
 import { formatFidelityReport } from './report.js';
 import { FIDELITY_RECALL_MAX_REQUESTS, runFidelityVariant } from './runner.js';
@@ -39,16 +40,19 @@ import type { FidelityVariantResult } from './runner.js';
 /** eval 的重試政策：跟出貨預設同一份（同 `../survey-cli.ts`）。 */
 const EVAL_RETRY_POLICY = streamRetryOptionsOf(liveModelConfigSchema.parse({}).retryPolicy);
 
-const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,...>] [--summary-call <template|replay>] [--recall] [--answers] [--count]
+const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,...>] [--summary-call <template|replay>] [--recall [--paired]] [--answers] [--count]
 
   --samples <n>        每個變體重複幾次，預設 1。摘要是取樣出來的，每次不同。
-  --variants <id,...>  只跑指定的變體，預設全部：
+  --variants <id,...>  只跑指定的變體。預設是量摘要保真度的五個：
                        ${FIDELITY_VARIANTS.map((variant) => `${variant.id}（${variant.title}）`).join(' / ')}
+                       摘要留不住答案、要配 --recall 看的三個要點名才跑：
+                       ${DETAIL_VARIANTS.map((variant) => `${variant.id}（${variant.title}）`).join(' / ')}
   --summary-call <形狀> 生摘要的請求形狀：template（預設，要摘的那段攤成一個字串）或 replay
                        （系統訊息、原訊息、最後接摘要指令，同 history-source: log 的出貨路徑）。
   --recall             帶著 history_read／history_search 答題：模型可以從日誌讀回被摘掉的原文，
                        每題最多 ${FIDELITY_RECALL_MAX_REQUESTS} 個請求。
-  --answers            報表之後逐題印出模型的答案。
+  --paired             配 --recall：每題先不帶工具問一次（多一個請求），同一份摘要上比有沒有工具。
+  --answers            報表之後逐題印出每一輪：摘要裡有沒有答案、叫了幾次讀回工具、得分與答案。
   --count              只印這一輪會送幾個模型請求，不跑、不需要金鑰。
 
 需要環境變數 NVIDIA_API_KEY（見 .env.example）。`;
@@ -57,13 +61,15 @@ function parseVariants(argv: readonly string[]): readonly FidelityVariant[] {
   const at = argv.indexOf('--variants');
   if (at < 0) return FIDELITY_VARIANTS;
   const wanted = (argv[at + 1] ?? '').split(',').filter((id) => id !== '');
-  const unknown = wanted.filter((id) => !FIDELITY_VARIANTS.some((variant) => variant.id === id));
+  const unknown = wanted.filter(
+    (id) => !ALL_FIDELITY_VARIANTS.some((variant) => variant.id === id),
+  );
   if (wanted.length === 0 || unknown.length > 0) {
     throw new Error(
-      `--variants 認不得 ${unknown.join(', ') || '（空的）'}；可用的是 ${FIDELITY_VARIANTS.map((variant) => variant.id).join(', ')}`,
+      `--variants 認不得 ${unknown.join(', ') || '（空的）'}；可用的是 ${ALL_FIDELITY_VARIANTS.map((variant) => variant.id).join(', ')}`,
     );
   }
-  return FIDELITY_VARIANTS.filter((variant) => wanted.includes(variant.id));
+  return ALL_FIDELITY_VARIANTS.filter((variant) => wanted.includes(variant.id));
 }
 
 function parseSummaryCall(argv: readonly string[]): 'template' | 'replay' {
@@ -93,13 +99,17 @@ async function main(argv: readonly string[]): Promise<void> {
   const variants = parseVariants(argv);
   const summaryCall = parseSummaryCall(argv);
   const recall = argv.includes('--recall');
-  const requests = variants.reduce((sum, variant) => sum + requestsOf(variant), 0) * samples;
+  const paired = argv.includes('--paired');
+  if (paired && !recall) throw new Error('--paired 要配 --recall');
   const questions = variants.reduce((sum, variant) => sum + variant.questions.length, 0) * samples;
+  const requests =
+    variants.reduce((sum, variant) => sum + requestsOf(variant), 0) * samples +
+    (paired ? questions : 0);
   const total = recall
-    ? `${requests} 到 ${requests + questions * (FIDELITY_RECALL_MAX_REQUESTS - 1)} 個模型請求（帶讀回工具，每題 1 到 ${FIDELITY_RECALL_MAX_REQUESTS} 個；`
+    ? `${requests} 到 ${requests + questions * (FIDELITY_RECALL_MAX_REQUESTS - 1)} 個模型請求（帶讀回工具，每題 1 到 ${FIDELITY_RECALL_MAX_REQUESTS} 個${paired ? '，另加不帶工具的一個' : ''}；`
     : `${requests} 個模型請求（`;
   console.log(
-    `交接保真度評估：${variants.length}/${FIDELITY_VARIANTS.length} 個變體 × ${samples} 次，` +
+    `交接保真度評估：${variants.length}/${ALL_FIDELITY_VARIANTS.length} 個變體 × ${samples} 次，` +
       `共 ${total}不含重試；${variants.map((variant) => `${variant.id} ${requestsOf(variant)}`).join('、')}）。模型 ${DEFAULT_LIVE_MODEL_ID}，生摘要的請求形狀 ${summaryCall}。`,
   );
   if (argv.includes('--count')) return;
@@ -149,11 +159,14 @@ async function main(argv: readonly string[]): Promise<void> {
           ask,
           retry: EVAL_RETRY_POLICY,
           summaryCall,
-          ...(recall && { answerStep }),
+          ...(recall && { answerStep, paired }),
         });
         round.push(result);
         console.log(
           `  · 第 ${sample + 1} 次 ${variant.id} 得分 ${result.score?.toFixed(2) ?? '—'}` +
+            (result.scoreWithoutTools === undefined
+              ? ''
+              : `（不帶工具 ${result.scoreWithoutTools.toFixed(2)}）`) +
             ` 過時命中 ${result.staleHits}` +
             (recall
               ? ` 讀回工具 ${result.questions.reduce((sum, question) => sum + question.recallCalls, 0)} 次／答題請求 ${result.questions.reduce((sum, question) => sum + question.requests, 0)} 個`
@@ -178,9 +191,19 @@ async function main(argv: readonly string[]): Promise<void> {
     for (const [sample, round] of rounds.entries()) {
       for (const result of round) {
         for (const question of result.questions) {
+          const flat = (text: string) => text.replaceAll('\n', ' ').slice(0, 300);
           console.log(
-            `  第 ${sample + 1} 次 ${result.variantId}/${question.questionId} [${question.score.toFixed(2)}] ${question.answer.replaceAll('\n', ' ').slice(0, 300)}`,
+            `  第 ${sample + 1} 次 ${result.variantId}/${question.questionId} [${question.score.toFixed(2)}]` +
+              ` 摘要裡${question.inSummary ? '有' : '沒有'}` +
+              (recall ? ` 讀回工具 ${question.recallCalls} 次` : '') +
+              (question.leaked ? ' 落在尾巴' : '') +
+              ` ${flat(question.answer)}`,
           );
+          if (question.withoutTools !== undefined) {
+            console.log(
+              `      不帶工具 [${question.withoutTools.score.toFixed(2)}] ${flat(question.withoutTools.answer)}`,
+            );
+          }
         }
       }
     }
