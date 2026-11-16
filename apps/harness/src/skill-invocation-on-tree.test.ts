@@ -583,6 +583,48 @@ describe('驗收 4、8：樹上叫得出來，落點在基線之後、讀數之�
   }, 60000);
 });
 
+describe('各注入源的用量（#2777）', () => {
+  it('serve 的樹：context/measure 的 sources 列出這次請求裡各源的位元組', async () => {
+    const booted = await boot(home());
+    const thread = await openThread(
+      booted,
+      't-sources',
+      [{ content: '好。' }],
+      workspace(STANDARD),
+    );
+    await thread.say('請 /release-notes');
+    const sent = thread.model.prompts[0] ?? [];
+    const system = sent[0]!.content as readonly { readonly text: string }[];
+    const humans = sent.filter((m) => m.getType() === 'human');
+    const bytes = (text: string | undefined) => Buffer.byteLength(text ?? '', 'utf8');
+    const block = (start: string) =>
+      bytes(system.find((part) => part.text.startsWith(start))?.text);
+    const measures = thread
+      .rootLog()
+      .events.filter((event) => event.type === 'context/measure')
+      .map((event) => (event.data as { sources?: unknown }).sources);
+
+    // 位元組跟實際送出的那幾塊、那幾則對得上。Skills 目錄在摘要器外層接上，也在裡面。
+    expect(measures).toEqual([
+      [
+        { id: 'agent-instructions', bytes: bytes(humans[1]?.text), limit: 65536 },
+        { id: 'file-reference', bytes: block('\n`@` 開頭的是') },
+        { id: 'nexus:approval-policy', bytes: block('\n這個 session 開著核准提示') },
+        { id: 'nexus:fs-observation', bytes: block('\n\nRead an existing file') },
+        { id: 'sandbox:policy', bytes: block('\n目前的檔案政策') },
+        { id: 'skill-catalog', bytes: block('## Skills System'), limit: 32768 },
+        { id: 'skill-invocation', bytes: bytes(humans[2]?.text), limit: 65536 },
+        // 頭段接上時後面多空一行（`prepend`），那兩個位元組不算在段裡。
+        { id: 'system-prompt-prefix', bytes: bytes(system[0]?.text) - 2, limit: 16384 },
+        { id: 'system-prompt-suffix', bytes: bytes(system.at(-1)?.text), limit: 16384 },
+      ],
+    ]);
+    for (const source of measures[0] as { bytes: number }[])
+      expect(source.bytes).toBeGreaterThan(0);
+    await thread.close();
+  }, 60000);
+});
+
 describe('驗收 7（樹上）：第二輪不重複', () => {
   it('第一輪叫了 /deploy，第二輪沒有手勢：第二輪的請求裡仍只有一份（第一輪落在 state 的那一則）', async () => {
     const booted = await boot(home());

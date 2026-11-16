@@ -100,8 +100,8 @@ export function systemPromptDefaultsOf(
 /** 前後段要接上的那幾塊：頭段接在最前面，尾段空一行接在最後。 */
 function piecesOf({ head, tail }: SystemPromptParts): SystemPromptPiece[] {
   return [
-    ...(head.length > 0 ? [{ prepend: head }] : []),
-    ...(tail.length > 0 ? [{ append: `\n\n${tail}` }] : []),
+    ...(head.length > 0 ? [{ prepend: head, source: 'system-prompt-prefix' }] : []),
+    ...(tail.length > 0 ? [{ append: `\n\n${tail}`, source: 'system-prompt-suffix' }] : []),
   ];
 }
 
