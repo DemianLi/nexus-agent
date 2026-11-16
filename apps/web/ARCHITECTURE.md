@@ -55,17 +55,18 @@ src/
 3. **公開入口是 `features/X/index.ts`**：只有具名的 re-export，不放邏輯，只匯出外面實際用到的名字。切片裡的檔不 import 自己的 `index.ts`。
 4. **切片之間不准循環**。A 用 B、B 又用 A 時，把兩邊都要的那一塊下沉到共用層。
 5. **檔名不重複資料夾名**：`features/tool/card.tsx`，不是 `features/tool/tool-card.tsx`。去掉前綴後沒有名字可用的保留原名（`composer/composer.tsx`）。
+6. **不拿整個 `Conversation`**：`features/` 與 `shared/` 的產品碼只用分組型別（`ConversationLink`、`ConversationPending` 等）、`Pick<Conversation, …>` 或 `Conversation['成員']`。整個物件只有組裝層拿。
 
-`src/architecture.test.ts` 擋第 1 到 4 條，`src/styles/naming-deprecation.test.ts` 擋第 5 條。
+`src/architecture.test.ts` 擋第 1 到 4 條與第 6 條，`src/styles/naming-deprecation.test.ts` 擋第 5 條。
 
 ### 例外
 
 兩處共用層的檔還在 import 切片，登記在 `src/architecture.test.ts` 的例外清單。清單只能變短，列了卻沒命中會紅。
 
-| 檔                                                              | 為什麼                                             | 什麼時候拿掉                                                                             |
-| --------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 檔                                                              | 為什麼                                               | 什麼時候拿掉                                                                                       |
+| --------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `shared/connection/use-conversation.ts`                         | 連線核心還拉著兩條錯誤文案（送出被拒、暫停目標失敗） | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「下行錯誤碼轉文案收成一個 module」 |
-| `shared/right-sidebar/api.ts`、`shared/right-sidebar/layout.ts` | 分頁要的資料來源集中在一個型別裡，用到各分頁的型別 | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「右側欄分頁登記」        |
+| `shared/right-sidebar/api.ts`、`shared/right-sidebar/layout.ts` | 分頁要的資料來源集中在一個型別裡，用到各分頁的型別   | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「右側欄分頁登記」                  |
 
 ## 新東西放哪
 

@@ -20,6 +20,9 @@ import { describe, expect, it } from 'vitest';
  * 6. **例外只能變短**：{@link EXCEPTIONS} 列的檔對規則 1、2 有明文豁免；列了卻沒命中（檔不見了、import 改走別的路）就紅，
  *    逼清單跟著現況收斂。
  *
+ * 7. **產品碼不拿整個 `Conversation`**：`features/` 與 `shared/` 裡從 {@link CONVERSATION_MODULE} import 了 `Conversation` 的檔，
+ *    型別只能用在 `Pick<Conversation, …>` 或 `Conversation['成員']`，其餘用分組型別（`ConversationLink` 等）。連線核心自己除外。
+ *
  * 判不出來的：入口多匯出了沒人用的名字、名字取得好不好、切片切得對不對。
  */
 
@@ -259,6 +262,86 @@ function check(
   return violations;
 }
 
+const CONVERSATION_MODULE = 'shared/connection/use-conversation.ts';
+
+/**
+ * 規則 7：一份原始碼裡，從 {@link CONVERSATION_MODULE} import 的 `Conversation` 型別有哪些不合格的用法（行號）。
+ * 看 AST 不看文字：註解與同名的別的東西（`features/tool/subagent-control.tsx` 的 React 元件 `Conversation`）不會誤判。
+ * 合格：`Pick<Conversation, …>` 的第一個型別參數、`Conversation['成員']` 的物件側。其餘（含 `Omit`）都不合格。
+ */
+function conversationTypeMisuse(
+  file: string,
+  source: string,
+  files: ReadonlySet<string>,
+): number[] {
+  const sf = ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const locals = new Set<string>();
+  for (const st of sf.statements) {
+    if (
+      ts.isImportDeclaration(st) &&
+      ts.isStringLiteral(st.moduleSpecifier) &&
+      resolveSpec(file, st.moduleSpecifier.text, files) === CONVERSATION_MODULE
+    ) {
+      const bindings = st.importClause?.namedBindings;
+      if (bindings !== undefined && ts.isNamedImports(bindings)) {
+        for (const el of bindings.elements) {
+          if ((el.propertyName ?? el.name).text === 'Conversation') locals.add(el.name.text);
+        }
+      }
+    }
+  }
+  if (locals.size === 0) return [];
+
+  const lines: number[] = [];
+  const isAllowed = (use: ts.Node): boolean => {
+    const parent = use.parent;
+    if (ts.isIndexedAccessTypeNode(parent)) return parent.objectType === use;
+    return (
+      ts.isTypeReferenceNode(parent) &&
+      ts.isIdentifier(parent.typeName) &&
+      parent.typeName.text === 'Pick' &&
+      parent.typeArguments?.[0] === use
+    );
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node)) return;
+    if (
+      ts.isTypeReferenceNode(node) &&
+      ts.isIdentifier(node.typeName) &&
+      locals.has(node.typeName.text)
+    ) {
+      if (!isAllowed(node))
+        lines.push(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1);
+    } else if (
+      ts.isExpressionWithTypeArguments(node) &&
+      ts.isIdentifier(node.expression) &&
+      locals.has(node.expression.text)
+    ) {
+      lines.push(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1);
+    } else if (
+      ts.isImportTypeNode(node) &&
+      node.qualifier !== undefined &&
+      ts.isIdentifier(node.qualifier) &&
+      node.qualifier.text === 'Conversation' &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteral(node.argument.literal) &&
+      resolveSpec(file, node.argument.literal.text, files) === CONVERSATION_MODULE &&
+      !isAllowed(node)
+    ) {
+      lines.push(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return lines;
+}
+
 const SKIP_DIRS = new Set(['node_modules']);
 const isTest = (path: string) => /\.test\.tsx?$/.test(path);
 
@@ -448,5 +531,80 @@ describe('規則會紅：違規的例子抓得到，合規的放行', () => {
     expect(describeViolations([v!])).toEqual([
       "app/App.tsx:2 import '@/features/a/x'：規則 2，切片外面只走公開入口，改成 `@/features/a`",
     ]);
+  });
+});
+
+describe('7. 產品碼不拿整個 Conversation 型別（真實的 src）', () => {
+  const files = new Set(Object.keys(productSources));
+  const scanned = Object.keys(productSources).filter(
+    (p) => (p.startsWith('features/') || p.startsWith('shared/')) && p !== CONVERSATION_MODULE,
+  );
+  const importers = scanned.filter(
+    (p) =>
+      /\bConversation\b/.test(productSources[p] ?? '') &&
+      productSources[p]?.includes('use-conversation') === true,
+  );
+
+  it('量具自檢：掃得到 features 與 shared 的檔，也掃得到 import 這個型別的檔', () => {
+    expect(scanned.length).toBeGreaterThan(100);
+    expect(files.has(CONVERSATION_MODULE)).toBe(true);
+    expect(importers).toEqual(
+      expect.arrayContaining([
+        'features/submit/machine.ts',
+        'features/feedback/use-feedback.ts',
+        'shared/connection/stall.ts',
+      ]),
+    );
+  });
+
+  it('features 與 shared 只用分組型別、Pick<Conversation, …> 或 Conversation[…]', () => {
+    const found = scanned.flatMap((p) =>
+      conversationTypeMisuse(p, productSources[p] ?? '', files).map(
+        (line) =>
+          `${p}:${line}：規則 7，不拿整個 Conversation，改用分組型別或 Pick<Conversation, …>`,
+      ),
+    );
+    expect(found).toEqual([]);
+  });
+
+  it('違規的例子抓得到，合規的放行', () => {
+    const sample = (body: string, from = '@/shared/connection/use-conversation') =>
+      conversationTypeMisuse(
+        'features/a/x.ts',
+        `import type { Conversation } from '${from}';\n${body}`,
+        files,
+      );
+    for (const bad of [
+      'export function f(c: Conversation) {}',
+      "type T = Omit<Conversation, 'send'>;",
+      'type T = Partial<Conversation>;',
+      'interface P extends Conversation {}',
+      "type T = import('@/shared/connection/use-conversation').Conversation;",
+    ]) {
+      expect(sample(bad), bad).toEqual([2]);
+    }
+    for (const ok of [
+      "type T = Pick<Conversation, 'send' | 'state'>;",
+      "type T = Conversation['send'];",
+      "type T = Parameters<Conversation['send']>;",
+      '// Conversation 只在註解裡\n/** {@link Conversation.send} */',
+    ]) {
+      expect(sample(ok), ok).toEqual([]);
+    }
+    // 同名的別的東西不算：沒從連線核心 import，或是自己宣告的元件
+    expect(
+      conversationTypeMisuse(
+        'features/a/x.tsx',
+        'function Conversation() { return null; }\nconst a = <Conversation />;',
+        files,
+      ),
+    ).toEqual([]);
+    expect(
+      conversationTypeMisuse(
+        'features/a/x.ts',
+        "import type { Conversation } from './other';\nlet c: Conversation;",
+        files,
+      ),
+    ).toEqual([]);
   });
 });

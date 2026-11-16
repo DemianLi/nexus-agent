@@ -35,7 +35,7 @@ export function ConversationBody({
   fork,
   fileDrop,
 }: {
-  readonly conversation: Conversation;
+  readonly conversation: Pick<Conversation, 'state' | 'connected' | 'history' | 'loadEarlier'>;
   /** 評分與回饋對話框，由組裝層從 `useFeedback` 傳進來。 */
   readonly feedback: Feedback;
   readonly isFresh: (id: string) => boolean;
