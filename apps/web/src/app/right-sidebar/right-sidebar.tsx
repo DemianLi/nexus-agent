@@ -239,9 +239,9 @@ export const RightSidebarPanel = memo(function RightSidebarPanel() {
           // 同一組，cn 才蓋得掉（#1583）。
           className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-none"
           data-testid="right-sidebar"
-          // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則；其餘交回從哪裡打開的那顆
-          // （「查看全文」、「這一輪的過程」），不在了就交回標頭的開關鈕。Radix 的預設在沒有 Trigger 時什麼都不還，焦點掉到 body
-          // （實機量到，#1034）。Base UI 用 Popup 的 `finalFocus`（#1583）：回傳 false 是「不要再搬」，焦點已經自己交了。
+          // 焦點自己還（spec §8，#1034）：從觀測分頁定位時交給對話裡那一則；其餘交回從哪裡打開的那顆
+          // （「查看全文」、「這一輪的過程」），不在了就交回標頭的開關鈕。Base UI 的預設只還給打開前聚焦的元素，
+          // 做不到這兩種。用 Popup 的 `finalFocus`（#1583）：回傳 false 是「不要再搬」，焦點已經自己交了。
           finalFocus={() => {
             const target = locateFocus.current;
             if (target !== null) {

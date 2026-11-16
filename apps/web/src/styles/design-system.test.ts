@@ -24,7 +24,7 @@ import { readCascade } from './css-cascade';
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
  * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-(--hover-faint)`＋`shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card`＋`rounded-3xl`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
- *    #1638；Radix 的 `data-state=open` 也照擋），就是又手寫了一顆。
+ *    #1638；`data-state=open` 的寫法也照擋），就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-muted`＋`w-full`＋`text-left`＋`min-h-11`，就是又手寫了一列。
  *    少了 `min-h-11` 的不算：工具結果的收合鈕（`tool/result.tsx` 的 `FoldToggle`）是一行字高的鈕，不是整列。
  * 8. **不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
