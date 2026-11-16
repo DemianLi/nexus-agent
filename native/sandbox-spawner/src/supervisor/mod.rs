@@ -3331,7 +3331,9 @@ mod tests {
 
         let mut stopping = conversation(4, 1, false);
         stopping.phase = Phase::Starting;
-        stopping.proc.begin_stop(Instant::now(), Duration::from_secs(1));
+        stopping
+            .proc
+            .begin_stop(Instant::now(), Duration::from_secs(1));
         assert_eq!(stopping.starting_since(), None);
     }
 
@@ -3392,7 +3394,10 @@ mod tests {
     #[test]
     fn an_unpaired_conversation_still_waiting_for_ready_at_the_start_deadline_is_killed() {
         let since = Instant::now();
-        for (tag, thread) in [("unpaired-assigned", Some(&b"t"[..])), ("unpaired-warm", None)] {
+        for (tag, thread) in [
+            ("unpaired-assigned", Some(&b"t"[..])),
+            ("unpaired-warm", None),
+        ] {
             let (mut supervisor, audit) = with_an_unpaired_starter(tag, thread, since);
             let limit = supervisor.args.start_timeout.unwrap();
             supervisor.check_starts(since + limit - Duration::from_millis(1));
@@ -3464,7 +3469,9 @@ mod tests {
 
         let (mut supervisor, _) = with_an_unpaired_starter("un-stopping", Some(b"t"), since);
         let eof_grace = supervisor.args.eof_grace;
-        supervisor.conversations[0].proc.begin_stop(since, eof_grace);
+        supervisor.conversations[0]
+            .proc
+            .begin_stop(since, eof_grace);
         supervisor.check_starts(late);
         let starter = &supervisor.conversations[0];
         assert!(starter.cause.is_none() && !starter.timed_out);

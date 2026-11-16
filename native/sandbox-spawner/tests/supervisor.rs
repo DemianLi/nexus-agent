@@ -3442,7 +3442,9 @@ fn an_unpaired_conversation_that_never_says_ready_stays_when_the_start_deadline_
     std::thread::sleep(Duration::from_millis(1_500));
     assert!(!gone(pid));
     assert!(
-        h.audit().iter().all(|line| !line.contains("ready 之前逾時")),
+        h.audit()
+            .iter()
+            .all(|line| !line.contains("ready 之前逾時")),
         "{:?}",
         h.audit()
     );
@@ -3474,7 +3476,9 @@ fn an_unpaired_conversation_that_is_ready_in_time_outlives_the_start_deadline() 
         }]
     );
     assert!(
-        h.audit().iter().all(|line| !line.contains("ready 之前逾時")),
+        h.audit()
+            .iter()
+            .all(|line| !line.contains("ready 之前逾時")),
         "{:?}",
         h.audit()
     );
