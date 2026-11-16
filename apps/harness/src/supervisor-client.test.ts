@@ -181,7 +181,7 @@ describe('SupervisorClient', () => {
     expect(h.sent).toHaveLength(1);
   });
 
-  it('down(shutdown) 照舊了結、不重送', async () => {
+  it('down(shutdown) 了結、不重送', async () => {
     const h = harness();
     h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
     await tick();
@@ -191,7 +191,7 @@ describe('SupervisorClient', () => {
     expect(h.sent).toHaveLength(1);
   });
 
-  it('down(evicted) 之後重起的那顆又死了：了結，只送過一則 ensure', async () => {
+  it('down(evicted) 之後表上已無此條的 down：了結，只送過一則 ensure', async () => {
     const h = harness();
     h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
     await tick();
