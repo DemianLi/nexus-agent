@@ -1240,7 +1240,8 @@ impl Supervisor {
                     && conversation.cause == Some(DeathCause::Evicted))
             {
                 // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
-                // 別的死因不理：收完回的 `down` 就是回答。被組合行程連帶收掉的，`down` 已經送過，也排隊。
+                // 別的死因不理：收完回的 `down` 就是回答。前台（`apps/harness/src/supervisor-client.ts` 的 `#apply`）收到 `down` 會重送 `ensure`，
+                // 理由寫在那邊；這裡哪些死因排隊一改，那邊要跟著看。被組合行程連帶收掉的（`peer`）`down` 已經送過，不分死因都排隊，它收屍時不再送。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -1261,7 +1262,7 @@ impl Supervisor {
                     self.refill(index, open);
                 }
             } else if composition.told || composition.peer {
-                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。
+                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。前台（`supervisor-client.ts` 的 `#apply`）也靠這句重送一次 `ensure`。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -3091,6 +3092,75 @@ mod tests {
             .iter()
             .map(|frame| crate::supervisor_protocol::decode_front_event(frame).unwrap())
             .collect()
+    }
+
+    /// 被當場殺（不是逐出）、還沒收屍的對話行程或組合行程，這時來的 `ensure` 什麼都不回：收完回的 `down` 就是回答。前台重送 `ensure`（#2905）
+    /// 靠這件事得到回答，所以釘在這裡：不成對、成對的葉子、成對的組合行程三種。
+    #[test]
+    fn an_ensure_for_a_thread_being_collected_after_a_kill_is_not_answered() {
+        let (mut supervisor, _) =
+            with_an_unpaired_starter("ensure-killed", Some(b"t"), Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的");
+
+        let (mut supervisor, _, _) = with_a_pair("ensure-killed-pair", PairState::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的葉子");
+        assert_eq!(supervisor.compositions.len(), 1, "當場起了新的一對");
+
+        // 組合行程被當場殺、還沒收屍：葉子還是 `Up`，靠 `composition_stopping` 不回 `up`，也不排隊。
+        let (mut supervisor, _, _) = with_a_pair("ensure-killed-composition", PairState::Bound);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的葉子");
+        assert_eq!(supervisor.compositions.len(), 1, "當場起了新的一對");
+    }
+
+    /// 收屍送出 `down` 之後才來的 `ensure` 是新的請求：起新的對話行程（這裡名額夠）。前台重送 `ensure`（#2905）靠這件事得到回答。
+    #[test]
+    fn an_ensure_after_the_down_starts_a_new_conversation_for_the_thread() {
+        let (mut supervisor, _) =
+            with_an_unpaired_starter("ensure-after-down", Some(b"t"), Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [FrontEvent::Down {
+                thread_id: b"t".to_vec(),
+                cause: DeathCause::Memory,
+            }]
+        );
+        assert!(supervisor.conversations.is_empty());
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            supervisor.conversations.len(),
+            1,
+            "{:?}",
+            supervisor.pending
+        );
+        assert_ne!(supervisor.conversations[0].proc.pid, LEAF);
+        assert_eq!(
+            supervisor.conversations[0].thread.as_deref(),
+            Some(&b"t"[..])
+        );
     }
 
     /// 組合行程被當場殺、還沒收屍：葉子這時回 `busy`（或 `drain` 逾時）不回 `up`，排著的那條 thread 等到的是收屍之後的 `down`。
