@@ -48,6 +48,13 @@ import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import { HOST_PLUGINS_FILE, SUPERVISOR_AUDIT_FILE } from './process-launcher.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
+import {
+  decodeConversationReport,
+  encodeConversationCommand,
+  frame,
+  PROTOCOL_VERSION,
+  takeFrames,
+} from './supervisor-protocol.js';
 import { signalPid } from './test-pids.fixture.js';
 
 const SUPERVISOR = process.env.NEXUS_SUPERVISOR_BIN;
@@ -1369,3 +1376,103 @@ describe.skipIf(SUPERVISOR === undefined || COMPOSITION === undefined)(
     }, 180_000);
   },
 );
+
+const COLD_START_SAMPLES = 5;
+
+/**
+ * 起一個對話行程（不經監督行程），量從 `spawn` 到收到 `ready` 的毫秒數，量完收掉。
+ * 跑的是原始碼（`node --import tsx`），模型是腳本、沒有外掛，環境只有 `PATH`、暫存的 home 與 {@link SOURCE_PATHS}。
+ */
+async function coldStartMs(loop: 'default' | 'native'): Promise<number> {
+  const dir = await mkdtemp(join(tmpdir(), 'nexus-cold-start-'));
+  roots.push(dir);
+  const sockets = join(dir, 'sockets');
+  await mkdir(sockets, { mode: 0o700 });
+  const patch = join(dir, 'script.patch.yml');
+  await writeFile(patch, scriptedPatchText([{ content: '回覆。' }]), 'utf8');
+  const home = join(dir, 'home');
+  const startedAt = performance.now();
+  const child = spawn(
+    process.execPath,
+    [
+      '--import',
+      TSX,
+      fileURLToPath(new URL('./conversation-process.ts', import.meta.url)),
+      '--socket',
+      join(sockets, 'wire.sock'),
+      '--patch',
+      patch,
+      ...(loop === 'native' ? ['--agent-loop', 'native'] : []),
+    ],
+    {
+      cwd: dir,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: home,
+        NEXUS_AGENT_HOME: join(home, 'harness-home'),
+        ...SOURCE_PATHS,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
+  children.push(child);
+  let stderr = '';
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf8');
+  });
+  const exited = new Promise<never>((_resolve, reject) =>
+    child.once('exit', (code) =>
+      reject(new Error(`對話行程先結束了（exit ${String(code)}）：\n${stderr}`)),
+    ),
+  );
+  const ready = new Promise<number>((resolve) => {
+    let pending: Buffer = Buffer.alloc(0);
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const taken = takeFrames(Buffer.concat([pending, chunk]));
+      pending = taken.rest;
+      for (const payload of taken.frames) {
+        if (decodeConversationReport(payload).type === 'ready')
+          resolve(performance.now() - startedAt);
+      }
+    });
+  });
+  child.stdin?.write(
+    frame(
+      encodeConversationCommand({
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        token: '00112233445566778899aabbccddeeff',
+      }),
+    ),
+  );
+  const elapsed = await Promise.race([
+    ready,
+    exited,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`60 秒內沒有 ready：\n${stderr}`)), 60_000).unref(),
+    ),
+  ]);
+  child.stdin?.end();
+  await new Promise((resolve) => child.once('exit', resolve));
+  return elapsed;
+}
+
+/**
+ * 冷起動量測（#2852）：給監督行程的 `--start-timeout-ms` 預設值一個有出處的數字。只印、不設門檻；樣本沒等到 `ready`（行程先結束或 60 秒逾時）就失敗。
+ * 每個 loop 依序起 {@link COLD_START_SAMPLES} 個、各用新的暫存目錄，照順序印原始數字。tsx 的轉譯快取在 `/tmp/tsx-<uid>`（子行程沒有 `TMPDIR`），
+ * 跨樣本、跨次都保留，所以沒有一個樣本是全冷的；第一個之後還多吃到同一輪的檔案快取。條件跟同檔其他測試一樣：只在有監督行程執行檔的 job 跑。
+ */
+describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程冷起動量測（#2852）', () => {
+  for (const loop of ['default', 'native'] as const) {
+    it(`loop=${loop}：起行程到 ready，依序 ${String(COLD_START_SAMPLES)} 次`, async () => {
+      const samples: number[] = [];
+      for (let index = 0; index < COLD_START_SAMPLES; index += 1) {
+        samples.push(Math.round(await coldStartMs(loop)));
+      }
+      console.log(
+        `[#2852 冷起動] arch=${process.arch} loop=${loop} 起行程到 ready（依序，ms）[${samples.join(',')}]`,
+      );
+      expect(samples).toHaveLength(COLD_START_SAMPLES);
+    }, 300_000);
+  }
+});
