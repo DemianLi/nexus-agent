@@ -16,7 +16,7 @@ import { sessionUsageView } from '@/shared/lib/usage-view';
  * - **不掛 `role="status"`**：代理的現況只由狀態列唸（§8），每次模型呼叫都唸一次太吵（同用量表）。
  * - 頂列不會被核准或提問面板換掉，所以不用像用量表那樣在 `hidden` 時自己關。
  * - **底部「看明細」**（#1031，#1017 Q3 ②）：打開右側欄的成本分頁。沒有右側欄時不畫（同卡片的慣例）。按下去先關 popover，
- *   而 Radix 關閉時會把焦點還給觸發鈕——那會蓋掉分頁要拿的焦點，所以這一次不還。
+ *   而 Popover 關閉時預設會把焦點還給觸發鈕（Base UI 的 `finalFocus` 預設）——那會蓋掉分頁要拿的焦點，所以這一次不還。
  */
 export function SessionUsage({
   tokenUsage,

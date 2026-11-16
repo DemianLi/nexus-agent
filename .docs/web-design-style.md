@@ -102,7 +102,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 ## 2. 從哪裡來：參考過的元件庫各給了什麼
 
-**原則是「只看不裝」**：用它們的結構與手感，換成本專案的值和積木重寫（`GLOSSARY.md`「參考對象」）。例外是 shadcn 官方：registry 元件裝進來就是我們的原始碼（規格 §4.1）。另一個例外是 [solid-glass](https://github.com/deeplethe/solid-glass)：demian 拍板改用它取代現有的主題（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)、地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497)），原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，外觀類照它，機制類與無障礙門檻照本專案（Q5、Q8），修改逐條登記在該目錄 README 的「本地修改」。主題在地圖第 ② 步換上；元件換成它的 Base UI 版在第 ③ 步，AI 元件在第 ④ 步。
+**原則是「只看不裝」**：用它們的結構與手感，換成本專案的值和積木重寫（`GLOSSARY.md`「參考對象」）。例外是 shadcn 官方的 `@shadcn/react`（相依）與 `shadcn/tailwind.css`（經 vendor 進來）；`ui/` 的元件是 solid-glass 的（規格 §4.1）。另一個例外是 [solid-glass](https://github.com/deeplethe/solid-glass)：demian 拍板改用它取代現有的主題（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)、地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497)），原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，外觀類照它，機制類與無障礙門檻照本專案（Q5、Q8），修改逐條登記在該目錄 README 的「本地修改」。主題在地圖第 ② 步換上；元件換成它的 Base UI 版在第 ③ 步，AI 元件在第 ④ 步。
 
 | 來源 | 角色 | 拿了什麼 | 沒拿什麼、為什麼 | 出處 |
 | --- | --- | --- | --- | --- |
