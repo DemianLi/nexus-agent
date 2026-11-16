@@ -1672,10 +1672,10 @@ fn a_crashing_warm_pool_backs_off() {
     });
     std::thread::sleep(Duration::from_millis(1_000));
     let audited = h.audit().len();
-    // `--front-restart-ms 100`、每次失敗加倍：一秒內約 0、100、300、700 毫秒各一次，四、五行。沒有退避的話是十行上下，上界 8 分得出來；
+    // `--front-restart-ms 100`、每次失敗加倍：一秒內約 0、100、300、700 毫秒各一次，四行。沒有退避的話是十行上下，上界 6 要每輪多花 65 毫秒以上才漏得掉；
     // 機器慢只會讓行數變少，下界不動。
     eprintln!("[預熱池退避] 一秒內稽核 {audited} 行");
-    assert!((2..=8).contains(&audited), "{audited} 行");
+    assert!((2..=6).contains(&audited), "{audited} 行");
     assert!(h.audit()[0].contains("\"thread\":\"\""), "{:?}", h.audit());
     h.ensure("x");
     assert_eq!(h.down_of("x"), DeathCause::Crash);

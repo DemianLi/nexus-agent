@@ -1442,6 +1442,10 @@ impl Supervisor {
 
     /// 預熱池的行程沒綁就死了、或起不來：隔 `warm_backoff` 再補，下一次的等待加倍到 [`args::WARM_BACKOFF_MAX`]
     /// （比 `--front-restart-ms` 小就用後者）。不放棄：預熱池只是加速，停了之後沒有人會把它開回來。
+    /// `--front-restart-ms 0` 時沒有間隔，也不會加倍。
+    ///
+    /// 級數只在預熱行程閒放過穩定期才死時回到起始值；預熱行程正常是被指派走、不是死掉，所以預熱行程多半被指派走的系統上，
+    /// 出過事之後級數會留在上限，到監督行程重起為止（那時只是補得慢，`ensure` 照樣當場起）。
     ///
     /// `settled`：這個行程到過 `ready`、而且活過 [`args::WARM_STABLE`]，等待回到 `--front-restart-ms`。**兩個條件缺一個都不行**：
     /// 只看活多久，`--start-timeout-ms` 設得比 [`args::WARM_STABLE`] 大的部署，永不 `ready` 的行程每次都「活過」而一直歸零；
@@ -3754,6 +3758,39 @@ mod tests {
         supervisor.compositions[0].proc.kill_now();
         supervisor.fill_warm();
         assert_eq!(supervisor.compositions.len(), 1);
+    }
+
+    /// 成對那一側：預熱的一對在停機時收屍，不排、不長。
+    #[test]
+    fn a_warm_pair_dying_in_shutdown_schedules_nothing() {
+        let (mut supervisor, _, _) = with_a_pair("warm-pair-shutdown", PairState::Ready);
+        supervisor.compositions[0].cause = Some(DeathCause::Shutdown);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 成對那一側：有 thread 的一對收屍走 `down`，不是預熱池的事，不排、不長。
+    #[test]
+    fn an_assigned_pair_dying_does_not_touch_the_warm_backoff() {
+        let (mut supervisor, _, _) = with_a_pair("assigned-pair", PairState::Bound);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 預熱的一對葉子先死、組合行程跟著收屍：這一個事件只長一次（葉子那一側算過，`told` 擋住組合行程那一側）。
+    #[test]
+    fn a_warm_pair_whose_leaf_dies_first_counts_one_failure() {
+        let (mut supervisor, _, _) = with_a_pair("warm-pair-leaf-first", PairState::Ready);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+        assert!(supervisor.warm_retry_at.is_some());
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
