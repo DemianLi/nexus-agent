@@ -3649,7 +3649,7 @@ mod tests {
         assert_eq!(supervisor.warm_backoff, base * 2, "起不來");
         assert!(supervisor.warm_retry_at.is_some());
 
-        let (mut supervisor, _) = with_an_unspawnable_starter_warm("warm-site-2", since);
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-site-2", None, since);
         supervisor.on_exit(LEAF, KILLED);
         assert_eq!(supervisor.warm_backoff, base * 2, "預熱的行程死了");
         assert!(supervisor.warm_retry_at.is_some());
@@ -3664,11 +3664,6 @@ mod tests {
         supervisor.on_exit(COMPOSITION, KILLED);
         assert_eq!(supervisor.warm_backoff, base * 2, "預熱的一對收屍");
         assert!(supervisor.warm_retry_at.is_some());
-    }
-
-    /// 預熱的不成對行程，沒綁就死：`phase`、活多久由測試給。
-    fn with_an_unspawnable_starter_warm(tag: &str, since: Instant) -> (Supervisor, PathBuf) {
-        with_an_unpaired_starter(tag, None, since)
     }
 
     /// 沒到過 `ready` 的活再久也不歸零：這是 `--start-timeout-ms` 大過 [`args::WARM_STABLE`] 時永不 `ready` 的行程。
