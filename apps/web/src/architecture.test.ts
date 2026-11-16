@@ -35,11 +35,6 @@ type Exception = { file: string; targets: readonly string[]; why: string };
 /** 對規則 1、2 的明文豁免：`file` 允許深層 import `targets`（路徑相對 `src/`，不含副檔名）。要等的卡寫在 `why`。 */
 const EXCEPTIONS: readonly Exception[] = [
   {
-    file: 'shared/connection/use-conversation.ts',
-    targets: ['features/attachments/send', 'features/goal/bar-view'],
-    why: '連線核心還拉著兩個切片的錯誤文案（送出被拒、暫停目標失敗）；走入口會把整個切片的元件帶進連線核心的載入圖。等 #2883 的下行錯誤碼轉文案收成一個 module',
-  },
-  {
     file: 'shared/right-sidebar/api.ts',
     targets: [
       'features/changes/diff',
