@@ -1224,6 +1224,65 @@ class LightScope(unittest.TestCase):
             {'apps/web': ['src/c.test.tsx', *expected]},
         )
 
+    def test_web_structure_guards_run_for_web_ts_sources(self) -> None:
+        """web 的結構護欄（#2883）掃整個 `apps/web/src`：只改 `.ts` 也要排到，新增、搬動、刪除都算。"""
+        guards = plan_ci.WEB_STRUCTURE_GUARDS
+        expected = sorted(g[len('apps/web/') :] for g in guards)
+
+        def tests(changed: list[str], existing: set[str] | None = None) -> dict:
+            present = set(guards) if existing is None else existing
+            return plan_ci.light(changed, self.NAMES, lambda p: p in present)['tests']
+
+        for path in ('apps/web/src/features/x/foo.ts', 'apps/web/src/features/x/foo.tsx', 'apps/web/src/lib/a.ts'):
+            with self.subTest(path=path):
+                self.assertEqual(tests([path], {path, *guards}), {'apps/web': expected})
+
+        # 刪檔：檔已不在，護欄照排（刪檔也會弄壞 import）。
+        self.assertEqual(tests(['apps/web/src/features/x/gone.ts']), {'apps/web': expected})
+
+        # 只改測試檔、`.d.ts`、css、web 以外的 ts 都不因此排結構護欄。
+        for path in (
+            'apps/web/src/features/x/foo.test.ts',
+            'apps/web/src/features/x/foo.test.tsx',
+            'apps/web/src/env.d.ts',
+            'apps/web/src/styles/theme.css',
+            'apps/harness/src/a.ts',
+        ):
+            with self.subTest(path=path):
+                result = tests([path], {path, *guards}).get('apps/web', [])
+                self.assertFalse(set(expected) & set(result), result)
+
+        # 護欄檔不存在就不排。
+        self.assertEqual(tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts'}), {})
+        self.assertEqual(
+            tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts', guards[0]}), {'apps/web': ['src/architecture.test.ts']}
+        )
+
+    def test_web_structure_guards_merge_with_design_guards(self) -> None:
+        design = ['apps/web/src/styles/design-system.test.ts']
+        existing = {'apps/web/src/styles/theme.css', *design, *plan_ci.WEB_STRUCTURE_GUARDS}
+        # css 只排設計護欄。
+        self.assertEqual(
+            plan_ci.light(['apps/web/src/styles/theme.css'], self.NAMES, lambda p: p in existing, design)['tests'],
+            {'apps/web': ['src/styles/design-system.test.ts']},
+        )
+        # tsx 兩組都排。
+        existing.add('apps/web/src/c.tsx')
+        tests = plan_ci.light(['apps/web/src/c.tsx'], self.NAMES, lambda p: p in existing, design)['tests']
+        self.assertEqual(
+            tests,
+            {
+                'apps/web': sorted(
+                    g[len('apps/web/') :] for g in [*design, *plan_ci.WEB_STRUCTURE_GUARDS]
+                )
+            },
+        )
+
+    def test_web_structure_guards_exist_on_disk(self) -> None:
+        for g in plan_ci.WEB_STRUCTURE_GUARDS:
+            with self.subTest(guard=g):
+                self.assertTrue((plan_ci.ROOT / g).is_file())
+
     def test_web_design_guards_are_the_style_tests_on_disk(self) -> None:
         guards = plan_ci.web_design_guards()
         self.assertIn('apps/web/src/styles/design-system.test.ts', guards)
