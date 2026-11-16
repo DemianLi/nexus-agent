@@ -51,7 +51,7 @@ describe('焦點外框', () => {
     });
   });
 
-  test('registry 自帶的 ring 仍在 layer 外清掉，兩圈不會疊在一起', () => {
+  test('基礎元件自帶的 ring 仍在 layer 外清掉，兩圈不會疊在一起', () => {
     expect(cascade.winner([':focus-visible'], '--tw-ring-shadow')).toMatchObject({
       value: '0 0 #0000',
       layer: null,

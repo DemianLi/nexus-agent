@@ -977,7 +977,7 @@ export const OVERLAY_SHADOW_LIMITS: Record<string, number> = {
 
 /**
  * 呼叫端的寬度（#1583 PM 決定第 4 點）：跟 develop 畫出來的一樣。回饋框 develop 是窄螢幕 28rem、640 以上 32rem
- * （`max-w-md` 加 registry 的 `sm:max-w-lg`）；手機側欄是 `--sidebar-width` 的 18rem（SG 的 `w-3/4` 不能蓋掉它）。
+ * （`features/feedback/dialog.tsx` 自己寫 `max-w-md sm:max-w-lg`，蓋掉 SG 的 `sm:max-w-sm`）；手機側欄是 `--sidebar-width` 的 18rem（SG 的 `w-3/4` 不能蓋掉它）。
  */
 export const WIDTHS: {
   overlay: string;

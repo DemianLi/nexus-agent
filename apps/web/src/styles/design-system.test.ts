@@ -29,7 +29,7 @@ import { readCascade } from './css-cascade';
  *    少了 `min-h-11` 的不算：工具結果的收合鈕（`tool/result.tsx` 的 `FoldToggle`）是一行字高的鈕，不是整列。
  * 8. **不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
- *    vendor 上游原樣的 ring 由 `solid-glass.overrides.css` 統一處理（不在掃描範圍）；#1680 起 `ui/` 不再有 registry 原文，`ui/` 也照擋。
+ *    vendor 上游原樣的 ring 由 `solid-glass.overrides.css` 統一處理（不在掃描範圍）；`ui/`（nexus 層）也照擋。
  * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
  * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-muted`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
  * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
@@ -245,7 +245,7 @@ interface Allowed {
 }
 
 /**
- * 已知的例外。**只能變少**：自己的元件要換掉，registry 原文的例外要等它們各自被改掉或確認要留。
+ * 已知的例外。**只能變少**：列了卻不再命中的會紅。
  */
 const ALLOWED: readonly Allowed[] = [
   // 自己的元件。
@@ -615,7 +615,7 @@ describe('判準', () => {
     expect(readFileSync(join(SRC, vendored ?? ''), 'utf8').includes('<textarea')).toBe(true);
   });
 
-  test('焦點那條 ui/ 也照擋：registry 原文都進了 vendor（#1680 換掉最後一份 sidebar），帶 ring 的只剩 vendor 原樣', () => {
+  test('焦點那條 ui/ 也照擋：nexus 層沒有 ring，帶 ring 的只剩 vendor 原樣', () => {
     const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
     expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
     const vendored = [...VENDOR_UPSTREAM_FILES].find((f) =>
