@@ -138,8 +138,8 @@ WEB_STRUCTURE_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.(test\.tsx?|d\.ts)$
 
 
 def web_design_guards(root: Path = ROOT) -> list[str]:
-    """`apps/web/src/styles/*.test.ts` 與 `ui/registry-edits.test.ts`，repo 相對路徑。"""
-    found = [*(root / WEB / 'src/styles').glob('*.test.ts'), root / WEB / 'src/components/ui/registry-edits.test.ts']
+    """`apps/web/src/styles/*.test.ts` 與 `ui/local-edits.test.ts`，repo 相對路徑。"""
+    found = [*(root / WEB / 'src/styles').glob('*.test.ts'), root / WEB / 'src/components/ui/local-edits.test.ts']
     return sorted(f.relative_to(root).as_posix() for f in found if f.is_file())
 
 

@@ -43,7 +43,7 @@ export function stubGlyphEnvironment(): void {
 
 /**
  * vendor 的 `RADIUS`（`status-glyph.tsx` 裡的 `const RADIUS = 1.7`，沒有 export）。vendor 升版改了它，
- * `registry-edits.test.ts` 那條紅；`guard/main.tsx` 的 `__openingPose` 也寫同一個數。
+ * `local-edits.test.ts` 那條紅；`guard/main.tsx` 的 `__openingPose` 也寫同一個數。
  */
 export const GLYPH_RADIUS = 1.7;
 
