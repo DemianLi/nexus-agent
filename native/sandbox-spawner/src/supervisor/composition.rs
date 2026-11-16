@@ -18,6 +18,8 @@ pub(super) struct Composition {
     state: PairState,
     /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。補葉子（[`Supervisor::refill`]）時清掉。
     pub(super) told: bool,
+    /// 起這個組合行程的時間：預熱的一對收屍時算它活了多久（[`Supervisor::warm_failed`]）。不隨補葉子、被停住過而變。
+    pub(super) started_at: Instant,
     /// 葉子不在了才收它的（葉子收完連帶收，或留著等葉子時因 `--idle-ms`、名額滿被收）：稽核記 `peer`，不回 `down`、不進死因累計。
     pub(super) peer: bool,
     pub(super) cause: Option<DeathCause>,
@@ -61,6 +63,7 @@ impl Composition {
             socket: PathBuf::new(),
             state,
             told: false,
+            started_at: Instant::now(),
             peer: false,
             cause: None,
             timed_out: false,
@@ -271,6 +274,7 @@ impl Supervisor {
                         since: Instant::now(),
                     },
                     told: false,
+                    started_at: Instant::now(),
                     peer: false,
                     cause: None,
                     timed_out: false,
@@ -304,7 +308,7 @@ impl Supervisor {
                         thread_id: thread,
                         cause: DeathCause::Crash,
                     }),
-                    None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+                    None => self.warm_failed(Instant::now(), false),
                 }
             }
         }
@@ -696,7 +700,10 @@ impl Supervisor {
                     cause,
                 }),
                 None if cause != DeathCause::Shutdown => {
-                    self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
+                    let now = Instant::now();
+                    let settled = composition.state == PairState::Ready
+                        && now.duration_since(composition.started_at) >= args::WARM_STABLE;
+                    self.warm_failed(now, settled);
                 }
                 _ => {}
             }
