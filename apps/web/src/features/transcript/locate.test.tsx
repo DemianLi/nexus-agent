@@ -5,28 +5,33 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Transcript } from '@/features/transcript/transcript';
 import { Script } from '@/test/conversation-frames';
 
-import { findTranscriptItem, registerTranscriptScroller, revealTranscriptItem } from './locate';
+import { findTranscriptItem, locateTranscriptItem, registerTranscriptScroller } from './locate';
 
 /**
  * 「定位」怎麼捲（[#1033](https://github.com/DemianLi/nexus-agent/issues/1033)）：串流中對話區在自動捲到底，直接 `scrollIntoView`
  * 會被拉回去（實機量過：1280 寬那一格始終進不了視野），所以要走對話區自己登記的 `scrollToMessage`。
  */
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
 function item(id: string): HTMLElement {
   const el = document.createElement('div');
+  el.setAttribute('data-slot', 'message-scroller-item');
   el.setAttribute('data-message-id', id);
   el.scrollIntoView = vi.fn();
+  document.body.append(el);
   return el;
 }
 
-describe('revealTranscriptItem', () => {
+describe('locateTranscriptItem', () => {
   it('有登記的捲動就走它、傳條目 id，不再自己 scrollIntoView', () => {
     const scrollTo = vi.fn(() => true);
     const unregister = registerTranscriptScroller(scrollTo);
     const target = item('tool-1');
-    revealTranscriptItem(target);
+    locateTranscriptItem('tool-1');
     expect(scrollTo).toHaveBeenCalledWith('tool-1');
     expect(target.scrollIntoView).not.toHaveBeenCalled();
     unregister();
@@ -35,14 +40,14 @@ describe('revealTranscriptItem', () => {
   it('登記的那條回 false（對話區沒有這一格）時退回 scrollIntoView', () => {
     const unregister = registerTranscriptScroller(() => false);
     const target = item('tool-1');
-    revealTranscriptItem(target);
+    locateTranscriptItem('tool-1');
     expect(target.scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'auto' });
     unregister();
   });
 
   it('沒登記（對話區還沒掛）時退回 scrollIntoView', () => {
     const target = item('tool-1');
-    revealTranscriptItem(target);
+    locateTranscriptItem('tool-1');
     expect(target.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
@@ -52,12 +57,13 @@ describe('revealTranscriptItem', () => {
     const unregisterFirst = registerTranscriptScroller(first);
     const unregisterSecond = registerTranscriptScroller(second);
     unregisterFirst();
-    revealTranscriptItem(item('a'));
+    item('a');
+    locateTranscriptItem('a');
     expect(second).toHaveBeenCalledWith('a');
     expect(first).not.toHaveBeenCalled();
     unregisterSecond();
     const target = item('b');
-    revealTranscriptItem(target);
+    locateTranscriptItem('b');
     expect(target.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 });
@@ -79,13 +85,13 @@ describe('Transcript 掛上時登記自己的捲動', () => {
     expect(target).toBeDefined();
     const spy = vi.fn();
     target!.scrollIntoView = spy;
-    revealTranscriptItem(target!);
+    locateTranscriptItem('history-0');
     // 走原語的 scrollToMessage：它自己捲 viewport，沒有人呼叫元素的 scrollIntoView。
     expect(spy).not.toHaveBeenCalled();
 
     view.unmount();
     const orphan = item('history-0');
-    revealTranscriptItem(orphan);
+    locateTranscriptItem('history-0');
     expect(orphan.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 });

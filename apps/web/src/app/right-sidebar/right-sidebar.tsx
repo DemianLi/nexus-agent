@@ -36,11 +36,7 @@ import { TAB_DEFINITIONS, TAB_REGISTRY, layoutOps } from '@/app/right-sidebar/ta
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
-import {
-  findOrExpandTranscriptItem,
-  focusTranscriptItem,
-  revealTranscriptItem,
-} from '@/features/transcript';
+import { focusTranscriptItem, locateTranscriptItem } from '@/features/transcript';
 import {
   MIN_PANEL_WIDTH,
   clampPanelWidth,
@@ -167,9 +163,8 @@ export function RightSidebarProvider({
       },
       locate: (entryId) => {
         // 收在一段工具呼叫裡的（#1309）先展開再捲過去。
-        const item = findOrExpandTranscriptItem(entryId);
+        const item = locateTranscriptItem(entryId);
         if (item === undefined) return false;
-        revealTranscriptItem(item);
         if (isMobile) {
           locateFocus.current = item;
           update((current) => setOpen(current, false));
