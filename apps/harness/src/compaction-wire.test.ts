@@ -237,10 +237,19 @@ describe('compactionData', () => {
     expect(payload).toEqual({ seq: 7, cutoff: 3, saved: false });
   });
 
-  it('檔沒寫成功、但前言指向讀回工具：saved 為 true（原文在會話日誌裡）', () => {
+  it.each([
+    [
+      '指示句',
+      'The summary leaves details out; the originals stay in the session log. When a detail from earlier is missing here, do not guess or say you do not know: call history_search with a literal string, or history_read with an <index> entry number, then answer from the result.',
+    ],
+    [
+      '只描述工具的那一句',
+      'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.',
+    ],
+  ])('檔沒寫成功、但前言指向讀回工具（%s）：saved 為 true（原文在會話日誌裡）', (_label, hint) => {
     const recallable =
       'You are in the middle of a conversation that has been summarized.\n\n' +
-      'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
+      `${hint}\n\n` +
       'A condensed summary follows:\n\n<summary>\n正文\n</summary>';
     expect(
       compactionData(

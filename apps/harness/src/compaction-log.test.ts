@@ -250,7 +250,7 @@ describe('壓縮發生時，日誌裡留得下來', () => {
       );
       expect(summaries.length).toBeGreaterThan(0);
       for (const summary of summaries) {
-        expect(summary.text).toContain('Originals also stay in the session log');
+        expect(summary.text).toContain('the originals stay in the session log');
         expect(summary.text).not.toContain('/conversation_history/');
       }
 

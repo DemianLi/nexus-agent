@@ -118,9 +118,14 @@ const SUMMARY_PREAMBLE_HEAD =
 const SUMMARY_PREAMBLE_TAIL =
   ' should you need to refer back to it for details.\n\nA condensed summary follows:\n\n<summary>\n';
 const SUMMARY_CLOSE = '\n</summary>';
-// 原文讀得回來時（`originalsRecallable`）前言裡的那一句。`summaryPointsToRecall` 認的是這句的字面值，改了字，已寫進日誌的摘要在
-// wire 上的 `saved` 會變成 false。句子短：前言每多一個 token，「摘要要比被取代的原文小」（#1396）就多擋下一些短的摘要。
-const SUMMARY_RECALL_HINT = `Originals also stay in the session log: ${HISTORY_READ_TOOL_NAME} reads an <index> entry verbatim, ${HISTORY_SEARCH_TOOL_NAME} finds a literal string.`;
+// 原文讀得回來時（`originalsRecallable`）前言裡的那一句。寫成指示而不只描述工具：只描述工具時，模型在摘要裡找不到答案就答不知道，
+// 不去讀（量測：#2777）。代價：前言每多一個 token，「摘要要比被取代的原文小」（#1396）就多擋下一些短的摘要；句子只寫指示需要的部分。
+const SUMMARY_RECALL_HINT = `The summary leaves details out; the originals stay in the session log. When a detail from earlier is missing here, do not guess or say you do not know: call ${HISTORY_SEARCH_TOOL_NAME} with a literal string, or ${HISTORY_READ_TOOL_NAME} with an <index> entry number, then answer from the result.`;
+// `SUMMARY_RECALL_HINT` 以前用過的字面值。`summaryPointsToRecall` 認字面值，已寫進日誌的摘要靠這些句子在 wire 上維持 `saved`：
+// 改 `SUMMARY_RECALL_HINT` 的字時，把舊句加進來，不刪。
+const SUMMARY_RECALL_HINTS_BEFORE: readonly string[] = [
+  `Originals also stay in the session log: ${HISTORY_READ_TOOL_NAME} reads an <index> entry verbatim, ${HISTORY_SEARCH_TOOL_NAME} finds a literal string.`,
+];
 // 原文讀得回來時的前言：不寫歷史檔，只指向讀回工具。
 const SUMMARY_RECALL_PREAMBLE = `You are in the middle of a conversation that has been summarized.\n\n${SUMMARY_RECALL_HINT}\n\nA condensed summary follows:\n\n<summary>\n`;
 const SUMMARY_PLAIN_PREFIX = 'Here is a summary of the conversation to date:\n\n';
@@ -154,11 +159,15 @@ export function summaryBodyOfText(text: string): string {
 
 /**
  * @param text - 摘要訊息的全文。
- * @returns 前言是不是指向讀回工具的那一種：被摘掉的原文在會話日誌裡讀得回來。
+ * @returns 前言是不是指向讀回工具的那一種：被摘掉的原文在會話日誌裡讀得回來。`SUMMARY_RECALL_HINTS_BEFORE` 裡的句子也認。
  */
 export function summaryPointsToRecall(text: string): boolean {
   const open = text.indexOf('<summary>\n');
-  return open >= 0 && text.slice(0, open).includes(SUMMARY_RECALL_HINT);
+  if (open < 0) return false;
+  const preamble = text.slice(0, open);
+  return [SUMMARY_RECALL_HINT, ...SUMMARY_RECALL_HINTS_BEFORE].some((hint) =>
+    preamble.includes(hint),
+  );
 }
 
 function isSummaryMessage(message: BaseMessage): boolean {

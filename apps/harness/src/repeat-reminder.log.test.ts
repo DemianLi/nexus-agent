@@ -46,7 +46,7 @@ function project(message: BaseMessage): unknown {
           ORIGINALS_POINTER,
         )
         .replace(
-          /Originals also stay in the session log: [^\\"]*?literal string\./g,
+          /The summary leaves details out; [^\\"]*?answer from the result\./g,
           ORIGINALS_POINTER,
         ),
     ) as unknown,

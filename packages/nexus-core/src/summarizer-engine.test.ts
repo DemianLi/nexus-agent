@@ -532,7 +532,7 @@ describe('摘要器引擎', () => {
       const head = step.contents[0]!;
       expect(head).toBe(
         'You are in the middle of a conversation that has been summarized.\n\n' +
-          'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
+          'The summary leaves details out; the originals stay in the session log. When a detail from earlier is missing here, do not guess or say you do not know: call history_search with a literal string, or history_read with an <index> entry number, then answer from the result.\n\n' +
           `A condensed summary follows:\n\n<summary>\n${ENTRY_1}\n<state>\n摘要 1\n</state>\n</summary>`,
       );
       expect(summaryPointsToRecall(head)).toBe(true);
@@ -549,10 +549,20 @@ describe('摘要器引擎', () => {
     expect(
       summaryPointsToRecall(
         summaryWithFile(
-          'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.',
+          'The summary leaves details out; the originals stay in the session log. When a detail from earlier is missing here, do not guess or say you do not know: call history_search with a literal string, or history_read with an <index> entry number, then answer from the result.',
         ),
       ),
     ).toBe(false);
+  });
+
+  it('日誌裡用另一句前言（只描述工具）的摘要：summaryPointsToRecall 是 true', () => {
+    expect(
+      summaryPointsToRecall(
+        'You are in the middle of a conversation that has been summarized.\n\n' +
+          'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
+          'A condensed summary follows:\n\n<summary>\n摘要\n</summary>',
+      ),
+    ).toBe(true);
   });
 
   it('沒有訊息：原樣交下去；沒有模型：拋錯', async () => {
