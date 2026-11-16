@@ -1241,7 +1241,7 @@ impl Supervisor {
             {
                 // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
                 // 別的死因不理：收完回的 `down` 就是回答。前台（`apps/harness/src/supervisor-client.ts` 的 `#apply`）分不出那顆 `down`
-                // 是舊的還是這次的回答，所以收到時重送一次 `ensure`；這裡哪些死因自己排隊重起一改，那邊的重送要跟著看。被組合行程連帶收掉的（`peer`）`down` 已經送過，不分死因都排隊，前台碰不到它。
+                // 是舊的還是這次的回答，所以收到時重送一次 `ensure`；這裡哪些死因自己排隊重起一改，那邊的重送要跟著看。被組合行程連帶收掉的（`peer`）`down` 已經送過，不分死因都排隊，它自己收屍時不再送。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -1262,7 +1262,7 @@ impl Supervisor {
                     self.refill(index, open);
                 }
             } else if composition.told || composition.peer {
-                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。
+                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。前台（`supervisor-client.ts` 的 `#apply`）也靠這句重送一次 `ensure`。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -3107,6 +3107,7 @@ mod tests {
         supervisor.ensure(b"t".to_vec(), OpenMode::Run);
         assert_eq!(front_events(&mut supervisor), []);
         assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的");
 
         let (mut supervisor, _, _) = with_a_pair("ensure-killed-pair", PairState::Bound);
         supervisor.conversations[0].cause = Some(DeathCause::Memory);
@@ -3115,6 +3116,19 @@ mod tests {
         supervisor.ensure(b"t".to_vec(), OpenMode::Run);
         assert_eq!(front_events(&mut supervisor), []);
         assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的葉子");
+        assert_eq!(supervisor.compositions.len(), 1, "當場起了新的一對");
+
+        // 組合行程被當場殺、還沒收屍：葉子還是 `Up`，靠 `composition_stopping` 不回 `up`，也不排隊。
+        let (mut supervisor, _, _) = with_a_pair("ensure-killed-composition", PairState::Bound);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的葉子");
+        assert_eq!(supervisor.compositions.len(), 1, "當場起了新的一對");
     }
 
     /// 收屍送出 `down` 之後才來的 `ensure` 是新的請求：起新的對話行程（這裡名額夠）。前台重送 `ensure`（#2905）靠這件事得到回答。

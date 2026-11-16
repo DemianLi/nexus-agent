@@ -59,14 +59,6 @@ interface Pending {
   /** 已經送出的打開方式裡最強的一個：`run` 送過就不再送 `read-only`。 */
   sent: OpenMode;
   readonly waiters: Set<Waiter>;
-  /**
-   * 送出第一則 `ensure` 當下表上這條 thread 的 socket（舊行程）；表上沒有就是 `undefined`。之後來的 `down` 若還是這個 socket，
-   * 可能是舊行程的死訊、也可能就是這則 `ensure` 的回答（監督行程對被當場殺、還沒收屍的行程不理 `ensure`，收完回的 `down` 就是回答），
-   * 前台分不出來，所以重送一次，見 `#apply`。併進來的 `ensure` 不改它。
-   */
-  readonly stale: string | undefined;
-  /** 已經因為上面那件事重送過；一個等待只重送一次。 */
-  resent: boolean;
 }
 
 /** 控制通道斷了之後，`ensure` 丟這個。 */
@@ -154,12 +146,7 @@ export class SupervisorClient {
       signal?.addEventListener('abort', onAbort, { once: true });
       const pending = this.#pending.get(threadId);
       if (pending === undefined) {
-        this.#pending.set(threadId, {
-          sent: open,
-          waiters: new Set([waiter]),
-          stale: this.#live.get(threadId),
-          resent: false,
-        });
+        this.#pending.set(threadId, { sent: open, waiters: new Set([waiter]) });
         this.#send({ type: 'ensure', threadId, open });
         return;
       }
@@ -232,18 +219,18 @@ export class SupervisorClient {
         this.#onDown?.(event.threadId, event.cause, socket);
         if (event.cause === 'evicted') return;
         const pending = this.#pending.get(event.threadId);
-        if (
-          pending !== undefined &&
-          !pending.resent &&
-          pending.stale !== undefined &&
-          pending.stale === socket &&
-          event.cause !== 'shutdown'
-        ) {
-          // 監督行程對逐出中的排隊重起（連帶收掉的 peer 不分死因也排隊，但它不送 `down`，到不了這裡），對其他死因不理：收完回的 `down` 就是回答
-          // （`native/sandbox-spawner/src/supervisor/mod.rs` 的 `ensure`，那邊一改這裡要跟著看）。重送的 `ensure` 到的時候，若那顆 `down` 就是回答，
-          // 它會替這條起新的；若這條已經有行程在起，不即時回，等那顆行程的 `up`。逐出的（`evicted`）與停機的（`shutdown`，一律回 `down`）不走這裡。
-          pending.resent = true;
-          this.#send({ type: 'ensure', threadId: event.threadId, open: pending.sent });
+        if (pending !== undefined && socket !== undefined && event.cause !== 'shutdown') {
+          // 等著的 `ensure` 送出去之後才到的 `down`，表上還有這條，所以是舊行程的死訊，或就是這則 `ensure` 的回答（監督行程對被當場殺、
+          // 還沒收屍的行程不理 `ensure`，收完回的 `down` 就是回答），前台分不出來：重送一次，兩種情況之後都有回答。只會重送一次：
+          // 等待活著的期間表上這條只會被 `down` 刪、不會被換（`up` 一定了結等待，`down` 一定先刪表），重送之後的 `down` 表上已經沒有。
+          // 監督行程對逐出中的排隊重起（連帶收掉的葉子自己收屍時不再送 `down`），對其他死因不理（`native/sandbox-spawner/src/supervisor/mod.rs`
+          // 的 `ensure`，葉子那一支與組合行程那一支各一處，那邊一改這裡要跟著看）。重送的 `ensure` 之後那個行程、排隊位置或名額的結果就是回答。
+          // 逐出的（`evicted`）與停機的（`shutdown`，一律回 `down`）不走這裡。
+          this.#send({
+            type: 'ensure',
+            threadId: event.threadId,
+            open: pending.sent,
+          });
           return;
         }
         this.#settle(event.threadId, { type: 'down', cause: event.cause });

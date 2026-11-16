@@ -191,6 +191,17 @@ describe('SupervisorClient', () => {
     expect(h.sent).toHaveLength(1);
   });
 
+  it('down(evicted) 之後重起的那顆又死了：了結，只送過一則 ensure', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'evicted' });
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await expect(ensured).resolves.toEqual({ type: 'down', cause: 'crash' });
+    expect(h.sent).toHaveLength(1);
+  });
+
   it('down(evicted) 不重送：監督行程自己會排隊重起', async () => {
     const h = harness();
     h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
@@ -216,7 +227,7 @@ describe('SupervisorClient', () => {
     ]);
   });
 
-  it('重送之後才併進來的 ensure 不換掉「舊行程」的記號：下一顆 down 了結', async () => {
+  it('重送之後併進來的等待：下一顆 down 一起了結，不再重送', async () => {
     const h = harness();
     h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
     await tick();
