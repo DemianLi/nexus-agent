@@ -293,7 +293,7 @@ describe('帶讀回工具答題（#2777）', () => {
     expect(first.answer.replace(/\s+/g, '')).toContain(mention.replace(/\s+/g, ''));
     expect(first).toMatchObject({ requests: 2, recallCalls: 1 });
     // 前言指向讀回工具。
-    expect(firstRequests[0]!.map(contentOf).join('\n')).toContain('history_read reads an <index>');
+    expect(firstRequests[0]!.map(contentOf).join('\n')).toContain('call history_search with a literal string');
   });
 
   it('連續摘要兩次：第一段的原文還讀得回來', async () => {

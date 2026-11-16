@@ -122,10 +122,11 @@ function textOf(message: BaseMessage): string {
 }
 
 /**
- * 比對前拿掉所有空白。模型回答時空白的寫法不固定（「4月23日」與「4 月 23 日」），那不是摘要丟了東西。
+ * 比對前拿掉所有空白，各種連字號（U+2010 到 U+2015、U+2212）換成 `-`。模型回答時空白與連字號的寫法不固定
+ * （「4月23日」與「4 月 23 日」、`INC-20417` 與用不斷行連字號的同一串），那不是摘要丟了東西。
  */
 function squash(text: string): string {
-  return text.replace(/\s+/g, '');
+  return text.replace(/\s+/g, '').replace(/[\u2010-\u2015\u2212]/g, '-');
 }
 
 function isSummary(message: BaseMessage): boolean {
