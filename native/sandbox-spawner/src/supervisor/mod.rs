@@ -350,8 +350,10 @@ struct Supervisor {
     capacity: u32,
     /// 名額滿而排著的 thread 與開啟方式，先排的在前；有行程收完就從前面起。
     pending: Vec<(Vec<u8>, OpenMode)>,
-    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。
+    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。只由 [`Supervisor::warm_failed`] 設：直接寫它就繞過退避，沒有測試會紅。
     warm_retry_at: Option<Instant>,
+    /// 下一次預熱失敗要等多久；初值是 `--front-restart-ms`，每失敗一次加倍到 [`args::WARM_BACKOFF_MAX`]。
+    warm_backoff: Duration,
     /// 下次送 `stats` 的時間。
     stats_at: Option<Instant>,
     /// 各類死因的累計，依死因碼的順序。
@@ -433,6 +435,7 @@ impl Supervisor {
     /// 還沒起任何行程的監督行程。
     fn assemble(args: args::Args, audit: Audit, sigfd: libc::c_int, capacity: u32) -> Supervisor {
         let stats_at = args.stats.map(|every| Instant::now() + every);
+        let front_restart = args.front_restart;
         let host_backoff = args
             .host
             .as_ref()
@@ -453,6 +456,7 @@ impl Supervisor {
             capacity,
             pending: Vec::new(),
             warm_retry_at: None,
+            warm_backoff: front_restart,
             stats_at,
             deaths: [0; DEATH_CAUSES],
             front_token: Vec::new(),
@@ -1436,12 +1440,28 @@ impl Supervisor {
         self.fill_warm();
     }
 
+    /// 預熱池的行程沒綁就死了、或起不來：隔 `warm_backoff` 再補，下一次的等待加倍到 [`args::WARM_BACKOFF_MAX`]
+    /// （比 `--front-restart-ms` 小就用後者）。不放棄：預熱池只是加速，停了之後沒有人會把它開回來。
+    ///
+    /// `settled`：這個行程到過 `ready`、而且活過 [`args::WARM_STABLE`]，等待回到 `--front-restart-ms`。**兩個條件缺一個都不行**：
+    /// 只看活多久，`--start-timeout-ms` 設得比 [`args::WARM_STABLE`] 大的部署，永不 `ready` 的行程每次都「活過」而一直歸零；
+    /// 只看到過 `ready`，起來、`ready`、馬上死的行程每次歸零，又回到每個 `--front-restart-ms` 一輪。
+    fn warm_failed(&mut self, now: Instant, settled: bool) {
+        if settled {
+            self.warm_backoff = self.args.front_restart;
+        }
+        let wait = self.warm_backoff;
+        self.warm_backoff = (wait * 2).min(args::WARM_BACKOFF_MAX.max(self.args.front_restart));
+        say!("預熱池 {} ms 後再補", wait.as_millis());
+        self.warm_retry_at = Some(now + wait);
+    }
+
     /// 預熱池補到 `--warm` 個：有排著的、名額滿、停機中、上一個預熱的剛失敗，都不補。
     fn fill_warm(&mut self) {
         while !self.shutting_down
             && self.warm_retry_at.is_none()
             && self.pending.is_empty()
-            && self.warm_count() < self.args.warm as usize
+            && self.warm_slots() < self.args.warm as usize
             && self.live() < self.capacity as usize
         {
             self.start_conversation(None, OpenMode::Run);
@@ -1683,7 +1703,7 @@ impl Supervisor {
                         thread_id: thread,
                         cause: DeathCause::Crash,
                     }),
-                    None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+                    None => self.warm_failed(Instant::now(), false),
                 }
                 None
             }
@@ -1733,6 +1753,22 @@ impl Supervisor {
                         .iter()
                         .any(|c| c.pair == Some(p.serial) && evicted(c))
             })
+    }
+
+    /// 預熱池佔著的位子：沒有 thread 的，連已經被殺、還沒收屍的也算。`fill_warm` 數這個：被殺到收屍之間不算數的話，別的行程剛好收屍時
+    /// 會當場補一個，繞過 [`Supervisor::warm_failed`] 排的等待。`warm_count` 只數沒在收的，`stats` 用它。
+    fn warm_slots(&self) -> usize {
+        if self.args.composition.is_none() {
+            return self
+                .conversations
+                .iter()
+                .filter(|c| c.thread.is_none())
+                .count();
+        }
+        self.compositions
+            .iter()
+            .filter(|p| p.thread.is_none())
+            .count()
     }
 
     fn warm_count(&self) -> usize {
@@ -2473,7 +2509,10 @@ impl Supervisor {
                 cause,
             }),
             None if cause != DeathCause::Shutdown => {
-                self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
+                let now = Instant::now();
+                let settled = conversation.phase != Phase::Starting
+                    && now.duration_since(conversation.started_at) >= args::WARM_STABLE;
+                self.warm_failed(now, settled);
             }
             None => {}
         }
@@ -3200,6 +3239,10 @@ mod tests {
             assert!(composition.proc.stop.is_some(), "{tag}");
             assert_eq!(composition.cause, Some(DeathCause::Stalled), "{tag}");
             assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+            // 再晚一點叫一次：一對的葉子也在 `Starting`、這時也過期了，不成對那一圈不能選它（葉子 `started_at` 比 `since` 晚一點，上一次叫的時間它還沒過期）。
+            supervisor.check_starts(since + limit + Duration::from_secs(1));
+            assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+            assert!(!supervisor.conversations[0].timed_out, "{tag}");
 
             supervisor.on_exit(COMPOSITION, KILLED);
             assert!(supervisor.conversations[0].peer, "{tag}");
@@ -3510,6 +3553,212 @@ mod tests {
         assert_eq!(supervisor.conversations[1].started_at, since);
         supervisor.check_starts(now);
         assert!(supervisor.conversations[0].proc.stop.is_none());
+    }
+
+    /// 起不來的監督行程：`--conversation`（成對時 `--composition`）指到不存在的程式，`spawn` 回 `Err`。
+    fn with_an_unspawnable(tag: &str, paired: bool) -> Supervisor {
+        let dir = temp(tag);
+        let mut argv: Vec<OsString> = [
+            "--run-dir",
+            dir.join("run").to_str().unwrap(),
+            "--audit",
+            "a",
+            "--front",
+            "/bin/true",
+            "--conversation",
+            "/nonexistent/conversation",
+            "--warm",
+            "0",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        if paired {
+            argv.extend(["--composition", "/nonexistent/composition"].map(OsString::from));
+        }
+        let audit = dir.join("audit.jsonl");
+        Supervisor::assemble(
+            args::parse(&argv).unwrap(),
+            Audit::open(&audit).unwrap(),
+            -1,
+            4,
+        )
+    }
+
+    /// 下一次補要等多久（`warm_failed` 排的）。
+    fn warm_wait(supervisor: &Supervisor, now: Instant) -> Duration {
+        supervisor.warm_retry_at.unwrap().duration_since(now)
+    }
+
+    /// 連續失敗的等待從 `--front-restart-ms` 起、每次兩倍：直接叫 `warm_failed`。
+    #[test]
+    fn warm_failures_wait_twice_as_long_each_time() {
+        let mut supervisor = with_an_unspawnable("warm-grow", false);
+        let base = supervisor.args.front_restart;
+        let now = Instant::now();
+        for factor in [1u32, 2, 4, 8] {
+            supervisor.warm_failed(now, false);
+            assert_eq!(warm_wait(&supervisor, now), base * factor);
+        }
+    }
+
+    /// 到 [`args::WARM_BACKOFF_MAX`] 就不再長；`--front-restart-ms` 比它大的時候上限跟著它，不會一開始就被壓小。
+    #[test]
+    fn warm_backoff_stops_growing_at_the_cap() {
+        let mut supervisor = with_an_unspawnable("warm-cap", false);
+        let now = Instant::now();
+        for _ in 0..20 {
+            supervisor.warm_failed(now, false);
+        }
+        assert_eq!(warm_wait(&supervisor, now), args::WARM_BACKOFF_MAX);
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), args::WARM_BACKOFF_MAX);
+
+        let mut supervisor = with_an_unspawnable("warm-cap-big", false);
+        let big = args::WARM_BACKOFF_MAX * 2;
+        supervisor.args.front_restart = big;
+        supervisor.warm_backoff = big;
+        supervisor.warm_failed(now, false);
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), big);
+    }
+
+    /// `settled` 為真：這一次等的就是 `--front-restart-ms`，下一次從兩倍接著長。
+    #[test]
+    fn a_settled_warm_failure_goes_back_to_the_start() {
+        let mut supervisor = with_an_unspawnable("warm-settled", false);
+        let base = supervisor.args.front_restart;
+        let now = Instant::now();
+        for _ in 0..3 {
+            supervisor.warm_failed(now, false);
+        }
+        supervisor.warm_failed(now, true);
+        assert_eq!(warm_wait(&supervisor, now), base);
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), base * 2);
+    }
+
+    /// 四處排重補的地方都經過 `warm_failed`：每一處失敗一次，`warm_backoff` 變兩倍、`warm_retry_at` 有排。
+    #[test]
+    fn every_place_that_schedules_a_warm_retry_goes_through_warm_failed() {
+        let since = Instant::now();
+        // 不成對：起不來、預熱的行程死了。
+        let mut supervisor = with_an_unspawnable("warm-site-1", false);
+        let base = supervisor.args.front_restart;
+        supervisor.start_conversation(None, OpenMode::Run);
+        assert_eq!(supervisor.warm_backoff, base * 2, "起不來");
+        assert!(supervisor.warm_retry_at.is_some());
+
+        let (mut supervisor, _) = with_an_unspawnable_starter_warm("warm-site-2", since);
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2, "預熱的行程死了");
+        assert!(supervisor.warm_retry_at.is_some());
+
+        // 成對：組合行程起不來、預熱的一對收屍。
+        let mut supervisor = with_an_unspawnable("warm-site-3", true);
+        supervisor.start_conversation(None, OpenMode::Run);
+        assert_eq!(supervisor.warm_backoff, base * 2, "組合行程起不來");
+        assert!(supervisor.warm_retry_at.is_some());
+
+        let (mut supervisor, _, _) = with_a_pair("warm-site-4", PairState::Ready);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2, "預熱的一對收屍");
+        assert!(supervisor.warm_retry_at.is_some());
+    }
+
+    /// 預熱的不成對行程，沒綁就死：`phase`、活多久由測試給。
+    fn with_an_unspawnable_starter_warm(tag: &str, since: Instant) -> (Supervisor, PathBuf) {
+        with_an_unpaired_starter(tag, None, since)
+    }
+
+    /// 沒到過 `ready` 的活再久也不歸零：這是 `--start-timeout-ms` 大過 [`args::WARM_STABLE`] 時永不 `ready` 的行程。
+    #[test]
+    fn a_warm_process_that_never_got_ready_does_not_reset_the_backoff() {
+        let long_ago = Instant::now() - Duration::from_secs(2 * 3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-never-ready", None, long_ago);
+        let base = supervisor.args.front_restart;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+
+        let (mut supervisor, _, _) = with_a_pair(
+            "warm-never-ready-pair",
+            PairState::Starting { since: long_ago },
+        );
+        // 還沒 `ready` 的一對有 thread（`with_a_pair` 只有 `Ready` 是預熱的），這裡改成預熱的。
+        supervisor.compositions[0].thread = None;
+        supervisor.conversations[0].thread = None;
+        supervisor.compositions[0].started_at = long_ago;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+    }
+
+    /// 到過 `ready` 而且活過 [`args::WARM_STABLE`] 的歸零；到過 `ready` 但只活了一下的不歸零。
+    #[test]
+    fn a_warm_process_that_got_ready_and_lived_long_resets_the_backoff() {
+        let long_ago = Instant::now() - Duration::from_secs(2 * 3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-stable", None, long_ago);
+        supervisor.conversations[0].phase = Phase::Warm;
+        let base = supervisor.args.front_restart;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-short", None, Instant::now());
+        supervisor.conversations[0].phase = Phase::Warm;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+
+        let (mut supervisor, _, _) = with_a_pair("warm-stable-pair", PairState::Ready);
+        supervisor.compositions[0].started_at = long_ago;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+
+        let (mut supervisor, _, _) = with_a_pair("warm-short-pair", PairState::Ready);
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+    }
+
+    /// 停機的死因不排、也不長：停機中沒有人要補。
+    #[test]
+    fn a_warm_process_dying_in_shutdown_schedules_nothing() {
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-shutdown", None, Instant::now());
+        supervisor.conversations[0].cause = Some(DeathCause::Shutdown);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 有 thread 的行程死了走 `down`，不是預熱池的事：不排、不長。
+    #[test]
+    fn an_assigned_process_dying_does_not_touch_the_warm_backoff() {
+        let (mut supervisor, _) =
+            with_an_unpaired_starter("warm-assigned", Some(b"t"), Instant::now());
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 預熱的行程被殺到收屍之間，`fill_warm` 照樣把它算進池子，不會當場補一個繞過等待。
+    #[test]
+    fn a_killed_warm_process_still_holds_its_slot_until_it_is_collected() {
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-slot", None, Instant::now());
+        supervisor.args.warm = 1;
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.fill_warm();
+        assert_eq!(supervisor.conversations.len(), 1);
+
+        let (mut supervisor, _, _) = with_a_pair("warm-slot-pair", PairState::Ready);
+        supervisor.args.warm = 1;
+        supervisor.compositions[0].proc.kill_now();
+        supervisor.fill_warm();
+        assert_eq!(supervisor.compositions.len(), 1);
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。

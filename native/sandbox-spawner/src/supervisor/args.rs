@@ -42,6 +42,11 @@ pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(5_000);
 pub const DEFAULT_STATS: Duration = Duration::from_millis(10_000);
 /// 停機時等前台回「已停准入」多久。
 pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_millis(5_000);
+/// 預熱池補不起來（行程起不來、沒到 `ready` 就死、或沒活多久就死）時，下一次補之前最多等多久：從 `--front-restart-ms` 起、每次失敗加倍到這裡為止。
+/// 不開旗標：這是監督行程內部的節流，沒有理由讓營運者調。
+pub const WARM_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
+/// 預熱的行程到過 `ready`、而且活過這麼久才死，下一次補的等待回到 `--front-restart-ms`。兩個條件缺一個都不歸零（[`super::Supervisor::warm_failed`]）。
+pub const WARM_STABLE: Duration = Duration::from_millis(60_000);
 /// 宿主結束後第一次重起前等多久；之後每次加倍，到 [`DEFAULT_HOST_BACKOFF_MAX`] 為止。
 pub const DEFAULT_HOST_BACKOFF: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_HOST_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
