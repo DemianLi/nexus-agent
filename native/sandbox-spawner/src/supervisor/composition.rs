@@ -554,6 +554,7 @@ impl Supervisor {
     /// 等 `ready` 等過了 `--start-timeout-ms` 的一對（#2801）：當場殺掉組合行程的群組，死因 `stalled`；葉子等它收完屍連帶收
     /// （[`Self::on_composition_exit`]），`down` 也在那裡回。組合行程沒 `hello`、葉子沒在橋上登記、組合行程沒替它送 `ready`，從外面分不出來，
     /// 都是這一條。跟 [`Self::check_stalls`] 一樣不走拆除梯度，判之前先讀一次它的控制通道。停機中不判：停機有自己的梯度。
+    /// 不成對的對話行程（含預熱池裡的，#2852）同一個期限，殺的是它自己的群組、死因 `stalled`，沒有組合行程也沒有葉子。
     pub(super) fn check_starts(&mut self, now: Instant) {
         let Some(limit) = self.args.start_timeout else {
             return;
@@ -580,6 +581,31 @@ impl Supervisor {
                 composition.proc.kill_now();
             }
         }
+        // 不成對的對話行程（含預熱池裡的）同一條：一對的葉子有 `pair`，由上面那一圈殺組合行程，這裡不會選到。
+        for index in 0..self.conversations.len() {
+            if !self.conversation_overdue(index, limit, now) {
+                continue;
+            }
+            self.on_conversation_readable(index);
+            if self.conversation_overdue(index, limit, now) {
+                let conversation = &mut self.conversations[index];
+                say!(
+                    "對話行程 {} 起了 {} ms 還沒 ready，殺掉",
+                    conversation.proc.pid,
+                    limit.as_millis()
+                );
+                conversation.cause.get_or_insert(DeathCause::Stalled);
+                conversation.timed_out = true;
+                conversation.proc.kill_now();
+            }
+        }
+    }
+
+    fn conversation_overdue(&self, index: usize, limit: Duration, now: Instant) -> bool {
+        self.conversations
+            .get(index)
+            .and_then(Conversation::starting_since)
+            .is_some_and(|since| since + limit <= now)
     }
 
     /// 一對的葉子收完屍、判完死因之後。上一則 `bind` 回過 `bound`、葉子是自己壞掉的（不是逐出、停機、協定錯）：組合行程留著，等下一個

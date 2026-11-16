@@ -88,8 +88,9 @@ pub struct Args {
     pub rss_poll: Duration,
     /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就當場對它的群組送 SIGKILL（不走拆除梯度），死因 `stalled`。`None`（`--stall-ms 0`）是不判。
     pub stall: Option<Duration>,
-    /// 一對從起組合行程（補葉子時從補的那一刻）到讀到它的 `ready` 最多這麼久，過了就當場對組合行程的群組送 SIGKILL，死因 `stalled`。
-    /// `None`（`--start-timeout-ms 0`）是不判。只管成對的。
+    /// 一對從起組合行程（補葉子時從補的那一刻）到讀到它的 `ready` 最多這麼久，過了就當場對組合行程的群組送 SIGKILL，死因 `stalled`；
+    /// 不成對的對話行程（含預熱池裡的）從 spawn 起到讀到它的 `ready` 同一個期限，過了殺它自己。
+    /// `None`（`--start-timeout-ms 0`）是不判。
     pub start_timeout: Option<Duration>,
     /// 同時活著的對話行程（含預熱池、起動中與正在收的）最多幾個。沒給就照記憶體上限算（[`super::memory::auto_capacity`]）。
     pub capacity: Option<u32>,
