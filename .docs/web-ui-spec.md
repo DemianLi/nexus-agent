@@ -11,14 +11,14 @@
 | 誰是準的 | 理由在卡片（凍結）、現行規則在這份、數字在程式碼 | §1 |
 | UI/UX 的依據 | shadcn＋Tailwind 是基底，外觀與 token 用 solid-glass（原樣 vendor＋覆寫檔）；視覺、token、動效的數值以這份標準為準，第一版凍結自畫面上的現況；Libraries.dev 只參考元件多樣性與交互模式；dsh 只參考元件多樣性 | §3、§13 |
 | 設計系統怎麼管 | 每條規則要有成文、token 或元件、會變紅的測試；token 與共用元件的增刪改要 demian 核可；先做嚴謹、再演進體驗 | §13 |
-| 元件從哪裡拿 | 主用 shadcn 官方；AI Elements 只參考清單、不用程式碼；registry 檔裝進來就是我們的原始碼 | §4 |
+| 元件從哪裡拿 | 來自 vendor 的 solid-glass，加或更新照 vendor README 的「同步」；AI Elements 只參考清單、不用程式碼 | §4 |
 | 核准與提問放哪 | **換掉輸入框**（隱藏不卸載），同時只一個面板、先來先處理 | §4.3 |
 | 顏色怎麼定 | oklch 語意 token 直接寫值；色相、彩度、alpha 取 solid-glass，用 colorjs.io 解明度到 WCAG 2.x 門檻；亮暗鑑別度一樣 | §5 |
 | 邊框怎麼畫 | 照 SG：面（卡片、浮層）的邊畫在陰影裡；控制項（按鈕、欄位）的細線是自己的 `border`，再疊 inset 光與投影 | §5 |
 | 字型 | Geist／Geist Mono（打包 latin，等寬另加方框字元的 symbols2），等寬再退系統等寬，中文退 Noto Sans TC，**全部打包進本地** | §5 |
 | 亮暗切換 | header 循環三態、預設跟系統、`localStorage`、`index.html` 內嵌腳本防閃、不裝 `next-themes` | §6 |
 | 動效 | 純 CSS＋`tw-animate-css`（例外：狀態列的 SG `StatusGlyph`，§7）；封閉模式清單；進出場時長照 SG（浮層 100、tooltip 150）；reduced-motion 分模式退 | §7 |
-| 無障礙 | WCAG 2.2 AA＋APG＋Radix 內建；焦點只在會丟掉時才搬 | §8 |
+| 無障礙 | WCAG 2.2 AA＋APG＋Base UI 內建；焦點只在會丟掉時才搬 | §8 |
 | 斷點 | 1024（以下收成抽屜）；驗收 375／768／1280 | §9 |
 | 原型哪些能搬 | 主題、token、模式規則、registry 改法直接搬；原型 App 只當參考 | §10 |
 | 實作必須帶的測試 | 13 條絆索 | §11 |
@@ -57,16 +57,12 @@
 
 ## 4. 元件
 
-### 4.1 安裝程序
+### 4.1 加元件與更新
 
 （新增自己的元件、改樣式該放哪一層、用哪些值、什麼會被擋：[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)。）
 
-1. `shadcn add … --overwrite`（shadcn 4.21.0 實測）。**不加 `--overwrite` 時非互動安裝會卡在覆寫提問、exit 0 靜默中止、檔案寫一半**——判準是實際寫入的檔，不是 exit code。
-2. 舊版 `button.tsx` 讓 registry 版覆寫（default／secondary／destructive 少了 `shadow-xs`、outline 暗色改 `bg-input/30`、多四種尺寸與 `data-variant`／`data-size`；原型並排比過，沒有異議）。
-3. `shadcn migrate cn`：`cn` 統一成 `cn` 套件，`@/lib/utils` 的 `cn` 是 `cn/config` 的 `createCn`，並登記自訂字級名（`text-ui`／`text-body`／`text-tip`／`text-micro`，與 `index.css` 的 `--text-*` 一致；沒登記的話預設 `cn` 會把它們當文字顏色，跟 `text-primary-foreground` 之類互相吃掉，#1141 的後續）。**全站只從 `@/lib/utils` 取 `cn`，registry 檔裝進來也要把 `from "cn"` 改成 `@/lib/utils`**（`utils.test.ts` 會擋）。`clsx`、`tailwind-merge` 移除。**`@radix-ui/react-slot` 會殘留**，覆寫 button 後已經沒人用，要手動拿掉。
-4. 對寫入的檔跑 `prettier --write`（registry 檔全數過不了 `format:check`，**不排除**）。
-5. **registry 檔裝進來就是我們的原始碼**：照 repo 規範改，檔頭記來源 URL 與版本，之後不靠重跑 `shadcn add` 更新。
-6. 提問的 `questionnaire` 只能從 `radix-vega` 風格裝（new-york 404），要用完整網址。
+- **`components/ui/` 的元件來自 vendor 的 solid-glass（§3）**：加元件、更新上游照 [vendor README](../apps/web/src/vendor/solid-glass/README.md) 的「清單」與「同步」（`sync.mjs`），不跑 `shadcn add`。`shadcn` 的 CLI 不加成相依。
+- **`cn` 只從 `@/lib/utils` 取，自訂的字級與圓角名要登記**：見 `COMPONENTS.md`〈新增自訂 token 要登記 `cn`〉。
 
 **AI Elements 一律不裝**（`tool`、`message`、`question`、`reasoning`…），只參考它有哪些元件。`reasoning`／`message` 會把主 chunk 拉到約 2 MB（streamdown＋mermaid，tree-shake 不掉）。
 
@@ -76,28 +72,28 @@
 
 | 列 | 元件 | 來源 | 現有檔案 |
 | --- | --- | --- | --- |
-| 1 | App 殼 | shadcn `sidebar` | — |
-| 2 | 手機抽屜 | shadcn `sheet` | — |
+| 1 | App 殼 | SG `Sidebar` | — |
+| 2 | 手機抽屜 | SG `Sheet` | — |
 | 3 | 主題切換 | 自建（§6） | — |
-| 6 | 會話列表 | shadcn `SidebarMenu*` | `features/threads/list.tsx` 留邏輯、換外殼 |
+| 6 | 會話列表 | SG `SidebarMenu*` | `features/threads/list.tsx` 留邏輯、換外殼 |
 | 7 | 空白狀態 hero | SG `Empty`（靜態圖示＋標題＋一句說明，#1695） | — |
 | 8 | 會話標頭 | 自建；標題規則在 `features/threads/title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `app/App.tsx` |
-| 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
-| 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`features/tool/max-tokens-view.ts`，#608） | `features/transcript/transcript.tsx` 留（歸屬、狀態字面） |
+| 9 | 歷史往回捲 | SG `MessageScroller`（帶 `@shadcn/react`） | — |
+| 10／11 | 使用者／助理訊息 | SG `Message`＋`Bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`features/tool/max-tokens-view.ts`，#608） | `features/transcript/transcript.tsx` 留（歸屬、狀態字面） |
 | 12 | 推理區塊（思考過程） | solid-glass 的 `Reasoning`（#1683 起；vendor `components/ui/reasoning.tsx`，套 vendor README「本地修改」第 67、68 條的 patch、第 69 條的包裝，第 63、64 條的覆寫擴到它身上）。原生 `<details>`，預設收合；收合時一行摘要放在標題後面的 `trailing`；內文用列 10／11 那一套 markdown | `shared/blocks/reasoning-row.tsx` 留轉接 |
 | 13 | 工具卡 | solid-glass 的 `StepRow`（#1682 起；vendor `components/ui/tool-steps.tsx`，套 vendor README「本地修改」第 56–59 條的 patch、第 60–66 條的包裝與覆寫）。`features/tool/step.ts` 把 `ToolEntry` 轉成 SG 的 `Step`：狀態收成 SG 的三態，四格 `ToolEntry.status` 的字放在列尾的 `badge`（狀態不靠顏色或動效）；通用卡的參數、結果、錯誤用 SG 的結果框，寫檔／改檔給 SG 的 `step.patch`（#1685 起：列上的 `+N −M` 與展開後的 `DiffView` 由 SG 畫，收著不再只畫 9 列；上限與報讀在 nexus 層，第 77–80 條），其餘專屬呈現（列 14）、提問、交付、待辦、子代理面板畫在展開後的 children，不畫兩次。連續完成的工具（至少 2 顆）收成 SG 的 `StepGroup`（工具段，`features/transcript/tool-run.tsx`），段收著那一列有整段的 `+N −M`。沒有狀態圖示、邊框光、外框卡片 | `features/tool/card.tsx`、`features/transcript/tool-run.tsx` |
 | 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；讀檔卡的高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex`。通用卡的參數是 SG 結果框裡的純文字，不上色（#1682）。寫檔／改檔的 diff 是 SG 的 `DiffView`（#1685，轉換在 `shared/lib/tool-diff.ts`，見列 13） | `features/tool/result.tsx`、`shared/lib/tool-diff.ts` |
-| 15／22 | 子代理歸屬、決定紀錄 | 自建＋shadcn `badge` | 在 `features/transcript/transcript.tsx` |
-| 21 | 核准 | 自建，shadcn `card`＋`button`，換掉輸入框（§4.3） | `features/approval/card.tsx` 留邏輯 |
-| 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
-| 24 | 計劃審核 | 自建，shadcn `card`＋`button`，換掉輸入框；全文開在右側欄的「計劃」分頁，markdown 用列 10／11 那一套；對話裡的計劃卡放在 `exit_plan_mode` 工具卡的位置（§4.3） | `features/plan/review.tsx`、`features/plan/preview-tab.tsx`、`features/plan/review-view.ts` |
+| 15／22 | 子代理歸屬、決定紀錄 | 自建＋SG `Badge` | 在 `features/transcript/transcript.tsx` |
+| 21 | 核准 | 自建，`Surface`＋SG `Button`、`Collapsible`，換掉輸入框（§4.3） | `features/approval/card.tsx` 留邏輯 |
+| 23 | 提問 | SG `Questionnaire`＋§4.3 的補件 | `question-card.tsx` 被取代 |
+| 24 | 計劃審核 | 自建，`Surface`＋SG `Button`，換掉輸入框；全文開在右側欄的「計劃」分頁，markdown 用列 10／11 那一套；對話裡的計劃卡放在 `exit_plan_mode` 工具卡的位置（§4.3） | `features/plan/review.tsx`、`features/plan/preview-tab.tsx`、`features/plan/review-view.ts` |
 | 26 | 輸入框 | solid-glass 的 `Composer`（#1591 起；vendor `components/ui/composer.tsx`，套 vendor README「本地修改」第 28、29、32、33 條的 patch）。`/` 與 @ 選單、附件、`@子代理` 標記由 nexus 從外面接（`leading`、`above`、外層 `div` 的 capture 階段攔鍵）。主按鈕照 dsh `InputBar`：跑著、草稿空（或送不出）是停止，有草稿是送出，名稱說出這次是排隊還是插話（`features/composer/submit-mode.ts`）；斷線時沒有停止。輸入框底下一列是 SG 的 `ComposerFooter`：左邊權限、右邊模型與推理強度，都是 SG 的 `ComposerPick`（下拉選單，鎖住時 `aria-disabled`、聚焦得到）；最右邊是 SG 的 `ContextRing`（用量環，套第 34 條；色階 70% 琥珀、90% destructive，壓回 status token） | `features/composer/composer.tsx`（App 組裝在 `app/App.tsx`） |
-| 27 | slash 選單 | shadcn `command` | 在 `app/App.tsx` |
-| 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `shared/lib/file-mention.ts`、`shared/lib/session-mention.ts`、`features/composer/mention-menu.ts`、`features/transcript/session-reference.tsx`、在 `features/composer/composer.tsx` |
-| 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改、刪與插話；插話鈕只在這一輪跑著時按得動，按下去那一則離開佇列、改畫在對話尾端）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），送出提示跟著換（#1591 起提示只給報讀：sr-only、掛在輸入框的 `aria-describedby`，畫面上不畫，看畫面的人因此看不到加速鍵那一句，PM 已告知 demian）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話。**草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話**（照 dsh `steerQueue`：照排的先後一件一件送，碰到「不收了」或「不在隊裡」靜靜停），輸入框提示字跟著換 | `features/queue/dock.tsx`、`features/composer/submit-mode.ts`、`features/queue/steer-view.ts`、`features/queue/steer-queue.ts` |
+| 27 | slash 選單 | SG `Command` | 在 `features/composer/composer.tsx` |
+| 28 | `@` 引用 | SG `Command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `shared/lib/file-mention.ts`、`shared/lib/session-mention.ts`、`features/composer/mention-menu.ts`、`features/transcript/session-reference.tsx`、在 `features/composer/composer.tsx` |
+| 29 | 送出佇列 | 自建，SG `Collapsible`＋`Button`＋`Textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改、刪與插話；插話鈕只在這一輪跑著時按得動，按下去那一則離開佇列、改畫在對話尾端）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），送出提示跟著換（#1591 起提示只給報讀：sr-only、掛在輸入框的 `aria-describedby`，畫面上不畫，看畫面的人因此看不到加速鍵那一句，PM 已告知 demian）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話。**草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話**（照 dsh `steerQueue`：照排的先後一件一件送，碰到「不收了」或「不在隊裡」靜靜停），輸入框提示字跟著換 | `features/queue/dock.tsx`、`features/composer/submit-mode.ts`、`features/queue/steer-view.ts`、`features/queue/steer-queue.ts` |
 | 31 | 狀態列 | 執行中那一列是 SG 的 `TurnStatus`＋`StatusGlyph`（#1684，vendor 原樣加 patch `0022`、`0023`）；其他支自建 | `features/status/line.tsx` 留（live region 與轉接層） |
-| 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `features/transcript/transcript.tsx` | `features/feedback/dialog.tsx` 換外殼 |
-| 36 | Toast | shadcn `sonner`，**改成收 `theme` prop、拿掉 `next-themes`** | — |
+| 35 | 讚踩＋回饋框 | 框換 SG `Dialog`，表單邏輯留；讚踩按鈕留在 `features/transcript/transcript.tsx` | `features/feedback/dialog.tsx` 換外殼 |
+| 36 | Toast | SG `Toaster`（`sonner.tsx`）；`theme` 由呼叫端給，不靠 `next-themes`（vendor README 第 49、50 條） | — |
 
 ### 4.3 核准與提問
 
@@ -260,7 +256,7 @@
 
 出處：[無障礙](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)。
 
-**依據**：WCAG 2.2 AA 定門檻 → WAI-ARIA APG 定模式 → Base UI（#1523、#1583 起換成 solid-glass 的元件）、Radix 與 `@shadcn/react` primitive 的內建行為當基底。
+**依據**：WCAG 2.2 AA 定門檻 → WAI-ARIA APG 定模式 → Base UI（solid-glass 的元件；command 是 cmdk、toast 是 sonner）與 `@shadcn/react` primitive 的內建行為當基底。
 
 **焦點**
 - **只在焦點本來會丟掉時才搬**（在輸入框裡或已經在 body）。人在別處就不搶，由狀態列報讀。

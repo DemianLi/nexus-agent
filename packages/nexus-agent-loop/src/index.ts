@@ -60,8 +60,10 @@ import { defineToken } from '@nexus/sdk';
  *   在 1.1.0 的宿主上載不起來，不會靜靜記成 `plugin`。
  * - `1.3.0`（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）：`plugin` 來源可多帶 `form: 'instructions'`，說這則是給模型照做的
  *   指示。只多收一種形狀：要交這一格的消費者宣告 `^1.3.0`，1.2.0 的宿主會拒收它（拋錯，這一輪失敗）。
+ * - `1.4.0`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：{@link PreStepInvocation} 多一格選填的 `contextWindow`。
+ *   只加選填欄位：不讀它的 listener 不受影響；要靠它縮小注入量的消費者宣告 `^1.4.0`。
  */
-export const AGENT_LOOP_CONTRACT_VERSION = '1.3.0';
+export const AGENT_LOOP_CONTRACT_VERSION = '1.4.0';
 
 /**
  * 這一次呼叫的設定，listener 的第二個參數。`configurable` 那一格要**原樣**交給會話查找與 fs 查找
@@ -76,6 +78,11 @@ export interface PreStepInvocation {
    * 做到一半的事（例如讀檔）就收手。宿主拿不到時省略。
    */
   readonly signal?: AbortSignal;
+  /**
+   * 這條 thread 下一步會走的模型的窗口，以 token 計（`1.4.0` 起）。listener 用它決定自己最多放多少（注入源的分項預算，見
+   * `@nexus/core` 的 `injection-budget.ts`）。宿主取不到時省略（沒有型錄、腳本模型）；子代理拿到的也是 root 下一步那一顆的。
+   */
+  readonly contextWindow?: number;
 }
 
 /** 一則要追加的訊息：宿主把它建成使用者訊息。 */

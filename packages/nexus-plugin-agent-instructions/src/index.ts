@@ -138,7 +138,7 @@ import { z } from 'zod';
 import { renderAgentInstructions } from './render.js';
 import type { InstructionFile } from './render.js';
 
-export { AGENT_INSTRUCTIONS_INTRO, COMPACT_AGENT_INSTRUCTIONS_INTRO } from './render.js';
+export { AGENT_INSTRUCTIONS_INTRO } from './render.js';
 
 /**
  * middleware 的名字，也是 listener 登記時給宿主的名字（宿主用它當 middleware 名與日誌 `source.plugin`）。撞名是 fold 那側的判準，
@@ -154,6 +154,13 @@ export const AGENT_INSTRUCTIONS_MIDDLEWARE_NAME = 'AgentInstructionsMiddleware';
  * 與壓縮之後從日誌重建回來的那一則照樣認得出來——同 `@nexus/core` 的 `REPEAT_REMINDER_MARKER`（#305）。
  */
 export const AGENT_INSTRUCTIONS_MARKER = 'nexus.agentInstructions';
+
+/**
+ * 這一則注入有多少原文位元組放不下、沒放進去，記在 `additional_kwargs` 的這一格（正整數；沒有延後就不放），`context/measure` 的
+ * `sources[].deferredBytes` 從它讀（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core` 的
+ * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
+ */
+export const INJECTION_DEFERRED_BYTES_KEY = 'nexus_injection_deferred_bytes';
 
 /**
  * 候選檔，**順序就是渲染順序**：先兩個基礎檔，再兩個 local overlay。
@@ -180,6 +187,9 @@ export const DEFAULT_MAX_BYTES = 65536;
  */
 export const DEFAULT_MAX_SOURCE_BYTES = 1_048_576;
 
+/** 一則基線最多佔模型窗口的幾成；同 `@nexus/core` 預算表 `agent-instructions` 那一列的 `contextFraction`。 */
+export const DEFAULT_CONTEXT_FRACTION = 0.1;
+
 /**
  * 這個 plugin 的設定。
  *
@@ -194,6 +204,16 @@ export const agentInstructionsConfigSchema = z.strictObject({
     .finite('上限要是正的有限數')
     .default(DEFAULT_MAX_BYTES),
   /**
+   * 一則基線最多佔下一步模型窗口的幾成（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)），大於 0、不超過 1，省略即
+   * {@link DEFAULT_CONTEXT_FRACTION}。實際上限是 `min(maxBytes, floor(窗口 × 4 × contextFraction))`，一個 token 估 4 個位元組；
+   * 宿主沒交窗口時只看 `maxBytes`。
+   */
+  contextFraction: z
+    .number()
+    .gt(0, '比例要大於 0、不超過 1')
+    .max(1, '比例要大於 0、不超過 1')
+    .default(DEFAULT_CONTEXT_FRACTION),
+  /**
    * 單一指示檔的 UTF-8 位元組上限。正整數，照 dsh `config.ts:40` 的 `.step(1).min(1)`；省略即 {@link DEFAULT_MAX_SOURCE_BYTES}。
    */
   maxSourceBytes: z
@@ -206,8 +226,23 @@ export const agentInstructionsConfigSchema = z.strictObject({
 /** 驗過的設定。 */
 export type AgentInstructionsConfig = z.infer<typeof agentInstructionsConfigSchema>;
 
-/** listener 用到的兩個上限：渲染預算與單檔上限。**兩格都必填**，`apply` 照設定交，不在這裡補預設。 */
-export type AgentInstructionsLimits = Pick<AgentInstructionsConfig, 'maxBytes' | 'maxSourceBytes'>;
+/**
+ * listener 用到的上限：渲染預算（`maxBytes` 與 `contextFraction`）與單檔上限。`maxBytes`、`maxSourceBytes` 必填，`apply` 照設定交；
+ * `contextFraction` 不給就不看窗口。
+ */
+export type AgentInstructionsLimits = Pick<AgentInstructionsConfig, 'maxBytes' | 'maxSourceBytes'> &
+  Partial<Pick<AgentInstructionsConfig, 'contextFraction'>>;
+
+/**
+ * 這一次的渲染預算：`min(maxBytes, floor(窗口 × 4 × contextFraction))`。同 `@nexus/core` 的 `injectionLimitFor`；插件不 import core，
+ * 算法照抄，`apps/harness` 的測試把兩邊釘成相等。
+ */
+function renderBudget(limits: AgentInstructionsLimits, contextWindow: number | undefined): number {
+  const fraction = limits.contextFraction;
+  if (fraction === undefined || contextWindow === undefined) return limits.maxBytes;
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return limits.maxBytes;
+  return Math.min(limits.maxBytes, Math.floor(contextWindow * 4 * fraction));
+}
 
 /** 這一則訊息是基線嗎。 */
 export function isAgentInstructionsMessage(message: BaseMessage): boolean {
@@ -264,7 +299,7 @@ async function discover(
     const digest = trimmedDigest(content);
     if (seen.has(digest)) continue;
     seen.add(digest);
-    files.push({ displayPath: candidate, content });
+    files.push({ displayPath: candidate, readPath: path, content });
   }
   return files;
 }
@@ -319,12 +354,16 @@ export function createAgentInstructionsListener(
     // 有共用區前綴的 thread（新 thread，#1775）讀共用區；沒有的（舊 thread、沒有圍堵）讀 `/`。
     const directory = found.fs.sharedWorkspacePrefix() ?? '';
     const files = await discover(backend, directory, limits.maxSourceBytes, invocation.signal);
-    const rendered = renderAgentInstructions(files, limits.maxBytes);
+    const rendered = renderAgentInstructions(files, renderBudget(limits, invocation.contextWindow));
     if (rendered === undefined) return undefined;
+    const deferredBytes = rendered.deferred.reduce((sum, file) => sum + file.bytes, 0);
     return [
       {
         content: rendered.text,
-        additionalKwargs: { [AGENT_INSTRUCTIONS_MARKER]: true },
+        additionalKwargs: {
+          [AGENT_INSTRUCTIONS_MARKER]: true,
+          ...(deferredBytes > 0 && { [INJECTION_DEFERRED_BYTES_KEY]: deferredBytes }),
+        },
         source: {
           kind: 'plugin',
           plugin: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
@@ -338,10 +377,10 @@ export function createAgentInstructionsListener(
 export const name = 'agent-instructions';
 
 /**
- * 要的服務：`agentLoop`（`^1.3.0`，登記 `preStep` listener，注入帶 `form: 'instructions'`）與 `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend 與共用區前綴）。範圍在這裡宣告，
+ * 要的服務：`agentLoop`（`^1.4.0`，登記 `preStep` listener，注入帶 `form: 'instructions'`，讀呼叫上的 `contextWindow`）與 `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend 與共用區前綴）。範圍在這裡宣告，
  * 經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
-export const inject = injectOf(need(agentLoopToken, '^1.3.0'), need(fsToken, '^2.1.0'));
+export const inject = injectOf(need(agentLoopToken, '^1.4.0'), need(fsToken, '^2.1.0'));
 
 /** 這個插件的設定（manifest 的 `config`）：見 {@link agentInstructionsConfigSchema}。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = agentInstructionsConfigSchema;
@@ -352,11 +391,11 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: agentLoopToken.name, range: '^1.3.0' },
+    { token: agentLoopToken.name, range: '^1.4.0' },
     { token: fsToken.name, range: '^2.1.0' },
   ],
   config: Config,
-  // 換程式碼要重啟行程；設定（`maxBytes`、`maxSourceBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
+  // 換程式碼要重啟行程；設定（`maxBytes`、`contextFraction`、`maxSourceBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
   reload: { code: 'restart', config: 'next-thread' },
   capabilities: [],
 });
@@ -375,7 +414,11 @@ export function apply(ctx: Context, config: AgentInstructionsConfig): void {
   agentLoop.preStep(
     AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
     createAgentInstructionsListener(
-      { maxBytes: config.maxBytes, maxSourceBytes: config.maxSourceBytes },
+      {
+        maxBytes: config.maxBytes,
+        maxSourceBytes: config.maxSourceBytes,
+        contextFraction: config.contextFraction,
+      },
       {
         fs: (invocation) => fs.forCall(invocation),
       },

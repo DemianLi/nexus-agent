@@ -312,7 +312,12 @@ export function subagentDefaultMiddleware(
   spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills'>,
   context: Pick<
     FoldedAgentParams,
-    'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions' | 'patchToolCallsStateFix'
+    | 'backend'
+    | 'permissions'
+    | 'fileTools'
+    | 'fileToolDescriptions'
+    | 'patchToolCallsStateFix'
+    | 'contextWindowOf'
   >,
 ): AgentMiddleware[] {
   const backend = context.backend;
@@ -335,7 +340,12 @@ export function subagentDefaultMiddleware(
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware({ stateFix: context.patchToolCallsStateFix !== false }),
     ...(skills.length > 0
-      ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
+      ? [
+          createSkillsMiddlewareQuietWhenEmpty(
+            { backend, sources: [...skills] },
+            context.contextWindowOf,
+          ),
+        ]
       : []),
   ] as unknown as AgentMiddleware[];
 }
@@ -414,6 +424,9 @@ export function assembleAgent(params: AssembleAgentParams) {
               ...(params.patchToolCallsStateFix !== undefined && {
                 patchToolCallsStateFix: params.patchToolCallsStateFix,
               }),
+              ...(params.contextWindowOf !== undefined && {
+                contextWindowOf: params.contextWindowOf,
+              }),
             }),
             (spec.middleware ?? []) as AgentMiddleware[],
           ),
@@ -451,7 +464,12 @@ export function assembleAgent(params: AssembleAgentParams) {
   const core = [
     // 選填的 root skills，排在檔案工具前面。
     ...(skills.length > 0
-      ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
+      ? [
+          createSkillsMiddlewareQuietWhenEmpty(
+            { backend, sources: [...skills] },
+            params.contextWindowOf,
+          ),
+        ]
       : []),
     filesystemMiddleware(
       filesystemMiddlewareOptions({
@@ -477,7 +495,9 @@ export function assembleAgent(params: AssembleAgentParams) {
     createPatchToolCallsMiddleware({ stateFix: params.patchToolCallsStateFix !== false }),
   ] as unknown as AgentMiddleware[];
   const memoryParts =
-    memory.length > 0 ? createMemoryMiddleware({ backend, sources: [...memory] }) : undefined;
+    memory.length > 0
+      ? createMemoryMiddleware({ backend, sources: [...memory] }, undefined, params.contextWindowOf)
+      : undefined;
   const tail = (memoryParts === undefined
     ? []
     : [memoryParts.hook]) as unknown as AgentMiddleware[];

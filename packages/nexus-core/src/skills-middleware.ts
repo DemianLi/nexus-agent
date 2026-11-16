@@ -55,7 +55,8 @@ import { createSkillsMiddleware } from 'deepagents';
 import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
-import { renderSkillsSection } from './base-prompt-text.js';
+import { renderSkillsSectionWithin } from './base-prompt-text.js';
+import { injectionLimitFor } from './injection-budget.js';
 import type { SkillListing } from './base-prompt-text.js';
 import { modelVisibleSkillsBackend } from './skill-catalog.js';
 import { withSystemPromptStep } from './system-prompt-step.js';
@@ -63,6 +64,9 @@ import type { SystemPromptCell } from './system-prompt-step.js';
 
 /** {@link createSkillsMiddleware} 收的東西，原樣轉給基座。 */
 type BaseOptions = Parameters<typeof createSkillsMiddleware>[0];
+
+/** 一顆模型的窗口（token）；查不到回 `undefined`，上限就只看絕對值。 */
+export type ContextWindowOf = (model: unknown) => number | undefined;
 
 /** 基座 middleware 上我們要轉呼叫的兩個鉤子，型別放寬成我們用得到的形狀。 */
 interface BaseHooks {
@@ -85,10 +89,17 @@ function skillsInState(state: unknown): readonly SkillListing[] | undefined {
 /**
  * 建 skills middleware：掃到空的就整個隱形（不掃第二次、不加任何字）；只給人叫的、旗標不合規的技能不列給模型。
  *
+ * 整段超過預算表 `skill-catalog` 那一列的上限時，放不下的條目不列、留一行指標（{@link renderSkillsSectionWithin}，
+ * [#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
+ *
  * @param options - 同基座的 `createSkillsMiddleware`。`backend` 會換成 {@link modelVisibleSkillsBackend} 的視圖再交給基座。
+ * @param contextWindowOf - 這次請求走的模型的窗口；不給就只看絕對上限。
  * @returns 與基座同名（`SkillsMiddleware`）同 state 形狀的 middleware，可以直接換掉基座那顆。
  */
-export function createSkillsMiddlewareQuietWhenEmpty(options: BaseOptions): AgentMiddleware {
+export function createSkillsMiddlewareQuietWhenEmpty(
+  options: BaseOptions,
+  contextWindowOf?: ContextWindowOf,
+): AgentMiddleware {
   /** 這一次 invoke 的掃描不完整：這一次不接字、不凍住，下一次 invoke 基座會重掃（它只快取非空的結果）。 */
   let incomplete = false;
   const base = createSkillsMiddleware({
@@ -102,11 +113,16 @@ export function createSkillsMiddlewareQuietWhenEmpty(options: BaseOptions): Agen
   /** 這個組裝看到的技能清單：基座掃到的，或沿用 state 裡已經有的。段的文字由它算，不讀模型請求上的 state。 */
   let listed: readonly SkillListing[] | undefined;
   const cell: SystemPromptCell = {
-    step: () => {
+    step: (request) => {
       if (empty || incomplete) return undefined;
       // 走得到這裡就有清單：完整掃描不是空的（空的在上面放行），或沿用了 state 裡已有的。
+      const { text, deferredBytes } = renderSkillsSectionWithin(
+        listed ?? [],
+        options.sources,
+        injectionLimitFor('skill-catalog', contextWindowOf?.(request.model)),
+      );
       return [
-        { append: renderSkillsSection(listed ?? [], options.sources), source: 'skill-catalog' },
+        { append: text, source: 'skill-catalog', ...(deferredBytes > 0 && { deferredBytes }) },
       ];
     },
   };

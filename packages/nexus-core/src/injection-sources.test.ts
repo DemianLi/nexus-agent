@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   captureInjectionSources,
+  INJECTION_DEFERRED_BYTES_KEY,
   carriedInjectionSources,
   INJECTION_SOURCES,
   measuredInjectionSources,
@@ -165,6 +166,55 @@ describe('組成 sources', () => {
   it('取不到窗口：limit 是絕對上限', () => {
     expect(measuredInjectionSources([{ id: 'memory', bytes: 1 }], undefined)).toEqual([
       { id: 'memory', bytes: 1, limit: 32_768 },
+    ]);
+  });
+});
+
+describe('延後的位元組（#2777）', () => {
+  it('系統提示的塊帶 deferredBytes：跟著回報，同名相加', async () => {
+    const { reports } = await captureInjectionSources(undefined, () =>
+      stepOf([
+        { append: '清單', source: 'skill-catalog', deferredBytes: 40 },
+        { block: '記憶', source: 'memory' },
+      ])(base, () => undefined),
+    );
+    expect(reports).toEqual([
+      { id: 'skill-catalog', bytes: 6, deferredBytes: 40 },
+      { id: 'memory', bytes: 6 },
+    ]);
+  });
+
+  it('訊息上的那一格：正整數才算，同源幾則相加', () => {
+    const skill = (content: string, deferred?: unknown) => ({
+      content,
+      additional_kwargs: {
+        ...sourceKwargs({ kind: 'skill-invocation', name: 'x', form: 'instructions' }),
+        ...(deferred !== undefined && { [INJECTION_DEFERRED_BYTES_KEY]: deferred }),
+      },
+    });
+    expect(
+      messageInjectionSources([
+        skill('ab', 100),
+        skill('c', 20),
+        skill('d'),
+        skill('e', -1),
+        skill('f', '9'),
+      ]),
+    ).toEqual([{ id: 'skill-invocation', bytes: 6, deferredBytes: 120 }]);
+  });
+
+  it('sources 上只有延後過的源有 deferredBytes', () => {
+    expect(
+      measuredInjectionSources(
+        [
+          { id: 'memory', bytes: 10, deferredBytes: 300 },
+          { id: 'skill-catalog', bytes: 20 },
+        ],
+        undefined,
+      ),
+    ).toEqual([
+      { id: 'memory', bytes: 10, limit: 32768, deferredBytes: 300 },
+      { id: 'skill-catalog', bytes: 20, limit: 32768 },
     ]);
   });
 });

@@ -40,6 +40,7 @@ import type { SystemMessage } from '@langchain/core/messages';
 import {
   applySystemPromptPieces,
   createSystemPromptStepMiddleware,
+  injectionLimitFor,
   taggedRouteOf,
 } from '@nexus/core';
 import type { PluginEntry, PluginRegistry, SystemPromptPiece } from '@nexus/core';
@@ -127,12 +128,37 @@ export function applySystemPromptParts<
   };
 }
 
+/** 前後段各自超過預算表上限時拋的錯：這兩段是必要來源，不截斷也不延後，組裝失敗。 */
+export class SystemPromptBudgetError extends Error {
+  constructor(source: 'system-prompt-prefix' | 'system-prompt-suffix', bytes: number) {
+    super(
+      `系統提示詞的${source === 'system-prompt-prefix' ? '前段' : '後段'}有 ${bytes} 個 UTF-8 位元組，超過上限 ${injectionLimitFor(source)}：` +
+        '這一段每次請求都整段送出、模型沒有別的路讀到，所以不截斷也不延後，請縮短各段的文字',
+    );
+    this.name = 'SystemPromptBudgetError';
+  }
+}
+
+/** 照送出時量的那幾塊（`context/measure` 的 `sources` 量的同一份文字）對預算表。 */
+function assertWithinBudget({ head, tail }: SystemPromptParts): void {
+  const sent = [
+    ['system-prompt-prefix', head],
+    ['system-prompt-suffix', tail.length > 0 ? `\n\n${tail}` : ''],
+  ] as const;
+  for (const [source, text] of sent) {
+    const bytes = Buffer.byteLength(text, 'utf8');
+    if (bytes > injectionLimitFor(source)) throw new SystemPromptBudgetError(source, bytes);
+  }
+}
+
 /**
  * 用快照建那顆 `nexusSystemPrompt` middleware。
  *
  * @param assembly - 組 thread 時取的快照（各段原文與已登記的變數名）。
  * @param defaults - 這次組裝的 `model`／`cwd`。
  * @returns middleware；**代入之後頭尾都是空的就回 `undefined`**（不掛）。
+ * @throws {SystemPromptBudgetError} 以組裝時的 `model` 代入之後，前段或後段超過預算表的上限（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
+ *   換模型後重新代入的那一份不再檢查：差的只有模型 id 的長度。
  * @throws {SystemPromptTemplateError} 某一段引用了沒有值的變數（掛載當下已驗過名字，這裡只會是別的插件登記的段出了問題）。
  */
 export function createSystemPromptMiddleware(
@@ -147,6 +173,7 @@ export function createSystemPromptMiddleware(
     SYSTEM_PROMPT_SECTION_FIELDS,
   );
   if (parts.head.length === 0 && parts.tail.length === 0) return undefined;
+  assertWithinBudget(parts);
   // `{{model}}` 跟著這一步實際用的模型走（#723）：只認明著貼過路由標籤的實例；沒貼標籤的維持組裝時定的那份。同一個 id 只算一次。
   const byModel = new Map<string, SystemPromptParts>();
   const partsFor = (model: unknown): SystemPromptParts => {

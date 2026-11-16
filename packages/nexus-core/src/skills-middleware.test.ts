@@ -29,3 +29,27 @@ describe('state 裡已經有的技能清單', () => {
     expect(sent?.text).toContain('- **deploy**: 部署。');
   });
 });
+
+describe('清單段的上限跟著模型的窗口（#2777）', () => {
+  it('窗口小到放不下：條目換成一行指標；查不到窗口的模型只看絕對上限', async () => {
+    const middleware = createSkillsMiddlewareQuietWhenEmpty(
+      { backend: () => new StateBackend(), sources: ['/skills/'] },
+      (model) => (model === 'small' ? 100 : undefined),
+    ) as unknown as { beforeAgent: Hook; wrapModelCall: Wrap };
+    const inState = [{ name: 'deploy', description: '部署。', path: '/skills/deploy/SKILL.md' }];
+    await middleware.beforeAgent({ skillsMetadata: inState }, {});
+    const textFor = (model: string) => {
+      let sent: SystemMessage | undefined;
+      middleware.wrapModelCall({ systemMessage: new SystemMessage(''), model }, (request) => {
+        sent = (request as { systemMessage: SystemMessage }).systemMessage;
+      });
+      return sent!.text;
+    };
+    // 100 × 4 × 0.05 = 20 位元組。
+    expect(textFor('small')).toContain(
+      '- (1 more skill not listed: skills section budget 20 bytes.',
+    );
+    expect(textFor('small')).not.toContain('**deploy**');
+    expect(textFor('unknown')).toContain('- **deploy**: 部署。');
+  });
+});

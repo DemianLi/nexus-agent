@@ -562,6 +562,11 @@ export interface FoldedAgentParams {
    * 補懸空呼叫那顆 middleware 要不要掛改狀態的 `beforeAgent`（{@link createPatchToolCallsMiddleware} 的 `stateFix`）。**省略時掛**；歷史從日誌推（`log`）時是 `false`：補在推導端，狀態上的補沒有人讀。root、一次性與背景子代理共用這一格。
    */
   patchToolCallsStateFix?: boolean;
+  /**
+   * 一顆模型的窗口（{@link FoldOptions.modelLimits} 取 `contextWindow`）：skills 清單與記憶那兩段的上限跟著它縮
+   * （[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。沒給 `modelLimits` 時省略，兩段只看絕對上限。root 與兩條子代理路徑共用。
+   */
+  contextWindowOf?: (model: unknown) => number | undefined;
 }
 
 /**
@@ -1076,6 +1081,10 @@ export function foldRegistry(
   );
   if (fileToolDescriptions !== undefined) params.fileToolDescriptions = fileToolDescriptions;
   if (options.history?.source === 'log') params.patchToolCallsStateFix = false;
+  const modelLimits = options.modelLimits;
+  if (modelLimits !== undefined) {
+    params.contextWindowOf = (model) => modelLimits(model)?.contextWindow;
+  }
 
   return params;
 }

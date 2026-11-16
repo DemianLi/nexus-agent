@@ -241,7 +241,7 @@ describe('回覆底下的「這一輪的過程」→ 觀測分頁那一輪（#10
   });
 });
 
-/** Radix 在卸載的下一個 tick 才還焦點（FocusScope 的 `setTimeout(0)`）。 */
+/** Base UI 在卸載之後的 microtask 才還焦點（`FloatingFocusManager` 清理時的 `queueMicrotask`）。 */
 const settle = () =>
   act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
 
