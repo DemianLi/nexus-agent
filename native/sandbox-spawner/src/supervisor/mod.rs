@@ -4026,8 +4026,6 @@ mod tests {
         assert!(prepare_run_dir(&long, false).unwrap_err().contains("太長"));
     }
 
-    // ---- 每條 thread 的重起退避（#2815）：`thread_backoff` 與 `ensure` 的閘 ----
-
     fn entry<'a>(supervisor: &'a Supervisor, thread: &[u8]) -> &'a ThreadBackoff {
         supervisor
             .thread_backoff
@@ -4061,7 +4059,7 @@ mod tests {
         supervisor
     }
 
-    /// T1：第一次失敗沒有窗：`ensure` 照樣去起（這裡起不來，再記一次），不把 #2905 修掉的那一次失敗長回來。
+    /// 第一次失敗沒有窗：`ensure` 照樣去起（這裡起不來，再記一次），不把 #2905 修掉的那一次失敗長回來。
     #[test]
     fn the_first_failure_of_a_thread_opens_no_window() {
         let mut supervisor = unspawnable_with_front("tb-first", false);
@@ -4076,7 +4074,7 @@ mod tests {
         assert_eq!(entry(&supervisor, b"t").failures, 2, "第二次還是去起了");
     }
 
-    /// T2：第二次失敗開 `--front-restart-ms` 的窗，窗內的 `ensure` 只得到 `down`：不起、不排隊；窗過了才放行。
+    /// 第二次失敗開 `--front-restart-ms` 的窗，窗內的 `ensure` 只得到 `down`：不起、不排隊；窗過了才放行。
     #[test]
     fn the_second_failure_opens_a_window_that_turns_ensure_away() {
         let mut supervisor = unspawnable_with_front("tb-second", false);
@@ -4102,7 +4100,7 @@ mod tests {
         assert_eq!(window(&supervisor, b"t"), start * 2);
     }
 
-    /// T3：窗 0、起始、兩倍、四倍……到上限不再長；`--front-restart-ms` 比上限大時上限跟著它。
+    /// 窗 0、起始、兩倍、四倍……到上限不再長；`--front-restart-ms` 比上限大時上限跟著它。
     #[test]
     fn the_window_doubles_up_to_the_cap() {
         let mut supervisor = unspawnable_with_front("tb-double", false);
@@ -4141,7 +4139,7 @@ mod tests {
         assert_eq!(waits, [0, 40, 40, 40].map(secs), "{waits:?}");
     }
 
-    /// T4：距上一次失敗滿 [`args::THREAD_BACKOFF_FORGET`] 就從頭數；差 1 ms 還算連續。忘記時間至少是上限的兩倍，
+    /// 距上一次失敗滿 [`args::THREAD_BACKOFF_FORGET`] 就從頭數；差 1 ms 還算連續。忘記時間至少是上限的兩倍，
     /// 不然窗開到上限那天就先被忘掉，退避永遠長不到上限。
     #[test]
     fn a_failure_after_the_forget_time_counts_from_the_start() {
@@ -4169,7 +4167,7 @@ mod tests {
         assert!(args::THREAD_BACKOFF_FORGET >= args::THREAD_BACKOFF_MAX * 2);
     }
 
-    /// T5：死因表：heap、memory、host-oom、stalled、crash、protocol 算失敗；evicted、shutdown 不算（逐出與停機不是 thread 自己的毛病）。
+    /// 死因表：heap、memory、host-oom、stalled、crash、protocol 算失敗；evicted、shutdown 不算（逐出與停機不是 thread 自己的毛病）。
     #[test]
     fn only_a_threads_own_deaths_count_as_failures() {
         for (cause, counts) in [
@@ -4193,7 +4191,7 @@ mod tests {
         }
     }
 
-    /// T6a：不成對的 `spawn` 失敗記一筆（死因 crash）。
+    /// 不成對的 `spawn` 失敗記一筆（死因 crash）。
     #[test]
     fn a_failed_unpaired_spawn_is_counted() {
         let mut supervisor = unspawnable_with_front("tb-6a", false);
@@ -4201,7 +4199,7 @@ mod tests {
         assert_eq!(entry(&supervisor, b"t").cause, DeathCause::Crash);
     }
 
-    /// T6b：不成對的對話行程死了記一筆，帶它的死因。
+    /// 不成對的對話行程死了記一筆，帶它的死因。
     #[test]
     fn an_unpaired_conversation_exit_is_counted() {
         let (mut supervisor, _) = with_an_unpaired_starter("tb-6b", Some(b"t"), Instant::now());
@@ -4214,7 +4212,7 @@ mod tests {
         assert_eq!(entry(&supervisor, b"t").failures, 1);
     }
 
-    /// T6c：成對的 `start_pair` 失敗記一筆。
+    /// 成對的 `start_pair` 失敗記一筆。
     #[test]
     fn a_failed_pair_start_is_counted() {
         let mut supervisor = unspawnable_with_front("tb-6c", true);
@@ -4223,7 +4221,7 @@ mod tests {
         assert_eq!(entry(&supervisor, b"t").failures, 1);
     }
 
-    /// T6d：成對的組合行程死了記一筆，帶它的死因。
+    /// 成對的組合行程死了記一筆，帶它的死因。
     #[test]
     fn a_composition_exit_is_counted() {
         let (mut supervisor, _, _) = with_a_pair("tb-6d", PairState::Bound);
@@ -4235,7 +4233,7 @@ mod tests {
         assert_eq!(entry(&supervisor, b"t").failures, 1);
     }
 
-    /// T7：一對的兩個行程死的先後不同，這條只記一次、前台只收到一則 `down`。
+    /// 一對的兩個行程死的先後不同，這條只記一次、前台只收到一則 `down`。
     #[test]
     fn a_pair_dying_counts_once_in_either_order() {
         for (tag, order) in [
@@ -4257,7 +4255,7 @@ mod tests {
         }
     }
 
-    /// T8：閘回的是表裡記的死因，不是固定值。
+    /// 閘回的是表裡記的死因，不是固定值。
     #[test]
     fn the_gate_answers_with_the_recorded_cause() {
         let mut supervisor = unspawnable_with_front("tb-cause", false);
@@ -4271,7 +4269,7 @@ mod tests {
         );
     }
 
-    /// T9：事件順序：當場殺、收屍前的 `ensure` 不回；收屍送一則 `down`；窗裡再來的 `ensure` 被閘回一則 `down`，排在收屍的那則後面。
+    /// 事件順序：當場殺、收屍前的 `ensure` 不回；收屍送一則 `down`；窗裡再來的 `ensure` 被閘回一則 `down`，排在收屍的那則後面。
     #[test]
     fn the_gate_down_follows_the_death_notice() {
         let (mut supervisor, _) = with_an_unpaired_starter("tb-order", Some(b"t"), Instant::now());
@@ -4294,7 +4292,7 @@ mod tests {
         assert!(supervisor.conversations.is_empty() && supervisor.pending.is_empty());
     }
 
-    /// T10：名額滿、有可逐出的閒置行程時，被閘擋下的 `ensure` 不排隊、不讓位、不收任何行程。
+    /// 名額滿、有可逐出的閒置行程時，被閘擋下的 `ensure` 不排隊、不讓位、不收任何行程。
     #[test]
     fn a_gated_ensure_makes_no_room_and_queues_nothing() {
         let mut supervisor = unspawnable_with_front("tb-room", false);
@@ -4319,7 +4317,7 @@ mod tests {
             .all(|c| c.proc.stop.is_none() && c.drain.is_none()));
     }
 
-    /// T11：每個窗只寫一行稽核（`event:"backoff"`），帶這條的連續次數與窗長；`deaths` 不因被擋的請求變動。
+    /// 每個窗只寫一行稽核（`event:"backoff"`），帶這條的連續次數與窗長；`deaths` 不因被擋的請求變動。
     #[test]
     fn one_audit_line_per_window() {
         let (mut supervisor, audit) = with_an_audited_unspawnable("tb-audit", false);
@@ -4355,7 +4353,7 @@ mod tests {
         assert_eq!(backoffs, 2);
     }
 
-    /// T12：窗裡的 `ensure` 不動預熱池的行程。
+    /// 窗裡的 `ensure` 不動預熱池的行程。
     #[test]
     fn a_gated_ensure_leaves_the_warm_pool_alone() {
         let mut supervisor = unspawnable_with_front("tb-warm", false);
@@ -4371,7 +4369,7 @@ mod tests {
         assert_eq!(supervisor.conversations[0].thread, None);
     }
 
-    /// T13：表不長過 [`args::THREAD_BACKOFF_ENTRIES`]：滿了丟最舊的；過了忘記時間的順手清掉。
+    /// 表不長過 [`args::THREAD_BACKOFF_ENTRIES`]：滿了丟最舊的；過了忘記時間的順手清掉。
     #[test]
     fn the_table_is_bounded_and_expires() {
         let mut supervisor = unspawnable_with_front("tb-table", false);
@@ -4399,7 +4397,7 @@ mod tests {
         assert_eq!(supervisor.thread_backoff.len(), 1);
     }
 
-    /// T14：停機中的 `ensure` 回 `down(shutdown)`，閘在它後面、不搶它。
+    /// 停機中的 `ensure` 回 `down(shutdown)`，閘在它後面、不搶它。
     #[test]
     fn shutdown_is_answered_before_the_gate() {
         let mut supervisor = unspawnable_with_front("tb-shutdown", false);
@@ -4415,7 +4413,7 @@ mod tests {
         assert!(!entry(&supervisor, b"t").noted, "閘沒有跑");
     }
 
-    /// T15：預熱池的退避與每條 thread 的表各算各的，互不牽動。
+    /// 預熱池的退避與每條 thread 的表各算各的，互不牽動。
     #[test]
     fn the_warm_backoff_and_the_thread_table_are_independent() {
         let mut supervisor = unspawnable_with_front("tb-indep", false);
@@ -4431,7 +4429,7 @@ mod tests {
         );
     }
 
-    /// T16：已經排在隊伍裡的 thread，名額出來就起，不看這張表（閘只在 `ensure`）；成功起來也不多記一筆。
+    /// 已經排在隊伍裡的 thread，名額出來就起，不看這張表（閘只在 `ensure`）；成功起來也不多記一筆。
     #[test]
     fn a_queued_thread_is_started_by_serve_pending_regardless_of_the_table() {
         let (mut supervisor, _) = with_an_unpaired_starter("tb-queued", Some(b"x"), Instant::now());
