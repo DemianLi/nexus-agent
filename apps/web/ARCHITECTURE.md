@@ -19,7 +19,7 @@ src/
     └── right-sidebar/   分頁共用的 context、契約型別與版面計算
 ```
 
-下面這些也算共用層，位置不變：`components/ui/`（registry 元件）、`styles/`、`vendor/`、`test/`，以及被 vendor 檔或 `.github` 釘住路徑的 `lib/utils.ts`、`lib/portal-container.ts`、`lib/theme.ts`、`hooks/use-mobile.ts`。`main.tsx` 算組裝層。
+下面這些也算共用層，位置不變：`components/ui/`（基礎元件）、`styles/`、`vendor/`、`test/`，以及被 vendor 檔或 `.github` 釘住路徑的 `lib/utils.ts`、`lib/portal-container.ts`、`lib/theme.ts`、`hooks/use-mobile.ts`。`main.tsx` 算組裝層。
 
 ## 切片
 

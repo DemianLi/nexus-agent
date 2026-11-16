@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { readCascade } from './css-cascade';
 
 /**
- * 全站的焦點外框（#1279）：外框本身要寫在 **layer 外**，registry 元件自帶的 `outline-none` 才擋不掉它。
+ * 全站的焦點外框（#1279）：外框本身要寫在 **layer 外**，基礎元件自帶的 `outline-none` 才擋不掉它。
  * 放回 `@layer base` 時，`Button`、`Input`、`Textarea`、側欄選單鈕的鍵盤焦點會整個看不到（2026-10-09 實機量到 67 個裡 34 個），
  * 而 jsdom 不算 cascade layer，元件測試看不出來，所以直接量樣式表。
  *
