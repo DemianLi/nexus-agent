@@ -29,7 +29,7 @@
 - **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
 - **時長**：只用 Tailwind 的 `duration-*` 級距（0、75、100、150、200、300、500、700、1000），不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137`，也不寫 `animation-duration-*`（#1827 D21，照 SG）。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的 `duration-*` 原樣留著，進出場的時長就照它（#1687）。
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
-- **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
+- **焦點外框**：不寫 `focus-visible:ring-*`，`ui/` 的 nexus 層也一樣；只有 vendor 上游原樣的檔留著它自己的。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - **陰影**：用具名的階（`shadow-sm`、`shadow-md`…）或引用 token 的畫法，不寫自己調的 `shadow-[0_2px_8px_#0003]`。
 - **層級**：只用 `z-0`、`z-10`、`z-20`、`z-50`（各層的用途在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫別的數字、負值與 `z-[60]`。
@@ -120,13 +120,13 @@
 
 ## 棄用
 
-token 與共用元件不直接刪（規格 §13.6）：
+token、基礎元件的 nexus 層與共用元件不直接刪（規格 §13.6）：
 
 1. **標記**：元件在 JSDoc 加 `@deprecated <版號>：改用 <什麼>`，token 在定義的那一行上面加同樣格式的註解（`/* @deprecated 0.7.0：改用 --scrim */`）。版號寫標記當下 `package.json` 的版號。同一張 PR 把 repo 裡的用法全部換掉。
 2. **保留一個 Release**：標記之後至少隨一個 Release 出去，下一個 Release 才刪。
 3. **刪除**：刪的那張 PR 確認 repo 裡沒有用法。token 是 `<nexus-chat>` 給宿主頁用的（升級指南列的那些）就是外部看得到的不相容變更，照[升級指南](../../docs/release.md#升級指南)寫一份。
 
-改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 的 SG 元件與 token 不適用，它們跟著上游同步走（vendor README）。
+改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 上游原樣的 SG 元件檔與 SG 自己的 token 不適用，它們跟著上游同步走（vendor README）。
 
 命名與棄用裡機器判得出來的由 `src/styles/naming-deprecation.test.ts` 擋：檔名 kebab-case 且不重複資料夾名、布林的 props 不加 `is`、事件不取 `handleX`／`xHandler`／`xCallback`、不開 `xxxClassName`、token 的名字不帶數值、`@deprecated` 的格式與版號、標了棄用的東西 repo 裡沒有用法。共用元件那張表的元件名與檔名對得上，由 `src/components/ui/components-doc.test.ts` 擋。判不出來、要靠審查的：事件名的動詞取得好不好、該用字串聯集卻開了好幾個布林、標記之後有沒有等一個 Release 才刪（刪的那張 PR 對 `@deprecated` 的版號與已出的 Release）。
 
