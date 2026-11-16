@@ -142,6 +142,29 @@ describe('supervisorLaunch', () => {
   });
 });
 
+describe('supervisorLaunch 的 startTimeoutMs', () => {
+  const input = {
+    supervisor: '/s',
+    home: '/h',
+    execPath: '/node',
+    execArgv: [],
+    frontEntry: '/f.js',
+    conversationEntry: '/c.js',
+    serveArgv: [],
+  };
+
+  it('沒給就不傳旗標，給了（含 0）原樣傳', () => {
+    expect(supervisorLaunch(input).args).not.toContain('--start-timeout-ms');
+    expect(supervisorLaunch({ ...input, startTimeoutMs: 45_000 }).args).toEqual(
+      expect.arrayContaining(['--start-timeout-ms', '45000']),
+    );
+    const args = supervisorLaunch({ ...input, startTimeoutMs: 0 }).args;
+    expect(
+      args.slice(args.indexOf('--start-timeout-ms'), args.indexOf('--start-timeout-ms') + 2),
+    ).toEqual(['--start-timeout-ms', '0']);
+  });
+});
+
 describe('childExecArgv', () => {
   it('supervisorLaunch：前台照原樣帶 inspector 旗標，對話行程不帶', () => {
     const { args } = supervisorLaunch({
@@ -253,6 +276,36 @@ describe('resolveProcessModel', () => {
       idleMs: 60_000,
     });
     expect(resolveProcessModel({ ...base, argv, flag: undefined })).toEqual({ mode: 'single' });
+  });
+
+  it('process-model 的 startTimeoutMs 只在 per-thread 交給監督行程，沒設就沒有', async () => {
+    const set = await patchFile(
+      '- id: process-model\n  config:\n    mode: per-thread\n    startTimeoutMs: 45000\n',
+    );
+    const argv = ['--patch', set];
+    expect(resolveProcessModel({ ...base, argv, flag: undefined }).startTimeoutMs).toBe(45_000);
+    expect(resolveProcessModel({ ...base, argv, flag: 'single' })).toEqual({ mode: 'single' });
+    const off = await patchFile(
+      '- id: process-model\n  config:\n    mode: per-thread\n    startTimeoutMs: 0\n',
+    );
+    expect(
+      resolveProcessModel({ ...base, argv: ['--patch', off], flag: undefined }).startTimeoutMs,
+    ).toBe(0);
+    const unset = await patchFile('- id: process-model\n  config:\n    mode: per-thread\n');
+    expect(
+      resolveProcessModel({ ...base, argv: ['--patch', unset], flag: undefined }),
+    ).not.toHaveProperty('startTimeoutMs');
+  });
+
+  it('startTimeoutMs 要是非負整數', async () => {
+    for (const bad of ['-1', '1.5', "'30000'"]) {
+      const patch = await patchFile(
+        `- id: process-model\n  config:\n    mode: per-thread\n    startTimeoutMs: ${bad}\n`,
+      );
+      expect(() =>
+        resolveProcessModel({ ...base, argv: ['--patch', patch], flag: 'per-thread' }),
+      ).toThrow(PROCESS_MODEL_ENTRY_NAME);
+    }
   });
 
   it('沒落盤時不照時間收（收掉的行程不留日誌）', async () => {

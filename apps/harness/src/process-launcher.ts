@@ -274,6 +274,8 @@ export interface SupervisorLaunchInput {
   readonly serveArgv: readonly string[];
   /** 對話行程閒置多久收掉（毫秒，`0` 不收）；省略用監督行程的預設。 */
   readonly idleMs?: number;
+  /** 傳給 `--start-timeout-ms`：一對起到組合行程回 `ready` 的上限（毫秒，`0` 不判；不成對的不判）；省略用監督行程的預設。 */
+  readonly startTimeoutMs?: number;
 }
 
 /** 值可以分開寫成下一個參數的 inspector 旗標。 */
@@ -315,6 +317,9 @@ export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch
       '--audit',
       join(input.home, SUPERVISOR_AUDIT_FILE),
       ...(input.idleMs === undefined ? [] : ['--idle-ms', String(input.idleMs)]),
+      ...(input.startTimeoutMs === undefined
+        ? []
+        : ['--start-timeout-ms', String(input.startTimeoutMs)]),
       ...(input.host === undefined
         ? []
         : [
@@ -360,6 +365,7 @@ export function resolveProcessModel(context: LaunchContext): {
   readonly mode: ProcessModel;
   readonly supervisorBinary?: string;
   readonly idleMs?: number;
+  readonly startTimeoutMs?: number;
 } {
   if (isPrintOnly(context.argv)) return { mode: 'single' };
   const { patch } = parseArgs({
@@ -406,6 +412,8 @@ export function resolveProcessModel(context: LaunchContext): {
     mode,
     ...(setting.supervisorBinary !== undefined && { supervisorBinary: setting.supervisorBinary }),
     ...(mode === 'per-thread' && idleMs !== undefined && { idleMs }),
+    ...(mode === 'per-thread' &&
+      setting.startTimeoutMs !== undefined && { startTimeoutMs: setting.startTimeoutMs }),
   };
 }
 
@@ -451,6 +459,7 @@ export function launchProcessModel(context: LaunchContext): false {
     conversationEntry: sibling(PER_THREAD_ENTRIES.conversation),
     serveArgv: context.argv,
     ...(model.idleMs !== undefined && { idleMs: model.idleMs }),
+    ...(model.startTimeoutMs !== undefined && { startTimeoutMs: model.startTimeoutMs }),
   });
   process.execve!(launch.file, [launch.file, ...launch.args], context.env);
   throw new Error('process.execve 回來了');
