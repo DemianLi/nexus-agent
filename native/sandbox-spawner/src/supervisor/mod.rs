@@ -878,6 +878,11 @@ impl Supervisor {
                         self.compositions
                             .iter()
                             .filter_map(move |p| Some(p.starting_since()? + limit))
+                            .chain(
+                                self.conversations
+                                    .iter()
+                                    .filter_map(move |c| Some(c.starting_since()? + limit)),
+                            )
                     }),
             )
             .chain(self.args.stall.into_iter().flat_map(|stall| {
@@ -942,7 +947,11 @@ impl Supervisor {
         let waiting = self
             .compositions
             .iter()
-            .any(|p| p.starting_since().is_some());
+            .any(|p| p.starting_since().is_some())
+            || self
+                .conversations
+                .iter()
+                .any(|c| c.starting_since().is_some());
         if waiting
             && self
                 .args
@@ -955,6 +964,11 @@ impl Supervisor {
             );
             for composition in &mut self.compositions {
                 composition.restart_start(now);
+            }
+            for conversation in &mut self.conversations {
+                if conversation.starting_since().is_some() {
+                    conversation.started_at = now;
+                }
             }
         }
         let Some(stall) = self.args.stall else { return };
@@ -2438,7 +2452,7 @@ impl Supervisor {
                 .max_silence
                 .as_millis()
                 .min(u128::from(u64::MAX)) as u64,
-            error: None,
+            error: conversation.timed_out.then_some("ready 之前逾時"),
         });
         let _ = std::fs::remove_file(
             conversation
@@ -3329,6 +3343,165 @@ mod tests {
         starting.started_at = started;
         starting.used_at = Instant::now();
         assert_eq!(starting.starting_since(), Some(started));
+    }
+
+    /// 手上有一條不成對、停在 `Starting` 等 `ready` 的對話行程：`thread` 是 `Some` 是已指派的，`None` 是預熱池裡的。
+    /// argv 不帶 `--composition`（帶了就是成對）、`--warm 0`；pid 是假的，`kill_now` 只會拿到 ESRCH。
+    fn with_an_unpaired_starter(
+        tag: &str,
+        thread: Option<&[u8]>,
+        since: Instant,
+    ) -> (Supervisor, PathBuf) {
+        let dir = temp(tag);
+        let audit = dir.join("audit.jsonl");
+        let events = dir.join("memory.events");
+        std::fs::write(&events, "oom_kill 0\n").unwrap();
+        let argv: Vec<OsString> = [
+            "--run-dir",
+            dir.join("run").to_str().unwrap(),
+            "--audit",
+            "a",
+            "--front",
+            "/bin/true",
+            "--conversation",
+            "/bin/true",
+            "--warm",
+            "0",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        let mut supervisor = Supervisor::assemble(
+            args::parse(&argv).unwrap(),
+            Audit::open(&audit).unwrap(),
+            -1,
+            4,
+        );
+        supervisor.oom = OomCounter::at(Some(events));
+        let mut starter = conversation(LEAF, 1, false);
+        starter.phase = Phase::Starting;
+        starter.thread = thread.map(<[u8]>::to_vec);
+        starter.started_at = since;
+        supervisor.conversations.push(starter);
+        (supervisor, audit)
+    }
+
+    /// 不成對、等 `ready` 的（已指派的與預熱池裡的）到了 `--start-timeout-ms` 才殺：死因 `stalled`、稽核帶 `error`、沒有 `pair`；差 1 ms 不動。
+    /// 死因只累計一次。已指派的 `down` 與預熱池的補位由 `tests/supervisor.rs` 釘。
+    #[test]
+    fn an_unpaired_conversation_still_waiting_for_ready_at_the_start_deadline_is_killed() {
+        let since = Instant::now();
+        for (tag, thread) in [("unpaired-assigned", Some(&b"t"[..])), ("unpaired-warm", None)] {
+            let (mut supervisor, audit) = with_an_unpaired_starter(tag, thread, since);
+            let limit = supervisor.args.start_timeout.unwrap();
+            supervisor.check_starts(since + limit - Duration::from_millis(1));
+            assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+            supervisor.check_starts(since + limit);
+            let starter = &supervisor.conversations[0];
+            assert!(starter.proc.stop.is_some(), "{tag}");
+            assert_eq!(starter.cause, Some(DeathCause::Stalled), "{tag}");
+            assert!(starter.timed_out, "{tag}");
+
+            supervisor.on_exit(LEAF, KILLED);
+            let lines = audit_lines(&audit);
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert!(
+                lines[0].contains("\"role\":\"conversation\"")
+                    && lines[0].contains("\"cause\":\"stalled\"")
+                    && lines[0].contains("\"error\":\"ready 之前逾時\"")
+                    && !lines[0].contains("\"pair\""),
+                "{lines:?}"
+            );
+            assert_eq!(supervisor.deaths[DeathCause::Stalled as usize - 1], 1);
+            assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1, "{tag}");
+        }
+    }
+
+    /// 期限到的時候 `ready` 已經在管線裡、還沒讀：判之前先讀，讀到就不殺。`Chan` 兩端是同一對 socket，讀到 `Ready` 會往同一條寫 `bind`，
+    /// 所以 `check_starts` 只叫一次就斷言，不再讀第二次。
+    #[test]
+    fn an_unpaired_ready_already_in_the_pipe_at_the_start_deadline_is_read_first() {
+        let since = Instant::now();
+        for (tag, thread, phase) in [
+            ("unpaired-piped-assigned", Some(&b"t"[..]), Phase::Binding),
+            ("unpaired-piped-warm", None, Phase::Warm),
+        ] {
+            let (mut supervisor, _) = with_an_unpaired_starter(tag, thread, since);
+            let limit = supervisor.args.start_timeout.unwrap();
+            let starter = &mut supervisor.conversations[0];
+            starter.proc.hello = true;
+            starter
+                .proc
+                .chan
+                .send(&crate::supervisor_protocol::encode_conversation_report(
+                    &ConversationReport::Ready,
+                ));
+            supervisor.check_starts(since + limit);
+            let starter = &supervisor.conversations[0];
+            assert_eq!(starter.phase, phase, "{tag}");
+            assert!(
+                starter.proc.stop.is_none() && starter.cause.is_none() && !starter.timed_out,
+                "{tag}"
+            );
+        }
+    }
+
+    /// 不判起動期限的：`--start-timeout-ms 0`、停機中、已經在收。
+    #[test]
+    fn the_start_deadline_skips_an_unpaired_conversation_when_off_shutdown_or_stopping() {
+        let since = Instant::now();
+        let late = since + Duration::from_secs(3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("un-off", Some(b"t"), since);
+        supervisor.args.start_timeout = None;
+        supervisor.check_starts(late);
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+
+        let (mut supervisor, _) = with_an_unpaired_starter("un-shutdown", Some(b"t"), since);
+        supervisor.shutting_down = true;
+        supervisor.check_starts(late);
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+
+        let (mut supervisor, _) = with_an_unpaired_starter("un-stopping", Some(b"t"), since);
+        let eof_grace = supervisor.args.eof_grace;
+        supervisor.conversations[0].proc.begin_stop(since, eof_grace);
+        supervisor.check_starts(late);
+        let starter = &supervisor.conversations[0];
+        assert!(starter.cause.is_none() && !starter.timed_out);
+    }
+
+    /// 等 `ready` 的不成對對話行程，poll 最晚在它的起動期限醒來；停機中不算。
+    #[test]
+    fn the_start_deadline_wakes_the_poll_for_an_unpaired_conversation() {
+        let since = Instant::now();
+        let (mut supervisor, _) = with_an_unpaired_starter("un-wake", Some(b"t"), since);
+        let limit = supervisor.args.start_timeout.unwrap();
+        let far = since + Duration::from_secs(24 * 3600);
+        supervisor.rss_poll_at = far;
+        supervisor.stats_at = None;
+        assert_eq!(supervisor.next_deadline(), Some(since + limit));
+        supervisor.shutting_down = true;
+        assert_eq!(supervisor.next_deadline(), Some(far));
+    }
+
+    /// 整棵樹被凍住過：不成對的等 `ready` 的時間也從判定那一刻重新起算，門檻是 `--start-timeout-ms` 的一半，`--stall-ms` 關著也一樣；
+    /// 已經 `ready` 的（`started_at` 不是它的事）不動。
+    #[test]
+    fn resuming_from_a_freeze_restarts_the_start_deadline_of_an_unpaired_conversation() {
+        let since = Instant::now() - Duration::from_secs(3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("un-resume", Some(b"t"), since);
+        let mut up = conversation(LEAF - 1, 1, false);
+        up.started_at = since;
+        supervisor.conversations.push(up);
+        supervisor.args.stall = None;
+        let limit = supervisor.args.start_timeout.unwrap();
+        let now = Instant::now();
+        supervisor.check_resumed(now, limit / 2 - Duration::from_millis(1));
+        assert_eq!(supervisor.conversations[0].starting_since(), Some(since));
+        supervisor.check_resumed(now, limit / 2);
+        assert_eq!(supervisor.conversations[0].starting_since(), Some(now));
+        assert_eq!(supervisor.conversations[1].started_at, since);
+        supervisor.check_starts(now);
+        assert!(supervisor.conversations[0].proc.stop.is_none());
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。

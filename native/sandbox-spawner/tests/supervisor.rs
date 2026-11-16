@@ -3404,6 +3404,102 @@ fn a_second_stop_signal_before_the_front_answers_collects_a_pair_as_shutdown() {
     );
 }
 
+/// 不成對的對話行程一直不送 `ready`（假對話行程在 `hello` 之前睡著）：過了 `--start-timeout-ms` 被殺，前台拿到 `down(stalled)`，
+/// 稽核是 `stalled` 加逾時的 `error`、沒有 `pair`；名額讓出來，第二條 thread 也是同樣的結局，不是 `capacity`。
+#[test]
+fn an_unpaired_conversation_that_never_says_ready_is_killed_at_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "600000".into()],
+        extra: vec!["--start-timeout-ms", "1000", "--capacity", "1"],
+        ..Options::default()
+    });
+    h.ensure("a");
+    let first = logged_pid(&h.dir.join("run/c1.sock"), "pid");
+    assert_eq!(h.down_of("a"), DeathCause::Stalled);
+    assert!(wait_until(|| gone(first)));
+    let line = h.audit_line("\"error\":\"ready 之前逾時\"");
+    assert!(
+        line.contains("\"role\":\"conversation\"")
+            && line.contains("\"cause\":\"stalled\"")
+            && !line.contains("\"pair\""),
+        "{line}"
+    );
+    // 名額只有一個：沒讓出來的話這裡回的是 `capacity`。
+    assert_eq!(h.down("b"), DeathCause::Stalled);
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// `--start-timeout-ms 0` 不是「馬上逾時」：不送 `ready` 的行程留著，停機時回一次 `down(shutdown)`。
+#[test]
+fn an_unpaired_conversation_that_never_says_ready_stays_when_the_start_deadline_is_off() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "600000".into()],
+        extra: vec!["--start-timeout-ms", "0"],
+        ..Options::default()
+    });
+    h.ensure("a");
+    let pid = logged_pid(&h.dir.join("run/c1.sock"), "pid");
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert!(!gone(pid));
+    assert!(
+        h.audit().iter().all(|line| !line.contains("ready 之前逾時")),
+        "{:?}",
+        h.audit()
+    );
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// 期限內 `ready` 的不受影響：過了 `--start-timeout-ms` 還是同一個行程，沒有人被判 `stalled`。
+#[test]
+fn an_unpaired_conversation_that_is_ready_in_time_outlives_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "300".into()],
+        extra: vec!["--start-timeout-ms", "1500"],
+        ..Options::default()
+    });
+    let socket = h.up("a");
+    std::thread::sleep(Duration::from_millis(2_000));
+    assert_eq!(h.up("a"), socket);
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+    assert!(
+        h.audit().iter().all(|line| !line.contains("ready 之前逾時")),
+        "{:?}",
+        h.audit()
+    );
+}
+
+/// 預熱池裡不成對的行程逾時：沒有 thread，不回 `down`、稽核有逾時那一行，之後補一個新的（換了 pid）。
+#[test]
+fn a_warm_unpaired_conversation_past_the_start_deadline_is_collected_and_refilled() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "600000".into()],
+        extra: vec!["--warm", "1", "--start-timeout-ms", "1000"],
+        ..Options::default()
+    });
+    let first = logged_pid(&h.dir.join("run/c1.sock"), "pid");
+    assert!(wait_until(|| gone(first)));
+    let line = h.audit_line("\"error\":\"ready 之前逾時\"");
+    assert!(
+        line.contains("\"cause\":\"stalled\"") && !line.contains("\"pair\""),
+        "{line}"
+    );
+    let second = logged_pid(&h.dir.join("run/c2.sock"), "pid");
+    assert_ne!(first, second);
+    assert_eq!(shut_down(&mut h), []);
+}
+
 /// 等到稽核裡有第 `serial` 對起動逾時的樣子：組合行程那一行是 `stalled`、帶逾時的 `error`；`with_leaf` 時它後面是葉子連帶收的那一行，
 /// 沒有葉子的就不該再有別行。
 fn assert_start_timed_out(h: &Harness, serial: u32, with_leaf: bool) {
