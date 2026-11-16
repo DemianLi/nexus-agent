@@ -30,6 +30,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as module from './index.js';
 import {
   AGENT_INSTRUCTIONS_MARKER,
+  INJECTION_DEFERRED_BYTES_KEY,
   AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
   agentInstructionsConfigSchema,
   Config,
@@ -118,6 +119,14 @@ describe('設定', () => {
     expect(String(small?.[0]?.content)).toContain(
       'Workspace instruction budget 400 bytes: not loaded /AGENTS.md (2000 bytes)',
     );
+    // 沒放進去的位元組記在訊息上，量測從這一格讀；全放進去的那一則沒有這一格。
+    expect(small?.[0]?.additionalKwargs).toEqual({
+      [AGENT_INSTRUCTIONS_MARKER]: true,
+      [INJECTION_DEFERRED_BYTES_KEY]: 2000,
+    });
+    expect((await listener([], INVOCATION))?.[0]?.additionalKwargs).toEqual({
+      [AGENT_INSTRUCTIONS_MARKER]: true,
+    });
     // 窗口夠大時是 maxBytes 生效；沒交窗口（1.3.0 以前的宿主、沒有型錄）也只看 maxBytes。
     for (const invocation of [{ ...INVOCATION, contextWindow: 1_000_000 }, INVOCATION]) {
       expect(String((await listener([], invocation))?.[0]?.content)).toContain('x'.repeat(2000));

@@ -1245,16 +1245,21 @@ export interface SessionEventMap {
      * - `bytes`：接上的文字的 UTF-8 位元組數（接在最前面時補的空行不算）。放在訊息串裡的源（`agent-instructions`、`skill-invocation`）是這次送出的串裡
      *   同源幾則相加。
      * - `limit`：這個窗口下的上限（`injectionLimitFor`）。表上沒有的源、每台一個上限的源（`mcp:servers`）沒有這一格。
-     *   **只是對照用的數字，超過不會有任何動作。**
+     *   可延後的四個源（`agent-instructions`、`skill-catalog`、`skill-invocation`、`memory`）照它延後，見 `deferredBytes`；必要的三個源
+     *   超過時組裝失敗，走不到這裡。
+     * - `deferredBytes`：這一次放不下、沒放進去的原文位元組數（正整數），原地留了一行指標叫模型用讀檔工具讀。沒有這一格 ＝ 沒有延後。
+     *   放在訊息串裡的源是送出的串裡同源幾則相加：延後的那一則被摘要切掉之前，每次請求都會列。
      *
      * 跟 `breakdown` 不能相加比對：單位是位元組不是 token；`systemTokens` 只算摘要器看得到的那一份系統提示，內層接的段不在裡面
      * （`prompt-sections.ts` 檔頭），這裡有。沒有這一格 ＝ 沒量（這一格出現以前的日誌），不是空的。加它沒有升日誌格式版本，紀錄見
-     * `docs/persistence-changes/2026-11-16-context-measure-sources.md`。
+     * `docs/persistence-changes/2026-11-16-context-measure-sources.md`；`deferredBytes` 的在
+     * `docs/persistence-changes/2026-11-16-context-measure-deferred-bytes.md`。
      */
     readonly sources?: readonly {
       readonly id: string;
       readonly bytes: number;
       readonly limit?: number;
+      readonly deferredBytes?: number;
     }[];
     /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。

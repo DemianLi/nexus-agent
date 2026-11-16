@@ -215,6 +215,13 @@ function invocationBudget(
   return Math.min(maxBytes, Math.floor(contextWindow * 4 * contextFraction));
 }
 
+/**
+ * 這一則注入有多少原文位元組放不下、沒放進去，記在 `additional_kwargs` 的這一格（正整數；沒有延後就不放），`context/measure` 的
+ * `sources[].deferredBytes` 從它讀（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core` 的
+ * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
+ */
+export const INJECTION_DEFERRED_BYTES_KEY = 'nexus_injection_deferred_bytes';
+
 /** 正文放不下時代替它的那一行：哪一份、多大、上限多少、用什麼讀。 */
 function deferredInvocation(
   skill: { readonly name: string; readonly path: string },
@@ -262,12 +269,13 @@ export function createSkillInvocationListener(
       if (skill === undefined || !skill.invocation.userInvocable) continue;
       const rendered = renderSkillInvocation(skill);
       const bytes = Buffer.byteLength(rendered, 'utf8');
+      const deferred = budget !== undefined && bytes > budget;
       injections.push({
-        content:
-          budget !== undefined && bytes > budget
-            ? deferredInvocation(skill, bytes, budget)
-            : rendered,
-        additionalKwargs: { [SKILL_INVOCATION_MARKER]: { name } },
+        content: deferred ? deferredInvocation(skill, bytes, budget) : rendered,
+        additionalKwargs: {
+          [SKILL_INVOCATION_MARKER]: { name },
+          ...(deferred && { [INJECTION_DEFERRED_BYTES_KEY]: bytes }),
+        },
         source: { kind: 'skill-invocation', name, form: 'instructions' },
       });
     }

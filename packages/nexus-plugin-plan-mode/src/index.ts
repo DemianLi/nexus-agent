@@ -228,6 +228,12 @@ export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 export const PLAN_POLICY_SECTION_NAME = 'plan:policy';
 
 /**
+ * 指引最多幾個 UTF-8 位元組，超過在載入設定時失敗（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core`
+ * 預算表 `plan:policy` 那一列；插件不 import core，數字照抄，`apps/harness` 的測試把兩邊釘成相等。
+ */
+export const MAX_GUIDANCE_BYTES = 16384;
+
+/**
  * `exit_plan_mode` 給模型看的描述。
  *
  * 照 dsh 的 schema（`docs/tool-catalog.zh.md` 的 `@deepseek-ai/dsh-plan-mode` 條目）：
@@ -321,9 +327,14 @@ export const planModeConfigSchema = z.strictObject({
    * `apps/harness/cordis.yml` 的 `plan-mode` 那一列（以前是這裡的 `DEFAULT_PLAN_GUIDANCE`）：
    * 說清楚現在在計劃模式、先探索與設計、完成後經 `exit_plan_mode` 交出去。
    */
-  guidance: z.string().refine((value) => value.trim() !== '', {
-    message: 'guidance 不能是空白：部署必須給計劃指引，這個套件沒有預設值',
-  }),
+  guidance: z
+    .string()
+    .refine((value) => value.trim() !== '', {
+      message: 'guidance 不能是空白：部署必須給計劃指引，這個套件沒有預設值',
+    })
+    .refine((value) => Buffer.byteLength(value, 'utf8') <= MAX_GUIDANCE_BYTES, {
+      message: `guidance 超過 ${MAX_GUIDANCE_BYTES} 個 UTF-8 位元組：這一段每次請求都整段送出、模型沒有別的路讀到，所以不截斷也不延後，請縮短`,
+    }),
   /**
    * **日誌上一顆 `plan/mode` 都沒有時**，這個組裝在不在計劃模式裡。省略即**否**。
    *

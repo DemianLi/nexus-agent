@@ -31,6 +31,7 @@ import type { FsLookup } from '@nexus/fs';
 import { isAgentInstructionsMessage } from '@nexus/plugin-agent-instructions';
 import {
   createSkillInvocationListener,
+  INJECTION_DEFERRED_BYTES_KEY,
   SKILL_INVOCATION_MARKER,
 } from '@nexus/plugin-skills/invocation';
 import { TIME_CONTEXT_MARKER } from '@nexus/plugin-time-context';
@@ -207,7 +208,13 @@ describe('正文放不下：整份不放，留一行指標（#2777）', () => {
     expect(deferred!.content).toMatch(
       /^Skill "big" is \d+ bytes, over the 500-byte budget: read \/skills\/big\/SKILL\.md with read_file and follow it\.$/,
     );
-    expect(deferred!.additionalKwargs).toEqual({ [SKILL_INVOCATION_MARKER]: { name: 'big' } });
+    const bodyBytes = Number(/is (\d+) bytes/.exec(deferred!.content)![1]);
+    expect(bodyBytes).toBeGreaterThan(600);
+    expect(deferred!.additionalKwargs).toEqual({
+      [SKILL_INVOCATION_MARKER]: { name: 'big' },
+      [INJECTION_DEFERRED_BYTES_KEY]: bodyBytes,
+    });
+    expect(kept!.additionalKwargs).toEqual({ [SKILL_INVOCATION_MARKER]: { name: 'deploy' } });
     expect(deferred!.source).toEqual({
       kind: 'skill-invocation',
       name: 'big',
@@ -657,6 +664,37 @@ describe('各注入源的用量（#2777）', () => {
     ]);
     for (const source of measures[0] as { bytes: number }[])
       expect(source.bytes).toBeGreaterThan(0);
+    await thread.close();
+  }, 60000);
+
+  it('serve 的樹：放不下的 AGENTS.md 整份延後，sources 上那一列多一格 deferredBytes', async () => {
+    const booted = await boot(home());
+    const agentsMd = 'x'.repeat(70_000);
+    const thread = await openThread(
+      booted,
+      't-deferred',
+      [{ content: '好。' }],
+      workspace(STANDARD, agentsMd),
+    );
+    await thread.say('你好');
+    const humans = (thread.model.prompts[0] ?? []).filter((m) => m.getType() === 'human');
+    const pointer = humans.find((m) => m.text.includes('not loaded'));
+    expect(pointer?.text).toContain('not loaded /AGENTS.md (70000 bytes)');
+    expect(pointer?.text).not.toContain('xxxx');
+    const sources = thread
+      .rootLog()
+      .events.filter((event) => event.type === 'context/measure')
+      .flatMap((event) => (event.data as { sources?: { id: string }[] }).sources ?? []);
+    expect(sources.filter((source) => source.id === 'agent-instructions')).toEqual([
+      {
+        id: 'agent-instructions',
+        bytes: Buffer.byteLength(pointer!.text, 'utf8'),
+        limit: 65536,
+        deferredBytes: 70_000,
+      },
+    ]);
+    // 沒延後的源沒有這一格。
+    expect(sources.filter((source) => 'deferredBytes' in source)).toHaveLength(1);
     await thread.close();
   }, 60000);
 });
