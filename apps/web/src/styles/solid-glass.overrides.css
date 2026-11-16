@@ -38,10 +38,11 @@
  *   沒有 layer 的樣式贏過 utilities，所以 `outline-none` 擋不掉它。
  * - **offset 留在 base layer**：外框被 `overflow-hidden` 裁掉的地方（縮圖、分頁）用 `focus-visible:-outline-offset-2` 畫進裡面，要讓 utility 贏。
  * - **不畫外框的只有三種**：
- *   - 程式把焦點搬到面板或題目容器（`tabindex=-1`；Radix 選單項也是，它們用底色標目前那一項）。
+ *   - 程式把焦點搬到面板或題目容器（`tabindex=-1`）。選單項不在排除之列：Base UI 把目前那一項設成 `tabindex=0`，鍵盤移到它時底色與外框都有。
  *   - **文字輸入框**（`input`、`textarea`）：滑鼠點進去也算 `:focus-visible`，而它們自己有焦點樣子——registry 的 `Input`／`Textarea`
  *     是邊框變 `border-ring`，輸入框群組是整個群組畫外框（下面「輸入框群組的焦點外框」那條）。再畫一圈會變成邊框加外框的雙圈。
- *     本專案沒有原生的 checkbox／radio（勾選框都是 Radix 的按鈕），所以整類排除不會漏掉別種控制項。
+ *     原生的 checkbox／radio `input` 只有兩處：提問選項的真 input 鋪滿選項、`opacity-0`，焦點外框畫在選項上（下面「問答選項的焦點外框畫在選項上」那條）；
+ *     markdown 任務清單的 checkbox 是 `disabled`，拿不到焦點。下拉選單裡可勾選的項目是 Base UI 的選單項，不是 `input`，所以整類排除不會漏掉別種控制項。
  *   - 自己畫了別的焦點樣子、標了 `data-focus="custom"` 的（例如右側欄的拖曳把手整條變色）。
  * - registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉，兩圈才不會疊在一起。
  */
