@@ -165,7 +165,7 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { createChangesStores } from '@/features/changes/diff';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import {
   PARTIAL_OUTPUT_HEADING,
   SUBAGENT_MAX_TOKENS_REASON,

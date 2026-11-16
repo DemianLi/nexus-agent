@@ -9,7 +9,7 @@ import {
   fallbackDescription,
 } from '@/features/deliverable/card';
 import { Control, type RightSidebarControl } from '@/shared/right-sidebar/context';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { axeViolations } from '@/test/axe';
 
 const toastSpy = vi.hoisted(() => {

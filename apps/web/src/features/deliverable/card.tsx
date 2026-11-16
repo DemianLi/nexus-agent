@@ -25,7 +25,7 @@ import { DownloadIconButton } from '@/features/deliverable/download-button';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { Button } from '@/components/ui/button';
 import type { DeliverableDownloader } from '@/features/deliverable/download';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import { basename } from '@/features/deliverable/present-view';
 
 /** 收起時先列幾個（dsh `COLLAPSED_PRESENTED_COUNT`）。 */

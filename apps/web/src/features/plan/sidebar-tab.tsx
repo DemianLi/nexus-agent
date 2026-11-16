@@ -1,3 +1,5 @@
+// 這個切片要右側欄帶給它的資料來源，在這裡補進 `RightSidebarSources`（`app/App.tsx` 組出來）。
+
 import { ScrollText } from 'lucide-react';
 import { useCallback } from 'react';
 
@@ -7,6 +9,7 @@ import type { TabBodyProps } from '@/shared/right-sidebar/tab';
 
 import { REVIEW_PLAN_ID_PREFIX } from './review-view';
 import { PlanTab } from './tab';
+import type { PlanDocument, PlanScanOutcome } from '@/shared/connection/plan-document';
 
 /** 計劃分頁的座標：一份計劃一個分頁。 */
 export type PlanSidebarTab = {
@@ -60,3 +63,16 @@ export const PLAN_TAB = defineTab<PlanSidebarTab>({
   Icon: ScrollText,
   Body: PlanBody,
 });
+
+declare module '@/shared/right-sidebar/api' {
+  interface RightSidebarSources {
+    /** 對話裡的計劃，以計劃分頁的 id 為鍵（#654）。 */
+    readonly plans?: ReadonlyMap<string, PlanDocument> | undefined;
+    /**
+     * 計劃分頁的旁路掃描（#1798，`Conversation.findPlan`）：那一份計劃不在載入的對話裡時，往前一頁一頁讀歷史找它，不動對話窗口。
+     * **身分要穩定**，理由同 {@link RightSidebarSources.conversation}。`App` 等第一頁歷史到了才給；沒給就只講那一句。
+     */
+    readonly findPlan?:
+      ((callId: string, signal: AbortSignal) => Promise<PlanScanOutcome>) | undefined;
+  }
+}

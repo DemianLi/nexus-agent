@@ -22,7 +22,7 @@ import type {
   DeliverableDownloader,
 } from '@/features/deliverable/download';
 import { MISSING_REASON } from '@/features/deliverable/file';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 
 /**
  * 每一種失敗講的那句話。

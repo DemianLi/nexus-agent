@@ -6,51 +6,29 @@
  * 它們就得 import 回側欄（#1127）。
  */
 
-import type { ChangesStores } from '@/features/changes/diff';
 import type { ConversationStore } from '@/shared/connection/conversation-store';
-import type { DeliverableDownloader } from '@/features/deliverable/download';
-import type { DeliverableFileStore } from '@/features/deliverable/file';
-import type { LocatedFile } from '@/features/deliverable/view';
-import type { PlanDocument, PlanScanOutcome } from '@/shared/connection/plan-document';
-import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
-import type { TrajectoryPuller } from '@/features/trace/trajectory-pull';
+import type { LocatedFile } from '@/shared/lib/located-file';
 
 /** 單例面板的種類（觀測、成本）：`openPanel` 的參數。 */
 export type PanelKind = 'trace' | 'cost';
 
-/** 內容從哪裡讀：跟著這條會話的畫面走（`app/App.tsx` 建）。 */
+/**
+ * 內容從哪裡讀：跟著這條會話的畫面走（`app/App.tsx` 建）。
+ *
+ * 這裡只有不只一個切片讀的欄位。各切片自己要的那一塊，由切片在自己的 `features/<切片>/sidebar-tab.tsx`
+ * 用 declaration merging 補上，所以這個檔不必認得任何切片。
+ */
 export interface RightSidebarSources {
-  readonly changes?: ChangesStores | undefined;
-  readonly deliverableFiles?: DeliverableFileStore | undefined;
-  readonly deliverableDownload?: DeliverableDownloader | undefined;
-  /** 對話裡的計劃，以計劃分頁的 id 為鍵（#654）。 */
-  readonly plans?: ReadonlyMap<string, PlanDocument> | undefined;
   /**
    * 對話狀態的可訂閱 store（#1033），觀測分頁讀它。**放的是 store 不是 `ConversationState`**：`sources` 一變身分，
    * `RightSidebarPanel` 的 `memo` 就擋不住（見該元件的註解）。沒給就是沒有對話可看（觀測分頁畫空狀態）。
    */
   readonly conversation?: ConversationStore | undefined;
   /**
-   * 讀一個背景子代理自己的總帳（#1032，成本分頁的子代理分列）。**身分要穩定**（`App` 以 `[client, threadId]` 建），理由同
-   * {@link RightSidebarSources.conversation}。沒給就不畫子代理那一段。
-   */
-  readonly subagentUsage?: SubagentUsageLoader | undefined;
-  /**
-   * 軌跡細節的按需拉取（#1083，觀測分頁）：快取與進行中的請求放在這裡，**身分要穩定**（`App` 以 `[client, threadId]` 建）——
-   * 分頁切走再回來、面板重掛，已經拉到的不必再拉。沒給就只有推送的那幾輪細節、更早的輪只有摘要。
-   */
-  readonly trajectoryPull?: TrajectoryPuller | undefined;
-  /**
    * 往前載到日誌位置 `seq` 為止（#1601，`Conversation.loadThrough`）：觀測分頁的定位目標還沒載入時先載到那一輪。**身分要穩定**，
    * 理由同 {@link RightSidebarSources.conversation}。沒給就是今天的樣子：內文沒載入的呼叫不畫定位鈕。
    */
   readonly loadThrough?: ((seq: number) => Promise<void>) | undefined;
-  /**
-   * 計劃分頁的旁路掃描（#1798，`Conversation.findPlan`）：那一份計劃不在載入的對話裡時，往前一頁一頁讀歷史找它，不動對話窗口。
-   * **身分要穩定**，理由同 {@link RightSidebarSources.conversation}。`App` 等第一頁歷史到了才給；沒給就只講那一句。
-   */
-  readonly findPlan?:
-    ((callId: string, signal: AbortSignal) => Promise<PlanScanOutcome>) | undefined;
 }
 
 /** 卡片用得到的那一半。 */

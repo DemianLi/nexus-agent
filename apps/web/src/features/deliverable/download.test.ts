@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeliverableDownloader } from '@/features/deliverable/download';
-import type { LocatedFile } from '@/features/deliverable/view';
+import type { LocatedFile } from '@/shared/lib/located-file';
 import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
 import {
   badRequestReply,
