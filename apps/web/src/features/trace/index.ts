@@ -9,4 +9,3 @@ export {
   trajectoryOf,
   viewOf,
 } from './trajectory-view';
-export { TRACE_LOCATE_LOADING_TEXT } from './view';

@@ -19,12 +19,12 @@ import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import type { RightSidebarSources } from '@/shared/right-sidebar/api';
 import {
   TRACE_CALL_UNLOADED_TEXT,
-  TRACE_LOCATE_LOADING_TEXT,
   TRACE_HEADLINE,
   TRACE_LIMITS,
   TRACE_STRUCTURED_HEADLINE,
   TRACE_STRUCTURED_LIMITS,
 } from '@/features/trace/view';
+import { TRACE_LOCATE_LOADING_TEXT } from '@/shared/right-sidebar/locate-text';
 import { clockText } from '@/features/trace/trajectory-view';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';

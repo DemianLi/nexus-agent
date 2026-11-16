@@ -44,10 +44,10 @@ import { focusLost, useFocusHandoff } from '@/shared/lib/use-focus-handoff';
 import { useStableNames } from '@/features/tool';
 import { useTrajectoryPull } from '@/features/trace/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/shared/lib/use-visible-snapshot';
+import { TRACE_LOCATE_LOADING_TEXT } from '@/shared/right-sidebar/locate-text';
 import {
   TRACE_HEADLINE,
   TRACE_LIMITS,
-  TRACE_LOCATE_LOADING_TEXT,
   TRACE_STRUCTURED_HEADLINE,
   TRACE_STRUCTURED_LIMITS,
   TRACE_TARGET_MISSING_TEXT,

@@ -9,3 +9,4 @@ export {
   planOutcomeOf,
   planReviewOf,
 } from './review-view';
+export { PlanTab } from './tab';

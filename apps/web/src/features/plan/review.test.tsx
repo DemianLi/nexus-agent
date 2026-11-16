@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PlanReviewPanel, PlanToolCard } from '@/features/plan/review';
-import { PLAN_TAB_MISSING_TEXT, RightSidebarToggle } from '@/app/right-sidebar/right-sidebar';
+import { RightSidebarToggle } from '@/app/right-sidebar/right-sidebar';
+import { PLAN_TAB_MISSING_TEXT } from '@/features/plan/tab';
 import {
   AUTO_OPENED_KEY,
   PLAN_REVIEW_DISMISSED_TEXT,
