@@ -3315,6 +3315,17 @@ mod tests {
         ));
     }
 
+    /// 組合行程的通道讀端讀到 EOF 為止（最多 5 秒），一路把可讀的事件交給 [`Supervisor::on_composition_readable`]。
+    /// 這幾支測試用 `UnixStream::pair()` 把兩端接成一條通道，EOF 要等寫端的每一份 fd 都關掉才到；同一個測試行程裡別的測試執行緒
+    /// 正在 fork 子行程時，子行程在 exec 之前握著一份寫端，EOF 晚一點才到，所以不能在 `kill_now()` 之後當場斷言 `read_closed()`。
+    fn read_the_composition_to_eof(supervisor: &mut Supervisor) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !supervisor.compositions[0].proc.chan.read_closed() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+            supervisor.on_composition_readable(0);
+        }
+    }
+
     /// `Binding` 的一對，組合行程被當場殺、管線裡已經有 `bound`：不進 `Bound`，葉子不變成 `Up`，也不回 `up`。
     #[test]
     fn a_bound_from_a_composition_being_collected_does_not_advance_the_pair() {
@@ -3332,6 +3343,7 @@ mod tests {
             ));
         composition.proc.kill_now();
         supervisor.on_composition_readable(0);
+        read_the_composition_to_eof(&mut supervisor);
         let composition = &supervisor.compositions[0];
         assert!(composition.proc.chan.read_closed() && composition.cause.is_none());
         assert_eq!(composition.state(), PairState::Binding);
@@ -3371,6 +3383,7 @@ mod tests {
         composition_ready_in_the_pipe(&mut supervisor);
         supervisor.on_exit(LEAF, KILLED);
         supervisor.on_composition_readable(0);
+        read_the_composition_to_eof(&mut supervisor);
         let composition = &supervisor.compositions[0];
         assert!(composition.proc.stop.is_some() && composition.proc.chan.read_closed());
         assert!(composition.cause.is_none());
@@ -3386,6 +3399,7 @@ mod tests {
             composition_ready_in_the_pipe(&mut supervisor);
             supervisor.compositions[0].proc.kill_now();
             supervisor.on_composition_readable(0);
+            read_the_composition_to_eof(&mut supervisor);
             let composition = &supervisor.compositions[0];
             assert!(composition.proc.chan.read_closed(), "{tag}");
             assert!(composition.cause.is_none(), "{tag}");
