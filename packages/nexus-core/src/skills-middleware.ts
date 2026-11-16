@@ -105,7 +105,9 @@ export function createSkillsMiddlewareQuietWhenEmpty(options: BaseOptions): Agen
     step: () => {
       if (empty || incomplete) return undefined;
       // 走得到這裡就有清單：完整掃描不是空的（空的在上面放行），或沿用了 state 裡已有的。
-      return [{ append: renderSkillsSection(listed ?? [], options.sources) }];
+      return [
+        { append: renderSkillsSection(listed ?? [], options.sources), source: 'skill-catalog' },
+      ];
     },
   };
   return withSystemPromptStep(cell, (wrapModelCall) =>

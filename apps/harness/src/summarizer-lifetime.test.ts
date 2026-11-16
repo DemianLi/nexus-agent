@@ -255,7 +255,7 @@ describe('前景子代理：被摘掉的原文每次委派各一份', () => {
       if (
         mark === 'CHILD-B' &&
         k === 4 &&
-        JSON.stringify(body.messages).includes('Originals also stay in the session log')
+        JSON.stringify(body.messages).includes('the originals stay in the session log')
       )
         return {
           tools: [{ id: 'call_search', name: 'history_search', args: { query: '暗號-CHILD-' } }],

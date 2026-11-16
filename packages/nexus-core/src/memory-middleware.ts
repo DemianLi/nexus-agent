@@ -105,6 +105,7 @@ export function createMemoryMiddleware(
     step: (request) => [
       {
         block: renderMemorySection(contents.of(threadOf(request.runtime)) ?? {}, options.sources),
+        source: 'memory',
       },
     ],
   };

@@ -345,10 +345,15 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
     expect(eventsOf(subagents, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1001]);
     expect(eventsOf(subagents, 'context/measure')).toHaveLength(1);
     expect(eventsOf(root, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1000, 1002]);
-    // 線上的量測沒有 `modelCall`（識別是日誌內的事，畫面不需要）；其餘幾格與日誌逐一相等。
+    // 線上的量測沒有 `modelCall`（識別是日誌內的事，畫面不需要），也沒有 `sources`（#2777：只記在日誌，不上線）；其餘幾格與日誌逐一相等。
     const rootMeasures = eventsOf(root, 'context/measure').map(
-      ({ modelCall: _modelCall, ...wire }) => wire,
+      ({ modelCall: _modelCall, sources: _sources, ...wire }) => wire,
     );
+    // 前提：日誌上每筆都有 `sources` 這一格，上面拿掉的不是不存在的欄位。
+    expect(eventsOf(root, 'context/measure').map((each) => Array.isArray(each.sources))).toEqual([
+      true,
+      true,
+    ]);
     expect(rootMeasures).toHaveLength(2);
     // 前提：出廠門檻帶 `messages` 那道，所以日誌上每筆都有 `messagesCompactable`（#1443）——下面的「逐一相等」才問得到
     // 逐欄手抄的 `contextMeasureData` 有沒有把它帶上線。
