@@ -1225,6 +1225,7 @@ describe.skipIf(SUPERVISOR === undefined)(
     /**
      * 外掛的工具：建一個檔、然後不返回。純物件、不 import 任何套件（只在執行時載入 node 內建）：home 在暫存目錄，從那裡解析不到 `zod` 與 `@langchain/core`。
      * 檔出現的時候 `tool/call` 已經落盤（工具本體之前先排空這條 thread 的日誌），所以可以看著它殺（耐久檢查點開著時，預設如此）。
+     * `parameters` 要自帶 `$schema` 且鍵序同上線的位元組（`@nexus/tool-adapter` 轉一圈比對，不同就拒；`additionalProperties: false` 由它補）。
      */
     const HANG_PROBE = [
       'export default {',
@@ -1233,7 +1234,11 @@ describe.skipIf(SUPERVISOR === undefined)(
       '    registry.tools.register({',
       "      name: 'hang',",
       "      description: '建一個檔，然後不返回。',",
-      "      parameters: { type: 'object', properties: {} },",
+      '      parameters: {',
+      "        $schema: 'https://json-schema.org/draft/2020-12/schema',",
+      "        type: 'object',",
+      '        properties: {},',
+      '      },',
       '      async execute() {',
       "        const { writeFileSync } = await import('node:fs');",
       "        writeFileSync(config.marker, '');",
