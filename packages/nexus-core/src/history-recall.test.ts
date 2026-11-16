@@ -310,14 +310,53 @@ describe('historySearch', () => {
       ok: true,
       content: [
         '2 matches for "enospc" in 2 summarized segments. Read around a match with history_read (same entry or segment, offset from the match).',
-        '- entry 1, offset 20: User: the disk said ENOSPC twice Assistant: noted',
-        '- entry 2, offset 10: User: and enospc again (a.b) Assistant: ok',
+        '- entry 1, offset 20:',
+        '  User: the disk said ENOSPC twice',
+        '  Assistant: noted',
+        '- entry 2, offset 10:',
+        '  User: and enospc again (a.b)',
+        '  Assistant: ok',
       ].join('\n'),
     });
     expect(historyRead(log.events, { entry: 1, offset: 20 }).content).toContain('\nENOSPC twice');
     // 字面比對：`.` 不是萬用字元。
     expect(historySearch(log.events, { query: 'a.b' }).content).toContain('1 match for');
     expect(historySearch(log.events, { query: 'axb' }).content).toContain('No matches for');
+  });
+
+  it('片段照原文分行：一行一筆的清冊裡，命中的字跟同一列的其他欄位在同一行', () => {
+    const log = new SessionLog('recall');
+    const rows = Array.from(
+      { length: 9 },
+      (_, index) => `id P-${100 + index}\t|  item ${index}   | keeper K${index}X`,
+    );
+    chat(log, `inventory:\n${rows.join('\n')}`, 'noted');
+    log.append('turn/start', { kind: 'message', text: '下一件' });
+    summarize(log, 2, 3, indexed([[0, 2]], '現況'));
+
+    const lines = historySearch(log.events, { query: 'K4X' }).content.split('\n');
+
+    // 行內的 tab 與連續空白併成一個空白，列與列各自一行、縮兩格。
+    expect(lines).toContain('  id P-104 | item 4 | keeper K4X');
+    expect(lines).toContain('  id P-105 | item 5 | keeper K5X');
+    expect(lines.slice(1).filter((line) => line.includes('K4X'))).toHaveLength(1);
+    expect(lines[1]).toMatch(/^- entry 1, offset \d+:$/);
+    // 窗口沒到段首、段尾，頭尾各帶一個刪節號（這裡兩頭都切在列中間）。
+    expect(lines[2]).toMatch(/^ {2}…/);
+    expect(lines.at(-1)).toMatch(/…$/);
+  });
+
+  it('片段不印空行：訊息之間的空行不佔一行', () => {
+    const log = new SessionLog('recall');
+    chat(log, 'first needle here', 'second line');
+    log.append('turn/start', { kind: 'message', text: '下一件' });
+    summarize(log, 2, 3, indexed([[0, 2]], '現況'));
+
+    expect(historySearch(log.events, { query: 'needle' }).content.split('\n').slice(1)).toEqual([
+      '- entry 1, offset 12:',
+      '  User: first needle here',
+      '  Assistant: second line',
+    ]);
   });
 
   it('`limit` 之外的只算數量；限在一段裡找', () => {
@@ -342,7 +381,7 @@ describe('historySearch', () => {
     );
 
     const limited = historySearch(log.events, { query: 'k', limit: 2 });
-    expect(limited.content.split('\n')).toHaveLength(3);
+    expect(limited.content.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(2);
     expect(limited.content).toContain(
       '4 matches for "k" in 2 summarized segments, showing the first 2.',
     );
