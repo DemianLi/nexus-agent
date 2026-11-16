@@ -121,7 +121,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 三種元件，定義見 `GLOSSARY.md`：
 
-- **基礎元件**（`components/ui/`）：原檔是 vendor 的 solid-glass 元件，`ui/` 是轉出它的 nexus 層；改過的地方逐條登記在 vendor README 的「本地修改」，每條由那張表「釘住的測試」欄裡的測試守住（覆寫檔那幾條與它們錨定的 vendor 原文在 `ui/registry-edits.test.ts`）。
+- **基礎元件**（`components/ui/`）：原檔是 vendor 的 solid-glass 元件，`ui/` 是轉出它的 nexus 層；改過的地方逐條登記在 vendor README 的「本地修改」，每條由那張表「釘住的測試」欄裡的測試守住（覆寫檔那幾條與它們錨定的 vendor 原文在 `ui/local-edits.test.ts`）。
 - **積木**：兩處以上用同一份配方才抽出來（`COMPONENTS.md`「什麼時候抽共用元件」）。今天有：
 
   | 積木 | 用在 | 檔案（`apps/web/src/components/`） |
@@ -153,7 +153,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 | 出貨 CSS 在真的 Chrome 裡：焦點、欄位聚焦的邊框、每個字對實際底色的對比、Pick 與用量鈕的三種狀態（權限「全開」的 Pick 平常與移上去守狀態色 5.2）、貼在輸入框上方的卡片是平的、對話定位那一則的圓角、陰影、不透明的退路 | `guard/*.test.ts`（`pnpm test:guard`，要先 build） |
 | vendor 的 solid-glass 沒被手改 | `src/vendor/solid-glass/vendor.test.ts` |
 | `role="status"` 只有狀態列 | `src/styles/live-region.test.ts` |
-| 基礎元件寫在覆寫檔的本地修改還在、錨定的 vendor 原文沒變 | `src/components/ui/registry-edits.test.ts` |
+| 基礎元件寫在覆寫檔的本地修改還在、錨定的 vendor 原文沒變 | `src/components/ui/local-edits.test.ts` |
 | 全站只從 `@/lib/utils` 取 `cn` | `src/lib/utils.test.ts` |
 | 建置出的 CSS：`@keyframes` 允許清單、減少動態、沒有只來自測試或文件的 class | `scripts/check-built-css.mjs`（`pnpm build` 最後一步） |
 | axe-core 無障礙掃描 | `src/test/axe.ts` 與用到它的畫面測試 |

@@ -11,7 +11,7 @@
  * - viewport 的底部淡出（`scroll-fade-b`）在不支援 scroll-driven 動畫的瀏覽器歸 0、不常駐（第 43 條，同一個覆寫檔）。
  *
  * 自動捲動時 vendor 只把捲軸換成透明（`scrollbar-thumb-transparent`／`scrollbar-track-transparent` 只設 `scrollbar-color`），不改捲軸寬，
- * 所以 #1363 不用本地修改；`registry-edits.test.ts` 釘 vendor 原文，`scripts/check-built-css.mjs` 掃產物。
+ * 所以 #1363 不用本地修改；`local-edits.test.ts` 釘 vendor 原文，`scripts/check-built-css.mjs` 掃產物。
  * 依賴 `@shadcn/react` 的 primitive：viewport 預設 `role="region"`、content 預設 `role="log"`。
  */
 export {

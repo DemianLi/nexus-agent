@@ -1189,8 +1189,8 @@ class LightScope(unittest.TestCase):
 
     def test_web_design_guards_run_for_web_source_and_styles(self) -> None:
         """web 的設計護欄（#2757）不是改到的檔的同名測試：動到 `apps/web/src` 的 tsx、css 或顏色 token 的產生器都要排到它們。"""
-        guards = ['apps/web/src/components/ui/registry-edits.test.ts', 'apps/web/src/styles/design-system.test.ts']
-        expected = ['src/components/ui/registry-edits.test.ts', 'src/styles/design-system.test.ts']
+        guards = ['apps/web/src/components/ui/local-edits.test.ts', 'apps/web/src/styles/design-system.test.ts']
+        expected = ['src/components/ui/local-edits.test.ts', 'src/styles/design-system.test.ts']
 
         def tests(path: str) -> dict:
             return plan_ci.light([path], self.NAMES, lambda p: p == path, guards)['tests']
@@ -1286,7 +1286,7 @@ class LightScope(unittest.TestCase):
     def test_web_design_guards_are_the_style_tests_on_disk(self) -> None:
         guards = plan_ci.web_design_guards()
         self.assertIn('apps/web/src/styles/design-system.test.ts', guards)
-        self.assertIn('apps/web/src/components/ui/registry-edits.test.ts', guards)
+        self.assertIn('apps/web/src/components/ui/local-edits.test.ts', guards)
         self.assertTrue(all(g.startswith('apps/web/src/') and g.endswith('.test.ts') for g in guards))
 
     def test_docs_only_needs_no_install(self) -> None:

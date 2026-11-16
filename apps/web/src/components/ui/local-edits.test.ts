@@ -12,7 +12,7 @@ import { GLYPH_RADIUS } from '@/test/glyph-env';
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const code = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-describe('registry 檔的改動還在', () => {
+describe('基礎元件的本地修改還在', () => {
   test('input-group 的焦點外框畫在群組上：寫在覆寫檔、layer 外（#1279，README 本地修改第 15 條）', () => {
     // 本地修改所在的那一層：覆寫檔照抄 vendor 用的屬性選擇器，外框 2px 字色寫在 layer 外（offset 2px 在 base layer，`focus-outline.test.ts`）。
     const overrides = read('../../styles/solid-glass.overrides.css');

@@ -1,6 +1,6 @@
 /* global console, process, URL */
 /**
- * 量**建置出來的 CSS**（`dist/assets/*.css`），不是原始碼：Tailwind 只產出用得到的東西、registry 的 class
+ * 量**建置出來的 CSS**（`dist/assets/*.css`），不是原始碼：Tailwind 只產出用得到的東西、基礎元件的 class
  * 少了套件就一筆都不產出也不報錯，原始碼看起來對不代表產物對。`pnpm build` 的最後一步，失敗就讓建置失敗。
  *
  * 對應 `.docs/web-ui-spec.md` §11：

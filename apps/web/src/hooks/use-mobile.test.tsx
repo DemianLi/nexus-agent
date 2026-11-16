@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { useIsMobile } from '@/hooks/use-mobile';
 
 /**
- * 斷點 1024（`.docs/web-ui-spec.md` §9）。registry 是 768，而 768 剛好是驗收寬度：改錯時 768 會顯示成桌面側欄。
+ * 斷點 1024（`.docs/web-ui-spec.md` §9）。shadcn registry 版的 `use-mobile` 是 768，而 768 剛好是驗收寬度：改錯時 768 會顯示成桌面側欄。
  * 截圖不會讓 CI 紅，這裡釘住。
  */
 
