@@ -48,7 +48,7 @@ describe('讀回被摘掉的原文', () => {
     expect(summaries[0]!.seq).toBeLessThan(lastTurn.seq);
     for (const event of summaries) {
       expect(JSON.stringify(event.data.summary)).toContain(
-        'history_read reads an <index> entry verbatim',
+        'call history_search with a literal string',
       );
     }
 
