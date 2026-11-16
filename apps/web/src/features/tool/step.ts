@@ -223,3 +223,5 @@ export function toStep(
     emptyNote,
   };
 }
+
+// 驗證用：確認輕模式的 gate 排出結構護欄（#2896），這張 PR 不合併。
