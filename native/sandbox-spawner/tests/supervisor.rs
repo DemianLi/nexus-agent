@@ -1681,6 +1681,66 @@ fn a_crashing_warm_pool_backs_off() {
     assert_eq!(h.down_of("x"), DeathCause::Crash);
 }
 
+/// 量測（#2815）：一條 thread 的行程每次都在 `ready` 之前死，前台緊密地要、等 `down`、再要，跑 2 秒；只印、斷言只放很鬆的下界。
+/// 印的是 2 秒內收到幾則 `down`、稽核多幾行；通過時 stderr 被收走，要看數字加 `-- --nocapture`。
+fn measure_a_tight_loop(label: &str, options: Options) {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--die-before-ready".into()],
+        ..options
+    });
+    let until = Instant::now() + Duration::from_secs(2);
+    let mut downs = 0;
+    while Instant::now() < until {
+        h.ensure("a");
+        assert_eq!(h.down_of("a"), DeathCause::Crash);
+        downs += 1;
+    }
+    eprintln!(
+        "[量測 M-緊 {label}] 2 秒內收到 {downs} 則 down，稽核 {} 行",
+        h.audit().len()
+    );
+    assert!(downs >= 1);
+}
+
+#[test]
+fn measure_a_tight_loop_on_a_crashing_thread() {
+    measure_a_tight_loop("不成對", Options::default());
+}
+
+#[test]
+fn measure_a_tight_loop_on_a_crashing_pair() {
+    measure_a_tight_loop("成對", paired());
+}
+
+/// 量測（#2815）：一條 thread 的行程 `bound` 之後馬上結束（等於 `up` 之後立刻死），前台照 web 的節奏（250–500 毫秒，取中間 375）
+/// 要、等 `down`、睡、再要，跑 10 秒；只印、斷言只放很鬆的下界。印的是起了幾次 `up`、收到幾則 `down`、稽核幾行
+/// （`down` 比稽核行數多的部分，就是沒起行程、直接回掉的）。
+#[test]
+fn measure_a_web_paced_retry_loop_on_a_thread_that_dies_right_after_up() {
+    let mut h = Harness::start(Options::default());
+    let until = Instant::now() + Duration::from_secs(10);
+    let (mut ups, mut downs) = (0, 0);
+    while Instant::now() < until {
+        h.ensure("w,exit:7");
+        loop {
+            match h.event() {
+                FrontEvent::Up { thread_id, .. } if thread_id == b"w,exit:7" => ups += 1,
+                FrontEvent::Down { thread_id, .. } if thread_id == b"w,exit:7" => {
+                    downs += 1;
+                    break;
+                }
+                other => panic!("要 w,exit:7 的 up 或 down，拿到 {other:?}"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(375));
+    }
+    eprintln!(
+        "[量測 M-web] 10 秒內 up {ups} 次、down {downs} 則，稽核 {} 行",
+        h.audit().len()
+    );
+    assert!(downs >= 1);
+}
+
 #[test]
 fn stats_counts_live_warm_rss_and_deaths() {
     let mut h = Harness::start(Options {
