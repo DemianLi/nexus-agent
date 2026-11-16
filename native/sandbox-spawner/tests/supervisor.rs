@@ -2209,6 +2209,7 @@ fn fake_host(args: &[&str]) -> Option<(PathBuf, Vec<String>)> {
 
 /// 真宿主：對話行程不等宿主 `ready` 就起，第一次連線可能早於宿主 bind，拿到 `host error 2`（ENOENT）；用它起宿主的測試，
 /// 第一個連線都走 `host-retry`，不是在斷言第一次就連得上。
+/// 重試的 15 秒要比 `WAIT`（20 秒）短：重試先放棄、把最後一次的回答寫進紀錄，`wait_until` 才看得到失敗的理由；改其中一個要看另一個。
 fn real_host() -> Option<(PathBuf, Vec<String>)> {
     Some((host_bin(), Vec::new()))
 }
