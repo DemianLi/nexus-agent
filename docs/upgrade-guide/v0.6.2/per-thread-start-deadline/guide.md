@@ -24,5 +24,5 @@ description: "`process-model` 設成 `per-thread` 時，對話行程起來後 30
 
 1. 看你的主機冷起動要多久：照 [#2852](https://github.com/DemianLi/nexus-agent/issues/2852) 留言裡的量測做法，或直接看 `apps/harness/src/per-thread.integration.test.ts` 的冷起動量測測試。
 2. 起得比 30 秒慢的，把 `~/.nexus-agent/cordis.patch.yml` 的 `process-model` 加 `startTimeoutMs`，設成冷起動時間的數倍；想維持舊行為就設 `0`。
-3. 要看有沒有行程被這個期限殺過，到 `$NEXUS_AGENT_HOME/supervisor-audit.jsonl` 找 `ready 之前逾時`。比對死因的腳本，把 `stalled` 加進「對話行程沒起來」的處理。
+3. 要看有沒有行程被這個期限殺過，到 `$NEXUS_AGENT_HOME/supervisor-audit.jsonl`（沒設就是 `~/.nexus-agent`）找 `error` 是 `ready 之前逾時`、`role` 是 `conversation` 或 `composition` 的那幾行；`role` 是 `host` 的同一個字串是宿主的 ready 期限，不是這一條。比對死因的腳本，把 `stalled` 加進「對話行程沒起來」的處理。
 4. 確認改好：重啟 serve，開一條 thread，檢查它回 `up`。期限會不會生效不要靠把 `startTimeoutMs` 設得很小來驗：期限小到一輪的處理時間就超過它的一半時，監督行程每一輪都重算，可能一直不逾時。
