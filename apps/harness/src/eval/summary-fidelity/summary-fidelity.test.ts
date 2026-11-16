@@ -359,10 +359,33 @@ describe('摘要留不住答案的題目與成對的量法（#2908）', () => {
     });
   };
 
-  it('三個變體要點名才跑，不在預設的五個裡', () => {
-    expect(DETAIL_VARIANTS.map((variant) => variant.id)).toEqual(['rows', 'rows-zh', 'rows-deep']);
-    expect(ALL_FIDELITY_VARIANTS).toEqual([...FIDELITY_VARIANTS, ...DETAIL_VARIANTS]);
-    expect(DETAIL_VARIANTS.find((variant) => variant.id === 'rows-deep')?.segments).toHaveLength(3);
+  it('另一組三個變體，原本那五個裡沒有它們', () => {
+    const ids = DETAIL_VARIANTS.map((variant) => variant.id);
+    expect(ids).toEqual(['rows', 'rows-zh', 'rows-deep']);
+    expect(FIDELITY_VARIANTS).toHaveLength(5);
+    for (const id of ids) expect(FIDELITY_VARIANTS.map((variant) => variant.id)).not.toContain(id);
+    expect(ALL_FIDELITY_VARIANTS.map((variant) => variant.id)).toEqual([
+      ...FIDELITY_VARIANTS.map((variant) => variant.id),
+      ...ids,
+    ]);
+  });
+
+  it('rows-deep 有三段，題目的事實都在第一段', () => {
+    const deep = DETAIL_VARIANTS.find((variant) => variant.id === 'rows-deep')!;
+    expect(deep.segments).toHaveLength(3);
+    expect(deep.questions.map((question) => question.segment)).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it('題目用來發問的鍵在各自的清冊或名單裡只出現一次', () => {
+    for (const variant of DETAIL_VARIANTS) {
+      const text = variant.segments.flat().map(contentOf).join('\n');
+      for (const question of variant.questions) {
+        const key = /AT-\d+|P31-\d+|(?<=extension of )[A-Z]\w+ \w+|(?<=保管人)\S{3}(?=保管)/.exec(
+          question.prompt,
+        )![0];
+        expect(text.split(key), `${variant.id}/${question.id}`).toHaveLength(2);
+      }
+    }
   });
 
   it('答案只出現在清冊的那一列或名單的那一筆：題目本身與別的訊息裡都沒有', () => {
@@ -392,16 +415,19 @@ describe('摘要留不住答案的題目與成對的量法（#2908）', () => {
   );
 
   it('成對：同一題先不帶工具問一次，兩次看到的訊息相同，各記各的分數', async () => {
+    const order: string[] = [];
     const withoutTools: string[] = [];
     const withTools: string[] = [];
     const result = await runFidelityVariant(rows, {
       summaryModel: DROPS_EVERYTHING,
       ask: async (messages) => {
+        order.push('without');
         withoutTools.push(messages.map(contentOf).join('\n'));
         return 'I do not know.';
       },
       answerStep: async (messages, tools) => {
         if (!ToolMessage.isInstance(messages.at(-1)!)) {
+          order.push('with');
           withTools.push(messages.map(contentOf).join('\n'));
         }
         return searchesKey(messages, tools);
@@ -409,6 +435,7 @@ describe('摘要留不住答案的題目與成對的量法（#2908）', () => {
       paired: true,
     });
 
+    expect(order).toEqual(rows.questions.flatMap(() => ['without', 'with']));
     expect(withoutTools).toEqual(withTools);
     expect(withoutTools).toHaveLength(rows.questions.length);
     expect(result.score).toBe(1);

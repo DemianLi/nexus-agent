@@ -9,7 +9,7 @@
  * `--count` 只印不跑；不含傳輸重試、索引條目不成立或現況超過上限時多叫的那一次，也不含摘要後仍到門檻時摘要器的那一次重摘。
  * `--recall`（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）帶著 `history_read`／`history_search` 答題：每題 1 到
  * `FIDELITY_RECALL_MAX_REQUESTS` 個請求，看模型叫不叫工具，`--count` 印的是下限與上限。
- * `--paired`（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）每題另外不帶工具問一次，同一份摘要上比有沒有工具的差別。
+ * `--paired`（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)，要配 `--recall`）每題另外不帶工具問一次，同一份摘要上比有沒有工具的差別。
  * 摘要與答題用同一顆模型（出貨預設那顆）；摘要器是出貨的那一顆，prompt、切點、重試都沒有另外寫。
  *
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 題庫的對話、摘要與答案會跟著 trace 出境。
@@ -52,7 +52,8 @@ const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,..
   --recall             帶著 history_read／history_search 答題：模型可以從日誌讀回被摘掉的原文，
                        每題最多 ${FIDELITY_RECALL_MAX_REQUESTS} 個請求。
   --paired             配 --recall：每題先不帶工具問一次（多一個請求），同一份摘要上比有沒有工具。
-  --answers            報表之後逐題印出每一輪：摘要裡有沒有答案、叫了幾次讀回工具、得分與答案。
+  --answers            報表之後逐題印出每一輪：摘要裡有沒有答案、得分與答案；--recall 時加印叫了幾次讀回工具，
+                       --paired 時加印不帶工具那一次。
   --count              只印這一輪會送幾個模型請求，不跑、不需要金鑰。
 
 需要環境變數 NVIDIA_API_KEY（見 .env.example）。`;

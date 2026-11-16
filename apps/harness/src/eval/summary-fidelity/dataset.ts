@@ -9,8 +9,8 @@
  * 題目的 `mentions` 是答案裡必須出現的字串（比對不看空白），交給 `../scorers.ts` 的 `scoreMentions` 計分；所以事實盡量挑寫法固定的
  * （編號、路徑、不帶千分位的數字），題目也要求照寫。`stale` 是被推翻的舊結論，答案裡出現就記一筆過時命中，不進分數。
  *
- * {@link DETAIL_VARIANTS} 是另一組（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）：事實是幾十列清冊裡的某一列，
- * 摘要通常帶不走整張表，題目問的那一列要從日誌讀回才答得出來。它量的是讀回工具，不是摘要寫得全不全。
+ * {@link DETAIL_VARIANTS} 是另一組（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）：事實是幾十列清冊或一份名單裡的某一筆，
+ * 設計成摘要帶不走整張表，題目問的那一筆要從日誌讀回才答得出來。它量的是讀回工具，不是摘要寫得全不全。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -413,7 +413,7 @@ export const FIDELITY_VARIANTS: readonly FidelityVariant[] = [
   },
 ];
 
-/** 清冊的列數。要多到摘要帶不走整張表。 */
+/** 清冊的列數。要多到摘要帶不走整張表；不能超過 60，{@link propertyRow} 的保管人姓名每 60 列循環一次。 */
 const INVENTORY_ROWS = 60;
 
 /** 英文資產清冊的一列：資產標籤、序號、機櫃位置。同一個 `seed` 裡標籤與序號都不重複。 */
@@ -426,10 +426,10 @@ function assetRow(seed: number, index: number): { tag: string; serial: string; l
 
 const ON_CALL_FIRST = ['Avery', 'Bruno', 'Celia', 'Dmitri', 'Elena', 'Farid'];
 const ON_CALL_LAST = ['Lindqvist', 'Okafor', 'Marchetti', 'Sandoval', 'Whitlock'];
-/** 值班名單的人數。 */
+/** 值班名單的人數。不能超過 30：{@link onCallEntry} 的姓名每 30 筆循環一次。 */
 const ON_CALL_PEOPLE = 24;
 
-/** 值班名單的一筆：姓名與分機。姓名與分機都不重複。 */
+/** 值班名單的一筆：姓名與分機。{@link ON_CALL_PEOPLE} 人裡姓名與分機都不重複。 */
 function onCallEntry(index: number): { name: string; extension: string } {
   return {
     name: `${ON_CALL_FIRST[index % ON_CALL_FIRST.length]} ${ON_CALL_LAST[index % ON_CALL_LAST.length]}`,
@@ -501,7 +501,7 @@ const KEEPER_GIVEN = [
 ];
 const PROPERTY_ITEMS = ['筆記型電腦', '桌上型電腦', '雷射印表機', '投影機', '網路交換器'];
 
-/** 中文財產清冊的一列：財產編號、品名、保管人。60 列裡編號與保管人姓名都不重複。 */
+/** 中文財產清冊的一列：財產編號、品名、保管人。{@link INVENTORY_ROWS} 列裡編號與保管人姓名都不重複。 */
 function propertyRow(index: number): { tag: string; keeper: string; line: string } {
   const tag = `P31-${String(1_000 + index)}`;
   const keeper = `${KEEPER_SURNAMES[index % KEEPER_SURNAMES.length]}${KEEPER_GIVEN[(index * 7) % KEEPER_GIVEN.length]}`;
@@ -548,7 +548,7 @@ function propertyTagQuestion(index: number): FidelityQuestion {
 
 /**
  * 摘要留不住答案的三個變體（[#2908](https://github.com/DemianLi/nexus-agent/issues/2908)）。不在 {@link FIDELITY_VARIANTS} 裡：
- * 那五個量摘要保真度、有既有的基準；這三個要配讀回工具看，預設不跑。
+ * 那五個量摘要保真度；這三個要配讀回工具看，預設不跑。
  */
 export const DETAIL_VARIANTS: readonly FidelityVariant[] = [
   {
@@ -577,7 +577,7 @@ export const DETAIL_VARIANTS: readonly FidelityVariant[] = [
     ],
   },
   {
-    // 後兩段只有雜訊：清冊要活過三次摘要。
+    // 後兩段只有雜訊：清冊所在的第一段經過三次摘要。
     id: 'rows-deep',
     title: '清冊在三次摘要之前',
     segments: [
@@ -595,7 +595,7 @@ export const DETAIL_VARIANTS: readonly FidelityVariant[] = [
   },
 ];
 
-/** 全部八個變體，`--variants` 認得的就是這些。 */
+/** 兩組合起來；`--variants` 認得的就是這些。 */
 export const ALL_FIDELITY_VARIANTS: readonly FidelityVariant[] = [
   ...FIDELITY_VARIANTS,
   ...DETAIL_VARIANTS,
