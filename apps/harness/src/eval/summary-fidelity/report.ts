@@ -47,7 +47,7 @@ export function formatFidelityReport(
 
   lines.push(
     '',
-    '逐題（得分是各輪平均；「摘要裡有」是該提到的字串都在最後那則摘要裡的輪數，比對不看空白）',
+    '逐題（得分是各輪平均；「摘要裡有」是該提到的字串都在最後那則摘要裡的輪數，比對不看空白與連字號的寫法）',
   );
   for (const [variantId, results] of byVariant) {
     const first = results[0];

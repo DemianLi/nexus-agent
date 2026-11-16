@@ -7,7 +7,7 @@
  *    門檻調小到這一段一定越過。主模型那一格用罐頭回覆頂替，不打模型；打模型的只有摘要器：每段兩次（索引條目一次、
  *    現況一次；條目不成立或現況超過上限時各多叫一次）。摘要後這份請求仍到門檻時，摘要器照出貨設定（`compactionRetries` 1）
  *    換成不留尾巴再摘一次。
- * 2. **問題目**。摘要器交下去的那一串（摘要加逐字留下的尾巴）後面接一題，一題一次模型呼叫，答案交給 `../scorers.ts` 的
+ * 2. **問題目**。摘要器交下去的那一串（摘要加逐字留下的尾巴）後面接一題，不帶讀回工具時一題一次模型呼叫（帶的時候見下面那段），答案交給 `../scorers.ts` 的
  *    `scoreMentions`。
  *
  * 門檻與保留量照出貨在預設模型上的實際比例（保留量封在 token 門檻的兩成），絕對值縮小：題庫要的是「事實被摘掉」，不是把窗口塞滿。
@@ -15,7 +15,7 @@
  *
  * **帶讀回工具的量法**（`answerStep`，[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：每一段對話先寫進日誌，摘要的前言
  * 指向 `history_read`／`history_search`，問題目那一步變成工具迴圈，模型叫工具就從日誌讀回被摘掉的原文。系統提示與題目不變，
- * 所以量到的是「模型看了前言那一句之後會不會自己去讀」。
+ * 所以量到的是模型拿到讀回前言和兩個工具的定義之後，會不會自己去讀。
  */
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
@@ -44,7 +44,7 @@ const ANSWER_SYSTEM_PROMPT =
   'You are an assistant continuing an ongoing conversation. Answer the next question using only what is in the conversation so far. ' +
   'Reply in the language of the question, in one short sentence. If the conversation does not contain the answer, say you do not know.';
 
-/** 帶讀回工具答一題最多送幾次請求。到了這個數還在叫工具，最後那一則的文字就是答案（通常是空的）。 */
+/** 帶讀回工具答一題最多送幾次請求。到了這個數還在叫工具，最後那一則的文字就是答案，它的工具呼叫不執行、不算進 `recallCalls`。 */
 export const FIDELITY_RECALL_MAX_REQUESTS = 4;
 
 /** 主模型那一格的罐頭回覆。 */
@@ -65,7 +65,7 @@ export interface FidelityModels {
    */
   readonly summaryCall?: 'template' | 'replay';
   /**
-   * 帶讀回工具答題。給了就不用 `ask`：這個函式送一次請求（帶著這兩個工具的定義）、回模型的那一則；有工具呼叫就由跑者執行、
+   * 帶讀回工具答題。給了就不叫 `ask`（型別上仍要給）：每次呼叫送一次請求，帶上 `tools`（`history_read`／`history_search`）的定義、回模型的那一則；有工具呼叫就由跑者執行、
    * 接回去再送，一題最多 {@link FIDELITY_RECALL_MAX_REQUESTS} 次請求。
    */
   answerStep?(messages: readonly BaseMessage[], tools: readonly NexusTool[]): Promise<AIMessage>;
@@ -77,18 +77,18 @@ export interface FidelityQuestionResult {
   readonly kind: FidelityQuestion['kind'];
   /** 這個事實經過幾次摘要。 */
   readonly summariesCrossed: number;
-  /** `scoreMentions` 的分數，0 到 1。比對不看空白。 */
+  /** `scoreMentions` 的分數，0 到 1。比對不看空白與連字號的寫法（見 `squash`）。 */
   readonly score: number;
   /** 答案裡出現了被推翻的舊結論。題目沒列 `stale` 時恆為假。 */
   readonly staleHit: boolean;
-  /** 該提到的字串是否全都在最後那則摘要裡（比對不看空白）。答錯時用它分辨是摘要丟了，還是摘要有、模型沒答出來。 */
+  /** 該提到的字串是否全都在最後那則摘要裡（比對不看空白與連字號的寫法）。答錯時用它分辨是摘要丟了，還是摘要有、模型沒答出來。 */
   readonly inSummary: boolean;
   /** 該提到的字串有任何一個出現在逐字留下的尾巴裡：這題量不到摘要，不進平均。 */
   readonly leaked: boolean;
   readonly answer: string;
-  /** 這一題送了幾次答題請求。不帶讀回工具時恆為 1。 */
+  /** 這一題送了幾次答題請求，不含傳輸重試。不帶讀回工具時恆為 1。 */
   readonly requests: number;
-  /** 這一題叫了幾次讀回工具。不帶讀回工具時恆為 0。 */
+  /** 跑者執行了幾次工具呼叫（名字不認得的也算；到上限那一則回覆裡的呼叫不執行、不算）。不帶讀回工具時恆為 0。 */
   readonly recallCalls: number;
 }
 
@@ -122,7 +122,7 @@ function textOf(message: BaseMessage): string {
 }
 
 /**
- * 比對前拿掉所有空白，各種連字號（U+2010 到 U+2015、U+2212）換成 `-`。模型回答時空白與連字號的寫法不固定
+ * 比對前拿掉所有空白，U+2010 到 U+2015 的連字號與破折號、U+2212 減號換成 `-`。模型寫的字裡空白與連字號的寫法不固定
  * （「4月23日」與「4 月 23 日」、`INC-20417` 與用不斷行連字號的同一串），那不是摘要丟了東西。
  */
 function squash(text: string): string {
@@ -136,7 +136,10 @@ function isSummary(message: BaseMessage): boolean {
   );
 }
 
-/** 把一則訊息照出貨的事件形狀寫進日誌，讀回工具才推得回原文。 */
+/**
+ * 用出貨的事件種類與欄位把一則訊息寫進日誌，讀回工具才推得回原文。只認題庫用到的三種訊息：工具結果一律記成功，
+ * 其餘非 AI 的訊息都記成使用者開的一輪；輪尾的 `turn/end` 由呼叫端補。
+ */
 function logMessage(log: SessionLog, message: BaseMessage): void {
   if (message instanceof ToolMessage) {
     log.append('tool/result', {
@@ -199,7 +202,7 @@ async function answerWithRecall(
  * @param models - 摘要模型與答題模型。
  * @returns 每一題的結果與這個變體的平均分。
  * @throws {SummaryDidNotHappenError} 任何一段沒有剛好生出一則摘要（門檻沒到、摘要模型失敗或摘要被拒收）。答題模型
- *   （`models.ask`）的錯誤原樣拋。
+ *   （`models.ask`／`models.answerStep`）與讀回工具的錯誤原樣拋。
  */
 export async function runFidelityVariant(
   variant: FidelityVariant,
@@ -236,6 +239,7 @@ export async function runFidelityVariant(
     models.retry,
     undefined,
     replay ? () => effective : undefined,
+    // 原文讀得回來：前言指向讀回工具、不寫歷史檔。
     recallTools !== undefined,
   );
   // 兩格都要給：摘要器靠它們認出是同一條對話的呼叫，下一段才會接著上一次的切點摘，而不是從原文重摘。

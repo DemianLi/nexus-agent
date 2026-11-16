@@ -77,7 +77,7 @@ function parseSummaryCall(argv: readonly string[]): 'template' | 'replay' {
 }
 
 /**
- * 一個變體跑一次送幾個模型請求：每段兩次摘要（索引條目、現況），每題一次。不含重試、索引條目不成立或現況超過上限時多叫的那一次，
+ * 一個變體跑一次送幾個模型請求：每段兩次摘要（索引條目、現況），每題一次（帶 `--recall` 時這是下限）。不含重試、索引條目不成立或現況超過上限時多叫的那一次，
  * 也不含摘要器的重摘。
  */
 function requestsOf(variant: FidelityVariant): number {

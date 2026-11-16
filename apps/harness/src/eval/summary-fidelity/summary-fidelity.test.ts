@@ -289,18 +289,23 @@ describe('帶讀回工具答題（#2777）', () => {
     const first = result.questions.find((question) => !question.leaked)!;
     const mention = single.questions.find((each) => each.id === first.questionId)!.mentions[0]!;
     expect(first.inSummary).toBe(false);
-    expect(first.answer).toMatch(/match(es)? for/);
-    expect(first.answer.replace(/\s+/g, '')).toContain(mention.replace(/\s+/g, ''));
+    // 沒命中時工具回的那一句也帶 `matches for` 與 query 本身，所以要正數、而且只看命中的那幾行。
+    expect(first.answer).toMatch(/^[1-9]\d* match(es)? for/);
+    expect(first.answer.split('\n').slice(1).join('\n').replace(/\s+/g, '')).toContain(
+      mention.replace(/\s+/g, ''),
+    );
     expect(first).toMatchObject({ requests: 2, recallCalls: 1 });
-    // 前言指向讀回工具。
-    expect(firstRequests[0]!.map(contentOf).join('\n')).toContain('call history_search with a literal string');
+    expect(firstRequests[0]!.map(contentOf).join('\n')).toContain(
+      'call history_search with a literal string',
+    );
   });
 
   it('連續摘要兩次：第一段的原文還讀得回來', async () => {
     const { answerStep } = searches(double);
     const result = await runFidelityVariant(double, { ...models(DROPS_EVERYTHING), answerStep });
     const early = result.questions.find((question) => question.summariesCrossed === 2)!;
-    expect(early.answer).toMatch(/match(es)? for/);
+    expect(early.answer).toMatch(/^[1-9]\d* match(es)? for/);
+    expect(early.answer).toContain('- entry 1, offset');
   });
 
   it(`一直叫工具：送到第 ${FIDELITY_RECALL_MAX_REQUESTS} 個請求就停，最後那一則的文字當答案`, async () => {
@@ -310,14 +315,14 @@ describe('帶讀回工具答題（#2777）', () => {
       answerStep: async () => {
         requests += 1;
         return new AIMessage({
-          content: '',
+          content: `step ${requests}`,
           tool_calls: [{ id: 'again', name: 'history_read', args: { entry: 1 } }],
         });
       },
     });
     expect(requests).toBe(single.questions.length * FIDELITY_RECALL_MAX_REQUESTS);
     expect(result.questions[0]).toMatchObject({
-      answer: '',
+      answer: `step ${FIDELITY_RECALL_MAX_REQUESTS}`,
       requests: FIDELITY_RECALL_MAX_REQUESTS,
       recallCalls: FIDELITY_RECALL_MAX_REQUESTS - 1,
     });
@@ -333,6 +338,7 @@ describe('帶讀回工具答題（#2777）', () => {
       },
     });
     expect(seen[0]).not.toContain('history_read');
+    expect(seen).toHaveLength(single.questions.length);
     expect(result.questions.every((q) => q.requests === 1 && q.recallCalls === 0)).toBe(true);
   });
 });
