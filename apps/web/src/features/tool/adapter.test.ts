@@ -32,6 +32,10 @@ const CONVERSATION_LEVEL_EXCEPTIONS: Readonly<
       '.includes(entry.name)',
     ],
   },
+  'dialog-summary.ts': {
+    why: '提問與待辦的一行摘要：觀測分頁問「這顆若是提問或待辦，摘要是什麼」，比工具名的事收在這一個檔，不讓別的分頁自己比',
+    hits: ['entry.name === ASK_USER_QUESTION', 'entry.name === TODO_WRITE'],
+  },
   'aborted.ts': {
     why: '提問的停止由 `isStoppedQuestion` 另判，被中止的狀態字不套在它身上',
     hits: ['name === ASK_USER_QUESTION'],
