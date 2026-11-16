@@ -4212,6 +4212,37 @@ mod tests {
         assert_eq!(entry(&supervisor, b"t").failures, 1);
     }
 
+    /// 葉子死了、組合行程留著（`Leafless`）的這條連續失敗：窗裡的 `ensure` 只得到一則 `down`，不補葉子；
+    /// 閘排在找行程之前，否則這條會走「只補一個葉子」的路繞過去。
+    #[test]
+    fn a_gated_ensure_does_not_refill_a_leafless_pair() {
+        let (mut supervisor, _, _) = with_a_pair("tb-6e", PairState::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Crash);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Leafless { .. }
+        ));
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+        front_events(&mut supervisor);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, Instant::now());
+        assert_eq!(entry(&supervisor, b"t").failures, 2);
+
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Leafless { .. }
+        ));
+        assert!(supervisor.conversations.is_empty(), "沒有補葉子");
+        assert!(supervisor.pending.is_empty());
+    }
+
     /// 成對的 `start_pair` 失敗記一筆。
     #[test]
     fn a_failed_pair_start_is_counted() {

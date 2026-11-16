@@ -1834,7 +1834,10 @@ fn a_failing_pair_is_turned_away_within_the_window() {
 /// 一條 thread 在窗裡，別條 thread 照常起、照常 `up`。
 #[test]
 fn a_thread_in_the_window_does_not_hold_back_the_others() {
-    let mut h = Harness::start(Options::default());
+    let mut h = Harness::start(Options {
+        extra: vec!["--front-restart-ms", "1500"],
+        ..Options::default()
+    });
     for _ in 0..2 {
         h.ensure("x,exit:3");
         assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
@@ -1844,9 +1847,11 @@ fn a_thread_in_the_window_does_not_hold_back_the_others() {
     assert_eq!(backoff_lines(&h).len(), 1);
 
     h.up("ok");
+    let started = settled_audit_lines(&h);
     h.ensure("x,exit:3");
     assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
     assert_eq!(backoff_lines(&h).len(), 1, "同一個窗不再寫");
+    assert_eq!(settled_audit_lines(&h), started, "被擋的沒有起行程");
 }
 
 #[test]
