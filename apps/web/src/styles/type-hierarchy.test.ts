@@ -12,7 +12,7 @@ import { isVendorUpstream } from '@/test/vendor-upstream';
  * **可以點的、當標題的用 `text-ui`（13）；小字說明、附註、時間、計數用 `text-tip`（12）；內文 `text-body`（14）不變。**
  *
  * 這裡只守機械判得出來的那一半：**可點的元件不縮成小字**——下面 {@link CONTROLS} 這些 JSX 元素自己的 `className` 裡出現
- * `text-tip`／`text-micro` 就紅。「是不是標題」判不出來，靠 review。registry 元件的預設字級（`xs` 按鈕、側欄、cmdk、附件）
+ * `text-tip`／`text-micro` 就紅。「是不是標題」判不出來，靠 review。基礎元件的預設字級（`xs` 按鈕、側欄、cmdk、附件）
  * 原本是 registry 原文的改動，#1468 Q19 拿掉，隨各元件換成 vendor 版改回 SG（側欄是 #1680）。
  *
  * 掃 JSX 語法樹（`@/test/jsx-scan`）；先用字串預篩，含 `text-tip` 或 `text-micro` 的檔才 parse。

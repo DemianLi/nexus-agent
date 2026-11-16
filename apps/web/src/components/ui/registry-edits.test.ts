@@ -5,8 +5,8 @@ import { describe, expect, test } from 'vitest';
 import { GLYPH_RADIUS } from '@/test/glyph-env';
 
 /**
- * registry 檔裝進來之後改過、而且改回去時**畫面不會報錯**的地方（#404）。重跑 `shadcn add` 或手滑貼回
- * registry 原文時在這裡紅。
+ * 寫在覆寫檔的本地修改（加上第 49 條的 patch）還在，以及它們、測試輔助與 guard 頁錨定的 vendor 原文沒變（#404）。
+ * 這些地方改回去時**畫面不會報錯**，所以同步 vendor 或手滑改回原文時在這裡紅。
  */
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
