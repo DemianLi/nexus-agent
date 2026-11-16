@@ -3781,7 +3781,7 @@ mod tests {
         assert_eq!(supervisor.warm_backoff, base);
     }
 
-    /// 預熱的一對葉子先死、組合行程跟著收屍：這一個事件只長一次（葉子那一側算過，`told` 擋住組合行程那一側）。
+    /// 預熱的一對葉子先死、組合行程跟著收屍：這一個事件只長一次（葉子那一側算過；連帶收組合行程時 `collect` 設了 `peer`、`on_leaf_gone` 設了 `told`，兩個都擋住組合行程那一側，這支測的是結果「只長一次」，不單獨守其中一個）。
     #[test]
     fn a_warm_pair_whose_leaf_dies_first_counts_one_failure() {
         let (mut supervisor, _, _) = with_a_pair("warm-pair-leaf-first", PairState::Ready);
