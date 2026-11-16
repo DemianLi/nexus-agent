@@ -18,7 +18,7 @@ import { jsxAttributes, tsxFiles } from '@/test/jsx-scan';
 const SRC = fileURLToPath(new URL('..', import.meta.url));
 
 /** 狀態列本身：全站唸代理現況的那一格。 */
-const STATUS_LINE = 'components/status-line.tsx';
+const STATUS_LINE = 'features/status/line.tsx';
 
 interface Allowed {
   readonly file: string;
@@ -28,11 +28,11 @@ interface Allowed {
 /** 狀態列以外准掛的。**只能變少**：列了卻不再命中的會紅。 */
 const ALLOWED: readonly Allowed[] = [
   {
-    file: 'components/sidebar/thread-list.tsx',
+    file: 'features/threads/list.tsx',
     why: '搜尋結果：人自己打的字、焦點留在搜尋框，結果在別處，「沒有結果」不唸就不知道（WCAG 4.1.3）。搜尋框在它就在、內容之後才填',
   },
   {
-    file: 'components/trace/panel.tsx',
+    file: 'features/trace/panel.tsx',
     why: '「看這一輪」與定位的結果：人自己按的，找不到或還在拉時焦點沒有地方落。觀測分頁常駐的唯一一格',
   },
 ];

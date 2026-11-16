@@ -250,37 +250,37 @@ interface Allowed {
 const ALLOWED: readonly Allowed[] = [
   // 自己的元件。
   {
-    file: 'components/chevron.tsx',
+    file: 'shared/blocks/chevron.tsx',
     what: 'group-data-panel-open:rotate-90',
     why: '`Chevron` 本身：全站唯一該寫展開箭頭旋轉的地方',
   },
   {
-    file: 'components/row-trigger.tsx',
+    file: 'shared/blocks/row-trigger.tsx',
     what: 'hover:bg-muted w-full text-left min-h-11',
     why: '`RowTrigger` 本身：全站唯一該寫可展開列配方的地方',
   },
   {
-    file: 'components/chat-bubble.tsx',
+    file: 'shared/blocks/chat-bubble.tsx',
     what: 'rounded-3xl px-4 py-2.5',
     why: '`ChatBubble` 本身：全站唯一該寫對話泡泡配方的地方',
   },
   {
-    file: 'components/mono-block.tsx',
+    file: 'shared/blocks/mono-block.tsx',
     what: 'bg-muted rounded-lg p-2 font-mono',
     why: '`MonoBlock` 本身：全站唯一該寫程式碼小框配方的地方',
   },
   {
-    file: 'components/surface.tsx',
+    file: 'shared/blocks/surface.tsx',
     what: 'bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]',
     why: '`Surface` 的 stage 配方本身：全站唯一該寫這串的地方',
   },
   {
-    file: 'components/surface.tsx',
+    file: 'shared/blocks/surface.tsx',
     what: 'bg-card rounded-3xl',
     why: '`Surface` 的 raised 配方本身：全站唯一該寫這串的地方',
   },
   {
-    file: 'components/surface.tsx',
+    file: 'shared/blocks/surface.tsx',
     what: 'bg-card border rounded-3xl',
     why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
   },

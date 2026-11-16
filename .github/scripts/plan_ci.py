@@ -126,6 +126,16 @@ SNAPSHOT_TRIGGER_RE = re.compile(
 WEB = 'apps/web'
 WEB_DESIGN_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.test\.tsx$).*\.(tsx|css)$|^apps/web/tokengen/')
 
+# web 的結構護欄（#2883）：掃整個 `apps/web/src` 的 import 與檔案配置，改到的檔的同名規則排不到它們。切片的 import 方向、公開入口、循環、
+# `features/tool/` 的檔不按工具名分支、`styles/` 的檔名不重複資料夾名，任何 `.ts`、`.tsx` 的新增、搬動、刪除都可能違反，所以只看 `changed`、
+# 不看檔還在不在（刪檔也會弄壞 import）。測試檔與 `.d.ts` 不觸發。
+WEB_STRUCTURE_GUARDS = [
+    'apps/web/src/architecture.test.ts',
+    'apps/web/src/features/tool/adapter.test.ts',
+    'apps/web/src/styles/naming-deprecation.test.ts',
+]
+WEB_STRUCTURE_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.(test\.tsx?|d\.ts)$).*\.tsx?$')
+
 
 def web_design_guards(root: Path = ROOT) -> list[str]:
     """`apps/web/src/styles/*.test.ts` 與 `ui/registry-edits.test.ts`，repo 相對路徑。"""
@@ -183,6 +193,10 @@ def light(
         tests.setdefault(d, set()).add(SNAPSHOT_TEST[len(d) + 1:])
     if design_guards and WEB in names and any(WEB_DESIGN_TRIGGER_RE.search(p) for p in changed):
         tests.setdefault(WEB, set()).update(g[len(WEB) + 1:] for g in design_guards)
+    if WEB in names and any(WEB_STRUCTURE_TRIGGER_RE.search(p) for p in changed):
+        found = [g[len(WEB) + 1:] for g in WEB_STRUCTURE_GUARDS if exists(g)]
+        if found:
+            tests.setdefault(WEB, set()).update(found)
 
     return {
         'typecheck': typecheck,

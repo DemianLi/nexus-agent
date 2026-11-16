@@ -77,7 +77,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
 - 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`composition`／`front`／`host`）、`pid`、`exit_code`、`signal`；`ready`（結束前送過 `ready` 沒有）只有 `host` 有；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 與 `composition` 有；沒起成的，與宿主 `ready` 之前逾時、插件清單壞了的、成對時等 `ready` 逾時的組合行程，多一個 `error`。宿主回報的違反協定另寫一行：`ts_ms`、`event`（`protocol`）、`pid`、`role`（那個 pid 在身分表上是 `front`、`conversation`，不在表上是 `unknown`）、`thread`、`reason`。欄位與值只加不改，讀的人照 `role` 或 `event` 分辨每一行。
 - 一對裡每個行程結束各寫一行（組合行程一行，每個葉子各一行，含補起的），都多一個 `pair`（這一對的序號，同一對的每一行都相同，就是 socket 檔名 `c<序號>.sock` 的那個數字）：葉子的 `role` 是 `conversation`，組合行程是 `composition`（`turns` 一律是 0）；被同伴連帶收掉的那一個 `cause` 是 `peer`；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也是（那條 thread 的 `down` 在葉子死時回過）。`peer` 只出現在稽核：不回 `down`、不進 `stats` 的死因累計。
-- 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2；前台或宿主的 `hello` 對不上 3；宿主在 `ready` 之前連續失敗 4；這個監督行程起來之後宿主還沒 `ready` 過、插件清單就壞了 5。
+- 結束碼（監督行程 `nexus-supervisor` 自己的；組合行程的另有一張，見〈組合行程 `nexus-composition`〉）：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2；前台或宿主的 `hello` 對不上 3；宿主在 `ready` 之前連續失敗 4；這個監督行程起來之後宿主還沒 `ready` 過、插件清單就壞了 5。
 
 整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`host/examples/fake_conversation.rs`、`examples/fake_host.rs` 三支假程式站在前台、對話行程與宿主的位置，成對的測試另外起真的 `nexus-composition`（驗組合行程 `hello` 的那一支拿 `fake_conversation` 頂替）；真宿主的端到端也在這裡。`fake_conversation` 要用宿主的協定，所以編在宿主那個 package。
 
@@ -87,10 +87,15 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 
 - 起動：先起組合行程，argv 是 `<程式> <--composition-arg>... --socket <--run-dir>/c<序號>.sock --pair-socket <--run-dir>/c<序號>.p.sock --leaf-socket <--run-dir>/c<序號>.l.sock`；收到它不宣告 loop 的 `hello` 才起葉子（`--conversation`），葉子的 `--socket` 是 `c<序號>.l.sock`、多一個 `--pair-socket c<序號>.p.sock`，並先送組合行程 `leaf{pid}`。兩個行程各有一條控制通道、各自 `hello`；葉子要宣告 loop 在自己這裡，組合行程不能宣告，對不上的死因是 `protocol`。組合行程的 `hello` 帶空的 token：它還不連宿主，身分表上只有葉子。
 - `ready`、`bound` 看組合行程的（葉子在橋上登記完它才 `ready`），葉子在控制通道上送的不理；`bind` 送給組合行程，由它經橋轉給葉子。`up` 的 socket 是組合行程的 `c<序號>.sock`。`turn`、閒置、`drain` 走葉子。預熱池預熱的是一對，到組合行程 `ready` 為止。
-- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子，`up` 的 socket 不變：送 `leaf{pid}`，等組合行程替補起的葉子再回一則 `ready`（它在橋上登記完）才送 `bind`，`--stall-ms` 也從那則 `bind` 起算，跟第一個葉子一樣。等這則 `ready` 的期限見下面 `--start-timeout-ms` 那一條；這一段葉子死了就整對收。第一則之後、不在等補起的葉子時多出來的 `ready` 不理。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
-- 組合行程死了：整對收。先收它的屍、判完死因，才對葉子的群組送 SIGKILL（反過來葉子可能先被收屍，領走那一次 `oom_kill`）。`down` 一對只送一次、死因累計也只進一次：葉子已經在收時照葉子的死因，否則照組合行程的。
+- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子，`up` 的 socket 不變：送 `leaf{pid}`，等組合行程替補起的葉子再回一則 `ready`（它在橋上登記完）才送 `bind`，`--stall-ms` 也從那則 `bind` 起算，跟第一個葉子一樣。等這則 `ready` 的期限見下面 `--start-timeout-ms` 那一條；這一段葉子死了就整對收。葉子在收（或已經不在）時讀到的 `ready` 不理、不送 `bind`，起動期限也照算。第一則之後、不在等補起的葉子時多出來的 `ready` 不理。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
+- 組合行程死了：整對收。先收它的屍、判完死因，才對葉子的群組送 SIGKILL（反過來葉子可能先被收屍，領走那一次 `oom_kill`）。`down` 一對只送一次、死因累計也只進一次：葉子已經在收時照葉子的死因，否則照組合行程的。組合行程開始收之後，這一對不再推進也不再回 `up`：它之後才讀到的 `ready`、`bound` 不理，葉子回 `busy`（或 `drain` 逾時）時排著的那條 thread 不回 `up`，等到的是這一對的 `down`。
 - `--start-timeout-ms`：一對從起組合行程到讀到它的 `ready`，整段一筆期限；補葉子時從補的那一刻另算一筆。過了就當場對組合行程的群組送 SIGKILL（不走拆除梯度），葉子等它收完屍連帶收（稽核記 `peer`），死因 `stalled`、`down` 一次，名額讓出來。組合行程沒送 `hello`、葉子沒在橋上登記、組合行程沒替它送 `ready`，從外面分不出來，都算這一條。判之前先讀一次組合行程的控制通道；停機中不判；監督行程判定自己被停住過時（比准許的晚了超過 `--start-timeout-ms` 的一半，跟 `--stall-ms` 開不開無關）從那一刻重新算。預熱池裡的一對逾時不回 `down`，隔 `--front-restart-ms` 再補；一直起不來的會這樣一輪一輪重來，間隔不會拉長。短於那一半的停住照樣算進期限；認不認得出來靠 poll 醒得夠勤，有一對時最晚每 `--rss-poll-ms` 醒一次，`--rss-poll-ms` 調到期限的一半以上就認不出來。期限很小（一輪的處理時間就超過它的一半）或監督行程的 fd 2 一直卡著時，每一輪都重算，一直不逾時（讀程式推論，沒量過）。`--start-timeout-ms 0` 是不判。預設 30000 跟 `--host-ready-timeout-ms` 取一樣的值，一對冷起動實際要多久沒有量過。
-- `--stall-ms` 兩個行程各看各的：葉子停住只殺葉子，組合行程停住整對收。組合行程的心跳是 1 秒一次，`--stall-ms` 要超過 4000：監督行程最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值，整棵樹凍住才認得出來（見上面「心跳」那一條）；參數解析不擋。`--rss-limit-mb` 只管葉子；組合行程的 RSS 只記進稽核與 `stats`。壓住吃滿 CPU 的也只有葉子。
+- `bind` 之後等 `bound` 沒有期限，靠三件事收：
+  - 葉子回 `attach` 錯（或 `attach` 送不出去）：組合行程以 4 結束，照「組合行程死了」整對收。稽核裡組合行程那一行是 `crash`、`exit_code` 4；葉子這時沒在收的話，`down` 的死因是 `crash`、葉子那一行是 `peer`，已經在收就照葉子的死因。
+  - 葉子結束（含橋斷了它自己以 70 結束；葉子自己的結束碼 70、71 見 [`docs/operations.md`](../../docs/operations.md)〈成對執行：對話行程連組合行程的橋〉）：還沒 `bound`，整對收。
+  - 葉子或組合行程沒有心跳：`--stall-ms`。真的葉子在綁定裡才開始送心跳，`attach` 還沒走到那裡就停住的，從 `bind` 起算的沉默到了就判。
+  - **已知限制**：葉子心跳照送、`attach` 一直不回（冷開不結束）的一對留在等 `bound`，佔著名額，到停機或葉子自己結束為止（還沒 `up` 的不能逐出）；這段期間同一條 thread 再來的 `ensure` 也拿不到回答；不成對的對話行程 `bind` 之後也一樣沒有期限。冷開最久要多久沒有量過，沒有數字就不設期限。
+- `--stall-ms` 兩個行程各看各的：葉子停住只殺葉子，組合行程停住整對收。組合行程的心跳是 1 秒一次，`--stall-ms` 要超過 4000：監督行程最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值，整棵樹凍住才認得出來（見上面「心跳」那一條）；參數解析不擋。不超過心跳間隔（1000 上下）時組合行程一送出 `bind` 就會在兩則心跳之間被判 `stalled`，整對收（[#2876](https://github.com/DemianLi/nexus-agent/issues/2876)）。`--rss-limit-mb` 只管葉子；組合行程的 RSS 只記進稽核與 `stats`。壓住吃滿 CPU 的也只有葉子。
 - 拆除與停機都是先葉子後組合行程：葉子收完才開始收組合行程。停機中再收到訊號時不分先後，全部當場 SIGKILL。
 
 ## 宿主 `nexus-host`
@@ -230,12 +235,12 @@ nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑
 
 - 握手：兩個 socket 都在聽了才送 `hello`，不宣告 loop 在自己這裡（`runs_loop` 是否）；監督行程的第一框要是同一版的 `hello`。
 - `ready` 每個葉子送一次，三件事都到了才送：收到 `leaf{pid}`、那個 pid 的葉子在橋上驗過（交換了 `hello`）、葉子送了第一則 `register`。清單是空的也算，但**葉子一定要送 `register`**，不送就永遠不會 `ready`。換了葉子，新葉子 `register` 之後再送一則。第一則 `ready` 之前不收前台的連線（排在 backlog）。
-- `bind`：經橋對葉子發 `attach`（payload 是 `{"threadId": …}`），葉子回成功才送 `bound`。thread 記第一次的，之後每一則都要相同。葉子換過之後監督行程再送同一條 thread 的 `bind`，就對新葉子再 `attach` 一次、成功再送一次 `bound`；`bind` 比新葉子的 `register` 早到就留著，等 `register` 那一刻才 `attach`。`attach` 沒成功（葉子回錯、送不出去、回之前斷線）只記一行，不送 `bound`、不自己重試，行程照活。
+- `bind`：經橋對葉子發 `attach`（payload 是 `{"threadId": …}`），葉子回成功才送 `bound`。thread 記第一次的，之後每一則都要相同。葉子換過之後監督行程再送同一條 thread 的 `bind`，就對新葉子再 `attach` 一次、成功再送一次 `bound`；`bind` 比新葉子的 `register` 早到就留著，等 `register` 那一刻才 `attach`。葉子回 `attach` 錯、或 `attach` 送不出去（橋上排著的到了暫停線、或編出來超過一框），記一行、以 4 結束：監督行程不會再送 `bind`，留著只會讓這一對停在等 `bound`。葉子回之前斷線（或要送時已經不在橋上）只記一行，不送 `bound`、不自己重試，行程照活。
 - 心跳：收到第一則 `bind` 起每 1 s 一則（跟對話行程的間隔相同），之後不停。
 - `drain`：loop 不在這裡，記一行、不理。
 - 葉子斷線：行程照活，等下一則 `leaf{pid}`。
 - 協定錯誤，以 3 結束：第一框不是同一版的 `hello`；解不開的框或訊息；第一則 `ready` 之前的 `bind`；thread 跟第一次不同、或不是 UTF-8 的 `bind`；現在的葉子已經綁了、`attach` 還沒回、或已經有一則 `bind` 留著時又來的 `bind`。
-- 結束：stdin 讀到 EOF 或收到 SIGTERM 就刪掉兩個 socket、回 0。綁不了 socket 回 1（這時還沒送 `hello`），參數不對回 2。
+- 結束碼（組合行程 `nexus-composition` 自己的，跟監督行程的那一張各自編號；監督行程不看它的數字，只原樣記進稽核的 `exit_code`）：0 是 stdin 讀到 EOF 或收到 SIGTERM；1 是綁不了 socket（這時還沒送 `hello`）；2 是參數不對；3 是協定錯誤；4 是 `attach` 明確失敗（見上面 `bind` 那一條）。0、3、4 結束前都刪掉兩個 socket。
 - 前台連線的轉送（`host/src/composition/forward.rs`）：`--socket` 上每收一條就對 `--leaf-socket` 連一條，位元組原樣雙向對接，不解析內容。每個方向最多留 64 KiB 還沒寫出去的，留著的寫完之前不讀來源，所以對方不讀時來源那一端會被核心擋住。一邊讀到 EOF，留著的寫完之後只關另一邊寫的方向；兩個方向都結束、或有一邊整條關了而它剩下的都轉完，才整條關。同時最多 64 條，到了就不 accept，多的排在 backlog。連不上葉子（含葉子的 backlog 滿了）就把進來的那一條直接關。
 - 轉送緩衝的最壞值（算的，沒量）：64 條 × 2 個方向 × 64 KiB＝8 MiB，加上共用的一塊 64 KiB 讀取區。心跳間隔、緩衝大小與連線數上限都是暫定的，沒有對著實際負載量過。
 

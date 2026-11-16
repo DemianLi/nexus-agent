@@ -12,7 +12,7 @@ export default [
           object: 'crypto',
           property: 'randomUUID',
           message:
-            '瀏覽器在非安全環境（內網用 IP 開的 http:// 頁面）不給 crypto.randomUUID；改用 @/lib/uuid 的 randomUuid()。',
+            '瀏覽器在非安全環境（內網用 IP 開的 http:// 頁面）不給 crypto.randomUUID；改用 @/shared/lib/uuid 的 randomUuid()。',
         },
       ],
     },

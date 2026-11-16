@@ -13,7 +13,7 @@ export default defineConfig({
   plugins: [pathsPlugin()],
   test: {
     execArgv: sourceHook(),
-    setupFiles: ['./src/test-home.setup.ts'],
+    setupFiles: ['./src/test-home.setup.ts', './src/request-baseline.setup.ts'],
     sequence: { sequencer: DurationSequencer },
   },
 });

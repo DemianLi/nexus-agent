@@ -6,7 +6,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
 /**
  * 關閉鈕的報讀名稱是中文「關閉」（README 本地修改第 20 條，patch `0002-dialog-close-label`、`0003-sheet-close-label`）：
- * vendor 原文是寫死的 "Close"。框要打開才掃得到（`history-ui.test.tsx` 只掃已經掛上的 DOM），所以這裡各自打開。
+ * vendor 原文是寫死的 "Close"。框要打開才掃得到（`app/history-ui.test.tsx` 只掃已經掛上的 DOM），所以這裡各自打開。
  */
 
 afterEach(cleanup);
