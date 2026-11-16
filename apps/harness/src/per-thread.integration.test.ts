@@ -240,6 +240,16 @@ function childrenRunning(parent: number, entry: string): number[] {
   return found;
 }
 
+/** 前台的 plugin 對照快照上列著的 thread：前台收到 `up` 之後綁上的才列，收到 `down` 就拿掉。 */
+async function liveThreadsOf(home: string): Promise<string[]> {
+  const rows = (
+    JSON.parse(await readFile(join(home, PLUGIN_SNAPSHOT_FILE_NAME), 'utf8')) as {
+      rows: { live?: { threads: string[] }[] }[];
+    }
+  ).rows;
+  return [...new Set(rows.flatMap((row) => row.live ?? []).flatMap(({ threads }) => threads))];
+}
+
 /** 監督行程預設補一個還沒綁 thread 的預熱行程（`--warm 1`）。 */
 const WARM = 1;
 
@@ -480,15 +490,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
       '1500',
     ]);
     const client = await clientOf(await running.loginUrl(1));
-    const snapshot = join(running.home, PLUGIN_SNAPSHOT_FILE_NAME);
-    const liveThreads = async (): Promise<string[]> => {
-      const rows = (
-        JSON.parse(await readFile(snapshot, 'utf8')) as {
-          rows: { live?: { threads: string[] }[] }[];
-        }
-      ).rows;
-      return [...new Set(rows.flatMap((row) => row.live ?? []).flatMap(({ threads }) => threads))];
-    };
+    const liveThreads = (): Promise<string[]> => liveThreadsOf(running.home);
     expect(await liveThreads()).toEqual([]);
 
     expect((await client.threadHistory('thread-p')).kind).toBe('ok');
@@ -1175,11 +1177,14 @@ describe.skipIf(SUPERVISOR === undefined)(
             ).unref(),
           ),
         ]);
+        // 前台收到 `down` 會了結這條 thread 所有在等的 `ensure`，連 `down` 之後才問的也算。所以下一句要等前台處理過舊葉子的 `down` 才送：
+        // 快照先列出這條，殺掉之後等它被拿掉。
+        await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([THREAD]);
         expect(signalPid(killed, 'SIGKILL')).toBe(true);
+        await expect.poll(() => liveThreadsOf(running.home), { timeout: 30_000 }).toEqual([]);
 
-        // 稽核那一行在收屍時寫：等到它就是舊葉子收完了，之後的 `ensure` 才會補葉子。
-        await expect.poll(() => auditOf(running.home, killed), { timeout: 30_000 }).toBeDefined();
-        const record = auditOf(running.home, killed)!;
+        // 監督行程收屍時先寫稽核那一行才送 `down`：前台處理過 `down`，這一行就已經在了。收完屍之後的 `ensure` 才會補葉子。
+        const record = auditOf(running.home, killed);
         expect(record).toMatchObject({
           role: 'conversation',
           thread: THREAD,
@@ -1187,7 +1192,7 @@ describe.skipIf(SUPERVISOR === undefined)(
           exit_code: null,
           signal: 9,
         });
-        const bridge = `c${String(record.pair)}.p.sock`;
+        const bridge = `c${String(record?.pair)}.p.sock`;
         downlink.abort();
 
         // 扣住的那一次不進 `bodies`、不佔 `mainOnly` 的號，所以這一句拿到的是第 0 次回覆。
