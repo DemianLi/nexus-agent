@@ -32,7 +32,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 ### 1.2 層次靠表面，不靠框線
 
 - **長什麼樣**：底色 → 浮起來的玻璃卡片（`Surface tone="raised"`）→ 卡片裡的內層底（`stage`）。卡片的邊畫在陰影裡，不用 `border`：頂上一條光、一圈 1px 細線、貼地的淡影，再加一層浮起來的投影，亮暗是同一組結構（SG `solid-glass.css:380-403`）；按鈕與欄位的細線則是它們自己的 `border`，再疊光與影（規格 §5「形狀」）。亮色每層投影的透明度上限是 solid-glass 現在的值（浮起來的那一層 `--glass-shade` 0.28、貼地的 `--glass-contact` 0.06），只准一樣或更淡（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。
-- **例外**：貼在輸入框上方的那一排（待辦、送出佇列、目標列，`Surface tone="docked"`）用平的細線，因為它們接在輸入框上、不是浮在對話裡；SG 會把它畫成浮起來的卡片，覆寫檔補回平線（#1512）（規格 §5「形狀」；`apps/web/src/components/surface.tsx` 檔頭）。
+- **例外**：貼在輸入框上方的那一排（待辦、送出佇列、目標列，`Surface tone="docked"`）用平的細線，因為它們接在輸入框上、不是浮在對話裡；SG 會把它畫成浮起來的卡片，覆寫檔補回平線（#1512）（規格 §5「形狀」；`apps/web/src/shared/blocks/surface.tsx` 檔頭）。
 - **從哪裡來**：
   - 卡片外框、裡面再嵌一個展示區、1px 半透明邊線、幾乎不用實色邊框：Libraries.dev 的外觀（[元件清單](agent-ui-element-inventory.md) §3.2）；展示區是 SG 的 `--hover-faint` 加一圈 `--border` 的內框線（#1689，規格 §5「顏色」）。
   - 邊緣畫在陰影裡：[#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)。
