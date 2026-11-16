@@ -194,6 +194,42 @@ describe('listener：注入什麼', () => {
   });
 });
 
+describe('正文放不下：整份不放，留一行指標（#2777）', () => {
+  const big = { skills: { big: { body: '步'.repeat(200) }, deploy: { body: '部署的步驟。' } } };
+  const limited = (ws: string, limits: { maxBytes: number; contextFraction?: number }) =>
+    createSkillInvocationListener({ fs: lookupOf(backendOf(ws)) }, limits);
+
+  it('超過 maxBytes 的那一份換成指標；記號與來源照舊，放得下的那一份原樣', async () => {
+    const ws = workspace(big);
+    const injections = await run(limited(ws, { maxBytes: 500 }), [human('/big 再 /deploy', 'h1')]);
+    expect(namesOf(injections)).toEqual(['big', 'deploy']);
+    const [deferred, kept] = injections!;
+    expect(deferred!.content).toMatch(
+      /^Skill "big" is \d+ bytes, over the 500-byte budget: read \/skills\/big\/SKILL\.md with read_file and follow it\.$/,
+    );
+    expect(deferred!.additionalKwargs).toEqual({ [SKILL_INVOCATION_MARKER]: { name: 'big' } });
+    expect(deferred!.source).toEqual({
+      kind: 'skill-invocation',
+      name: 'big',
+      form: 'instructions',
+    });
+    expect(kept!.content).toContain('<skill_instructions>\n部署的步驟。');
+  });
+
+  it('上限跟著宿主交來的窗口縮：min(maxBytes, floor(窗口 × 4 × contextFraction))', async () => {
+    const ws = workspace(big);
+    const listener = limited(ws, { maxBytes: 65536, contextFraction: 0.1 });
+    const visible = [human('/big', 'h1')];
+    const wide = await listener(visible, { configurable: {}, contextWindow: 100_000 });
+    expect(wide![0]!.content).toContain('<skill_instructions>');
+    // 1000 × 4 × 0.1 = 400，比那一份（六百多位元組）小。
+    const narrow = await listener(visible, { configurable: {}, contextWindow: 1000 });
+    expect(narrow![0]!.content).toContain('over the 400-byte budget');
+    // 宿主沒交窗口：只看 maxBytes。
+    expect((await run(listener, visible))![0]!.content).toContain('<skill_instructions>');
+  });
+});
+
 describe('驗收 5：不是手勢、叫不出來的，當一般文字', () => {
   it.each([['/usr/bin/env 是什麼'], ['5/8 開會'], ['看 /deploy/x'], ['沒有手勢']])(
     '%s：不掃、不注入',

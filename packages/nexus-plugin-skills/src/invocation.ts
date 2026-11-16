@@ -68,14 +68,43 @@ import { z } from 'zod';
 export const name = 'skill-invocation';
 
 /**
- * 要的服務：`agentLoop`（`^1.2.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上）、
+ * 要的服務：`agentLoop`（`^1.4.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上；1.4.0 起讀呼叫上的
+ * `contextWindow`）、
  * `fs`（`^2.2.0`，呼叫當下拿這條 thread 的 backend、位址與技能來源；來源是 2.2.0 加的 `skillSources`，#1919）。範圍在這裡宣告，經
  * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
-export const inject = injectOf(need(agentLoopToken, '^1.2.0'), need(fsToken, '^2.2.0'));
+export const inject = injectOf(need(agentLoopToken, '^1.4.0'), need(fsToken, '^2.2.0'));
 
-/** 沒有設定：來源由 `skills` 列登記。`strictObject`：未知欄位讓載入失敗。 */
-export const Config = z.strictObject({});
+/** 一份叫用的正文最多幾個 UTF-8 位元組；同 `@nexus/core` 預算表 `skill-invocation` 那一列。 */
+export const DEFAULT_MAX_INVOCATION_BYTES = 65536;
+
+/** 一份叫用的正文最多佔模型窗口的幾成；同預算表那一列的 `contextFraction`。 */
+export const DEFAULT_INVOCATION_CONTEXT_FRACTION = 0.1;
+
+/**
+ * 設定：一份叫用的正文放進請求的上限（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。來源由 `skills` 列登記，不在這裡。
+ * `strictObject`：未知欄位讓載入失敗。
+ */
+export const Config = z.strictObject({
+  /** 絕對上限，UTF-8 位元組。正的有限數，省略即 {@link DEFAULT_MAX_INVOCATION_BYTES}。 */
+  maxBytes: z
+    .number()
+    .positive('上限要是正的有限數')
+    .finite('上限要是正的有限數')
+    .default(DEFAULT_MAX_INVOCATION_BYTES),
+  /**
+   * 最多佔下一步模型窗口的幾成，大於 0、不超過 1，省略即 {@link DEFAULT_INVOCATION_CONTEXT_FRACTION}。實際上限是
+   * `min(maxBytes, floor(窗口 × 4 × contextFraction))`；宿主沒交窗口時只看 `maxBytes`。
+   */
+  contextFraction: z
+    .number()
+    .gt(0, '比例要大於 0、不超過 1')
+    .max(1, '比例要大於 0、不超過 1')
+    .default(DEFAULT_INVOCATION_CONTEXT_FRACTION),
+});
+
+/** 驗過的設定。 */
+export type SkillInvocationConfig = z.infer<typeof Config>;
 
 export const manifest = defineManifest({
   id: 'skill-invocation',
@@ -83,11 +112,11 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: agentLoopToken.name, range: '^1.2.0' },
+    { token: agentLoopToken.name, range: '^1.4.0' },
     { token: fsToken.name, range: '^2.2.0' },
   ],
   config: Config,
-  // 換程式碼要重啟行程；掛不掛只影響新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
+  // 換程式碼要重啟行程；掛不掛與設定只影響新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
   reload: { code: 'restart', config: 'next-thread' },
   capabilities: [],
 });
@@ -97,13 +126,14 @@ export const manifest = defineManifest({
  * `fs.forCall`。
  *
  * @param ctx - 這一列的 Cordis context。
+ * @param config - 驗過的設定。
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: SkillInvocationConfig): void {
   const agentLoop = service(ctx, agentLoopToken);
   const fs = service(ctx, fsToken);
   agentLoop.preStep(
     SKILL_INVOCATION_LISTENER_NAME,
-    createSkillInvocationListener({ fs: (invocation) => fs.forCall(invocation) }),
+    createSkillInvocationListener({ fs: (invocation) => fs.forCall(invocation) }, config),
   );
 }
 
@@ -167,13 +197,46 @@ export interface SkillInvocationLookups {
   fs(invocation: PreStepInvocation): FsLookup;
 }
 
+/** 一份叫用正文的上限。不給就不設上限（直接建 listener 的測試）。 */
+export type SkillInvocationLimits = Partial<SkillInvocationConfig>;
+
+/**
+ * 這一次的上限：`min(maxBytes, floor(窗口 × 4 × contextFraction))`。同 `@nexus/core` 的 `injectionLimitFor`；插件不 import core，算法照抄，
+ * `apps/harness` 的測試把兩邊釘成相等。
+ */
+function invocationBudget(
+  limits: SkillInvocationLimits,
+  contextWindow: number | undefined,
+): number | undefined {
+  const { maxBytes, contextFraction } = limits;
+  if (maxBytes === undefined) return undefined;
+  if (contextFraction === undefined || contextWindow === undefined) return maxBytes;
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return maxBytes;
+  return Math.min(maxBytes, Math.floor(contextWindow * 4 * contextFraction));
+}
+
+/** 正文放不下時代替它的那一行：哪一份、多大、上限多少、用什麼讀。 */
+function deferredInvocation(
+  skill: { readonly name: string; readonly path: string },
+  bytes: number,
+  budget: number,
+): string {
+  return `Skill "${skill.name}" is ${bytes} bytes, over the ${budget}-byte budget: read ${skill.path} with read_file and follow it.`;
+}
+
 /**
  * 建 `/名字` 叫用的 listener，見檔頭。
  *
+ * 渲染好的正文超過上限就**整份不放**，改放一行指標（{@link deferredInvocation}）；記號與來源照舊，所以這一段不會再注入第二次。
+ *
  * @param lookups - 查找，見 {@link SkillInvocationLookups}。
+ * @param limits - 上限，見 {@link SkillInvocationLimits}。
  * @returns 登記給 `agentLoop.preStep` 的 listener。
  */
-export function createSkillInvocationListener(lookups: SkillInvocationLookups): PreStepListener {
+export function createSkillInvocationListener(
+  lookups: SkillInvocationLookups,
+  limits: SkillInvocationLimits = {},
+): PreStepListener {
   return async (visible, invocation): Promise<readonly PreStepInjection[] | undefined> => {
     const found = lookups.fs(invocation);
     // 只在 root 認（偏離 1）。
@@ -192,12 +255,18 @@ export function createSkillInvocationListener(lookups: SkillInvocationLookups): 
       );
       return undefined;
     }
+    const budget = invocationBudget(limits, invocation.contextWindow);
     const injections: PreStepInjection[] = [];
     for (const name of requested) {
       const skill = scan.skills.find((entry) => entry.name === name);
       if (skill === undefined || !skill.invocation.userInvocable) continue;
+      const rendered = renderSkillInvocation(skill);
+      const bytes = Buffer.byteLength(rendered, 'utf8');
       injections.push({
-        content: renderSkillInvocation(skill),
+        content:
+          budget !== undefined && bytes > budget
+            ? deferredInvocation(skill, bytes, budget)
+            : rendered,
         additionalKwargs: { [SKILL_INVOCATION_MARKER]: { name } },
         source: { kind: 'skill-invocation', name, form: 'instructions' },
       });
