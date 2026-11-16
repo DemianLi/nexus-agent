@@ -1,6 +1,6 @@
 # apps/web 新增元件規則
 
-給「要在 `apps/web` 加元件、改樣式」的人。詞（registry 元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。什麼算一條規則、元件分哪三層、哪些改動要 demian 核可，見規格 §13。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`.docs/web-design-style.md`](../../.docs/web-design-style.md)。
+給「要在 `apps/web` 加元件、改樣式」的人。詞（基礎元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。什麼算一條規則、元件分哪三層、哪些改動要 demian 核可，見規格 §13。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`.docs/web-design-style.md`](../../.docs/web-design-style.md)。
 
 ## 放哪一層
 
@@ -67,7 +67,7 @@
 - **等寬的內容不是標題**：diff、讀檔、搜尋結果、`MonoBlock`、工具卡上的路徑都留 `text-tip`。路徑本身就是那顆鈕的字時（改動清單的列、審閱分頁選檔案的鈕）才是 `text-ui`。
 - **只動 12 的那一層**：已經是 `text-body` 的按鈕與選單不降成 13。
 
-機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；registry 元件的預設字級照 SG：#1281 的三條（下拉選單、cmdk、側欄）照 #1468 Q19 拿掉，下拉選單與 cmdk 隨 #1583、側欄（群組標題與 `sm` 選單鈕是 vendor 原文的 `text-xs`）隨 #1680 換成 vendor 版。「是不是標題」判不出來，靠 review。
+機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；基礎元件的預設字級照 SG：#1281 的三條（下拉選單、cmdk、側欄）照 #1468 Q19 拿掉，下拉選單與 cmdk 隨 #1583、側欄（群組標題與 `sm` 選單鈕是 vendor 原文的 `text-xs`）隨 #1680 換成 vendor 版。「是不是標題」判不出來，靠 review。
 
 ## `Button` 的 variant 與尺寸
 

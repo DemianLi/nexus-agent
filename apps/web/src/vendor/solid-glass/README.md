@@ -37,7 +37,7 @@
 
 每個檔的 sha256 記在 `manifest.json`，`vendor.test.ts` 比對（子目錄也掃）：手改這裡的檔、或放進沒登記的檔，CI 就紅，不用拉上游。套了 patch 的檔另外記 `upstreamSha256`（上游原樣）與 `patches`，`sha256` 是套完之後的值（見「改 vendor 檔」）。`patches/`、`patches.mjs`、`sync.mjs`、`vendor.test.ts` 這類是我們自己的檔，不在清單上。
 
-之後加進來的，照地圖的順序：其餘的 registry 元件在 ③-2～③-4，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。
+之後加進來的，照地圖的順序：其餘的基礎元件在 ③-2～③-4，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。
 
 **元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的 8 個元件，`components/ui/<x>.tsx` 都已換成轉出 vendor 版；有本地修改的只有 `input-group.tsx`（第 16 條），其餘是一行 `export … from`。③-2 的 dialog、popover、sheet、tooltip 同樣是一行轉出（#1583，PR 1）；alert-dialog、dropdown-menu、command 是轉出加一個薄包裝（PR 2，第 24～26 條）。composer、context-ring 是一行轉出（#1591）：SG 的 `Composer` 只出外殼、文字、主按鈕與底列，`/` 與 @ 選單、附件、代理 chip 由 `src/components/composer.tsx` 用 `leading`、`above` 與包在外面的一層 `div` 接上（攔鍵在那層 `div` 的 capture 階段，見那個檔的檔頭）。collapsible 是一行轉出（#1638 PR A），14 個呼叫端只做機械適配，見下一條。message、bubble、message-scroller 是一行轉出（#1638 PR B；message-scroller 原本的薄包裝是第 41 條，#1687 撤掉）；呼叫端不用改：泡泡的字級由呼叫端自己給 `text-body`、蓋得掉 vendor 的 `text-sm`，產品碼沒有人用 `BubbleContent` 的 `asChild`（換成 `render`）。questionnaire 是轉出加四顆按鈕的薄包裝（#1638 PR C，第 45 條），attachment 是一行轉出；呼叫端（`question-panel.tsx`、`attachment-rail.tsx`、`sent-attachments.tsx`）不用改，字級、shimmer、附件列的淡出照 SG（#1468 Q19 拿掉 #733、#1281 的改動）。
 

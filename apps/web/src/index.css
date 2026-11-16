@@ -35,7 +35,7 @@
 /*
  * 現行規則見 `.docs/web-ui-spec.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
  *
- * 動效：registry 元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS（沒裝時一筆都不產出、也不報錯）。
+ * 動效：基礎元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS（沒裝時一筆都不產出、也不報錯）。
  * 時長與曲線照 SG 的機制（#1687）：讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。
  * **不用 inline**：inline 會讓 utility 直接展開數值、不再讀 `var(--animate-in)`，reduced-motion 在執行期換掉的變數就沒人讀，
  * 無聲失效（`check-built-css` 量產物）。可是非 inline 的值宣告在 `:root`，裡面的 `var(--tw-duration)` 會在 `:root` 先解掉，
