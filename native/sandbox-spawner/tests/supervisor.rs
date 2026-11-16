@@ -2207,6 +2207,9 @@ fn fake_host(args: &[&str]) -> Option<(PathBuf, Vec<String>)> {
     ))
 }
 
+/// 真宿主：對話行程不等宿主 `ready` 就起，第一次連線可能早於宿主 bind，拿到 `host error 2`（ENOENT）；用它起宿主的測試，
+/// 第一個連線都走 `host-retry`，不是在斷言第一次就連得上。
+/// 重試的 15 秒要比 `WAIT`（20 秒）短：重試先放棄、把最後一次的回答寫進紀錄，`wait_until` 才看得到失敗的理由；改其中一個要看另一個。
 fn real_host() -> Option<(PathBuf, Vec<String>)> {
     Some((host_bin(), Vec::new()))
 }
@@ -2280,7 +2283,7 @@ fn conversations_get_the_socket_the_host_binds_only_when_there_is_a_host() {
         host: real_host(),
         ..Options::default()
     });
-    let socket = h.up("a,host-hello");
+    let socket = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&socket).contains(&"host hello".to_string())),
         "{:?}",
@@ -2302,7 +2305,7 @@ fn the_token_travels_only_on_the_control_channel() {
         host: real_host(),
         ..Options::default()
     });
-    let socket = h.up("a,host-hello");
+    let socket = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&socket).contains(&"host hello".to_string())),
         "{:?}",
@@ -2344,7 +2347,7 @@ fn conversations_reach_the_host_and_violations_are_audited_and_quarantined() {
         host: real_host(),
         ..Options::default()
     });
-    let a = h.up("a,host-hello");
+    let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -2396,6 +2399,13 @@ fn a_quarantined_conversation_is_audited_on_every_later_rejection() {
         host: real_host(),
         ..Options::default()
     });
+    // b 的第一個動作就是被拒的連線，不能前面加重試；先起 a 連到宿主收下，再起 b，那時宿主一定 bind 了。
+    let a = h.up("a,host-retry:15000");
+    assert!(
+        wait_until(|| log(&a).contains(&"host hello".to_string())),
+        "{:?}",
+        raw_log(&a)
+    );
     let b = h.up("b,host-bad-token,host-garbage,host-hello");
     assert!(wait_until(|| log(&b).len() >= 5), "{:?}", log(&b));
     assert_eq!(
@@ -2436,7 +2446,7 @@ fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
         host: real_host(),
         ..Options::default()
     });
-    let a = h.up("a,host-hello,wait-go,host-hello");
+    let a = h.up("a,host-retry:15000,wait-go,host-hello");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -2652,7 +2662,8 @@ fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf
         extra: vec!["--host-start-failures", start_failures],
         ..Options::default()
     });
-    let a = h.up("a,host-hello");
+    // 第一個連線可能早於宿主 bind，見 `real_host`。
+    let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
