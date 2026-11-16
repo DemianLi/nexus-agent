@@ -196,7 +196,8 @@ export interface HistoryView {
   readonly loaded?: number;
 }
 
-export interface Conversation {
+/** 對話的紀錄：目前的狀態、可訂閱的版本、歷史與往前翻、計劃的旁路掃描。 */
+export interface ConversationRecord {
   readonly state: ConversationState;
   /**
    * 同一份狀態的可訂閱版本（#1033），給右側欄的面板讀：身分穩定，面板只在看得見時訂閱。
@@ -221,6 +222,10 @@ export interface Conversation {
    * 計劃分頁的旁路掃描（#1798）：從已載入那一頁的游標往前一頁一頁讀，找 `callId` 相同的那一份計劃。**不動對話窗口**。語意見實作。
    */
   findPlan(callId: string, signal: AbortSignal): Promise<PlanScanOutcome>;
+}
+
+/** 下行連線的現況：連上了沒、失敗與拒絕的原因、重連。 */
+export interface ConversationLink {
   /**
    * 下行開好了沒。**開好之前不能送**——這條線只補送還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)），
    * 其他的不重播，早送的那一輪會看不到。斷了就翻回 `false`。
@@ -271,6 +276,10 @@ export interface Conversation {
   readonly recovered: boolean;
   /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
   reconnectNow(): void;
+}
+
+/** 狀態列的三格文字與寫入口：上行指令被拒、斜線命令的失敗與通知。 */
+export interface ConversationStatusLine {
   /**
    * 上一個上行指令被拒的原因。
    *
@@ -279,16 +288,6 @@ export interface Conversation {
    * 那正是這一版在 server 端拒絕動作要避免的事。
    */
   readonly commandError?: string;
-  /**
-   * 這條 thread 打得出哪些斜線命令：`/` 選單的命令組，也是送出時認命令的那份（#1929）。
-   * dsh 的 `CommandDirectory`（epoch guard、single-flight）是另一張卡。
-   */
-  readonly slashCommands: readonly SlashDescriptor[];
-  /**
-   * 這條 thread 用 `/名字` 叫得出的技能（#1929）：`/` 選單的技能組。抓不到（伺服器沒掛技能、被拒、拋錯）就是空的，
-   * 只少了那一組。
-   */
-  readonly skills: readonly SkillEntry[];
   /**
    * 上一個斜線命令自己失敗的原因，或那一行不是認得的命令。
    *
@@ -303,6 +302,45 @@ export interface Conversation {
    * `printer.log`。
    */
   readonly slashNotice?: string;
+  /**
+   * 在狀態列放一則通知或錯誤（{@link Conversation.slashNotice}、{@link Conversation.slashError}）：兩格都照傳進來的換，沒給的那格就清掉。
+   * 給別的功能（例如回饋）講它自己這一側的結果用，身分穩定。
+   */
+  setStatusLine(line: { readonly notice?: string; readonly error?: string }): void;
+}
+
+/** 斜線命令與技能：命令清單、認命令、執行、退出計劃模式。 */
+export interface ConversationCommands {
+  /**
+   * 這條 thread 打得出哪些斜線命令：`/` 選單的命令組，也是送出時認命令的那份（#1929）。
+   * dsh 的 `CommandDirectory`（epoch guard、single-flight）是另一張卡。
+   */
+  readonly slashCommands: readonly SlashDescriptor[];
+  /**
+   * 這條 thread 用 `/名字` 叫得出的技能（#1929）：`/` 選單的技能組。抓不到（伺服器沒掛技能、被拒、拋錯）就是空的，
+   * 只少了那一組。
+   */
+  readonly skills: readonly SkillEntry[];
+  /**
+   * 執行一行**呼叫端確定是命令**的斜線命令（權限座的 `/permission <組名>`），直接走 `slash.run`，不經過 {@link Conversation.send}
+   * 認命令的那一道（#1929）：命令清單抓失敗時那一道會退回，座位的切換就靜靜沒了。結果照斜線命令那一套顯示。
+   */
+  runCommand(line: string): Promise<void>;
+  /**
+   * 認開頭像命令的這一行（{@link Adjudication}）：等到這條線的命令清單才答——在途就等、之前失敗就重抓一次（照 dsh 的
+   * `CommandDirectory.ensureReady`）。呼叫端在等的期間不再送任何一行、草稿不動（dsh 的 `adjudicating`）。
+   */
+  adjudicate(line: string): Promise<Adjudication>;
+  /**
+   * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
+   * 命令成功（標籤等線上的值翻回關著才消失），回字串是失敗的原因（被拒、不認得、命令回錯誤）。不碰
+   * {@link Conversation.slashNotice} 與 {@link Conversation.slashError}：那兩格是狀態列的，標籤的失敗講在標籤旁邊。
+   */
+  exitPlanMode(): Promise<string | undefined>;
+}
+
+/** 這一輪的上行動作：送出、停止、改佇列、暫停目標。 */
+export interface ConversationTurn {
   /**
    * 送一行進去。**開頭那個字是命令清單上的名字才走 `slash.run`**，其餘走 `run.start`
    * （[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，#1574 Q2 (a)，照 dsh）：技能的 `/deploy 今天`、打錯的
@@ -348,28 +386,12 @@ export interface Conversation {
     hostTools?: readonly HostToolDeclaration[],
   ): Promise<SendRejected | undefined>;
   /**
-   * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
-   * 命令成功（標籤等線上的值翻回關著才消失），回字串是失敗的原因（被拒、不認得、命令回錯誤）。不碰
-   * {@link Conversation.slashNotice} 與 {@link Conversation.slashError}：那兩格是狀態列的，標籤的失敗講在標籤旁邊。
+   * 按停止（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+   *
+   * **只送出、不等停穩，也不自己改狀態**：停下來的事實走下行，折疊器把狀態翻成 `stopped`。
+   * 停在核准點時按它就是收回那幾張卡，收回的結果由伺服器那側寫。
    */
-  exitPlanMode(): Promise<string | undefined>;
-  /**
-   * 執行一行**呼叫端確定是命令**的斜線命令（權限座的 `/permission <組名>`），直接走 `slash.run`，不經過 {@link Conversation.send}
-   * 認命令的那一道（#1929）：命令清單抓失敗時那一道會退回，座位的切換就靜靜沒了。結果照斜線命令那一套顯示。
-   */
-  runCommand(line: string): Promise<void>;
-  /**
-   * 認開頭像命令的這一行（{@link Adjudication}）：等到這條線的命令清單才答——在途就等、之前失敗就重抓一次（照 dsh 的
-   * `CommandDirectory.ensureReady`）。呼叫端在等的期間不再送任何一行、草稿不動（dsh 的 `adjudicating`）。
-   */
-  adjudicate(line: string): Promise<Adjudication>;
-  /**
-   * 暫停目標（`goal.pause`，[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：帶**畫面上當時那份**目標的身分與修訂。
-   * 一輪跑著時 server 當場停掉那一輪，停下來的事實走下行（跟按停止一樣）；相位翻成 `paused` 也走下行，這裡不自己改狀態。
-   * 結果同 {@link Conversation.exitPlanMode}：回 `undefined` 是收下了，回字串是講給人聽的失敗原因（目標剛被改過、已經不在進行、
-   * 伺服器不支援、這條線收不了）。
-   */
-  pauseGoal(goalId: string, revision: number): Promise<string | undefined>;
+  cancel(): Promise<void>;
   /**
    * 改或刪送出佇列裡的一件（`queue.update`，#637）。**只回有沒有收下**：清單的新樣子走下行的 `inbox`，
    * 不拿回條改本地的東西。
@@ -378,6 +400,17 @@ export interface Conversation {
     itemId: string,
     action: QueueUpdateAction | QueueSteerAction,
   ): Promise<QueueUpdateRejected | undefined>;
+  /**
+   * 暫停目標（`goal.pause`，[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：帶**畫面上當時那份**目標的身分與修訂。
+   * 一輪跑著時 server 當場停掉那一輪，停下來的事實走下行（跟按停止一樣）；相位翻成 `paused` 也走下行，這裡不自己改狀態。
+   * 結果同 {@link Conversation.exitPlanMode}：回 `undefined` 是收下了，回字串是講給人聽的失敗原因（目標剛被改過、已經不在進行、
+   * 伺服器不支援、這條線收不了）。
+   */
+  pauseGoal(goalId: string, revision: number): Promise<string | undefined>;
+}
+
+/** 待決請求的回應：核准、問答、宿主頁工具的結果。 */
+export interface ConversationPending {
   /**
    * 回答**指名的那一顆**核准請求。
    *
@@ -417,19 +450,17 @@ export interface Conversation {
    * 這一輪不停。認不得那顆 id、或那顆不是問答時，什麼都不做。
    */
   declineQuestion(interruptId: string): Promise<void>;
-  /**
-   * 按停止（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
-   *
-   * **只送出、不等停穩，也不自己改狀態**：停下來的事實走下行，折疊器把狀態翻成 `stopped`。
-   * 停在核准點時按它就是收回那幾張卡，收回的結果由伺服器那側寫。
-   */
-  cancel(): Promise<void>;
-  /**
-   * 在狀態列放一則通知或錯誤（{@link Conversation.slashNotice}、{@link Conversation.slashError}）：兩格都照傳進來的換，沒給的那格就清掉。
-   * 給別的功能（例如回饋）講它自己這一側的結果用，身分穩定。
-   */
-  setStatusLine(line: { readonly notice?: string; readonly error?: string }): void;
 }
+
+/** 一條對話的全部：六組的合併，物件是扁平的。只要其中一部分的使用者宣告分組型別或 `Pick<Conversation, …>`，不要拿整個。 */
+export interface Conversation
+  extends
+    ConversationRecord,
+    ConversationLink,
+    ConversationStatusLine,
+    ConversationCommands,
+    ConversationTurn,
+    ConversationPending {}
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);

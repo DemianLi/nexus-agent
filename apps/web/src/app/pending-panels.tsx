@@ -12,7 +12,11 @@ import { PlanReviewPanel, isPlanReview, planReviewOf } from '@/features/plan';
 import { QuestionPanel, STOPPED_QUESTION_TEXT } from '@/features/question';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { Conversation } from '@/shared/connection/use-conversation';
+import type { Conversation, ConversationPending } from '@/shared/connection/use-conversation';
+
+/** 兩個渲染函式讀的那一部分：待決回應那一組，加上讀狀態、連線與停止。 */
+type PendingPanelConversation = ConversationPending &
+  Pick<Conversation, 'state' | 'connected' | 'cancel'>;
 
 /** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（`.docs/web-ui-spec.md` §4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
 export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
@@ -24,7 +28,7 @@ export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
  * `{answers:[…]}`），而認不得的 `kind` 根本到不了這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
  * 計劃審核（#654）是問答中斷的一種：認得 `intent` 才換成審核面板，其餘照一般提問。
  */
-export function renderPendingPanel(conversation: Conversation, pending: PendingInput) {
+export function renderPendingPanel(conversation: PendingPanelConversation, pending: PendingInput) {
   const asker = pendingAsker(conversation.state, pending);
   const review = pending.kind === 'question' ? planReviewOf(pending.questions) : undefined;
   if (pending.kind === 'question' && review !== undefined) {
@@ -71,7 +75,10 @@ export function renderPendingPanel(conversation: Conversation, pending: PendingI
  * 提問的 ❌ 停止這一輪，不讓模型在沒回答的情況下接著猜（`.docs/web-ui-spec.md` §4.3）。停下來之後那張提問工具卡展開、
  * 列出題目，輸入框提示字同一句。計劃審核面板沒有 ❌：「要求修改」才是它的出口（#654）。
  */
-export function renderPendingActions(conversation: Conversation, pending: PendingInput) {
+export function renderPendingActions(
+  conversation: PendingPanelConversation,
+  pending: PendingInput,
+) {
   return (
     pending.kind === 'question' &&
     !isPlanReview(pending.questions) && (

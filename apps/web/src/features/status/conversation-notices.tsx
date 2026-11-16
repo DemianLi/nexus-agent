@@ -4,7 +4,7 @@
  */
 
 import { StatusLine } from '@/features/status/line';
-import type { Conversation } from '@/shared/connection/use-conversation';
+import type { Conversation, ConversationLink } from '@/shared/connection/use-conversation';
 import { threadCapacityText } from '@/shared/connection/thread-capacity';
 import { threadHistoryTooDeepText } from '@/shared/connection/thread-history-too-deep';
 import { threadLogBudgetText } from '@/shared/connection/thread-log-budget';
@@ -27,7 +27,11 @@ export function ConversationNotices({
   conversation,
   notice,
 }: {
-  readonly conversation: Conversation;
+  readonly conversation: ConversationLink &
+    Pick<
+      Conversation,
+      'state' | 'history' | 'historyError' | 'commandError' | 'slashError' | 'slashNotice'
+    >;
   readonly notice: string | undefined;
 }) {
   return (
