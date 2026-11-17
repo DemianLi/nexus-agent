@@ -6,7 +6,7 @@
  * 附件寫死開關是因為沒有可以先問的東西，這裡列表本身就是答案。實作在 `features/threads/use-management.ts`。
  *
  * **畫面一律以 server 回的完整集合為準，本機不自己推**（例如「封存同時取消釘選」是 server 的規則，不在這裡重算）：
- * 動作成功就拿回應裡的整份集合取代，封存、刪除、復原成功之後再重抓一次列表。規則照 dsh（`workspace-controller/src/commands.ts:155-230`）：
+ * 動作成功就拿回應裡的整份集合取代（釘選、封存）；封存、刪除、復原成功之後再重抓一次列表。規則：
  * 封存的會話不能釘、取消是冪等的、釘選的順序是最近釘的在前。
  *
  * @module
@@ -104,7 +104,7 @@ export interface ThreadDeletion {
   readonly deleted: readonly DeletedThread[];
   /** server 一律先停掉它正在做的事再搬，所以沒有 `stopActivity`：在跑的只是確認框的字不同。 */
   readonly onDelete: (threadId: string) => ThreadActionResult;
-  /** 復原到原處。失敗回原因（過期、原處已有同一條、不在已刪除裡）；不論成敗都重讀已刪除清單。 */
+  /** 復原到原處。失敗回原因（過期、原處已有同一條、不在已刪除裡、另一件刪除或復原還沒做完）；不論成敗都重讀已刪除清單。 */
   readonly onRestore: (threadId: string) => ThreadActionResult;
 }
 

@@ -18,8 +18,8 @@ import type { RowStatus } from '@/features/threads/status';
  *
  * - **全域下行**（`WireClient.openThreadFeed`）：一個分頁一條。斷了照 `shared/connection/reconnect.ts` 的退避重接，不放棄。
  * - **列表**：全域下行**每次接上**（含第一次）重抓一次，當「在跑」的起點——那條線不補送狀態（`THREAD_FEED_PATH`）。
- *   側欄打開時也重抓（`refresh`，#302 的理由：清單會變，會話增減不走那條線）。**自己抓的只有這兩個時機**：線開不起來又沒打開
- *   側欄，就一次都不抓。另外由呼叫端叫 `refresh`：側欄的封存、刪除、復原成功之後，以及打開的這條被拒說已刪除時（`app/App.tsx`）。晚送出的那一次回來之後，早送出、晚回來的那一份丟掉。送出前記 `list-requested`，途中的
+ *   側欄打開時也重抓（`refresh`，#302 的理由：清單會變，會話增減不走那條線）。**平常只有這兩個時機**：線開不起來又沒打開
+ *   側欄，就一次都不抓。另外在動作之後由呼叫端叫 `refresh`：側欄的封存、刪除、復原成功之後，以及打開的這條被拒說已刪除時（`app/App.tsx`）。晚送出的那一次回來之後，早送出、晚回來的那一份丟掉。送出前記 `list-requested`，途中的
  *   frame 在回應到了之後重放（#1600，見 `features/threads/status.ts`）。
  *
  * @module

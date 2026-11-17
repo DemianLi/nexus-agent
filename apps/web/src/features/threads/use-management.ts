@@ -115,8 +115,8 @@ export async function forkThread(
 }
 
 /**
- * 已刪除清單（#2958）：`undefined` 是還沒讀到，`null` 是被拒（沒接已刪除存放區）或讀不到，兩種都當成沒有刪除這件事。
- * 掛上時、列表每來一份新的（`listed` 換了）、以及刪除與復原之後讀：別的頁籤刪掉或復原的，跟著列表一起追上；讀不到的那一次也在下一份列表時再試。
+ * 已刪除清單（#2958）：`undefined` 是還沒讀到，`null` 是被拒（沒接已刪除存放區，或 server 讀不動索引）或讀不到，兩種都當成沒有刪除這件事。
+ * 掛上時、`listed` 每換一次（列表來了新的一份，或從有變成讀失敗）、以及刪除與復原之後讀：別的頁籤刪掉或復原的，跟著列表一起追上；讀不到的那一次也在下一份列表時再試。
  */
 function useDeletedThreads(client: WireClient, listed: unknown) {
   const [deleted, setDeleted] = useState<readonly DeletedThread[] | null | undefined>(undefined);
@@ -146,7 +146,7 @@ function useDeletedThreads(client: WireClient, listed: unknown) {
  * 列表沒帶釘選與封存兩個集合（還沒實作的 server）、還在讀、或讀失敗，側欄什麼都不多畫。刪除另看已刪除清單（`deletion`）。規則見 `features/threads/management.ts`。
  *
  * **集合一律以 server 為準**：畫面上的集合是最近一份列表帶的；動作成功就拿回應裡的整份取代（蓋在列表上，直到下一份列表
- * 來為止），**本機不推**。封存之後 server 可能順手取消釘選，回應只帶封存集合，所以封存、刪除、復原成功之後重抓一次列表（改名不重抓，見 `onRename`）。
+ * 來為止），**本機不推**。封存之後 server 可能順手取消釘選，回應只帶封存集合，所以封存成功之後重抓一次列表；刪除、復原成功之後也重抓，那一列才會消失或回來。改名不重抓，見 `onRename`。
  * 同一個集合上連續的動作，回得慢的舊回應不蓋掉新的。
  */
 export function useThreadManagement(
@@ -264,7 +264,7 @@ export function useThreadManagement(
   const onRestore = useCallback(
     async (threadId: string) => {
       const result = await settle(() => client.threadRestore(threadId));
-      // 已經復原過（`thread_not_deleted`）：server 的清單上已經沒有它；過期：server 照樣列，重讀後重畫時由側欄用 `expiresAt` 濾掉。兩種都重讀。
+      // 成敗都重讀：已經復原過（`thread_not_deleted`）的，server 清單上已經沒有它；過期的 server 照樣列，重讀之後重畫，由側欄用 `expiresAt` 濾掉。
       reloadDeleted();
       if ('message' in result) return result.message;
       refresh();
