@@ -8,6 +8,7 @@
 //!   子行程不是 session 長，也就不會因為開終端裝置而取得控制終端。
 //! - 收線：transport 關了（stdin 跟著關）之後，領頭 [`STDIN_GRACE`] 內自己結束就收；沒有就對整組 SIGTERM，再等領頭最多 [`TERM_GRACE`]，之後對整組 SIGKILL（領頭已結束也送，收掉剩下的子孫），最後一定把領頭 `wait` 掉（SIGKILL 後最多等 [`KILL_WAIT`]，等不到就放手、由阻塞執行緒自己 `wait` 完）。
 //!   兩段等待都只看領頭：領頭一結束，組裡剩下的子孫沒有收尾的機會，立刻 SIGKILL。子孫只收到訊號，不等它們結束，也不是宿主的子行程。三段加起來是 [`REAP_BUDGET`]，編譯期斷言小於監督者的 `GENERATION_CLOSE_TIMEOUT`。領頭不留殭屍。連線的 future 被丟下（握手或列工具中途停掉）時，[`ChildGuard`] 的 drop 對整組 SIGKILL 並在另一條執行緒 `wait`。
+//! - 宿主死了的後備：子行程設 `PR_SET_PDEATHSIG` 為 SIGKILL，起它的那條執行緒（橋的執行緒）結束時領頭跟著死。只殺領頭：子孫靠監督行程掃 session；setuid／setgid 或帶 capability 的執行檔在 exec 時會清掉這個設定；自己 daemonize 的不是宿主的直接子行程，也不受保護。
 //! - 領頭不先收屍：[`leader_state`] 用 `waitid(WNOWAIT)` 只看不收，領頭結束後留成殭屍，pid 與 pgid 在 `wait` 之前不會被別的行程拿去用，對整組送訊號才不會打到不相干的行程。前提是宿主行程裡沒有收別人子行程的呼叫：`waitpid(-1)`、`waitid(P_ALL)`，或把 SIGCHLD 設成 `SIG_IGN`／`SA_NOCLDWAIT`。
 
 use std::io;
@@ -81,6 +82,8 @@ pub struct Spawned {
 }
 
 /// 照 `spec` 起行程，stdin、stdout 接成 rmcp 的 client transport。必須在 tokio 執行環境裡呼叫。
+///
+/// 子行程綁在呼叫的這條執行緒（`PR_SET_PDEATHSIG`）：這條執行緒結束時領頭收到 SIGKILL，所以要在活得比子行程久的執行緒上呼叫。
 pub fn spawn(spec: &Stdio) -> io::Result<Spawned> {
     let mut command = Command::new(&spec.command);
     command
@@ -94,6 +97,11 @@ pub fn spawn(spec: &Stdio) -> io::Result<Spawned> {
     // 不開 session：宿主死掉時監督行程靠「同一個 session」掃出這些行程（見檔頭）。
     // 被 spawner 的 `--exec` 包起來的 server：spawner 是組長但不是 session 長，`setsid` 回 `EPERM`，它在沒有控制終端時留在這個 session 裡跑（#2920）。
     command.process_group(0);
+    let parent = std::process::id() as libc::pid_t;
+    // SAFETY：`die_with_parent` 在 fork 之後的子行程裡跑，只做系統呼叫，不配置記憶體。
+    unsafe {
+        command.pre_exec(move || die_with_parent(parent));
+    }
     if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
     }
@@ -101,6 +109,20 @@ pub fn spawn(spec: &Stdio) -> io::Result<Spawned> {
     let mut child = ChildGuard(Some(command.spawn()?));
     let transport = pipes(child.child().ok_or_else(missing)?)?;
     Ok(Spawned { child, transport })
+}
+
+/// exec 之前：設 `PR_SET_PDEATHSIG`＝SIGKILL（起它的執行緒結束就收到），設好之後再核父行程還是 `parent`。fork 之後、`prctl` 之前宿主若已經死了，訊號不會補發，只能自己看。
+fn die_with_parent(parent: libc::pid_t) -> io::Result<()> {
+    // SAFETY：`prctl` 與 `getppid` 都是單純的系統呼叫。
+    unsafe {
+        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if libc::getppid() != parent {
+            return Err(io::Error::from_raw_os_error(libc::ESRCH));
+        }
+    }
+    Ok(())
 }
 
 fn pipes(child: &mut Child) -> io::Result<AsyncRwTransport<RoleClient, Receiver, Sender>> {
@@ -179,6 +201,8 @@ enum Leader {
 
 /// 領頭結束了沒，但不收屍：`WNOWAIT` 讓領頭留成殭屍，pid 與 pgid 在自己 `wait` 之前不會被別的行程拿去用。
 /// 不用 `Child::try_wait`：它一看到結束就收屍，之後對 `-pgid` 送訊號可能打到拿到同一個號碼的別組行程。
+// 這是 host 裡唯一該呼叫 `waitid` 的地方，而且只對自己的 `pid`、帶 `WNOWAIT`；`clippy.toml` 禁掉其餘的。
+#[allow(clippy::disallowed_methods)]
 fn leader_state(pid: u32) -> Leader {
     // SAFETY：`info` 歸零後交給 `waitid` 填；`WNOHANG` 下沒有結束的子行程時 `si_pid` 留在零，所以讀 `si_pid()` 有定義。
     let (rc, reported) = unsafe {
@@ -214,5 +238,35 @@ async fn exited_within(pid: u32, limit: Duration) -> Leader {
             return Leader::Running;
         }
         sleep(POLL).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 領頭結束之後 `leader_state` 看得到、但沒有收屍：之後 `Child::wait` 還拿得到結束狀態。
+    /// 拿掉 `WNOWAIT`，第一次看就把它收了：再看回 `Unknown`，`wait` 回 `ECHILD`。
+    #[test]
+    fn leader_state_看到結束也不收屍() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .expect("起得來");
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match leader_state(pid) {
+                Leader::Exited => break,
+                Leader::Running => {}
+                Leader::Unknown => panic!("查不到領頭狀態"),
+            }
+            assert!(std::time::Instant::now() < deadline, "領頭 5 秒內沒結束");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // 再看一次還是已結束：沒有被收走。
+        assert!(matches!(leader_state(pid), Leader::Exited));
+        let status = child.wait().expect("還沒被收屍，wait 拿得到狀態");
+        assert_eq!(status.code(), Some(7));
     }
 }

@@ -85,6 +85,8 @@ extern "C" fn on_sigterm(_: libc::c_int) {
 }
 
 /// 開一條非阻塞的管線、裝上 SIGTERM 的 handler，回讀端。
+// 只動 SIGTERM；`clippy.toml` 禁 `signal` 是為了擋 SIGCHLD（見 `mcp/stdio.rs` 的「領頭不先收屍」）。
+#[allow(clippy::disallowed_methods)]
 fn watch_sigterm() -> std::io::Result<OwnedFd> {
     let mut fds: [libc::c_int; 2] = [0; 2];
     // SAFETY：fds 是兩個 int 的陣列。

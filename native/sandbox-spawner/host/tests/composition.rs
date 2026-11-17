@@ -774,6 +774,8 @@ struct Stopped(libc::pid_t);
 
 impl Stopped {
     /// 送 `SIGSTOP`，等到它真的停住才回來。
+    // `waitpid` 只等自己起的那一個 pid，不是 `-1`。
+    #[allow(clippy::disallowed_methods)]
     fn stop(rig: &Rig) -> Stopped {
         let pid = rig.child.id() as libc::pid_t;
         // SAFETY：對自己起的子行程送訊號。
