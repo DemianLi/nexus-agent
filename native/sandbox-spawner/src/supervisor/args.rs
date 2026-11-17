@@ -311,7 +311,7 @@ fn millis(flag: &str, value: OsString) -> Result<Duration, String> {
 mod tests {
     use super::*;
 
-    /// U1：`--stall-ms 0`（不判）與預設不警告；4000 以下警告（含 4000），4001 起不警告；警告寫出值與 README 的位置。
+    /// 警告寫出值與 README 的位置。
     #[test]
     fn u1_warns_only_for_a_nonzero_stall_at_or_below_4000() {
         let ms = |n| Some(Duration::from_millis(n));
