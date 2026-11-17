@@ -40,7 +40,7 @@ GitHub 端已啟用 secret scanning 與 push protection，但它們只擋得住�
 
 ## home 底下的狀態檔
 
-**改這幾份檔（`.credentials.yaml`、`plugin-journal.jsonl`、`browser-session.json`、`thread-organization.json`、`config-hash-key.json`、`thread-deletions.json`）的 schema 或版本，同一張 PR 要留著 `apps/harness/src/fixtures/home-state/v1/` 的夾具，並在 `home-state-v1-fixtures.test.ts` 旁邊證明 v1 怎麼處置**（[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh `session-projection-cache/README.zh.md:130`）：讀相容、照當前版本重寫，或 backup-and-skip；就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。出貨新版本時另放 `v2/`，不動 `v1/`。backup-and-skip 只給可以重建的衍生資料，這幾份都是權威狀態，沒有理由用它（`docs/operations.md` 的〈home 底下的狀態檔壞了怎麼辦〉）。夾具裡的值一律是假的（見上面〈秘密與環境變數〉：夾具不放真的 secret）。
+**改這幾份檔（`.credentials.yaml`、`plugin-journal.jsonl`、`browser-session.json`、`thread-organization.json`、`config-hash-key.json`）的 schema 或版本，同一張 PR 要留著 `apps/harness/src/fixtures/home-state/v1/` 的夾具，並在 `home-state-v1-fixtures.test.ts` 旁邊證明 v1 怎麼處置**（[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh `session-projection-cache/README.zh.md:130`）：讀相容、照當前版本重寫，或 backup-and-skip；就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。出貨新版本時另放 `v2/`，不動 `v1/`。backup-and-skip 只給可以重建的衍生資料，這幾份都是權威狀態，沒有理由用它（`docs/operations.md` 的〈home 底下的狀態檔壞了怎麼辦〉）。夾具裡的值一律是假的（見上面〈秘密與環境變數〉：夾具不放真的 secret）。
 
 ## 跨套件的型別收緊必須原子落地
 

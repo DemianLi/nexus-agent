@@ -120,7 +120,7 @@ import {
 } from './session-header-metadata.js';
 import { installFailLoud } from './fail-loud.js';
 import type { FailLoudProcess } from './fail-loud.js';
-import { forkAncestors, inheritedStashNames, withDeletedFallback } from './fork-stash.js';
+import { forkAncestors, inheritedStashNames } from './fork-stash.js';
 import { createProcessShutdown, PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import {
@@ -230,14 +230,6 @@ import {
   memoryUsageSource,
 } from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
-import { threadDeletionStorePlugin } from './settings/thread-deletion-store.js';
-import {
-  DELETED_STORE_DIR_NAME,
-  graceMsOfDays,
-  runDeletionStartup,
-  ThreadDeletions,
-  threadDeletionPortFor,
-} from './thread-deletion.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { embedLoginPlugin } from './settings/embed-login.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
@@ -1132,37 +1124,6 @@ async function startServer(
   const turnClock: TurnClock | undefined = startupEntryMounted(plugins, turnTimeoutPlugin)
     ? { timeoutMs: startupSetting(plugins, turnTimeoutPlugin).timeoutMs }
     : undefined;
-  // 已刪除存放區（#2957）：路徑與寬限天數起動期讀一次。落盤關掉就沒有會話可刪，不接。啟動先恢復意圖，再看路徑有沒有被改過。
-  const deletionStore = startupSetting(plugins, threadDeletionStorePlugin);
-  const deletedDefaultRoot = join(resolveHarnessHome(env), DELETED_STORE_DIR_NAME);
-  const deletedStoreRoot = deletionStore.path ?? deletedDefaultRoot;
-  // 刪除要先放手寫入方（`releaseWriter`）：handler 晚一步才建，所以經由這個參照取，請求進來時一定已經建好。
-  const wireHandlerRef: { current?: ReturnType<typeof createWireHandler> } = {};
-  const threadDeletions =
-    sessionLogDir === undefined
-      ? undefined
-      : new ThreadDeletions({
-          home: resolveHarnessHome(env),
-          sessionsRoot: sessionLogDir,
-          deletedRoot: deletionStore.path ?? deletedDefaultRoot,
-          graceMs: graceMsOfDays(deletionStore.graceDays),
-          now: () => Date.now(),
-          releaseWriter: async (threadId) => {
-            const handler = wireHandlerRef.current;
-            if (handler === undefined) throw new Error('wire handler 還沒建好，不能放手寫入方');
-            await handler.releaseWriter(threadId);
-          },
-        });
-  // 恢復只在前台（或單行程）做：對話行程是前台起的，同一份意圖由前台收，子行程不搶著恢復。
-  if (threadDeletions !== undefined && options.conversation === undefined) {
-    const startup = await runDeletionStartup(threadDeletions, deletedDefaultRoot);
-    if (startup.recovered !== undefined) {
-      warn(
-        `[已刪除存放區] 啟動時恢復了一件未完成的${startup.recovered.kind === 'delete' ? '刪除' : '復原'}（${startup.recovered.threadId}）`,
-      );
-    }
-    if (startup.warning !== undefined) warn(startup.warning);
-  }
   // 記憶體量具（#1490）：只讀只講，預設關閉（`reportIntervalMs: 0`），開了才在起動尾端起，見 `memory-gauge.ts`。
   const memoryGaugeConfig = startupSetting(plugins, memoryGaugePlugin);
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
@@ -1630,19 +1591,6 @@ async function startServer(
       : new ThreadFeed({ maxQueuedBytes: downlink.maxQueuedBytes, warn });
   if (frontThreadFeed !== undefined) options.front?.feed.connect(frontThreadFeed);
   const handler = createWireHandler({
-    // 刪除會話的閘門（#2957）：刪除中或已刪的不組起來、不觀察。
-    deletionGate:
-      threadDeletions === undefined
-        ? undefined
-        : {
-            hiddenReason: (threadId) => threadDeletions.hiddenReason(projectKey(cwd), threadId),
-            hiddenIds: () => threadDeletions.hiddenThreadIds(projectKey(cwd)),
-          },
-    // 刪除、復原與已刪除清單（#2957）：綁本專案格，協定層不認得 projectKey。
-    threadDeletion:
-      threadDeletions === undefined
-        ? undefined
-        : threadDeletionPortFor(threadDeletions, projectKey(cwd)),
     auth,
     trustedHosts: invocation.trustedHosts,
     // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。
@@ -1903,17 +1851,9 @@ async function startServer(
           sessionStore !== undefined && history?.header.isSeeded === true
             ? {
                 names: inheritedStashNames(history.events),
-                sessions: (
-                  await forkAncestors(
-                    history.header,
-                    withDeletedFallback(
-                      coldSessionHeader,
-                      join(deletedStoreRoot, projectKey(cwd)),
-                      (directory) => openJsonlSessionStore({ directory }),
-                    ),
-                    warn,
-                  )
-                ).map((ancestor) => `${sessionStore.directory}\0${ancestor}`),
+                sessions: (await forkAncestors(history.header, coldSessionHeader, warn)).map(
+                  (ancestor) => `${sessionStore.directory}\0${ancestor}`,
+                ),
               }
             : undefined;
         built = await assembly.create(
@@ -2200,7 +2140,6 @@ async function startServer(
       };
     },
   });
-  wireHandlerRef.current = handler;
 
   const opsEndpoints = createOpsEndpoints({
     trustedHosts: invocation.trustedHosts,

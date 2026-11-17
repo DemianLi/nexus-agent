@@ -33,23 +33,6 @@ export interface Gate {
   open(): void;
 }
 
-/**
- * 等閘門放行；若帶進來的中止訊號先到就拋，等待途中中止也拋。實測：`pump.cancel()` 送不到一個已經卡在這裡的工具（它的中止訊號不是那一條），
- * 所以卡住的工具仍要靠放行才回來，中止只能擋住放行之後的下一步。
- */
-export function untilOpenOrAborted(open: Promise<void>, signal?: AbortSignal): Promise<void> {
-  if (signal === undefined) return open;
-  if (signal.aborted) return Promise.reject(new Error('已中止'));
-  return new Promise<void>((resolve, reject) => {
-    const onAbort = () => reject(new Error('已中止'));
-    signal.addEventListener('abort', onAbort, { once: true });
-    open.then(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    });
-  });
-}
-
 export function gate(): Gate {
   let open: () => void = () => undefined;
   const promise = new Promise<void>((resolve) => {
@@ -74,9 +57,6 @@ export interface Probe {
   /** 斜線命令 `/slow` 進來幾次、卡在哪道閘上。 */
   slashEntered: number;
   readonly slash: Gate;
-  /** `stall` 工具進來幾次；它只在中止訊號來時才以錯誤結束（閘門不放行）。 */
-  stalled: number;
-  readonly stall: Gate;
 }
 
 export function toolsPlugin(probe: Probe): PluginEntry {
@@ -86,31 +66,13 @@ export function toolsPlugin(probe: Probe): PluginEntry {
       apply(registry) {
         registry.tools.register(
           tool(
-            async (_input: unknown, ...rest: unknown[]) => {
+            async () => {
               probe.started += 1;
-              // 中止訊號若帶到這裡就拋（見 {@link untilOpenOrAborted}）。
-              // 中止訊號在執行設定裡，位置依 LangChain 版本而定，所以從其餘參數裡找。
-              const signal = rest
-                .map((arg) => (arg as { signal?: unknown } | undefined)?.signal)
-                .find((candidate): candidate is AbortSignal => candidate instanceof AbortSignal);
-              await untilOpenOrAborted(probe.hold.promise, signal);
+              await probe.hold.promise;
               probe.settled += 1;
               return '放行了';
             },
             { name: 'hold', description: '卡住直到被放行。', schema: z.object({}) },
-          ),
-        );
-        registry.tools.register(
-          tool(
-            async (_input: unknown, ...rest: unknown[]) => {
-              probe.stalled += 1;
-              const signal = rest
-                .map((arg) => (arg as { signal?: unknown } | undefined)?.signal)
-                .find((candidate): candidate is AbortSignal => candidate instanceof AbortSignal);
-              await untilOpenOrAborted(probe.stall.promise, signal);
-              return '卡住後回來';
-            },
-            { name: 'stall', description: '卡住，只有中止才回來。', schema: z.object({}) },
           ),
         );
         registry.tools.register(
@@ -187,15 +149,7 @@ export function rig(options: Partial<WireHandlerOptions> = {}): Rig {
   const evicted: string[] = [];
   const warnings: string[] = [];
   const extras = new Map<string, AgentExtras>();
-  const probe: Probe = {
-    started: 0,
-    settled: 0,
-    hold: gate(),
-    slashEntered: 0,
-    slash: gate(),
-    stalled: 0,
-    stall: gate(),
-  };
+  const probe: Probe = { started: 0, settled: 0, hold: gate(), slashEntered: 0, slash: gate() };
   const state: { clock: number } = { clock: 1_000_000 };
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,

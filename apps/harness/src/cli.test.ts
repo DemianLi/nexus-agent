@@ -188,7 +188,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十四列 harness 設定 ＋ 八個配套入口', async () => {
+  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十三列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -327,9 +327,6 @@ describe('一次性模式', () => {
       // **`goal-round-cap` 是操作者給續行輪數的上限**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)）：消費者是 harness 的
       // 續行排程器，起動期讀一次；續行沒開（CLI 預設）時它安靜地不起作用。關得掉，關掉就只剩目標自己的 `max_goal_rounds`。
       'goal-round-cap',
-      // **`thread-deletion-store` 是已刪除存放區的路徑與寬限天數**（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：消費者是 serve 的
-      // 起動期（啟動恢復與路徑變動警告），起動期讀一次；改了要重啟。
-      'thread-deletion-store',
       'agent-loop',
       // **`history-source` 講模型歷史從哪裡來**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：消費點在組裝期，出廠 `state` 什麼都不掛。
       'history-source',
