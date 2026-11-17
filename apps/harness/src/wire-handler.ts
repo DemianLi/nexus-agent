@@ -2041,7 +2041,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 見 {@link WireHandlerOptions.idleEvictMs}：那裡列的每一條都要成立；`releasing: true` 時「沒有下行掛著」與「標題沒在飛」兩條不看。
+   * 見 {@link WireHandlerOptions.idleEvictMs}：那裡列的每一條都要成立；`releasing: true` 時「沒有下行掛著」與「沒有 LLM 標題在產生」兩條不看。
    *
    * `releasing: true` 給刪除用（`releaseThreadWriter`）：開著下行的人只讀不寫，撤出時 `pump.close()` 讓那幾條正常結束；
    * 在飛的標題由撤出時的拆掉中止，結果寫不進去，不等它自己逾時。閒置逐出照舊不撤有人在看的、也不中止標題。

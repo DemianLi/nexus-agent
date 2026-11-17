@@ -124,6 +124,8 @@ describe('releaseWriter：停、等閒置、撤出，回來時收尾已兌現', 
   }, 60_000);
 
   it('LLM 標題還在飛（模型端點不回）：不等它逾時，撤出時中止它', async () => {
+    // 假標題在拆掉之前一直 busy（端點不回）。刪除的閒置判定還看 `titleBusy` 的話，等不到閒置，`releaseWriter` 在 500 毫秒後拋——測試紅；
+    // `busy` 變回 false 證明撤出時走了拆掉，不是等它自己結束。
     const r = track(rig({ releaseIdleWaitMs: 500 }));
     let busy = true;
     r.extras.set('t-title', {
