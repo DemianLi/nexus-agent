@@ -576,6 +576,17 @@ export class ThreadDeletions {
     return undefined;
   }
 
+  /** 專案格裡要藏起來的 thread id：刪除中與已刪除的（列表與搜尋用）。 */
+  async hiddenThreadIds(projectKey: string): Promise<ReadonlySet<string>> {
+    const state = await this.#read();
+    const ids = new Set<string>();
+    if (state.intent !== null && state.intent.projectKey === projectKey)
+      ids.add(state.intent.threadId);
+    for (const record of state.deleted)
+      if (record.projectKey === projectKey) ids.add(record.threadId);
+    return ids;
+  }
+
   /** 刪除一條會話。 */
   async delete(request: ThreadDeletionRequest): Promise<DeletedThreadView> {
     const state = await this.#read();

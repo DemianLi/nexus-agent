@@ -1625,7 +1625,10 @@ async function startServer(
     deletionGate:
       threadDeletions === undefined
         ? undefined
-        : { hiddenReason: (threadId) => threadDeletions.hiddenReason(projectKey(cwd), threadId) },
+        : {
+            hiddenReason: (threadId) => threadDeletions.hiddenReason(projectKey(cwd), threadId),
+            hiddenIds: () => threadDeletions.hiddenThreadIds(projectKey(cwd)),
+          },
     auth,
     trustedHosts: invocation.trustedHosts,
     // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。

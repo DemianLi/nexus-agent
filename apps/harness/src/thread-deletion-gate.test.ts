@@ -13,7 +13,8 @@ import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
-import { rig, startHeldRun, touch } from './idle-eviction.fixture.js';
+import { BASE, JSON_HEADERS, rig, startHeldRun, touch } from './idle-eviction.fixture.js';
+import { loopbackRequest } from './fixtures.js';
 import type { Rig } from './idle-eviction.fixture.js';
 import { ThreadDeletions, THREAD_DELETIONS_FILE } from './thread-deletion.js';
 
@@ -110,10 +111,12 @@ describe('releaseWriter：停、等閒置、撤出，回來時收尾已兌現', 
     const store = openJsonlSessionStore({ directory: projectDir });
     const r = track(rig({}));
     const state = { closed: false };
+    const leases: Promise<Awaited<ReturnType<typeof store.resume>>>[] = [];
     r.extras.set('t-lease', {
       attachPersistence: () => {
         const pending = store.resume('t-lease');
         pending.catch(() => undefined);
+        leases.push(pending);
         return {
           flush: async () => undefined,
           dispose: async () => {
@@ -126,7 +129,8 @@ describe('releaseWriter：停、等閒置、撤出，回來時收尾已兌現', 
     });
     await wake(r, 't-lease');
     expect(r.created).toEqual(['t-lease']);
-    // 還握著：另一個後端拿不到。
+    // 租約要先真的拿到（resume 是非同步的），再問另一個後端：它應該拿不到。
+    await leases[0];
     await expect(
       openJsonlSessionStore({ directory: projectDir }).resume('t-lease'),
     ).rejects.toThrow();
@@ -189,3 +193,29 @@ function existsOriginal(path: string): boolean {
     return false;
   }
 }
+
+describe('列表與搜尋藏起刪除中與已刪除的會話', () => {
+  it('GET /threads 不列刪除中與已刪除的那幾條', async () => {
+    const hidden = new Set(['t-gone']);
+    const r = track(
+      rig({
+        listThreads: async () => ({
+          items: [
+            { threadId: 't-live', updatedAt: 1, blank: false },
+            { threadId: 't-gone', updatedAt: 2, blank: false },
+          ],
+          unreadable: 0,
+        }),
+        deletionGate: {
+          hiddenReason: async () => undefined,
+          hiddenIds: async () => hidden,
+        },
+      }),
+    );
+    const response = await r.handler.handle(
+      loopbackRequest(`${BASE}/threads`, { method: 'GET', headers: JSON_HEADERS }),
+    );
+    const body = (await response.json()) as { result: { items: { threadId: string }[] } };
+    expect(body.result.items.map((item) => item.threadId)).toEqual(['t-live']);
+  });
+});

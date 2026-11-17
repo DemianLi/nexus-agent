@@ -479,6 +479,8 @@ export interface WireHandlerOptions {
    */
   readonly deletionGate?: {
     hiddenReason(threadId: string): Promise<'deleting' | 'deleted' | undefined>;
+    /** 列表與搜尋要藏起來的 thread id（刪除中與已刪除）。 */
+    hiddenIds?(): Promise<ReadonlySet<string>>;
   };
   /**
    * 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。
@@ -4134,6 +4136,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     let stored: StoredThreadList;
     try {
       stored = await options.listThreads(signal);
+      // 刪除中與已刪除的不列（#2957）：清單與搜尋共用同一份藏起來的集合。
+      const hidden = await options.deletionGate?.hiddenIds?.();
+      if (hidden !== undefined && hidden.size > 0) {
+        stored = { ...stored, items: stored.items.filter((item) => !hidden.has(item.threadId)) };
+      }
     } catch (error: unknown) {
       return json(
         errorResponse(
@@ -4190,6 +4197,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
       result = await options.searchThreads(query, signal);
+      const hidden = await options.deletionGate?.hiddenIds?.();
+      if (hidden !== undefined && hidden.size > 0) {
+        result = { ...result, items: result.items.filter((item) => !hidden.has(item.threadId)) };
+      }
     } catch (error: unknown) {
       // 這兩種的訊息接了原始錯誤，可能帶主機路徑；其餘種類的訊息是自己組的固定字句，照舊上線。
       if (
