@@ -584,7 +584,8 @@ impl Spawner {
     }
 
     /// 狀態 pipe 有結果：EOF 是 exec 成功，有字是失敗紀錄（子行程每條失敗路徑都會寫）。
-    /// 例外：exec 之前被外部殺掉（例如 OOM killer）也是 EOF，會被看成 `Started`，接著的 `Exited` 帶那個訊號。
+    /// 例外：exec 之前被外部殺掉（例如 OOM killer），或配置失敗而 abort，也是 EOF，會被看成 `Started`，接著的 `Exited` 帶那個訊號。
+    /// 子行程裡的 panic 不在例外裡：它設了 panic hook，會寫失敗紀錄（見 `child::on_panic`）。
     fn on_status(&mut self, id: u32) {
         let Some(child) = self.children.get_mut(&id) else {
             return;

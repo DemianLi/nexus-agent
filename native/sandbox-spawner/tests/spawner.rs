@@ -1140,7 +1140,10 @@ fn assert_spawner_still_works_and_id_1_stays_failed(s: &mut Spawner) {
     let ws = temp_dir("ws");
     let (out, exit) = s.run(request(2, &ws, &["/bin/echo", "ok"]));
     assert_eq!(out.trim(), "ok");
-    assert!(matches!(exit, Event::Exited { id: 2, code: 0, .. }), "{exit:?}");
+    assert!(
+        matches!(exit, Event::Exited { id: 2, code: 0, .. }),
+        "{exit:?}"
+    );
     assert!(
         s.events.iter().all(|e| event_id(e) != Some(1)),
         "id 1 還有後續事件：{:?}",
@@ -1186,6 +1189,23 @@ fn a_child_panic_message_does_not_reach_the_tools_stderr() {
     let mut text = String::new();
     stderr.read_to_string(&mut text).unwrap();
     assert_eq!(text, "", "panic 訊息印進了工具的 stderr");
+}
+
+/// 沒有 `test-hooks` 的建置（出貨的那種）不讀 `NEXUS_SPAWNER_TEST_CHILD_PANIC`。CI 只用 `--features test-hooks` 跑測試，
+/// 這支只在不帶那個 feature 時編進來：本機 `cargo test --test spawner the_child_panic_switch_is_inert` 才會跑到。
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn the_child_panic_switch_is_inert_without_test_hooks() {
+    let Some(mut s) = start_panicking("late") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    let (out, exit) = s.run(request(1, &ws, &["/bin/echo", "ok"]));
+    assert_eq!(out.trim(), "ok");
+    assert!(
+        matches!(exit, Event::Exited { id: 1, code: 0, .. }),
+        "{exit:?}"
+    );
 }
 
 /// 等 spawner 自己結束，最多 `limit`；回結束碼。
