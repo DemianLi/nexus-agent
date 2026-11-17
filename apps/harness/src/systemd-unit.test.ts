@@ -21,7 +21,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const operationsDoc = join(here, '../../../docs/operations.md');
 const supervisorArgs = join(here, '../../../native/sandbox-spawner/src/supervisor/args.rs');
 
-/** 監督行程 `args.rs` 的預設寬限（毫秒）。讀不到就丟錯，不回預設值：這支測試就是要在 Rust 那邊改了數字時紅。 */
+/** 監督行程 `args.rs` 的預設寬限（毫秒）。讀不到就丟錯，不回預設值，免得正規式失效時拿舊數字比過。 */
 function supervisorDefaultMs(name: string): number {
   const match = new RegExp(
     `pub const ${name}: Duration = Duration::from_millis\\(([\\d_]+)\\);`,
@@ -94,7 +94,7 @@ describe('operations.md 的 systemd 單元檔範本', () => {
   it('TimeoutStopSec 大於 per-thread 監督行程照預設旗標的最壞停機', () => {
     // 順序：等前台回「已停准入」→ 對話行程、宿主、前台依序各走一次拆除梯度（EOF 等待＋SIGTERM 等待）。
     // 這裡是有宿主、不成對（serve 今天起的樣子）的 3 次梯度，最壞 5＋3×(6＋3)＝32 秒。
-    // 成對（組合行程加葉子）會多一次梯度；成對成為預設時要把 3 改成 4。算式本身沒有別的東西守。
+    // 成對（組合行程加葉子）會多一次梯度；成對成為預設時要把 3 改成 4。
     const worstMs =
       supervisorDefaultMs('DEFAULT_ADMISSION_TIMEOUT') +
       3 * (supervisorDefaultMs('DEFAULT_EOF_GRACE') + supervisorDefaultMs('DEFAULT_TERM_GRACE'));

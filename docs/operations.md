@@ -1910,7 +1910,7 @@ MemoryMax=4G
 ExecStart=/usr/bin/node --max-old-space-size=2867 /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
 
 # SIGTERM 是 serve 的一般停止要求（退出碼 0，收尾失敗是 1）。只送給主行程（KillMode=mixed）：單行程 serve 自己收完、
-# per-thread 的監督行程照它的順序收（先停收新請求、再對話行程、宿主、前台）。逾時或主行程結束後，cgroup 裡剩下的行程收到 SIGKILL。
+# per-thread 的監督行程照它的順序收（先停收新請求、再對話行程、宿主、前台）。要求停止時，TimeoutStopSec 到了或主行程結束，cgroup 裡剩下的行程收到 SIGKILL（systemd.kill 手冊）。
 # 45 秒蓋得住 per-thread 預設旗標的最壞停機（32 秒，見下面說明）；單行程 serve 的收尾上限只有 5 秒，平常不會用到這麼久。
 KillSignal=SIGTERM
 KillMode=mixed
@@ -1933,12 +1933,11 @@ WantedBy=multi-user.target
   serve 起監督行程時沒有帶這三個旗標，部署出去一定是預設值。每一段都有一個行程不理 EOF 也不理 SIGTERM 的最壞情況是 **5 ＋ 3 × (6 ＋ 3) ＝ 32 秒**（有宿主、不成對；沒有宿主是 23 秒）；成對（組合行程加葉子）多一次梯度，是 41 秒，serve 今天不會這樣起。
   這是照碼算的，沒有量，監督行程每段醒來的間隔沒有算進去（量級是毫秒到幾百毫秒）。45 秒蓋得住 32 秒與 41 秒。
   `apps/harness/src/systemd-unit.test.ts` 讀這一段與 `native/sandbox-spawner/src/supervisor/args.rs` 的三個預設值：`TimeoutStopSec` 不大於單行程的 5 秒、或不大於監督行程的最壞值就紅。
-  那個最壞值的算式（幾次梯度）沒有測試守：成對成為預設時要把測試的 3 次改成 4 次；改旗標預設值則由測試比出來。
 - **`KillMode=mixed`：`SIGTERM` 只給主行程。** systemd 預設的 `KillMode=control-group` 會把停止訊號送給 cgroup 裡**每一個**行程，前台、對話行程、宿主會和監督行程同時收到 SIGTERM，監督行程的停機順序就被繞過。
-  `mixed` 是 SIGTERM 只給主行程（serve 或監督行程）、SIGKILL 給 cgroup 裡剩下的全部；**主行程一結束，剩下的行程就收到 SIGKILL，不等 `TimeoutStopSec`**，所以拉到 45 秒平常不會讓停止變慢。
+  `mixed` 是 SIGTERM 只給主行程（serve 或監督行程）、SIGKILL 給 cgroup 裡剩下的全部；**要求停止時，手冊列的 SIGKILL 觸發條件是「主行程已結束」或「`TimeoutStopSec` 到了」**，所以主行程照順序收完自己結束，45 秒只是它卡住時的上限。這一點只來自手冊，沒有實跑。
   依據是 systemd 手冊（`systemd.kill`、`systemd.service`，頁首標 262）：預設值與四個 `KillMode` 值的行為與上面一致。
   - 單行程 serve：SIGTERM 只給 serve，serve 的收尾（`disposeWith`）會關 MCP 連線池與根（`mcpPool.close()`、`root.dispose()`，見 `apps/harness/src/serve-run.ts`），MCP stdio 子行程是這樣被收掉的，不靠 systemd 直接送訊號給它們；
-    收尾逾時（5 秒）serve 強制結束時沒收掉的子行程當場收到 SIGKILL。
+    收尾逾時（5 秒）serve 強制結束時沒收掉的子行程，靠上面 systemd 的 SIGKILL 收；有包 spawner `--guard` 的 stdio 子行程另靠 `PR_SET_PDEATHSIG` 隨 serve 死（沒包的情況見 `apps/harness/src/mcp-sandbox.ts`）。
   - `KillSignal` 之後 systemd 一定緊接著送 SIGCONT：`mixed` 下只有主行程收到。harness 的 TypeScript 沒有任何行程註冊 SIGCONT；監督行程只用 signalfd 收 SIGINT、SIGTERM、SIGHUP、SIGCHLD，SIGCONT 落回預設（行程沒被停住就忽略）。
     監督行程自己送給對話行程的 SIGCONT（壓住 CPU 的行程用的，#2496）是另一回事。
   - **沒有在真的 systemd 底下跑過。** 手冊 `systemd.service` 只讀到前半，`Restart=` 那一節沒讀；主行程自己結束（不是被要求停止）時 cgroup 裡剩下的行程怎麼處理，手冊沒有明寫，我們另有 `PR_SET_PDEATHSIG`（監督行程被殺，子行程跟著死）。
