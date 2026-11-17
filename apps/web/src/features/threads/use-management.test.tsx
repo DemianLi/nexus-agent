@@ -7,7 +7,7 @@ import {
   THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
 } from '@nexus/wire';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useAcceptedTitles, useThreadManagement } from '@/features/threads/use-management';
@@ -388,5 +388,132 @@ describe('失敗', () => {
       await hook.result.current!.onArchive('t');
     });
     expect(client.threadArchive).toHaveBeenCalledWith('t', undefined);
+  });
+});
+
+describe('刪除與最近刪除（#2958）', () => {
+  const DELETED = {
+    threadId: 'x',
+    title: '舊的',
+    deletedAt: 1,
+    expiresAt: Date.now() + 86_400_000,
+  };
+  const deletedList = (items: readonly unknown[]) => ({ kind: 'ok' as const, result: { items } });
+  const failed = (code: string) => ({
+    kind: 'ok' as const,
+    result: { ok: false as const, error: { code } },
+  });
+
+  it.each([
+    [
+      '回 rejected（沒接已刪除存放區）',
+      async () => ({ kind: 'rejected', code: 'not_supported', message: '沒接' }),
+    ],
+    ['拋錯', async () => Promise.reject(new Error('斷線'))],
+  ])('已刪除清單%s：沒有刪除這一項', async (_case, deletedThreads) => {
+    const { hook } = setup({ deletedThreads }, okListing(listed([], [])));
+    await act(async () => undefined);
+    expect(hook.result.current).toBeDefined();
+    expect(hook.result.current?.deletion).toBeUndefined();
+  });
+
+  it('接了：掛上時讀一次已刪除清單；列表來了新的一份就跟著重讀（別的頁籤刪的、復原的才看得到）', async () => {
+    let items: unknown[] = [];
+    const deletedThreads = vi.fn(async () => deletedList(items));
+    const { hook } = setup({ deletedThreads }, okListing(listed([], [])));
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([]));
+    items = [DELETED];
+    hook.rerender({ listing: okListing(listed(['a'], [])) });
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([DELETED]));
+    expect(deletedThreads).toHaveBeenCalledTimes(2);
+  });
+
+  it('掛上時讀不到：列表下一份來時再讀，讀到了刪除就回來', async () => {
+    let fail = true;
+    const deletedThreads = vi.fn(async () =>
+      fail ? Promise.reject(new Error('斷線')) : deletedList([]),
+    );
+    const { hook } = setup({ deletedThreads }, okListing(listed([], [])));
+    await act(async () => undefined);
+    expect(hook.result.current?.deletion).toBeUndefined();
+    fail = false;
+    hook.rerender({ listing: okListing(listed(['a'], [])) });
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([]));
+  });
+
+  it('刪除成功：重抓列表、重讀已刪除清單', async () => {
+    let items: unknown[] = [];
+    const deletedThreads = vi.fn(async () => deletedList(items));
+    const threadDelete = vi.fn(async () => {
+      items = [DELETED];
+      return { kind: 'ok' as const, result: { ok: true as const, value: { threadId: 'x' } } };
+    });
+    const { hook, refresh } = setup({ deletedThreads, threadDelete }, okListing(listed([], [])));
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([]));
+    await act(async () => {
+      expect(await hook.result.current!.deletion!.onDelete('x')).toBeUndefined();
+    });
+    expect(threadDelete).toHaveBeenCalledWith('x');
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([DELETED]));
+  });
+
+  it('刪除失敗：講原因，不重抓', async () => {
+    const deletedThreads = vi.fn(async () => deletedList([]));
+    const threadDelete = vi.fn(async () => failed('thread_busy'));
+    const { hook, refresh } = setup({ deletedThreads, threadDelete }, okListing(listed([], [])));
+    await waitFor(() => expect(hook.result.current?.deletion).toBeDefined());
+    await act(async () => {
+      expect(await hook.result.current!.deletion!.onDelete('x')).toBe(
+        '這條會話另一件事還沒做完，稍後再試。',
+      );
+    });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(deletedThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it('復原成功：重抓列表、重讀已刪除清單', async () => {
+    let items: unknown[] = [DELETED];
+    const deletedThreads = vi.fn(async () => deletedList(items));
+    const threadRestore = vi.fn(async () => {
+      items = [];
+      return { kind: 'ok' as const, result: { ok: true as const, value: { threadId: 'x' } } };
+    });
+    const { hook, refresh } = setup({ deletedThreads, threadRestore }, okListing(listed([], [])));
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([DELETED]));
+    await act(async () => {
+      expect(await hook.result.current!.deletion!.onRestore('x')).toBeUndefined();
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([]));
+  });
+
+  it('復原失敗（已經復原過）：講原因，並重讀已刪除清單讓那一列消失', async () => {
+    let items: unknown[] = [DELETED];
+    const deletedThreads = vi.fn(async () => deletedList(items));
+    const threadRestore = vi.fn(async () => {
+      items = [];
+      return failed('thread_not_deleted');
+    });
+    const { hook, refresh } = setup({ deletedThreads, threadRestore }, okListing(listed([], [])));
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([DELETED]));
+    await act(async () => {
+      expect(await hook.result.current!.deletion!.onRestore('x')).toBeTypeOf('string');
+    });
+    expect(refresh).not.toHaveBeenCalled();
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([]));
+  });
+
+  it('復原時已經過期：講原因；server 的清單照樣帶著它，過期的由側欄用 expiresAt 濾掉', async () => {
+    const deletedThreads = vi.fn(async () => deletedList([DELETED]));
+    const threadRestore = vi.fn(async () => failed('restore_expired'));
+    const { hook } = setup({ deletedThreads, threadRestore }, okListing(listed([], [])));
+    await waitFor(() => expect(hook.result.current?.deletion?.deleted).toEqual([DELETED]));
+    await act(async () => {
+      expect(await hook.result.current!.deletion!.onRestore('x')).toBe(
+        '已經過了寬限期，不能復原。',
+      );
+    });
+    expect(deletedThreads).toHaveBeenCalledTimes(2);
   });
 });

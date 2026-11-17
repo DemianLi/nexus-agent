@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, MoreHorizontal, Pencil, Pin, PinOff } from 'lucide-react';
+import { Archive, ArchiveRestore, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -27,11 +27,13 @@ import type { ArchiveAnswer, ThreadActionResult } from '@/features/threads/manag
 import type { ThreadActivityKind } from '@nexus/wire';
 
 /**
- * 會話列的管理：「⋯」選單（釘選、改名、封存）與行內改名輸入（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
+ * 會話列的管理：「⋯」選單（釘選、改名、封存、刪除）與行內改名輸入（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
  * 只在側欄拿到 `ThreadManagement` 時才畫（`list.tsx`）；規則與開關見 `features/threads/management.ts`。
  *
  * - **選單**：桌面滑過那一列才現身（鍵盤聚焦也算），觸控（1024 以下）常駐。選項依狀態換：釘選／取消釘選、封存／取消封存。
  *   **封存的不能釘**，所以封存的那一列沒有釘選。目前這條也能封存：人留在這條，輸入框上方換成已封存的橫幅（`archived-banner.tsx`）。
+ * - **刪除**（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)）：server 接了已刪除存放區才有；每一條都能刪（目前這條、已封存的也是），
+ *   一律先問。在跑或在等人的，確認鈕寫「停掉並刪除」：server 刪除時一律先停再搬，字要講出這件事。刪掉目前這條之後去哪裡由 `App` 決定。
  * - **整張清單共用一份選單與確認框**（`ThreadRowMenus`），每一列只有一顆觸發鈕（`ThreadRowMenuTrigger`），按下時帶著那一列的
  *   `RowMenuTarget`。
  * - **改名**：那一列原地換成輸入框，Enter 送出、Esc 放棄、點旁邊算送出（沒改或空的算放棄）。送出失敗（伺服器說了原因）留在輸入框、
@@ -47,6 +49,8 @@ export interface RowMenuTarget {
   readonly pinned: boolean;
   readonly archived: boolean;
   readonly current: boolean;
+  /** 在跑或在等人回答（「跑完沒看」不算）。 */
+  readonly active: boolean;
 }
 
 /** 選單上的動作，按 thread id 呼叫。`onRename` 等選單收完（`onOpenChangeComplete`）才呼叫。 */
@@ -59,6 +63,7 @@ export interface RowMenuActions {
   ) => ArchiveAnswer;
   readonly onUnarchive: (threadId: string) => ThreadActionResult;
   readonly onRename: (threadId: string) => void;
+  readonly onDelete: (threadId: string) => ThreadActionResult;
 }
 
 /**
@@ -137,17 +142,24 @@ export function ThreadRowMenuTrigger({
 export function ThreadRowMenus({
   handle,
   actions,
+  deletable,
 }: {
   readonly handle: RowMenuHandle;
   readonly actions: RowMenuActions;
+  /** server 接了已刪除存放區：選單多一項「刪除」。 */
+  readonly deletable: boolean;
 }) {
   // 封存還在跑的會話要多問一句：問的是哪一條、server 說它在跑什麼（舊 server 沒帶就是空的）。
+  // 對話框問的是哪一條另外存、關掉時不清：關閉的動畫還在畫，清掉的話標題與內文會先變空才消失。
   const [confirmStop, setConfirmStop] = useState<
     { readonly target: RowMenuTarget; readonly activity: readonly ThreadActivityKind[] } | undefined
   >(undefined);
+  const [stopOpen, setStopOpen] = useState(false);
   // 選了「改名」的那一條：等選單收完才換成輸入框。選單還開著時，輸入框拿到的焦點會被選單拉回去，一失焦就當成沒改收起來。
   // 選單關掉時也不把焦點還給「⋯」，那一次焦點要留給輸入框。
   const renaming = useRef<string | undefined>(undefined);
+  const [confirmDelete, setConfirmDelete] = useState<RowMenuTarget | undefined>(undefined);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   return (
     <>
       <DropdownMenuRoot
@@ -196,25 +208,33 @@ export function ThreadRowMenus({
               ) : (
                 <DropdownMenuItem
                   onClick={() =>
-                    archive(actions, target.threadId, undefined, (activity) =>
-                      setConfirmStop({ target, activity }),
-                    )
+                    archive(actions, target.threadId, undefined, (activity) => {
+                      setConfirmStop({ target, activity });
+                      setStopOpen(true);
+                    })
                   }
                 >
                   <Archive aria-hidden />
                   封存
                 </DropdownMenuItem>
               )}
+              {deletable && (
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmDelete(target);
+                    setDeleteOpen(true);
+                  }}
+                >
+                  <Trash2 aria-hidden />
+                  刪除
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           )
         }
       </DropdownMenuRoot>
-      <AlertDialog
-        open={confirmStop !== undefined}
-        onOpenChange={(open) => {
-          if (!open) setConfirmStop(undefined);
-        }}
-      >
+      <AlertDialog open={stopOpen} onOpenChange={setStopOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>這條會話還在執行</AlertDialogTitle>
@@ -237,6 +257,29 @@ export function ThreadRowMenus({
               }}
             >
               停掉並封存
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>刪除「{confirmDelete?.label}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDelete?.active === true && '它還在執行，刪除會先停掉它正在做的事。'}
+              刪除後移到「最近刪除」，寬限期內可以復原；從它分支出去的會話不受影響。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>先不要</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (confirmDelete === undefined) return;
+                report('刪除', actions.onDelete(confirmDelete.threadId));
+              }}
+            >
+              {confirmDelete?.active === true ? '停掉並刪除' : '刪除'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
