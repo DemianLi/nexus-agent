@@ -49,6 +49,7 @@ import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { embedLoginPlugin } from './settings/embed-login.js';
 import { goalRoundCapPlugin } from './settings/goal-round-cap.js';
+import { threadDeletionStorePlugin } from './settings/thread-deletion-store.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { attachmentImagesPlugin } from './settings/attachment-images.js';
 import { hostToolsPlugin } from './settings/host-tools.js';
@@ -101,6 +102,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   attachmentImagesPlugin,
   hostToolsPlugin,
   goalRoundCapPlugin,
+  threadDeletionStorePlugin,
   turnTimeoutPlugin,
   processModelPlugin,
 ] as readonly NexusPlugin<unknown>[];

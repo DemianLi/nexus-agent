@@ -5,7 +5,7 @@
  * 對應卡上的驗收 1（圍欄）、2（探針不帶資料）、3（就緒跟著收尾走）、4（到上限仍就緒）、5（指標的 token）、7（格式）。
  */
 
-import { historyPath } from '@nexus/wire';
+import { DELETED_THREADS_PATH, historyPath, THREAD_SEARCH_PATH, THREADS_PATH } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -143,6 +143,10 @@ describe('路徑判斷', () => {
     expect(surfaceOf('/threads')).toBe('wire');
     expect(surfaceOf('/threads/t1/history')).toBe('wire');
     expect(surfaceOf('/threadsX')).toBe('web');
+    // wire 的全域路由（不帶 thread id 的）也要落在 wire：分到網頁就是靜態檔的 404。
+    for (const path of [THREADS_PATH, THREAD_SEARCH_PATH, DELETED_THREADS_PATH]) {
+      expect(surfaceOf(path)).toBe('wire');
+    }
     expect(surfaceOf('/')).toBe('web');
   });
 });
