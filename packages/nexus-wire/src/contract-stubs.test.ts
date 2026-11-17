@@ -99,6 +99,54 @@ describe('modelCatalog／selectModel／permissionCatalog', () => {
   });
 });
 
+describe('thread 刪除與復原（#2957）', () => {
+  it('thread.delete、thread.restore 送到 /commands/:method，params 都是空物件', async () => {
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', id: 1, result: { ok: true, value: {} } }),
+    );
+    await client.threadDelete('t');
+    await client.threadRestore('t');
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      [
+        `http://agent.test${commandPath('t', 'thread.delete')}`,
+        { id: 1, method: 'thread.delete', params: {} },
+      ],
+      [
+        `http://agent.test${commandPath('t', 'thread.restore')}`,
+        { id: 2, method: 'thread.restore', params: {} },
+      ],
+    ]);
+  });
+
+  it('業務失敗在 result 裡：刪除的 thread_busy／thread_deleted，復原的 restore_expired 與 restore_conflict 分得開', async () => {
+    const respondWith = (error: unknown) =>
+      recording(() => Response.json({ type: 'success', id: 1, result: { ok: false, error } }))
+        .client;
+    expect(await respondWith({ code: 'thread_busy' }).threadDelete('t')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'thread_busy' } },
+    });
+    expect(await respondWith({ code: 'restore_expired' }).threadRestore('t')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'restore_expired' } },
+    });
+    expect(await respondWith({ code: 'restore_conflict' }).threadRestore('t')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'restore_conflict' } },
+    });
+  });
+
+  it('GET /deleted-threads 是全域路由，回已刪除清單（threadId、title、deletedAt、expiresAt）', async () => {
+    const items = [{ threadId: 'x', title: '舊會話', deletedAt: 1, expiresAt: 2 }];
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', id: null, result: { items } }),
+    );
+    expect(await client.deletedThreads()).toEqual({ kind: 'ok', result: { items } });
+    expect(seen[0]?.method).toBe('GET');
+    expect(seen[0]?.url).toBe('http://agent.test/deleted-threads');
+  });
+});
+
 describe('thread 釘選／封存／改名', () => {
   it('五支都在 RPC 白名單裡，送到 /commands/:method，params 照契約', async () => {
     for (const method of [
@@ -110,7 +158,8 @@ describe('thread 釘選／封存／改名', () => {
     ]) {
       expect(isRpcMethod(method), method).toBe(true);
     }
-    expect(isRpcMethod('thread.delete')).toBe(false);
+    expect(isRpcMethod('thread.delete')).toBe(true);
+    expect(isRpcMethod('thread.restore')).toBe(true);
     const { client, seen } = recording(() =>
       Response.json({ type: 'success', id: 1, result: { ok: true, value: {} } }),
     );

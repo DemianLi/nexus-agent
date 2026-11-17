@@ -45,6 +45,12 @@ import type {
   ThreadRenameResult,
   ThreadUnarchiveCommand,
   ThreadUnarchiveResult,
+  DeletedThreadsResult,
+  ThreadDeleteCommand,
+  ThreadDeleteResult,
+  ThreadRestoreCommand,
+  ThreadRestoreResult,
+  DeletedThread,
   ThreadUnpinCommand,
   ThreadUnpinResult,
 } from './thread-management.js';
@@ -115,6 +121,7 @@ import {
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREADS_PATH,
+  DELETED_THREADS_PATH,
   WIRE_CHANNELS,
   commandPath,
   historyPath,
@@ -407,6 +414,19 @@ export interface WireClient {
   ): Promise<CommandOutcome<ThreadArchiveResult>>;
   /** 取消封存（`thread.unarchive`）。冪等，不會失敗；回整個封存集合。 */
   threadUnarchive(threadId: string): Promise<CommandOutcome<ThreadUnarchiveResult>>;
+  /**
+   * 刪除這條 thread（`thread.delete`，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：整條軌跡移到已刪除存放區，
+   * 寬限期內可以復原。還在跑的先停掉再搬。業務失敗在 `result` 裡：`thread_not_found`（沒有這條）、`thread_busy`（另一件還沒做完）、
+   * `thread_deleted`（已經刪了）。
+   */
+  threadDelete(threadId: string): Promise<CommandOutcome<ThreadDeleteResult>>;
+  /**
+   * 復原已刪除的 thread（`thread.restore`）。寬限期過了回 `restore_expired`，原處已有同 id 回 `restore_conflict`，檔案都留著。
+   * 另外還會回 `thread_not_deleted`（不在已刪除存放區）與 `thread_busy`。
+   */
+  threadRestore(threadId: string): Promise<CommandOutcome<ThreadRestoreResult>>;
+  /** 列出這個專案格已刪除、還在寬限期內的會話（`GET /deleted-threads`）。`rejected` 是這台 server 沒接已刪除存放區。 */
+  deletedThreads(): Promise<CommandOutcome<DeletedThreadsResult>>;
   /** 改這條 thread 的標題（`thread.rename`）。回受理後的標題與事件 `seq`；標題不合法回 `title_invalid`，標題不變。 */
   threadRename(threadId: string, title: string): Promise<CommandOutcome<ThreadRenameResult>>;
   /**
@@ -677,6 +697,31 @@ function readHistory(result: unknown): ThreadHistoryResult {
   // 讓它流進折疊器的話，那條 thread 就永遠打不開。
   events.forEach((event: unknown, index) => assertWireEvent(event, `events[${String(index)}]`));
   return { events: events as Event[], firstSeq, throughSeq, hasMore, legacy };
+}
+
+/** 已刪除清單的一列驗過才給呼叫端，理由同 {@link readThreadList}。 */
+function readDeletedThreads(result: unknown): DeletedThreadsResult {
+  const { items } = result as { items?: unknown };
+  if (!Array.isArray(items)) throw new Error('GET /deleted-threads 的結果裡沒有 items 陣列');
+  return {
+    items: items.map((entry: unknown): DeletedThread => {
+      const row = entry as Record<string, unknown> | null;
+      if (
+        typeof row?.threadId !== 'string' ||
+        typeof row.deletedAt !== 'number' ||
+        typeof row.expiresAt !== 'number' ||
+        (row.title !== undefined && typeof row.title !== 'string')
+      ) {
+        throw new Error('GET /deleted-threads 回了不認得的一列');
+      }
+      return Object.freeze({
+        threadId: row.threadId,
+        deletedAt: row.deletedAt,
+        expiresAt: row.expiresAt,
+        ...(typeof row.title === 'string' ? { title: row.title } : {}),
+      });
+    }),
+  };
 }
 
 /** 線上回來的列表得先驗過，理由同 {@link readDescriptors}。 */
@@ -1229,6 +1274,39 @@ export function createWireClient(options: WireClientOptions): WireClient {
         params: {},
       };
       return sendOkCommand<ThreadUnarchiveResult>(threadId, command, '取消封存');
+    },
+
+    async threadDelete(threadId) {
+      const command: ThreadDeleteCommand = {
+        id: nextCommandId++,
+        method: 'thread.delete',
+        params: {},
+      };
+      return sendOkCommand<ThreadDeleteResult>(threadId, command, '刪除');
+    },
+
+    async threadRestore(threadId) {
+      const command: ThreadRestoreCommand = {
+        id: nextCommandId++,
+        method: 'thread.restore',
+        params: {},
+      };
+      return sendOkCommand<ThreadRestoreResult>(threadId, command, '復原');
+    },
+
+    async deletedThreads() {
+      const response = await doFetch(`${base}${DELETED_THREADS_PATH}`, {
+        method: 'GET',
+        // 同 `listThreads`：沒有這個 header 就是不發 preflight 的 simple request，見 `THREADS_PATH`。
+        headers: { 'content-type': 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`已刪除清單被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as ThreadListResponse;
+      return body.type === 'error'
+        ? rejectedOf(body)
+        : { kind: 'ok', result: readDeletedThreads(body.result) };
     },
 
     async threadRename(threadId, title) {
