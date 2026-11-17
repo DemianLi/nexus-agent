@@ -37,6 +37,8 @@ export interface DeferralRunOptions {
   readonly credentials?: CredentialService;
   /** 把出貨清單換成要跑的那一份（CI 在這裡換成替身模型）；省略即原樣。 */
   readonly plugins?: (shipped: readonly PluginEntry[]) => readonly PluginEntry[];
+  /** 跑完之後交出這次用的模型；測試用它讀替身模型實際收到的請求。 */
+  readonly onModel?: (model: unknown) => void;
 }
 
 /** 一次執行看到的事。 */
@@ -105,7 +107,13 @@ export async function runDeferralCase(
       },
       { plugins: [...(options.plugins?.(loaded.plugins) ?? loaded.plugins)] },
     );
-    const attachment = built.attachSessions(new SessionRegistry('deferral'));
+    const sessions = new SessionRegistry('deferral');
+    const attachment = built.attachSessions(sessions);
+    const rootLog = () => {
+      const entry = sessions.list().find((item) => item.address.kind === 'root');
+      if (entry === undefined) throw new Error('沒有 root 日誌');
+      return entry.log;
+    };
     try {
       const abort = new AbortController();
       let started = 0;
@@ -124,6 +132,8 @@ export async function runDeferralCase(
       ).invoke.bind(built.agent);
       let messages: readonly BaseMessage[] = [];
       let capped = false;
+      // 照入口的樣子開一輪：出貨設定的對話歷史從日誌推導，少了 `turn/start` 模型就看不到這句話。
+      rootLog().append('turn/start', { kind: 'message', text: DEFERRAL_TASK });
       try {
         ({ messages } = await invoke(toAgentInvocation(DEFERRAL_TASK), {
           configurable: { thread_id: 'deferral' },
@@ -134,6 +144,8 @@ export async function runDeferralCase(
         if (!abort.signal.aborted) throw error;
         capped = true;
       }
+      rootLog().append('turn/end', {});
+      options.onModel?.(built.model);
       return { ...observe(testCase, messages), capped };
     } finally {
       await attachment.detach();

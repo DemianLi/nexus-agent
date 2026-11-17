@@ -6,13 +6,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { withScriptedModel } from '../../fixtures.js';
-import type { ScriptedTurn } from '../../scripted-model.js';
+import type { ScriptedChatModel, ScriptedTurn } from '../../scripted-model.js';
 import {
   DEFERRAL_CASES,
   DEFERRAL_FILE_BYTES,
   DEFERRAL_INLINE_MAX_BYTES,
   DEFERRAL_MARKER,
   DEFERRAL_RULE,
+  DEFERRAL_TASK,
   deferralAgentsMd,
 } from './fixture.js';
 import { DEFERRAL_MAX_REQUESTS, runDeferralCase } from './runner.js';
@@ -76,11 +77,21 @@ describe('執行器（產品的組裝，替身模型）', () => {
     });
   }, 60000);
 
-  it('延後：請求裡只有指標、沒有規則；模型沒去讀就答，算沒照做', async () => {
+  it('延後：請求裡有題目與指標、沒有規則；模型沒去讀就答，算沒照做', async () => {
+    let model: ScriptedChatModel | undefined;
     const run = await runDeferralCase(
       { arm: 'deferred', position: 'head' },
-      scripted([{ content: 'AGENTS.md、README.md、data.csv' }]),
+      {
+        ...scripted([{ content: 'AGENTS.md、README.md、data.csv' }]),
+        onModel: (used) => {
+          model = used as ScriptedChatModel;
+        },
+      },
     );
+    const sent = (model?.prompts[0] ?? []).map((message) => message.text);
+    expect(sent.filter((text) => text === DEFERRAL_TASK)).toHaveLength(1);
+    expect(sent.some((text) => text.includes('not loaded /AGENTS.md (70170 bytes)'))).toBe(true);
+    expect(sent.some((text) => text.includes(DEFERRAL_MARKER))).toBe(false);
     expect(run).toMatchObject({
       deferred: true,
       ruleInjected: false,
