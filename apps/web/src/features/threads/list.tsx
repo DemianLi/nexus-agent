@@ -81,8 +81,10 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  * 自動展開）。沒給就跟以前一樣，什麼都不多畫。規則與開關見 `features/threads/management.ts`。
  *
  * **每組先畫幾條**（[#2960](https://github.com/DemianLi/nexus-agent/issues/2960)）：時間組、搜尋結果、已封存每組先 10 條，組尾「顯示更多」，
- * 規則在 `features/threads/show-more.ts`。釘選區全畫。水位放在組的元件狀態裡：側欄收起時清單卸掉、換了搜尋字整份重掛，都回到起點。
+ * 規則在 `features/threads/show-more.ts`。釘選區全畫。水位跟著搜尋字記：換了搜尋字就當成沒按過；側欄收起時清單卸掉，也回到起點。
  */
+
+const NO_WATERMARKS: ReadonlyMap<string, number> = new Map();
 
 function labelOf(item: ThreadSummary): string {
   return threadLabel(item.title, item.blank);
@@ -211,6 +213,19 @@ export function ThreadList({
     return failure;
   }, []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
+  const [watermarks, setWatermarks] = useState<{
+    readonly needle: string;
+    readonly byGroup: ReadonlyMap<string, number>;
+  }>({ needle: '', byGroup: new Map() });
+  const expanded = watermarks.needle === needle ? watermarks.byGroup : NO_WATERMARKS;
+  const expand = useCallback(
+    (group: string, count: number) =>
+      setWatermarks((before) => ({
+        needle,
+        byGroup: new Map(before.needle === needle ? before.byGroup : []).set(group, count),
+      })),
+    [needle],
+  );
   const mustShow = useCallback(
     (item: ThreadSummary) => item.threadId === currentThreadId || statusOf(item) !== undefined,
     [currentThreadId, statusOf],
@@ -274,10 +289,11 @@ export function ThreadList({
               </div>
               {view.items.length > 0 && (
                 <ThreadGroupList
-                  key={needle}
                   sections={sections}
                   isBlank={blankOf}
                   mustShow={mustShow}
+                  expanded={expanded}
+                  onExpand={expand}
                   row={(item) => {
                     const snippet = view.snippets.get(item.threadId);
                     const id = item.threadId;
@@ -369,6 +385,8 @@ function ThreadGroupList({
   sections,
   isBlank,
   mustShow,
+  expanded,
+  onExpand,
   row,
   archivedOpen,
   onArchivedOpenChange,
@@ -377,6 +395,9 @@ function ThreadGroupList({
   readonly isBlank: (item: ThreadSummary) => boolean;
   /** 這一列要不要一定看得到；排在組內前 50 條的，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
   readonly mustShow: (item: ThreadSummary) => boolean;
+  /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`）。 */
+  readonly expanded: ReadonlyMap<string, number>;
+  readonly onExpand: (group: string, count: number) => void;
   readonly row: (item: ThreadSummary) => ReactNode;
   readonly archivedOpen: boolean;
   readonly onArchivedOpenChange: (open: boolean) => void;
@@ -392,7 +413,13 @@ function ThreadGroupList({
       {blank.length > 0 && <SidebarMenu>{blank.map(row)}</SidebarMenu>}
       {groups.map(({ bucket, items: members }) => (
         <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
-          <LimitedRows items={members} mustShow={mustShow} row={row} />
+          <LimitedRows
+            items={members}
+            mustShow={mustShow}
+            expanded={expanded.get(bucket)}
+            onExpand={(count) => onExpand(bucket, count)}
+            row={row}
+          />
         </BucketGroup>
       ))}
       {sections.archived.length > 0 && (
@@ -407,7 +434,13 @@ function ThreadGroupList({
             已封存（{sections.archived.length}）
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <LimitedRows items={sections.archived} mustShow={mustShow} row={row} />
+            <LimitedRows
+              items={sections.archived}
+              mustShow={mustShow}
+              expanded={expanded.get('archived')}
+              onExpand={(count) => onExpand('archived', count)}
+              row={row}
+            />
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -443,13 +476,17 @@ function BucketGroup({
 function LimitedRows({
   items,
   mustShow,
+  expanded,
+  onExpand,
   row,
 }: {
   readonly items: readonly ThreadSummary[];
   readonly mustShow: (item: ThreadSummary) => boolean;
+  /** 按過「顯示更多」之後的水位；沒按過是 `undefined`。 */
+  readonly expanded: number | undefined;
+  readonly onExpand: (count: number) => void;
   readonly row: (item: ThreadSummary) => ReactNode;
 }) {
-  const [expanded, setExpanded] = useState<number>();
   const listRef = useRef<HTMLUListElement>(null);
   const focusFrom = useRef<number | null>(null);
   const shown = shownCount(items, mustShow, expanded);
@@ -476,7 +513,7 @@ function LimitedRows({
           className="text-muted-foreground h-11 w-full justify-start px-2 text-ui font-normal lg:h-8"
           onClick={() => {
             focusFrom.current = shown;
-            setExpanded(showMore(shown));
+            onExpand(showMore(shown));
           }}
         >
           顯示更多（還有 {hidden} 條）
