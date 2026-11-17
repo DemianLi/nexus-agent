@@ -4367,7 +4367,7 @@ fn server_script(dir: &Path) -> PathBuf {
     std::fs::write(
         &path,
         format!(
-            "#!/bin/sh\ncase \"$2\" in\n  threads-outlive-leader) exec {} member \"$1\" ;;\nesac\n",
+            "#!/bin/sh\ncase \"$2\" in\n  threads-outlive-leader) exec '{}' member \"$1\" ;;\nesac\n",
             example("leader_exits").display()
         ) + "\
          case \"$2\" in\n\
