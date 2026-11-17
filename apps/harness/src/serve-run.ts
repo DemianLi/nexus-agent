@@ -236,6 +236,7 @@ import {
   graceMsOfDays,
   runDeletionStartup,
   ThreadDeletions,
+  threadDeletionPortFor,
 } from './thread-deletion.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { embedLoginPlugin } from './settings/embed-login.js';
@@ -1135,6 +1136,8 @@ async function startServer(
   const deletionStore = startupSetting(plugins, threadDeletionStorePlugin);
   const deletedDefaultRoot = join(resolveHarnessHome(env), DELETED_STORE_DIR_NAME);
   const deletedStoreRoot = deletionStore.path ?? deletedDefaultRoot;
+  // 刪除要先放手寫入方（`releaseWriter`）：handler 晚一步才建，所以經由這個參照取，請求進來時一定已經建好。
+  const wireHandlerRef: { current?: ReturnType<typeof createWireHandler> } = {};
   const threadDeletions =
     sessionLogDir === undefined
       ? undefined
@@ -1144,6 +1147,11 @@ async function startServer(
           deletedRoot: deletionStore.path ?? deletedDefaultRoot,
           graceMs: graceMsOfDays(deletionStore.graceDays),
           now: () => Date.now(),
+          releaseWriter: async (threadId) => {
+            const handler = wireHandlerRef.current;
+            if (handler === undefined) throw new Error('wire handler 還沒建好，不能放手寫入方');
+            await handler.releaseWriter(threadId);
+          },
         });
   if (threadDeletions !== undefined) {
     const startup = await runDeletionStartup(threadDeletions, deletedDefaultRoot);
@@ -1629,6 +1637,11 @@ async function startServer(
             hiddenReason: (threadId) => threadDeletions.hiddenReason(projectKey(cwd), threadId),
             hiddenIds: () => threadDeletions.hiddenThreadIds(projectKey(cwd)),
           },
+    // 刪除、復原與已刪除清單（#2957）：綁本專案格，協定層不認得 projectKey。
+    threadDeletion:
+      threadDeletions === undefined
+        ? undefined
+        : threadDeletionPortFor(threadDeletions, projectKey(cwd)),
     auth,
     trustedHosts: invocation.trustedHosts,
     // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。
@@ -2186,6 +2199,7 @@ async function startServer(
       };
     },
   });
+  wireHandlerRef.current = handler;
 
   const opsEndpoints = createOpsEndpoints({
     trustedHosts: invocation.trustedHosts,

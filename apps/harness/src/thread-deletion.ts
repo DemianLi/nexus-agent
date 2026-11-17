@@ -799,3 +799,30 @@ export function graceMsOfDays(days: number): number {
   }
   return days * DAY_MS;
 }
+
+/**
+ * 把一個 `ThreadDeletions` 綁到一個專案格，成為 wire handler 的 `threadDeletion` 入口（#2957）。協定層不認得 projectKey，
+ * 所以綁定與「只列這個專案格」都在這裡做，`serve-run.ts` 與 wire 測試用同一份。
+ */
+export function threadDeletionPortFor(deletions: ThreadDeletions, projectKey: string) {
+  return {
+    delete: (request: { threadId: string; actor: WirePrincipal; title?: string }) =>
+      deletions.delete({
+        threadId: request.threadId,
+        projectKey,
+        actor: request.actor,
+        ...(request.title !== undefined && { title: request.title }),
+      }),
+    restore: (request: { threadId: string; actor: WirePrincipal }) =>
+      deletions.restore({ threadId: request.threadId, projectKey, actor: request.actor }),
+    deleted: async () =>
+      (await deletions.deleted())
+        .filter((view) => view.projectKey === projectKey)
+        .map((view) => ({
+          threadId: view.threadId,
+          ...(view.title !== undefined && { title: view.title }),
+          deletedAt: view.deletedAt,
+          expiresAt: view.expiresAt,
+        })),
+  };
+}
