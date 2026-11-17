@@ -627,6 +627,107 @@ fn second_stop_signal_kills_at_once() {
     assert!(h.audit_line("t,ignore-term").contains("\"signal\":9"));
 }
 
+/// 內部觸發的停機（宿主在 `ready` 之前連續失敗到上限）：起一個對話行程，等到 stderr 出現「整台停機」。
+/// 前台不回 `admission-stopped`、等前台的期限很長，所以停機卡在等前台那一段，對話行程還活著，也還沒有人送過停止訊號。
+fn start_an_internal_shutdown(thread: &str) -> (Harness, PathBuf) {
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--exit-before-ready", "1"]),
+        answer_stop_admission: false,
+        eof_grace_ms: 600_000,
+        term_grace_ms: 600_000,
+        extra: vec![
+            "--host-start-failures",
+            "2",
+            "--host-backoff-ms",
+            "1500",
+            "--host-backoff-max-ms",
+            "1500",
+            "--admission-timeout-ms",
+            "20000",
+        ],
+        ..Options::default()
+    });
+    let a = h.up(thread);
+    assert!(
+        wait_until(|| supervisor_stderr(&h).contains("整台停機")),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    (h, a)
+}
+
+/// 內部觸發的停機之後，操作的人第一次送停止訊號：不當場 SIGKILL，照梯度走，對話行程在 EOF 時自己結束；結束碼還是內部記的 4。
+/// 只按一次，不該把一個正在停的行程少掉拆除梯度（#2864）。
+#[test]
+fn the_first_stop_signal_after_an_internal_shutdown_runs_the_ladder() {
+    let (mut h, a) = start_an_internal_shutdown("a");
+    kill(h.pid(), libc::SIGTERM);
+    assert!(
+        wait_until(|| supervisor_stderr(&h).contains("再收到一次停止訊號才強制")),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    assert!(!supervisor_stderr(&h).contains("當場 SIGKILL"));
+    assert!(!log(&a).contains(&"eof".to_string()));
+    h.request(&FrontRequest::AdmissionStopped);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    assert_eq!(h.wait_exit().code(), Some(4));
+    let line = h.audit_line("\"thread\":\"a\"");
+    assert!(
+        line.contains("\"exit_code\":0") && !line.contains("\"signal\":9"),
+        "{line}"
+    );
+}
+
+/// 內部觸發的停機之後的第二次停止訊號才當場 SIGKILL（對話行程不理 EOF 與 SIGTERM，不靠它自己結束）；結束碼還是 4。
+#[test]
+fn the_second_stop_signal_after_an_internal_shutdown_kills_everything() {
+    let (mut h, _a) = start_an_internal_shutdown("a,ignore-term");
+    kill(h.pid(), libc::SIGTERM);
+    assert!(
+        wait_until(|| supervisor_stderr(&h).contains("再收到一次停止訊號才強制")),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    assert!(!supervisor_stderr(&h).contains("當場 SIGKILL"));
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("a,ignore-term"), DeathCause::Shutdown);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert_eq!(h.wait_exit().code(), Some(4));
+    let line = h.audit_line("\"thread\":\"a,ignore-term\"");
+    assert!(line.contains("\"signal\":9"), "{line}");
+    assert!(supervisor_stderr(&h).contains("當場 SIGKILL"));
+}
+
+/// 另一個內部觸發點：宿主的 `hello` 版本對不上（回 3）。同樣，之後第一次停止訊號不當場 SIGKILL，結束碼還是 3。
+#[test]
+fn the_first_stop_signal_after_a_host_version_mismatch_does_not_kill() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--version", "99"]),
+        answer_stop_admission: false,
+        eof_grace_ms: 600_000,
+        term_grace_ms: 600_000,
+        extra: vec!["--warm", "1", "--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    assert!(
+        wait_until(|| supervisor_stderr(&h).contains("整台停機")),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    kill(h.pid(), libc::SIGTERM);
+    assert!(
+        wait_until(|| supervisor_stderr(&h).contains("再收到一次停止訊號才強制")),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    assert!(!supervisor_stderr(&h).contains("當場 SIGKILL"));
+    h.request(&FrontRequest::AdmissionStopped);
+    assert_eq!(h.wait_exit().code(), Some(3));
+}
+
 /// 等前台回 `admission-stopped` 的那一段再收到停止訊號：這時停機還沒開始收對話行程，被當場殺掉的照樣是停機收的，
 /// 回 `down(shutdown)`、稽核記 `shutdown`，不算成 `crash`（#2827）。
 #[test]

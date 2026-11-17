@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { SESSION_LOG_FORMAT_VERSION, sessionDirectoryName } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { createWireClient } from '@nexus/wire';
+import { THREAD_DELETED, WireRejectedError, commandPath, createWireClient } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
@@ -67,7 +67,9 @@ function listedOnDisk(titles: Record<string, string>) {
   });
 }
 
-function setup(options: { graceMs?: number; withDeletion?: boolean } = {}) {
+function setup(
+  options: { graceMs?: number; withDeletion?: boolean; releaseIdleWaitMs?: number } = {},
+) {
   const titles = { 't-live': '還在的', 't-gone': '要刪的' };
   const clock = { now: 1_000_000 };
   const holder: { wire?: ReturnType<typeof createWireHandler> } = {};
@@ -81,6 +83,9 @@ function setup(options: { graceMs?: number; withDeletion?: boolean } = {}) {
   });
   holder.wire = createWireHandler({
     auth: TEST_BROWSER_AUTH,
+    ...(options.releaseIdleWaitMs === undefined
+      ? {}
+      : { releaseIdleWaitMs: options.releaseIdleWaitMs }),
     listThreads: listedOnDisk(titles),
     deletionGate:
       options.withDeletion === false
@@ -187,6 +192,77 @@ describe('刪除、復原與已刪除清單：真的 wire 往返', () => {
       result: { ok: false, error: { code: 'thread_not_deleted' } },
     });
   }, 30_000);
+
+  it('刪掉一條已經載入記憶體的：經 HTTP 刪除不會等到自己這個請求（#2957）', async () => {
+    await seed('t-live');
+    await seed('t-gone');
+    // 等不到閒置就在 1 秒後拋：刪除請求自己算進那條 thread 的在途請求數時，這條紅。
+    const { client, wire } = setup({ releaseIdleWaitMs: 1_000 });
+    await wire.open('t-gone');
+    expect(wire.idleState('t-gone')).toMatchObject({ idle: true });
+
+    const deleted = await client.threadDelete('t-gone');
+    expect(deleted).toMatchObject({ kind: 'ok' });
+    expect(ids(await client.listThreads())).toEqual(['t-live']);
+    expect(wire.idleState('t-gone')).toBeUndefined();
+  });
+
+  it('有人開著這條的下行（看著它）：刪除不等看的人，刪完那條下行正常結束', async () => {
+    await seed('t-live');
+    await seed('t-gone');
+    const { client } = setup({ releaseIdleWaitMs: 1_000 });
+    // 開下行就會建起這條 thread；看的人只讀，等它關掉就等不完（頁籤一直開著）。
+    const events = await client.openEvents('t-gone');
+
+    const deleted = await client.threadDelete('t-gone');
+    expect(deleted).toMatchObject({ kind: 'ok' });
+    expect(ids(await client.listThreads())).toEqual(['t-live']);
+    const rest: unknown[] = [];
+    for await (const event of events) rest.push(event);
+    expect(rest).toEqual([]);
+  });
+
+  it('刪掉之後再開這條（開下行、送話）：回專用碼 thread_deleted，客戶端分得出是刪了、不是暫時連不上', async () => {
+    await seed('t-live');
+    await seed('t-gone');
+    const { client } = setup();
+    await client.threadDelete('t-gone');
+
+    const refused = await client.openEvents('t-gone').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(WireRejectedError);
+    expect((refused as WireRejectedError).code).toBe(THREAD_DELETED);
+    expect(await client.runStart('t-gone', '還在嗎')).toMatchObject({
+      type: 'error',
+      error: THREAD_DELETED,
+    });
+  });
+
+  it('同一條 thread 還有別的在途請求（run.start 的本文還沒讀完）：刪除照樣等它，等不到就什麼都不搬', async () => {
+    await seed('t-live');
+    await seed('t-gone');
+    const { client, wire } = setup({ releaseIdleWaitMs: 300 });
+    await wire.open('t-gone');
+    // 本文一直不送完：這個請求停在讀本文那一步，算在這條 thread 的在途請求數裡。
+    const stalled = new ReadableStream<Uint8Array>({ start: () => undefined });
+    const pending = wire.handle(
+      loopbackRequest(`http://delete.test${commandPath('t-gone', 'run.start')}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: stalled,
+        duplex: 'half',
+      } as RequestInit),
+    );
+    void pending.catch(() => undefined);
+
+    const deleted = await client.threadDelete('t-gone');
+    expect(deleted.kind).not.toBe('ok');
+    expect(existsSync(join(projectDir, sessionDirectoryName('t-gone')))).toBe(true);
+    expect(existsSync(join(deletedRoot, PROJECT, sessionDirectoryName('t-gone')))).toBe(false);
+    expect(ids(await client.listThreads())).toEqual(['t-gone', 't-live']);
+  });
 
   it('已刪除清單只列這個專案格的：別的專案格刪掉的不列', async () => {
     await seed('t-live');
