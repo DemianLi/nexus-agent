@@ -1935,12 +1935,12 @@ WantedBy=multi-user.target
   `apps/harness/src/systemd-unit.test.ts` 讀這一段與 `native/sandbox-spawner/src/supervisor/args.rs` 的三個預設值：`TimeoutStopSec` 不大於單行程的 5 秒、或不大於監督行程的最壞值就紅。
 - **`KillMode=mixed`：`SIGTERM` 只給主行程。** systemd 預設的 `KillMode=control-group` 會把停止訊號送給 cgroup 裡**每一個**行程，前台、對話行程、宿主會和監督行程同時收到 SIGTERM，監督行程的停機順序就被繞過。
   `mixed` 是 SIGTERM 只給主行程（serve 或監督行程）、SIGKILL 給 cgroup 裡剩下的全部；**要求停止時，手冊列的 SIGKILL 觸發條件是「主行程已結束」或「`TimeoutStopSec` 到了」**，所以主行程照順序收完自己結束，45 秒只是它卡住時的上限。這一點只來自手冊，沒有實跑。
-  依據是 systemd 手冊（`systemd.kill`、`systemd.service`，頁首標 262）：預設值與四個 `KillMode` 值的行為與上面一致。
+  依據是 systemd 手冊（`systemd.kill`、`systemd.service`，頁首標 262）：預設值（`control-group`）與 `mixed` 的行為與上面一致；其他 `KillMode` 值這裡沒用到，沒有核。
   - 單行程 serve：SIGTERM 只給 serve，serve 的收尾（`disposeWith`）會關 MCP 連線池與根（`mcpPool.close()`、`root.dispose()`，見 `apps/harness/src/serve-run.ts`），MCP stdio 子行程是這樣被收掉的，不靠 systemd 直接送訊號給它們；
-    收尾逾時（5 秒）serve 強制結束時沒收掉的子行程，靠上面 systemd 的 SIGKILL 收；有包 spawner `--guard` 的 stdio 子行程另靠 `PR_SET_PDEATHSIG` 隨 serve 死（沒包的情況見 `apps/harness/src/mcp-sandbox.ts`）。
+    `systemctl stop` 時，收尾逾時（5 秒）serve 強制結束後沒收掉的子行程，靠上面 systemd 的 SIGKILL 收；有包 spawner `--guard` 的 stdio 子行程另靠 `PR_SET_PDEATHSIG` 隨 serve 死（沒包的情況見 `apps/harness/src/mcp-sandbox.ts`）。
   - `KillSignal` 之後 systemd 一定緊接著送 SIGCONT：`mixed` 下只有主行程收到。harness 的 TypeScript 沒有任何行程註冊 SIGCONT；監督行程只用 signalfd 收 SIGINT、SIGTERM、SIGHUP、SIGCHLD，SIGCONT 落回預設（行程沒被停住就忽略）。
     監督行程自己送給對話行程的 SIGCONT（壓住 CPU 的行程用的，#2496）是另一回事。
-  - **沒有在真的 systemd 底下跑過。** 手冊 `systemd.service` 只讀到前半，`Restart=` 那一節沒讀；主行程自己結束（不是被要求停止）時 cgroup 裡剩下的行程怎麼處理，手冊沒有明寫，我們另有 `PR_SET_PDEATHSIG`（監督行程被殺，子行程跟著死）。
+  - **沒有在真的 systemd 底下跑過。** 手冊 `systemd.service` 只讀到前半，`Restart=` 那一節沒讀；主行程自己結束（不是被要求停止）時 cgroup 裡剩下的行程怎麼處理，手冊沒有明寫，監督行程直接起的行程另帶 `PR_SET_PDEATHSIG`（監督行程被殺，它們跟著死）；更下一層的行程不一定有。
 - **收尾失敗之後**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：serve 以 1 結束，原因印在標準錯誤。照 systemd 的語意（**沒有實跑過**），上面這份 `Restart=on-failure` 的單元：`systemctl stop` 不重啟，單元進 `failed`，
   排除原因後 `systemctl reset-failed nexus-agent` 再啟動；不是 `systemctl stop` 送的 `SIGTERM` 會重啟，連續失敗滿 `StartLimitBurst` 後單元進 `failed`。
 - **記憶體上限：`MemoryMax` 與 `--max-old-space-size` 成對，heap 取 70%**（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
