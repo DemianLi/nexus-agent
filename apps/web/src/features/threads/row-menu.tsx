@@ -150,13 +150,16 @@ export function ThreadRowMenus({
   readonly deletable: boolean;
 }) {
   // 封存還在跑的會話要多問一句：問的是哪一條、server 說它在跑什麼（舊 server 沒帶就是空的）。
+  // 對話框問的是哪一條另外存、關掉時不清：關閉的動畫還在畫，清掉的話標題與內文會先變空才消失。
   const [confirmStop, setConfirmStop] = useState<
     { readonly target: RowMenuTarget; readonly activity: readonly ThreadActivityKind[] } | undefined
   >(undefined);
+  const [stopOpen, setStopOpen] = useState(false);
   // 選了「改名」的那一條：等選單收完才換成輸入框。選單還開著時，輸入框拿到的焦點會被選單拉回去，一失焦就當成沒改收起來。
   // 選單關掉時也不把焦點還給「⋯」，那一次焦點要留給輸入框。
   const renaming = useRef<string | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState<RowMenuTarget | undefined>(undefined);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   return (
     <>
       <DropdownMenuRoot
@@ -205,9 +208,10 @@ export function ThreadRowMenus({
               ) : (
                 <DropdownMenuItem
                   onClick={() =>
-                    archive(actions, target.threadId, undefined, (activity) =>
-                      setConfirmStop({ target, activity }),
-                    )
+                    archive(actions, target.threadId, undefined, (activity) => {
+                      setConfirmStop({ target, activity });
+                      setStopOpen(true);
+                    })
                   }
                 >
                   <Archive aria-hidden />
@@ -215,7 +219,13 @@ export function ThreadRowMenus({
                 </DropdownMenuItem>
               )}
               {deletable && (
-                <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(target)}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmDelete(target);
+                    setDeleteOpen(true);
+                  }}
+                >
                   <Trash2 aria-hidden />
                   刪除
                 </DropdownMenuItem>
@@ -224,12 +234,7 @@ export function ThreadRowMenus({
           )
         }
       </DropdownMenuRoot>
-      <AlertDialog
-        open={confirmStop !== undefined}
-        onOpenChange={(open) => {
-          if (!open) setConfirmStop(undefined);
-        }}
-      >
+      <AlertDialog open={stopOpen} onOpenChange={setStopOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>這條會話還在執行</AlertDialogTitle>
@@ -256,12 +261,7 @@ export function ThreadRowMenus({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <AlertDialog
-        open={confirmDelete !== undefined}
-        onOpenChange={(open) => {
-          if (!open) setConfirmDelete(undefined);
-        }}
-      >
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>刪除「{confirmDelete?.label}」？</AlertDialogTitle>
