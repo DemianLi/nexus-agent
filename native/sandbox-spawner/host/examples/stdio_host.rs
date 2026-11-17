@@ -68,6 +68,10 @@ fn main() {
         }
     });
     let no_ready = args.iter().any(|a| a == "--no-ready");
+    assert!(
+        !no_ready || spawn_before_ready,
+        "--no-ready 要搭 --spawn-before-ready：不搭的話 ready 沒送，卻還是會在之後 spawn，測不出「ready 之前被殺」"
+    );
     let short_thread = args.iter().any(|a| a == "--spawn-thread=short");
     let env: Vec<(String, String)> = args
         .windows(2)
