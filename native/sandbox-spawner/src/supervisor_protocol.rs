@@ -25,7 +25,7 @@ use crate::protocol::{DecodeError, Reader, Writer};
 
 /// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
 /// 宿主 socket 的協定版本另算（`nexus-host` 的 `HOST_PROTOCOL_VERSION`，向量檔 `host-vectors.json`）。
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// 宿主的 `--plugins` 檔案讀不了或解析不過時的結束碼。監督行程看它判斷插件清單壞了，所以放在兩邊共用的協定這裡。
 pub const HOST_EXIT_CONFIG: i32 = 4;
@@ -201,6 +201,10 @@ pub enum HostCommand {
     /// 宿主收到時先把 listen backlog 收完，再撤掉表上那一筆：它驗過身分的連線斷掉；還沒送 `hello` 的（含剛從 backlog 收進來的）
     /// 從此不管送什麼都只回 `rejected`、報 [`HostReport::Unregistered`]，同一個 pid 號碼之後再登記也不照新的那一筆驗。
     Revoke { pid: u32 },
+    /// 身分表送完了：宿主每次（重）起送出 [`HostReport::Ready`] 之後，監督行程把當下整張表的 [`HostCommand::Grant`] 都寫完，最後送這一筆；表是空的也送。
+    /// 宿主收到之前不讀任何客戶端連線（`hello` 留在核心的緩衝區），這樣剛起來的宿主不會在表還沒到時把合法的行程回成「沒有登記」。
+    /// 每個宿主行程一生只送一次；之後的 `grant`、`revoke` 都是增量，不再送。
+    Synced,
 }
 
 /// 宿主 → 監督行程。
@@ -259,6 +263,7 @@ const EV_STATS: u8 = b'm';
 const HCMD_HELLO: u8 = b'k';
 const HCMD_GRANT: u8 = b'a';
 const HCMD_REVOKE: u8 = b'r';
+const HCMD_SYNCED: u8 = b'y';
 const HREP_HELLO: u8 = b'K';
 const HREP_READY: u8 = b'Q';
 const HREP_VIOLATION: u8 = b'P';
@@ -525,6 +530,7 @@ pub fn encode_host_command(command: &HostCommand) -> Vec<u8> {
             w.u8(HCMD_REVOKE);
             w.u32(*pid);
         }
+        HostCommand::Synced => w.u8(HCMD_SYNCED),
     }
     w.0
 }
@@ -546,6 +552,7 @@ pub fn decode_host_command(payload: &[u8]) -> Result<HostCommand, DecodeError> {
                 thread: r.bytes()?,
             },
             HCMD_REVOKE => HostCommand::Revoke { pid: r.u32()? },
+            HCMD_SYNCED => HostCommand::Synced,
             _ => return Err(DecodeError("不認得的種類")),
         })
     })
@@ -764,6 +771,7 @@ mod tests {
                 thread: T.to_vec(),
             },
             HostCommand::Revoke { pid: 4242 },
+            HostCommand::Synced,
         ]
     }
 
@@ -844,6 +852,17 @@ mod tests {
         );
     }
 
+    /// `Synced` 只有種類位元組：來回一致，種類後面多一個位元組就解不開。
+    #[test]
+    fn synced_is_a_bare_kind_byte() {
+        assert_eq!(encode_host_command(&HostCommand::Synced), vec![HCMD_SYNCED]);
+        assert_eq!(
+            decode_host_command(&[HCMD_SYNCED]).unwrap(),
+            HostCommand::Synced
+        );
+        assert!(decode_host_command(&[HCMD_SYNCED, 0]).is_err());
+    }
+
     #[test]
     fn the_protocol_version_matches_the_vector_file() {
         let key = "\"protocolVersion\": ";
@@ -899,7 +918,10 @@ mod tests {
                 EV_STATS,
             ],
         );
-        expect("hostCommands", &[HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE]);
+        expect(
+            "hostCommands",
+            &[HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE, HCMD_SYNCED],
+        );
         expect(
             "hostReports",
             &[
@@ -967,6 +989,7 @@ mod tests {
             HCMD_HELLO,
             HCMD_GRANT,
             HCMD_REVOKE,
+            HCMD_SYNCED,
             HREP_HELLO,
             HREP_READY,
             HREP_VIOLATION,

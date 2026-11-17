@@ -2952,6 +2952,88 @@ fn a_list_that_stays_broken_after_ready_never_counts_toward_the_failure_limit() 
 }
 
 /// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
+/// 假宿主的紀錄切成一段一段：每個 `start <pid>` 開一段，裡面是那個宿主行程收到的身分表指令（`grant …`、`synced`、`revoke …`）。
+fn host_segments(h: &Harness) -> Vec<Vec<String>> {
+    let mut segments: Vec<Vec<String>> = Vec::new();
+    for line in host_log(h) {
+        if line.starts_with("start ") {
+            segments.push(Vec::new());
+        } else if let Some(segment) = segments.last_mut() {
+            segment.push(line);
+        }
+    }
+    segments
+}
+
+/// 身分表送完要有記號：表（前台的 `grant`）在 `synced` 前面，之後才登記的對話行程在後面，整段只有一筆 `synced`。
+#[test]
+fn the_table_is_followed_by_exactly_one_synced_and_later_grants_come_after_it() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&[]),
+        ..Options::default()
+    });
+    assert!(
+        wait_until(|| host_log(&h).iter().any(|l| l == "synced")),
+        "{:?}",
+        host_log(&h)
+    );
+    h.up("a");
+    assert!(
+        wait_until(|| host_log(&h).iter().any(|l| l.ends_with(" conversation a"))),
+        "{:?}",
+        host_log(&h)
+    );
+    let segments = host_segments(&h);
+    assert_eq!(segments.len(), 1, "{segments:?}");
+    let segment = &segments[0];
+    let synced: Vec<usize> = (0..segment.len())
+        .filter(|&i| segment[i] == "synced")
+        .collect();
+    assert_eq!(synced.len(), 1, "{segment:?}");
+    let at = synced[0];
+    assert!(
+        segment[..at]
+            .iter()
+            .any(|l| l.starts_with("grant ") && l.contains(" front")),
+        "前台的 grant 在表裡，要在 synced 前面：{segment:?}"
+    );
+    let conversation = segment
+        .iter()
+        .position(|l| l.ends_with(" conversation a"))
+        .unwrap();
+    assert!(
+        conversation > at,
+        "ready 之後才起的對話行程在 synced 後面：{segment:?}"
+    );
+}
+
+/// 宿主重起、而且表是空的（前台不在、沒有對話行程）：`synced` 照樣送，前面沒有任何 `grant`；不送的話宿主永遠不讀連線。
+#[test]
+fn a_restarted_host_with_an_empty_table_is_still_synced() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&[]),
+        extra: vec!["--front-restart-ms", "600000"],
+        ..Options::default()
+    });
+    assert!(
+        wait_until(|| host_log(&h).iter().any(|l| l == "synced")),
+        "{:?}",
+        host_log(&h)
+    );
+    h.front = None;
+    h.audit_line("\"role\":\"front\"");
+    let first = nth_logged(&h, "start", 0);
+    kill(first as u32, libc::SIGKILL);
+    assert!(
+        wait_until(
+            || host_segments(&h).len() == 2 && host_segments(&h)[1].iter().any(|l| l == "synced")
+        ),
+        "{:?}",
+        host_log(&h)
+    );
+    assert_eq!(host_segments(&h)[1], vec!["synced"], "{:?}", host_log(&h));
+}
+
 #[test]
 fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_everything() {
     let marker = temp_dir("marker").join("crashed");

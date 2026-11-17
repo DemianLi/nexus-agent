@@ -393,6 +393,7 @@ impl Host {
                     self.revoke(pid);
                 }
                 Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
+                Ok(HostCommand::Synced) => {}
                 Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
             }
         }

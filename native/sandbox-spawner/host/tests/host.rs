@@ -187,6 +187,76 @@ fn a_violation_carries_the_generation_of_the_grant_it_belongs_to() {
     assert_eq!(host.report(), Some(violation(me(), 43, "token 不對")));
 }
 
+/// 一段時間內沒有任何回應、也沒斷線：讀逾時（還連著）才算，讀到資料或 EOF 都不算。
+fn silent_for(stream: &mut UnixStream, wait: Duration) -> bool {
+    stream.set_read_timeout(Some(wait)).unwrap();
+    let mut buf = [0u8; 1];
+    matches!(
+        stream.read(&mut buf),
+        Err(err) if matches!(err.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
+    )
+}
+
+/// 身分表到齊（`Synced`）之前宿主不讀連線：`hello` 先到也不回，也不報；表（`grant`）來了還是不回；`Synced` 到了才照今天的路驗，接受。
+#[test]
+fn a_hello_is_not_answered_until_the_table_is_synced() {
+    let dir = temp_dir("synced");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::spawn(&socket);
+    host.ready_without_table();
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    stream.write_all(&hello_frame(TOKEN)).unwrap();
+    let wait = Duration::from_millis(300);
+    assert!(silent_for(&mut stream, wait), "表還沒到就回了");
+    assert_eq!(host.reports_so_far(), vec![], "表還沒到就報了");
+    host.grant(me(), TOKEN, Role::Conversation, "a");
+    assert!(silent_for(&mut stream, wait), "只有 grant 還不算到齊");
+    host.command(&HostCommand::Synced);
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    assert_eq!(read_message(&mut stream), accepted());
+}
+
+/// 空表也要等 `Synced`：到了之後，表上沒有的 pid 才回「沒有登記」、報 `unregistered`。
+#[test]
+fn an_empty_table_is_also_waited_for_and_then_rejects() {
+    let dir = temp_dir("synced-empty");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::spawn(&socket);
+    host.ready_without_table();
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    stream.write_all(&hello_frame(TOKEN)).unwrap();
+    assert!(
+        silent_for(&mut stream, Duration::from_millis(300)),
+        "表還沒到就回了"
+    );
+    host.command(&HostCommand::Synced);
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    assert_eq!(read_message(&mut stream), rejected("沒有登記"));
+    assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
+}
+
+/// 表一直不來：宿主不自己放行、不報，等了 `HELLO_TIMEOUT` 的連線被斷，斷之前沒回任何框。
+#[test]
+fn a_connection_waiting_for_a_table_that_never_comes_is_dropped_silently() {
+    let dir = temp_dir("synced-never");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::spawn(&socket);
+    host.ready_without_table();
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    stream.write_all(&hello_frame(TOKEN)).unwrap();
+    stream
+        .set_read_timeout(Some(nexus_host::host::HELLO_TIMEOUT * 3))
+        .unwrap();
+    let started = Instant::now();
+    assert_eq!(read_message(&mut stream), None, "斷之前不該回任何框");
+    assert!(started.elapsed() >= nexus_host::host::HELLO_TIMEOUT / 2);
+    assert_eq!(host.reports_so_far(), vec![], "不該報 unregistered");
+}
+
 #[test]
 fn handshake_then_eof_removes_the_socket_and_exits_0() {
     let dir = temp_dir("eof");
