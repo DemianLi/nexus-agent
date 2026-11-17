@@ -481,6 +481,11 @@ export interface WireHandlerOptions {
    * 刪除會話的閘門（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：這條 thread 正在刪或已刪就回原因。
    * 組裝之前（等完收尾之後也一樣）查一次，觀察（{@link observeThread}）也查。沒給就不擋。
    */
+  /**
+   * 放手寫入方（{@link WireHandler.releaseWriter}）時等閒置的上限（毫秒）；超過就拋，不硬撤。省略就是 30 秒。測試用它縮短，
+   * 產品路徑不設。
+   */
+  readonly releaseIdleWaitMs?: number;
   readonly deletionGate?: {
     hiddenReason(threadId: string): Promise<'deleting' | 'deleted' | undefined>;
     /** 列表與搜尋要藏起來的 thread id（刪除中與已刪除）。 */
@@ -2092,7 +2097,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 刪除會話時的寫入方放手（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，single 模式）：停掉還在跑的一輪、等到閒置
    * （含背景子代理），再走閒置逐出的那一條撤出記憶體。**回來時寫租約已經放掉**：撤出的 promise 在 `release` 收完之後才兌現。
-   * 不在記憶體裡就直接回；等不到閒置超過 {@link RELEASE_IDLE_WAIT_MS} 就拋，不硬撤。
+   * 不在記憶體裡就直接回；等不到閒置超過 {@link WireHandlerOptions.releaseIdleWaitMs}（預設 {@link RELEASE_IDLE_WAIT_MS}）就拋，不硬撤。
    */
   async function releaseThreadWriter(threadId: string): Promise<void> {
     const building = threads.get(threadId);
@@ -2105,12 +2110,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     const state = ready.get(threadId);
     if (state === undefined) return;
     state.pump.cancel();
-    const deadline = Date.now() + RELEASE_IDLE_WAIT_MS;
+    const waitMs = options.releaseIdleWaitMs ?? RELEASE_IDLE_WAIT_MS;
+    const deadline = Date.now() + waitMs;
     while (!isIdle(threadId, state)) {
       if (Date.now() > deadline) {
-        throw new Error(
-          `thread "${threadId}" 等不到閒置（${String(RELEASE_IDLE_WAIT_MS)} 毫秒），不撤`,
-        );
+        throw new Error(`thread "${threadId}" 等不到閒置（${String(waitMs)} 毫秒），不撤`);
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }

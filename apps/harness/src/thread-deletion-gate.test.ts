@@ -9,11 +9,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import type { ColdStoredSession, SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
-import { BASE, JSON_HEADERS, rig, startHeldRun, touch } from './idle-eviction.fixture.js';
+import {
+  BASE,
+  gate,
+  JSON_HEADERS,
+  rig,
+  startHeldRun,
+  touch,
+  until,
+} from './idle-eviction.fixture.js';
 import { loopbackRequest } from './fixtures.js';
 import type { Rig } from './idle-eviction.fixture.js';
 import { ThreadDeletions, THREAD_DELETIONS_FILE } from './thread-deletion.js';
@@ -95,15 +103,24 @@ describe('閘門：刪除中或已刪除的會話不再組起來', () => {
 });
 
 describe('releaseWriter：停、等閒置、撤出，回來時收尾已兌現', () => {
-  it('還在跑的一輪被停下來，撤出之後 dispose 完成', async () => {
-    const r = track(rig());
+  it('還在跑的一輪被停下來：停止之後那一輪不再往下走（第二個工具卡住、只有中止才回來），撤出之後 dispose 完成', async () => {
+    // 第一個工具放行之後，模型要接著呼叫會卡住的 `stall`。沒有 `pump.cancel()` 的話這一輪走到 `stall` 就停在那裡，
+    // 等不到閒置，`releaseWriter` 在 2 秒後拋——測試紅。
+    const r = track(rig({ releaseIdleWaitMs: 2_000 }));
+    r.extras.set('t-run', {
+      script: [
+        { content: '動手', toolCalls: [{ name: 'hold', args: {} }] },
+        { content: '再來', toolCalls: [{ name: 'stall', args: {} }] },
+        { content: '好' },
+      ],
+    });
     await startHeldRun(r, 't-run');
-    // 測試用的工具不看中止訊號，要等它放手一輪才會落定（真的工具會在中止時回來）。
     const released = r.handler.releaseWriter('t-run');
     r.probe.hold.open();
     await released;
     expect(r.disposed).toContain('t-run');
     expect(r.evicted).toContain('t-run');
+    expect(r.probe.stalled).toBe(0);
   }, 60_000);
 
   it('寫租約在 releaseWriter 回來時已經放掉：另一個 store 拿得到寫租約', async () => {
@@ -218,4 +235,54 @@ describe('列表與搜尋藏起刪除中與已刪除的會話', () => {
     const body = (await response.json()) as { result: { items: { threadId: string }[] } };
     expect(body.result.items.map((item) => item.threadId)).toEqual(['t-live']);
   });
+});
+
+describe('observeThread：收尾之後再查一次閘門（分叉的來源）', () => {
+  it('來源在收尾中、收尾時被翻成已刪除：分叉拿不到它，回 thread_not_found，不從磁碟讀回來', async () => {
+    const hidden: { value: 'deleting' | 'deleted' | undefined } = { value: undefined };
+    const slow = gate();
+    const disposing = { value: false };
+    const r = track(
+      rig({
+        deletionGate: { hiddenReason: async () => hidden.value },
+        // 來源在磁碟上看得到（有 header），若閘門沒擋，分叉會去讀它。
+        readStoredThread: async (threadId) =>
+          threadId === 't-src'
+            ? ({
+                header: {
+                  version: SESSION_LOG_FORMAT_VERSION,
+                  id: 't-src',
+                  createdAt: 1,
+                  cwd: CWD,
+                },
+                storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+                events: [],
+              } as unknown as ColdStoredSession)
+            : undefined,
+      }),
+    );
+    r.extras.set('t-src', {
+      attachPersistence: () => ({
+        flush: async () => undefined,
+        dispose: async () => {
+          disposing.value = true;
+          await slow.promise;
+        },
+      }),
+    });
+    await wake(r, 't-src');
+    const releasing = r.handler.releaseWriter('t-src');
+    await until(() => disposing.value);
+    // 收尾卡在 dispose：分叉要等它收完才觀察來源。
+    const forking = r.client.threadFork('t-src', 'm-1');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    hidden.value = 'deleted';
+    slow.open();
+    await releasing;
+    const outcome = await forking;
+    expect(outcome).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'thread_not_found' } },
+    });
+  }, 60_000);
 });
