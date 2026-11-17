@@ -18,6 +18,8 @@ pub(super) struct Composition {
     state: PairState,
     /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。補葉子（[`Supervisor::refill`]）時清掉。
     pub(super) told: bool,
+    /// 起這個組合行程的時間：預熱的一對收屍時算它活了多久（[`Supervisor::warm_failed`]）。不隨補葉子、被停住過而變。
+    pub(super) started_at: Instant,
     /// 葉子不在了才收它的（葉子收完連帶收，或留著等葉子時因 `--idle-ms`、名額滿被收）：稽核記 `peer`，不回 `down`、不進死因累計。
     pub(super) peer: bool,
     pub(super) cause: Option<DeathCause>,
@@ -61,6 +63,7 @@ impl Composition {
             socket: PathBuf::new(),
             state,
             told: false,
+            started_at: Instant::now(),
             peer: false,
             cause: None,
             timed_out: false,
@@ -271,6 +274,7 @@ impl Supervisor {
                         since: Instant::now(),
                     },
                     told: false,
+                    started_at: Instant::now(),
                     peer: false,
                     cause: None,
                     timed_out: false,
@@ -300,11 +304,8 @@ impl Supervisor {
                 });
                 self.count_death(DeathCause::Crash);
                 match thread {
-                    Some(thread) => self.tell_front(&FrontEvent::Down {
-                        thread_id: thread,
-                        cause: DeathCause::Crash,
-                    }),
-                    None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+                    Some(thread) => self.thread_down(thread, DeathCause::Crash),
+                    None => self.warm_failed(Instant::now(), false),
                 }
             }
         }
@@ -554,6 +555,7 @@ impl Supervisor {
     /// 等 `ready` 等過了 `--start-timeout-ms` 的一對（#2801）：當場殺掉組合行程的群組，死因 `stalled`；葉子等它收完屍連帶收
     /// （[`Self::on_composition_exit`]），`down` 也在那裡回。組合行程沒 `hello`、葉子沒在橋上登記、組合行程沒替它送 `ready`，從外面分不出來，
     /// 都是這一條。跟 [`Self::check_stalls`] 一樣不走拆除梯度，判之前先讀一次它的控制通道。停機中不判：停機有自己的梯度。
+    /// 不成對的對話行程（含預熱池裡的，#2852）同一個期限，殺的是它自己的群組、死因 `stalled`，沒有組合行程也沒有葉子。
     pub(super) fn check_starts(&mut self, now: Instant) {
         let Some(limit) = self.args.start_timeout else {
             return;
@@ -580,6 +582,31 @@ impl Supervisor {
                 composition.proc.kill_now();
             }
         }
+        // 不成對的對話行程（含預熱池裡的）同一條：一對的葉子有 `pair`，由上面那一圈殺組合行程，這裡不會選到。
+        for index in 0..self.conversations.len() {
+            if !self.conversation_overdue(index, limit, now) {
+                continue;
+            }
+            self.on_conversation_readable(index);
+            if self.conversation_overdue(index, limit, now) {
+                let conversation = &mut self.conversations[index];
+                say!(
+                    "對話行程 {} 起了 {} ms 還沒 ready，殺掉",
+                    conversation.proc.pid,
+                    limit.as_millis()
+                );
+                conversation.cause.get_or_insert(DeathCause::Stalled);
+                conversation.timed_out = true;
+                conversation.proc.kill_now();
+            }
+        }
+    }
+
+    fn conversation_overdue(&self, index: usize, limit: Duration, now: Instant) -> bool {
+        self.conversations
+            .get(index)
+            .and_then(Conversation::starting_since)
+            .is_some_and(|since| since + limit <= now)
     }
 
     /// 一對的葉子收完屍、判完死因之後。上一則 `bind` 回過 `bound`、葉子是自己壞掉的（不是逐出、停機、協定錯）：組合行程留著，等下一個
@@ -665,12 +692,12 @@ impl Supervisor {
         if counted {
             self.count_death(cause);
             match composition.thread {
-                Some(thread) => self.tell_front(&FrontEvent::Down {
-                    thread_id: thread,
-                    cause,
-                }),
+                Some(thread) => self.thread_down(thread, cause),
                 None if cause != DeathCause::Shutdown => {
-                    self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
+                    let now = Instant::now();
+                    let settled = composition.state == PairState::Ready
+                        && now.duration_since(composition.started_at) >= args::WARM_STABLE;
+                    self.warm_failed(now, settled);
                 }
                 _ => {}
             }

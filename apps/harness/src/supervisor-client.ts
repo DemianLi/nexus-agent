@@ -5,6 +5,7 @@
  * - **`ensure` 的回答是 `up`、`down` 或 `capacity`**，以 thread 為單位：同一條 thread 同時有幾個人在等，一則回答全部了結。
  *   `down(evicted)` 不了結：監督行程在等 `drain` 回答時又被 `ensure` 到、結果回了 `drained`，會先送 `down(evicted)`，
  *   接著重算名額再回 `up` 或 `capacity`（`native/sandbox-spawner/README.md` 的逐出那一條）。
+ *   舊行程的非逐出 `down` 在等待中的 `ensure` 送出之後才到時，也不算回答：前台重送一次（見 `#apply`）。
  * - **活著的行程表只由 `up`／`down` 維護**。前台重啟之後監督行程先把每條活著的送一次 `up`，表就這樣重建，不用另外問。
  * - 控制通道斷了（監督行程走了），在等的全部丟錯，之後的 `ensure` 也直接丟。
  * - **第一框是 `hello`**：建構時就先送自己的；監督行程送來的第一框也要是版本相等的 `hello`，帶著連宿主用的 token
@@ -217,9 +218,23 @@ export class SupervisorClient {
         const socket = this.#live.get(event.threadId);
         this.#live.delete(event.threadId);
         this.#onDown?.(event.threadId, event.cause, socket);
-        if (event.cause !== 'evicted') {
-          this.#settle(event.threadId, { type: 'down', cause: event.cause });
+        if (event.cause === 'evicted') return;
+        const pending = this.#pending.get(event.threadId);
+        if (pending !== undefined && socket !== undefined && event.cause !== 'shutdown') {
+          // 等著的 `ensure` 送出去之後才到的 `down`，表上還有這條，所以是舊行程的死訊，或就是這則 `ensure` 的回答（監督行程對被當場殺、
+          // 還沒收屍的行程不理 `ensure`，收完回的 `down` 就是回答），前台分不出來：重送一次，兩種情況之後都有回答。只會重送一次：
+          // 等待活著的期間表上這條只會被 `down` 刪、不會被換（`up` 一定了結等待，`down` 一定先刪表），重送之後的 `down` 表上已經沒有。
+          // 監督行程對逐出中與連帶收掉（`peer`）的排隊重起，其餘死因不理（`native/sandbox-spawner/src/supervisor/mod.rs` 的 `ensure`，
+          // 葉子那一支與組合行程那一支各一處，那邊一改這裡要跟著看）；連帶收掉的葉子收屍時不送 `down`。重送的 `ensure` 之後那個行程、
+          // 排隊位置或名額的結果就是回答。`shutdown` 一律回 `down`，所以不重送。
+          this.#send({
+            type: 'ensure',
+            threadId: event.threadId,
+            open: pending.sent,
+          });
+          return;
         }
+        this.#settle(event.threadId, { type: 'down', cause: event.cause });
         return;
       }
       case 'capacity':

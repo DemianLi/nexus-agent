@@ -1672,11 +1672,186 @@ fn a_crashing_warm_pool_backs_off() {
     });
     std::thread::sleep(Duration::from_millis(1_000));
     let audited = h.audit().len();
-    // `--front-restart-ms 100`：一秒最多十幾次，不是一直 fork。
-    assert!((2..=20).contains(&audited), "{audited} 行");
+    // `--front-restart-ms 100`、每次失敗加倍：一秒內約 0、100、300、700 毫秒各一次，四行。沒有退避的話是十行上下，上界 6 要每輪多花 65 毫秒以上才漏得掉；
+    // 機器慢只會讓行數變少，下界不動。
+    eprintln!("[預熱池退避] 一秒內稽核 {audited} 行");
+    assert!((2..=6).contains(&audited), "{audited} 行");
     assert!(h.audit()[0].contains("\"thread\":\"\""), "{:?}", h.audit());
     h.ensure("x");
     assert_eq!(h.down_of("x"), DeathCause::Crash);
+}
+
+/// 量測（#2815）：一條 thread 的行程每次都在 `ready` 之前死，前台緊密地要、等 `down`、再要，跑 2 秒；只印、斷言只放很鬆的下界。
+/// 印的是 2 秒內收到幾則 `down`、稽核多幾行；通過時 stderr 被收走，要看數字加 `-- --nocapture`。
+fn measure_a_tight_loop(label: &str, options: Options) {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--die-before-ready".into()],
+        ..options
+    });
+    let until = Instant::now() + Duration::from_secs(2);
+    let mut downs = 0;
+    while Instant::now() < until {
+        h.ensure("a");
+        assert_eq!(h.down_of("a"), DeathCause::Crash);
+        downs += 1;
+    }
+    eprintln!(
+        "[量測 M-緊 {label}] 2 秒內收到 {downs} 則 down，稽核 {} 行",
+        h.audit().len()
+    );
+    assert!(downs >= 1);
+}
+
+#[test]
+fn measure_a_tight_loop_on_a_crashing_thread() {
+    measure_a_tight_loop("不成對", Options::default());
+}
+
+#[test]
+fn measure_a_tight_loop_on_a_crashing_pair() {
+    measure_a_tight_loop("成對", paired());
+}
+
+/// 量測（#2815）：一條 thread 的行程 `bound` 之後馬上結束（等於 `up` 之後立刻死），前台照估計的節奏（250–500 毫秒，取中間 375，沒有量過真的前台）
+/// 要、等 `down`、睡、再要，跑 10 秒；只印、斷言只放很鬆的下界。印的是起了幾次 `up`、收到幾則 `down`、稽核幾行
+/// （`down` 次數減 `up` 次數，是被閘回掉的加上起不來的）。
+fn measure_a_web_paced_retry_loop(label: &str, options: Options) {
+    let mut h = Harness::start(options);
+    let until = Instant::now() + Duration::from_secs(10);
+    let (mut ups, mut downs) = (0, 0);
+    while Instant::now() < until {
+        h.ensure("w,exit:7");
+        loop {
+            match h.event() {
+                FrontEvent::Up { thread_id, .. } if thread_id == b"w,exit:7" => ups += 1,
+                FrontEvent::Down { thread_id, .. } if thread_id == b"w,exit:7" => {
+                    downs += 1;
+                    break;
+                }
+                other => panic!("要 w,exit:7 的 up 或 down，拿到 {other:?}"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(375));
+    }
+    eprintln!(
+        "[量測 M-web {label}] 10 秒內 up {ups} 次、down {downs} 則，稽核 {} 行",
+        h.audit().len()
+    );
+    assert!(downs >= 1);
+}
+
+#[test]
+fn measure_a_web_paced_retry_loop_on_a_thread_that_dies_right_after_up() {
+    measure_a_web_paced_retry_loop("100 毫秒", Options::default());
+}
+
+/// 同上，用出廠的 `--front-restart-ms 1000`（harness 預設 100 是為了讓要測重起的測試不用等）。
+#[test]
+fn measure_a_web_paced_retry_loop_with_the_shipped_restart_interval() {
+    measure_a_web_paced_retry_loop(
+        "1000 毫秒",
+        Options {
+            extra: vec!["--front-restart-ms", "1000"],
+            ..Options::default()
+        },
+    );
+}
+
+/// 稽核裡不是 `backoff` 的行數：起行程、死亡的紀錄，被閘擋下的請求不會讓它增加。
+fn audit_without_backoff(h: &Harness) -> usize {
+    h.audit()
+        .iter()
+        .filter(|line| !line.contains("\"event\":\"backoff\""))
+        .count()
+}
+
+/// 成對時 `down` 比組合行程的死亡紀錄早到：等行數兩次讀都一樣（隔 200 毫秒）才算數。
+fn settled_audit_lines(h: &Harness) -> usize {
+    let mut last = audit_without_backoff(h);
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        let now = audit_without_backoff(h);
+        if now == last {
+            return now;
+        }
+        last = now;
+    }
+}
+
+fn backoff_lines(h: &Harness) -> Vec<String> {
+    h.audit()
+        .into_iter()
+        .filter(|line| line.contains("\"event\":\"backoff\""))
+        .collect()
+}
+
+/// 一條 thread 的行程每次都在 `ready` 之前死（#2815）：第一次失敗不等，第二次起連續失敗開窗；窗內的 `ensure` 當場回 `down`、
+/// 不起行程（稽核沒有新的行程紀錄、只有一行 `backoff`）；窗過了才又起。
+fn assert_a_failing_thread_is_turned_away_within_the_window(options: Options) {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--die-before-ready".into()],
+        extra: vec!["--front-restart-ms", "1500"],
+        ..options
+    });
+    h.ensure("a");
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    h.ensure("a");
+    assert_eq!(h.down_of("a"), DeathCause::Crash, "第二次照樣去起");
+    let started = settled_audit_lines(&h);
+    assert!(backoff_lines(&h).is_empty());
+
+    for _ in 0..3 {
+        h.ensure("a");
+        assert_eq!(h.down_of("a"), DeathCause::Crash);
+    }
+    assert_eq!(settled_audit_lines(&h), started, "窗內沒有起行程");
+    let lines = backoff_lines(&h);
+    assert_eq!(lines.len(), 1, "每個窗一行：{lines:?}");
+    assert!(
+        lines[0].contains("\"thread\":\"a\"")
+            && lines[0].contains("\"cause\":\"crash\"")
+            && lines[0].contains("\"failures\":2")
+            && lines[0].contains("\"wait_ms\":1500"),
+        "{lines:?}"
+    );
+
+    std::thread::sleep(Duration::from_millis(1_600));
+    h.ensure("a");
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert!(settled_audit_lines(&h) > started, "窗過了又起了行程");
+}
+
+#[test]
+fn a_failing_thread_is_turned_away_within_the_window() {
+    assert_a_failing_thread_is_turned_away_within_the_window(Options::default());
+}
+
+#[test]
+fn a_failing_pair_is_turned_away_within_the_window() {
+    assert_a_failing_thread_is_turned_away_within_the_window(paired());
+}
+
+/// 一條 thread 在窗裡，別條 thread 照常起、照常 `up`。
+#[test]
+fn a_thread_in_the_window_does_not_hold_back_the_others() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--front-restart-ms", "1500"],
+        ..Options::default()
+    });
+    for _ in 0..2 {
+        h.ensure("x,exit:3");
+        assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
+    }
+    h.ensure("x,exit:3");
+    assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
+    assert_eq!(backoff_lines(&h).len(), 1);
+
+    h.up("ok");
+    let started = settled_audit_lines(&h);
+    h.ensure("x,exit:3");
+    assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
+    assert_eq!(backoff_lines(&h).len(), 1, "同一個窗不再寫");
+    assert_eq!(settled_audit_lines(&h), started, "被擋的沒有起行程");
 }
 
 #[test]
@@ -2205,6 +2380,9 @@ fn fake_host(args: &[&str]) -> Option<(PathBuf, Vec<String>)> {
     ))
 }
 
+/// 真宿主：對話行程不等宿主 `ready` 就起，第一次連線可能早於宿主 bind，拿到 `host error 2`（ENOENT）；用它起宿主的測試，
+/// 第一個連線都走 `host-retry`，不是在斷言第一次就連得上。
+/// 重試的 15 秒要比 `WAIT`（20 秒）短：重試先放棄、把最後一次的回答寫進紀錄，`wait_until` 才看得到失敗的理由；改其中一個要看另一個。
 fn real_host() -> Option<(PathBuf, Vec<String>)> {
     Some((host_bin(), Vec::new()))
 }
@@ -2278,7 +2456,7 @@ fn conversations_get_the_socket_the_host_binds_only_when_there_is_a_host() {
         host: real_host(),
         ..Options::default()
     });
-    let socket = h.up("a,host-hello");
+    let socket = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&socket).contains(&"host hello".to_string())),
         "{:?}",
@@ -2300,7 +2478,7 @@ fn the_token_travels_only_on_the_control_channel() {
         host: real_host(),
         ..Options::default()
     });
-    let socket = h.up("a,host-hello");
+    let socket = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&socket).contains(&"host hello".to_string())),
         "{:?}",
@@ -2342,7 +2520,7 @@ fn conversations_reach_the_host_and_violations_are_audited_and_quarantined() {
         host: real_host(),
         ..Options::default()
     });
-    let a = h.up("a,host-hello");
+    let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -2394,6 +2572,13 @@ fn a_quarantined_conversation_is_audited_on_every_later_rejection() {
         host: real_host(),
         ..Options::default()
     });
+    // b 的第一個動作就是被拒的連線，不能前面加重試；先起 a 連到宿主收下，再起 b，那時宿主一定 bind 了。
+    let a = h.up("a,host-retry:15000");
+    assert!(
+        wait_until(|| log(&a).contains(&"host hello".to_string())),
+        "{:?}",
+        raw_log(&a)
+    );
     let b = h.up("b,host-bad-token,host-garbage,host-hello");
     assert!(wait_until(|| log(&b).len() >= 5), "{:?}", log(&b));
     assert_eq!(
@@ -2434,7 +2619,7 @@ fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
         host: real_host(),
         ..Options::default()
     });
-    let a = h.up("a,host-hello,wait-go,host-hello");
+    let a = h.up("a,host-retry:15000,wait-go,host-hello");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -2650,7 +2835,8 @@ fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf
         extra: vec!["--host-start-failures", start_failures],
         ..Options::default()
     });
-    let a = h.up("a,host-hello");
+    // 第一個連線可能早於宿主 bind，見 `real_host`。
+    let a = h.up("a,host-retry:15000");
     assert!(
         wait_until(|| log(&a).contains(&"host hello".to_string())),
         "{:?}",
@@ -3404,6 +3590,106 @@ fn a_second_stop_signal_before_the_front_answers_collects_a_pair_as_shutdown() {
     );
 }
 
+/// 不成對的對話行程一直不送 `ready`（假對話行程在 `hello` 之前睡著）：過了 `--start-timeout-ms` 被殺，前台拿到 `down(stalled)`，
+/// 稽核是 `stalled` 加逾時的 `error`、沒有 `pair`；名額讓出來，第二條 thread 也是同樣的結局，不是 `capacity`。
+#[test]
+fn an_unpaired_conversation_that_never_says_ready_is_killed_at_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "600000".into()],
+        extra: vec!["--start-timeout-ms", "1000", "--capacity", "1"],
+        ..Options::default()
+    });
+    h.ensure("a");
+    let first = logged_pid(&h.dir.join("run/c1.sock"), "pid");
+    assert_eq!(h.down_of("a"), DeathCause::Stalled);
+    assert!(wait_until(|| gone(first)));
+    let line = h.audit_line("\"error\":\"ready 之前逾時\"");
+    assert!(
+        line.contains("\"role\":\"conversation\"")
+            && line.contains("\"cause\":\"stalled\"")
+            && !line.contains("\"pair\""),
+        "{line}"
+    );
+    // 名額只有一個：沒讓出來的話這裡回的是 `capacity`。
+    assert_eq!(h.down("b"), DeathCause::Stalled);
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// `--start-timeout-ms 0` 不是「馬上逾時」：不送 `ready` 的行程留著，停機時回一次 `down(shutdown)`。
+#[test]
+fn an_unpaired_conversation_that_never_says_ready_stays_when_the_start_deadline_is_off() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "600000".into()],
+        extra: vec!["--start-timeout-ms", "0"],
+        ..Options::default()
+    });
+    h.ensure("a");
+    let pid = logged_pid(&h.dir.join("run/c1.sock"), "pid");
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert!(!gone(pid));
+    assert!(
+        h.audit()
+            .iter()
+            .all(|line| !line.contains("ready 之前逾時")),
+        "{:?}",
+        h.audit()
+    );
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// 期限內 `ready` 的不受影響：過了 `--start-timeout-ms` 還是同一個行程，沒有人被判 `stalled`。
+#[test]
+fn an_unpaired_conversation_that_is_ready_in_time_outlives_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "300".into()],
+        extra: vec!["--start-timeout-ms", "1500"],
+        ..Options::default()
+    });
+    let socket = h.up("a");
+    std::thread::sleep(Duration::from_millis(2_000));
+    assert_eq!(h.up("a"), socket);
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+    assert!(
+        h.audit()
+            .iter()
+            .all(|line| !line.contains("ready 之前逾時")),
+        "{:?}",
+        h.audit()
+    );
+}
+
+/// 預熱池裡不成對的行程逾時：沒有 thread，不回 `down`、稽核有逾時那一行，之後補一個新的（換了 pid）。
+#[test]
+fn a_warm_unpaired_conversation_past_the_start_deadline_is_collected_and_refilled() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "600000".into()],
+        extra: vec!["--warm", "1", "--start-timeout-ms", "1000"],
+        ..Options::default()
+    });
+    let first = logged_pid(&h.dir.join("run/c1.sock"), "pid");
+    assert!(wait_until(|| gone(first)));
+    let line = h.audit_line("\"error\":\"ready 之前逾時\"");
+    assert!(
+        line.contains("\"cause\":\"stalled\"") && !line.contains("\"pair\""),
+        "{line}"
+    );
+    let second = logged_pid(&h.dir.join("run/c2.sock"), "pid");
+    assert_ne!(first, second);
+    assert_eq!(shut_down(&mut h), []);
+}
+
 /// 等到稽核裡有第 `serial` 對起動逾時的樣子：組合行程那一行是 `stalled`、帶逾時的 `error`；`with_leaf` 時它後面是葉子連帶收的那一行，
 /// 沒有葉子的就不該再有別行。
 fn assert_start_timed_out(h: &Harness, serial: u32, with_leaf: bool) {
@@ -3737,6 +4023,8 @@ fn a_refilled_leaf_that_never_registers_is_collected_at_the_start_deadline() {
     assert!(wait_until(|| gone(composition as i32) && gone(new as i32)));
     assert_start_timed_out(&h, 1, true);
 
+    // 這條連續死了兩次（補葉子之前的 crash、這次的 stalled），窗是 harness 的 `--front-restart-ms 100`；窗內再要只會拿到 `down`。
+    std::thread::sleep(Duration::from_millis(250));
     std::fs::write(h.dir.join("run/c2.l.sock.go"), b"").unwrap();
     assert_eq!(h.up("a"), h.dir.join("run/c2.sock"));
 }
@@ -3778,6 +4066,8 @@ fn a_refilled_leaf_killed_before_it_registers_takes_the_pair_down_once() {
     assert_eq!(h.down_of("a"), DeathCause::Crash);
     assert!(wait_until(|| gone(composition as i32)));
 
+    // 這條連續死了兩次（先殺的第一個葉子、這次的補起葉子），窗是 harness 的 `--front-restart-ms 100`；窗內再要只會拿到 `down`。
+    std::thread::sleep(Duration::from_millis(250));
     h.ensure("a");
     let next = h.dir.join("run/c2.l.sock");
     assert!(wait_until(|| log(&next).contains(&"ready".to_string())));

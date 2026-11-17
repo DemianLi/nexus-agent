@@ -15,6 +15,7 @@
 //!   沒名額當場回 `capacity`，收完照樣送 `down(evicted)`。死因不是 `evicted`、正在收、又沒在等 `drain` 回答的不理，收完回的 `down` 就是回答；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
 //!   前台先收到 `down(evicted)`，這條跟其他排著的一起重算名額，收完照排隊順序起，沒名額回 `capacity`。等回答期間它跟自己的行程互抵，
 //!   不回 `capacity`，別的行程讓出的名額也不拿去替它起第二個。
+//!   這條 thread 連續失敗（第二次起，見 README 〈每條 thread 的重起退避〉）而窗還沒過：只回 `down(thread, 上一次的死因)`，不起、不排隊、不讓位。閘在停機判斷之後、其餘判斷之前，只在這裡。
 //!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。已經在排的再要，只把 `open` 升成 `run`。
 //!   對話行程送 `ready` 之後，已經指派了 thread 的送它 `bind(thread)`，沒指派的留在預熱池；回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。
 //!   `open` 是 `read-only` 的標成只讀開啟；同一條 thread 之後收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
@@ -27,7 +28,7 @@
 //! 只讀的先，同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
 //! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度；逾時之後才到的也照收）；回 `busy` 或
 //! `--drain-timeout-ms` 內沒回答都不收，當它不閒置，等它下次回報閒置。閒置超過 `--idle-ms`（只讀的 `--read-only-idle-ms`）也送 `drain`。
-//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
+//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補，每失敗一次加倍到上限（[`args::WARM_BACKOFF_MAX`]，[`Supervisor::warm_failed`]）。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
@@ -71,7 +72,8 @@
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
 //! `ready`、`bound` 看組合行程的，`bind` 也送給它，`up` 給的是它的 socket；`turn`、閒置、`drain` 走葉子。
-//! 從起組合行程（補葉子時從補的那一刻）到讀到 `ready` 超過 `--start-timeout-ms` 就殺組合行程、整對收（[`Supervisor::check_starts`]）。
+//! 從起組合行程（補葉子時從補的那一刻）到讀到 `ready` 超過 `--start-timeout-ms` 就殺組合行程、整對收（[`Supervisor::check_starts`]）；
+//! 不成對的對話行程從 spawn 起到 `ready` 也是這一個期限，過了殺它自己。
 //! 葉子死了照它的死因回 `down`：上一則 `bind` 回過 `bound`、又是它自己壞掉的，組合行程留著等下一個 `ensure` 補葉子
 //! （留到 `--idle-ms`，名額滿時最先收；補了之後等它替新葉子再回一則 `ready` 才重送 `bind`）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
 //! 被連帶收掉的那一個稽核記 `peer`，不回 `down`、不進死因累計；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也記 `peer`
@@ -104,6 +106,7 @@ use composition::Composition;
 use composition::PairState;
 use memory::OomCounter;
 use process::{Chan, StderrTap};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -203,6 +206,11 @@ struct Conversation {
     idle_since: Option<Instant>,
     /// 最後一次被 `ensure` 要到、被起、或從預熱池指派的時間；逐出的先後與閒置時限都從它與 `idle_since` 較晚的那個算。
     used_at: Instant,
+    /// spawn 它的時間，等 `ready` 的期限（`--start-timeout-ms`）從這裡算。不用 `used_at`：它在 `ensure` 要到、從預熱池指派時都會更新，
+    /// 預熱池裡的一被指派就等於重新起算。只有監督行程被停住過時才重設（[`Supervisor::check_resumed`]）。
+    started_at: Instant,
+    /// 等 `ready` 超過期限被監督行程殺的；稽核記 `error`。
+    timed_out: bool,
     /// 送出 `drain`、還沒收到回答的時間點。
     drain: Option<Instant>,
     /// 只讀開啟時被前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 或收到 `turn(begin)` 就清掉。
@@ -291,6 +299,12 @@ impl Conversation {
         self.thread.is_none() && self.proc.stop.is_none()
     }
 
+    /// 還在等 `ready`、沒在收、也不是一對的葉子（那一種由組合行程的 `ready` 管，見 [`Composition::starting_since`]）：從什麼時候起。
+    fn starting_since(&self) -> Option<Instant> {
+        (self.phase == Phase::Starting && self.pair.is_none() && self.proc.stop.is_none())
+            .then_some(self.started_at)
+    }
+
     /// 送出 `bind` 之後、還沒在收，而且已經 `stall` 沒聽到它（壓住時停住的時間不算，見 [`cpu::Guard::silence`]）。
     fn stalled(&self, now: Instant, stall: Duration) -> bool {
         self.proc.stop.is_none()
@@ -320,6 +334,22 @@ const EXIT_HOST_CONFIG: i32 = 5;
 /// 撤銷寫進宿主控制通道最多等這麼久；收屍會等它，所以要短。
 const REVOKE_WRITE_LIMIT: Duration = Duration::from_millis(500);
 
+/// 一條 thread 最近的連續失敗，見 [`Supervisor::thread_backoff`]。
+struct ThreadBackoff {
+    /// 連續第幾次。
+    failures: u32,
+    /// 最近一次失敗的時間。
+    at: Instant,
+    /// 這個窗的結束：這之前來的 `ensure` 被閘回掉。第一次失敗等於 `at`，沒有窗。
+    until: Instant,
+    /// 再失敗一次要等多久。
+    next_wait: Duration,
+    /// 最近一次的死因，閘回 `down` 時用。
+    cause: DeathCause,
+    /// 這個窗已經寫過那一行稽核。
+    noted: bool,
+}
+
 struct Supervisor {
     args: args::Args,
     audit: Audit,
@@ -338,8 +368,15 @@ struct Supervisor {
     capacity: u32,
     /// 名額滿而排著的 thread 與開啟方式，先排的在前；有行程收完就從前面起。
     pending: Vec<(Vec<u8>, OpenMode)>,
-    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。
+    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。只由 [`Supervisor::warm_failed`] 設。現有四處由 `every_place_that_schedules_a_warm_retry_goes_through_warm_failed` 釘；之後新增的寫法直接寫它就繞過退避，沒有測試會紅。
     warm_retry_at: Option<Instant>,
+    /// 下一次預熱失敗要等多久；初值是 `--front-restart-ms`，每失敗一次加倍到 [`args::WARM_BACKOFF_MAX`]。
+    warm_backoff: Duration,
+    /// 每條 thread 最近的連續失敗（[`Supervisor::thread_down`] 在回前台 `down` 之後記；鍵是 thread id）。窗還沒過的 thread 來的 `ensure`，
+    /// 在 [`Supervisor::ensure`] 最前面（停機判斷之後）就被回掉，不起行程、不排隊、不拿預熱的、不讓位。**只放 `ensure` 一處靠的是：窗裡的 thread
+    /// 沒有新起的行程**（起行程的路是 `ensure` 裡的補葉子、拿預熱、當場起，與排隊之後的 [`Supervisor::serve_pending`]）。排著的 thread 是過了閘才排的，但排了之後它自己的行程死了開出窗，所以 [`Supervisor::thread_down`] 開窗時把它從隊伍拿掉。
+    /// 加新的起行程的路要過閘，不然繞過去，沒有測試會紅。另外直接 `tell_front` 送 `down` 的地方不經 [`Supervisor::thread_down`] 就不進表。
+    thread_backoff: HashMap<Vec<u8>, ThreadBackoff>,
     /// 下次送 `stats` 的時間。
     stats_at: Option<Instant>,
     /// 各類死因的累計，依死因碼的順序。
@@ -421,6 +458,7 @@ impl Supervisor {
     /// 還沒起任何行程的監督行程。
     fn assemble(args: args::Args, audit: Audit, sigfd: libc::c_int, capacity: u32) -> Supervisor {
         let stats_at = args.stats.map(|every| Instant::now() + every);
+        let front_restart = args.front_restart;
         let host_backoff = args
             .host
             .as_ref()
@@ -441,6 +479,8 @@ impl Supervisor {
             capacity,
             pending: Vec::new(),
             warm_retry_at: None,
+            warm_backoff: front_restart,
+            thread_backoff: HashMap::new(),
             stats_at,
             deaths: [0; DEATH_CAUSES],
             front_token: Vec::new(),
@@ -867,6 +907,11 @@ impl Supervisor {
                         self.compositions
                             .iter()
                             .filter_map(move |p| Some(p.starting_since()? + limit))
+                            .chain(
+                                self.conversations
+                                    .iter()
+                                    .filter_map(move |c| Some(c.starting_since()? + limit)),
+                            )
                     }),
             )
             .chain(self.args.stall.into_iter().flat_map(|stall| {
@@ -925,13 +970,17 @@ impl Supervisor {
     /// 同步等待可能跨過門檻）。凍住前對話行程照常送心跳時，會造成誤判的停住，它所在那一段量到的 `late` 至少是 `stall` 的四分之三減一個心跳間隔：
     /// 每一段准許的時間最多是 poll 的 timeout，[`Self::next_deadline`] 讓它不超過 `stall` 的四分之一。所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
     ///
-    /// 一對等 `ready` 的時間（`--start-timeout-ms`）也從 `now` 重新起算，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
+    /// 每個等 `ready` 的（一對、不成對的對話行程、預熱池裡的）等的時間（`--start-timeout-ms`）也從 `now` 重新起算，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
     /// 這裡沒有 `stall` 四分之一那樣的上限：有一對時 poll 最晚每 `--rss-poll-ms` 醒一次，停在 poll 裡的停頓要扣掉那一段才算 `late`。
     fn check_resumed(&mut self, now: Instant, late: Duration) {
         let waiting = self
             .compositions
             .iter()
-            .any(|p| p.starting_since().is_some());
+            .any(|p| p.starting_since().is_some())
+            || self
+                .conversations
+                .iter()
+                .any(|c| c.starting_since().is_some());
         if waiting
             && self
                 .args
@@ -939,11 +988,16 @@ impl Supervisor {
                 .is_some_and(|limit| late >= limit / 2)
         {
             say!(
-                "監督行程比准許的晚了 {} ms，判定自己被停住過；每一對等 ready 的時間從現在重新起算",
+                "監督行程比准許的晚了 {} ms，判定自己被停住過；每一個等 ready 的行程的時間從現在重新起算",
                 late.as_millis()
             );
             for composition in &mut self.compositions {
                 composition.restart_start(now);
+            }
+            for conversation in &mut self.conversations {
+                if conversation.starting_since().is_some() {
+                    conversation.started_at = now;
+                }
             }
         }
         let Some(stall) = self.args.stall else { return };
@@ -1181,6 +1235,33 @@ impl Supervisor {
             return;
         }
         let now = Instant::now();
+        if let Some(entry) = self
+            .thread_backoff
+            .get_mut(&thread)
+            .filter(|entry| now < entry.until)
+        {
+            // 這條連續失敗、窗還沒過：回上一次的死因，不起行程、不排隊、不拿預熱的、不讓位。每個窗只寫一行稽核。
+            let (cause, failures, wait) = (entry.cause, entry.failures, entry.until - entry.at);
+            let first = !std::mem::replace(&mut entry.noted, true);
+            if first {
+                self.audit.record(&Record::Backoff {
+                    thread: &thread,
+                    cause,
+                    failures,
+                    wait_ms: wait.as_millis().min(u128::from(u64::MAX)) as u64,
+                });
+                say!(
+                    "thread {} 連續失敗 {failures} 次，{} ms 內不再起",
+                    String::from_utf8_lossy(&thread),
+                    wait.as_millis()
+                );
+            }
+            self.tell_front(&FrontEvent::Down {
+                thread_id: thread,
+                cause,
+            });
+            return;
+        }
         if let Some(index) = self
             .conversations
             .iter()
@@ -1210,7 +1291,8 @@ impl Supervisor {
                     && conversation.cause == Some(DeathCause::Evicted))
             {
                 // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
-                // 別的死因不理：收完回的 `down` 就是回答。被組合行程連帶收掉的，`down` 已經送過，也排隊。
+                // 別的死因不理：收完回的 `down` 就是回答。前台（`apps/harness/src/supervisor-client.ts` 的 `#apply`）收到 `down` 會重送 `ensure`，
+                // 理由寫在那邊；這裡哪些死因排隊一改，那邊要跟著看。被組合行程連帶收掉的（`peer`）`down` 已經送過，不分死因都排隊，它收屍時不再送。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -1231,7 +1313,7 @@ impl Supervisor {
                     self.refill(index, open);
                 }
             } else if composition.told || composition.peer {
-                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。
+                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。前台（`supervisor-client.ts` 的 `#apply`）也靠這句重送一次 `ensure`。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -1410,12 +1492,101 @@ impl Supervisor {
         self.fill_warm();
     }
 
+    /// 預熱池的行程沒綁就死了、或起不來：隔 `warm_backoff` 再補，下一次的等待加倍到 [`args::WARM_BACKOFF_MAX`]
+    /// （比 `--front-restart-ms` 小就用後者）。不放棄：預熱池只是加速，停了之後沒有人會把它開回來。
+    /// `--front-restart-ms 0` 時沒有間隔，也不會加倍。
+    ///
+    /// 級數只在預熱行程閒放過穩定期才死時回到起始值；預熱行程正常是被指派走、不是死掉，所以預熱行程多半被指派走的系統上，
+    /// 出過事之後級數會留在上限，到監督行程重起為止（那時只是補得慢，`ensure` 照樣當場起）。
+    ///
+    /// `settled`：這個行程到過 `ready`、而且活過 [`args::WARM_STABLE`]，等待回到 `--front-restart-ms`。**兩個條件缺一個都不行**：
+    /// 只看活多久，`--start-timeout-ms` 設得比 [`args::WARM_STABLE`] 大的部署，永不 `ready` 的行程每次都「活過」而一直歸零；
+    /// 只看到過 `ready`，起來、`ready`、馬上死的行程每次歸零，又回到每個 `--front-restart-ms` 一輪。
+    fn warm_failed(&mut self, now: Instant, settled: bool) {
+        if settled {
+            self.warm_backoff = self.args.front_restart;
+        }
+        let wait = self.warm_backoff;
+        self.warm_backoff = (wait * 2).min(args::WARM_BACKOFF_MAX.max(self.args.front_restart));
+        say!("預熱池 {} ms 後再補", wait.as_millis());
+        self.warm_retry_at = Some(now + wait);
+    }
+
+    /// 有 thread 的行程（成對是一對）結束或沒起成：回前台 `down`，然後（死因不是 `evicted`、`shutdown`）記一筆。**先送、後記**：
+    /// 之後窗裡來的 `ensure` 被閘回掉的 `down` 一定排在這一則死訊後面。成對時 `down` 一個事件只送一次，記帳跟著它走。
+    fn thread_down(&mut self, thread: Vec<u8>, cause: DeathCause) {
+        self.tell_front(&FrontEvent::Down {
+            thread_id: thread.clone(),
+            cause,
+        });
+        if !matches!(cause, DeathCause::Evicted | DeathCause::Shutdown) {
+            let now = Instant::now();
+            self.note_thread_failure(thread.clone(), cause, now);
+            // 窗開了：這條排在隊伍裡的請求已經拿到上面那則 `down`，不能留著，不然 `serve_pending` 照起、窗內的 `ensure` 卻拿到 `down`。
+            if self
+                .thread_backoff
+                .get(&thread)
+                .is_some_and(|e| now < e.until)
+            {
+                self.pending.retain(|(queued, _)| *queued != thread);
+            }
+        }
+    }
+
+    /// 第二次連續失敗的窗長，也是之後加倍的起點。
+    fn thread_backoff_start(&self) -> Duration {
+        self.args.front_restart
+    }
+
+    /// 一條 thread 失敗了一次。距這條上一次失敗不到忘記時間才算連續，不然從第一次數；忘記時間是 [`args::THREAD_BACKOFF_FORGET`]
+    /// 與實際上限兩倍的較大者。第一次不等（加窗會把 #2905 修掉的那次延遲加回來）；第二次起等 `--front-restart-ms`，每次加倍到
+    /// [`args::THREAD_BACKOFF_MAX`]（實際上限是兩者較大者）。不放棄。`--front-restart-ms 0` 時沒有間隔，也不會加倍。
+    /// 順手清掉過期的；表滿了丟最舊的。
+    fn note_thread_failure(&mut self, thread: Vec<u8>, cause: DeathCause, now: Instant) {
+        let start = self.thread_backoff_start();
+        let cap = args::THREAD_BACKOFF_MAX.max(start);
+        let forget = args::THREAD_BACKOFF_FORGET.max(cap * 2);
+        self.thread_backoff
+            .retain(|_, entry| now.duration_since(entry.at) < forget);
+        if self.thread_backoff.len() >= args::THREAD_BACKOFF_ENTRIES
+            && !self.thread_backoff.contains_key(&thread)
+        {
+            if let Some(oldest) = self
+                .thread_backoff
+                .iter()
+                .min_by_key(|(_, entry)| entry.at)
+                .map(|(key, _)| key.clone())
+            {
+                self.thread_backoff.remove(&oldest);
+            }
+        }
+        let (failures, wait, next_wait) = match self.thread_backoff.get(&thread) {
+            None => (1, Duration::ZERO, start),
+            Some(entry) => (
+                entry.failures.saturating_add(1),
+                entry.next_wait,
+                (entry.next_wait * 2).min(cap),
+            ),
+        };
+        self.thread_backoff.insert(
+            thread,
+            ThreadBackoff {
+                failures,
+                at: now,
+                until: now + wait,
+                next_wait,
+                cause,
+                noted: false,
+            },
+        );
+    }
+
     /// 預熱池補到 `--warm` 個：有排著的、名額滿、停機中、上一個預熱的剛失敗，都不補。
     fn fill_warm(&mut self) {
         while !self.shutting_down
             && self.warm_retry_at.is_none()
             && self.pending.is_empty()
-            && self.warm_count() < self.args.warm as usize
+            && self.warm_slots() < self.args.warm as usize
             && self.live() < self.capacity as usize
         {
             self.start_conversation(None, OpenMode::Run);
@@ -1549,7 +1720,7 @@ impl Supervisor {
         self.spawn_conversation(thread, open, socket, None);
     }
 
-    /// 起一個對話行程，回它的 pid；起不來就寫稽核、回 `down`（預熱的不回 `down`，隔 `--front-restart-ms` 再補）。`pair` 是成對時的（序號、橋的 socket、前台連的 socket），
+    /// 起一個對話行程，回它的 pid；起不來就寫稽核、回 `down`（預熱的不回 `down`，照 [`Supervisor::warm_failed`] 再補）。`pair` 是成對時的（序號、橋的 socket、前台連的 socket），
     /// 這時 `socket` 是葉子自己收連線的那個，而且先告訴組合行程葉子的 pid、才把 `hello` 交給葉子。
     fn spawn_conversation(
         &mut self,
@@ -1586,6 +1757,8 @@ impl Supervisor {
                     read_only: open == OpenMode::ReadOnly,
                     idle_since: None,
                     used_at: Instant::now(),
+                    started_at: Instant::now(),
+                    timed_out: false,
                     drain: None,
                     released: false,
                     rss_now_kb: 0,
@@ -1651,11 +1824,8 @@ impl Supervisor {
                 });
                 self.count_death(DeathCause::Crash);
                 match thread {
-                    Some(thread) => self.tell_front(&FrontEvent::Down {
-                        thread_id: thread,
-                        cause: DeathCause::Crash,
-                    }),
-                    None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+                    Some(thread) => self.thread_down(thread, DeathCause::Crash),
+                    None => self.warm_failed(Instant::now(), false),
                 }
                 None
             }
@@ -1705,6 +1875,22 @@ impl Supervisor {
                         .iter()
                         .any(|c| c.pair == Some(p.serial) && evicted(c))
             })
+    }
+
+    /// 預熱池佔著的位子：沒有 thread 的，連已經被殺、還沒收屍的也算。`fill_warm` 數這個：被殺到收屍之間不算數的話，別的行程剛好收屍時
+    /// 會當場補一個，繞過 [`Supervisor::warm_failed`] 排的等待。`warm_count` 只數沒在收的，`stats` 用它。
+    fn warm_slots(&self) -> usize {
+        if self.args.composition.is_none() {
+            return self
+                .conversations
+                .iter()
+                .filter(|c| c.thread.is_none())
+                .count();
+        }
+        self.compositions
+            .iter()
+            .filter(|p| p.thread.is_none())
+            .count()
     }
 
     fn warm_count(&self) -> usize {
@@ -2425,7 +2611,7 @@ impl Supervisor {
                 .max_silence
                 .as_millis()
                 .min(u128::from(u64::MAX)) as u64,
-            error: None,
+            error: conversation.timed_out.then_some("ready 之前逾時"),
         });
         let _ = std::fs::remove_file(
             conversation
@@ -2440,12 +2626,12 @@ impl Supervisor {
         }
         self.count_death(cause);
         match conversation.thread {
-            Some(thread) => self.tell_front(&FrontEvent::Down {
-                thread_id: thread,
-                cause,
-            }),
+            Some(thread) => self.thread_down(thread, cause),
             None if cause != DeathCause::Shutdown => {
-                self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
+                let now = Instant::now();
+                let settled = conversation.phase != Phase::Starting
+                    && now.duration_since(conversation.started_at) >= args::WARM_STABLE;
+                self.warm_failed(now, settled);
             }
             None => {}
         }
@@ -2485,6 +2671,8 @@ mod tests {
             read_only: false,
             idle_since: None,
             used_at: Instant::now(),
+            started_at: Instant::now(),
+            timed_out: false,
             drain: None,
             released: false,
             rss_now_kb: 0,
@@ -3020,6 +3208,75 @@ mod tests {
             .collect()
     }
 
+    /// 被當場殺（不是逐出）、還沒收屍的對話行程或組合行程，這時來的 `ensure` 什麼都不回：收完回的 `down` 就是回答。前台重送 `ensure`（#2905）
+    /// 靠這件事得到回答，所以釘在這裡：不成對、成對的葉子、成對的組合行程三種。
+    #[test]
+    fn an_ensure_for_a_thread_being_collected_after_a_kill_is_not_answered() {
+        let (mut supervisor, _) =
+            with_an_unpaired_starter("ensure-killed", Some(b"t"), Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的");
+
+        let (mut supervisor, _, _) = with_a_pair("ensure-killed-pair", PairState::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的葉子");
+        assert_eq!(supervisor.compositions.len(), 1, "當場起了新的一對");
+
+        // 組合行程被當場殺、還沒收屍：葉子還是 `Up`，靠 `composition_stopping` 不回 `up`，也不排隊。
+        let (mut supervisor, _, _) = with_a_pair("ensure-killed-composition", PairState::Bound);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        assert_eq!(supervisor.conversations.len(), 1, "當場起了新的葉子");
+        assert_eq!(supervisor.compositions.len(), 1, "當場起了新的一對");
+    }
+
+    /// 收屍送出 `down` 之後才來的 `ensure` 是新的請求：起新的對話行程（這裡名額夠）。前台重送 `ensure`（#2905）靠這件事得到回答。
+    #[test]
+    fn an_ensure_after_the_down_starts_a_new_conversation_for_the_thread() {
+        let (mut supervisor, _) =
+            with_an_unpaired_starter("ensure-after-down", Some(b"t"), Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [FrontEvent::Down {
+                thread_id: b"t".to_vec(),
+                cause: DeathCause::Memory,
+            }]
+        );
+        assert!(supervisor.conversations.is_empty());
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            supervisor.conversations.len(),
+            1,
+            "{:?}",
+            supervisor.pending
+        );
+        assert_ne!(supervisor.conversations[0].proc.pid, LEAF);
+        assert_eq!(
+            supervisor.conversations[0].thread.as_deref(),
+            Some(&b"t"[..])
+        );
+    }
+
     /// 組合行程被當場殺、還沒收屍：葉子這時回 `busy`（或 `drain` 逾時）不回 `up`，排著的那條 thread 等到的是收屍之後的 `down`。
     #[test]
     fn a_leaf_whose_composition_is_being_collected_is_not_reported_up() {
@@ -3058,6 +3315,17 @@ mod tests {
         ));
     }
 
+    /// 組合行程的通道讀端讀到 EOF 為止（最多 5 秒），一路把可讀的事件交給 [`Supervisor::on_composition_readable`]。
+    /// 這幾支測試用 `UnixStream::pair()` 把兩端接成一條通道，EOF 要等寫端的每一份 fd 都關掉才到；同一個測試行程裡別的測試執行緒
+    /// 正在 fork 子行程時，子行程在 exec 之前握著一份寫端，EOF 晚一點才到，所以不能在 `kill_now()` 之後當場斷言 `read_closed()`。
+    fn read_the_composition_to_eof(supervisor: &mut Supervisor) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !supervisor.compositions[0].proc.chan.read_closed() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+            supervisor.on_composition_readable(0);
+        }
+    }
+
     /// `Binding` 的一對，組合行程被當場殺、管線裡已經有 `bound`：不進 `Bound`，葉子不變成 `Up`，也不回 `up`。
     #[test]
     fn a_bound_from_a_composition_being_collected_does_not_advance_the_pair() {
@@ -3075,6 +3343,7 @@ mod tests {
             ));
         composition.proc.kill_now();
         supervisor.on_composition_readable(0);
+        read_the_composition_to_eof(&mut supervisor);
         let composition = &supervisor.compositions[0];
         assert!(composition.proc.chan.read_closed() && composition.cause.is_none());
         assert_eq!(composition.state(), PairState::Binding);
@@ -3114,6 +3383,7 @@ mod tests {
         composition_ready_in_the_pipe(&mut supervisor);
         supervisor.on_exit(LEAF, KILLED);
         supervisor.on_composition_readable(0);
+        read_the_composition_to_eof(&mut supervisor);
         let composition = &supervisor.compositions[0];
         assert!(composition.proc.stop.is_some() && composition.proc.chan.read_closed());
         assert!(composition.cause.is_none());
@@ -3129,6 +3399,7 @@ mod tests {
             composition_ready_in_the_pipe(&mut supervisor);
             supervisor.compositions[0].proc.kill_now();
             supervisor.on_composition_readable(0);
+            read_the_composition_to_eof(&mut supervisor);
             let composition = &supervisor.compositions[0];
             assert!(composition.proc.chan.read_closed(), "{tag}");
             assert!(composition.cause.is_none(), "{tag}");
@@ -3170,6 +3441,10 @@ mod tests {
             assert!(composition.proc.stop.is_some(), "{tag}");
             assert_eq!(composition.cause, Some(DeathCause::Stalled), "{tag}");
             assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+            // 再晚一點叫一次：一對的葉子也在 `Starting`、這時也過期了，不成對那一圈不能選它（葉子 `started_at` 比 `since` 晚一點，上一次叫的時間它還沒過期）。
+            supervisor.check_starts(since + limit + Duration::from_secs(1));
+            assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+            assert!(!supervisor.conversations[0].timed_out, "{tag}");
 
             supervisor.on_exit(COMPOSITION, KILLED);
             assert!(supervisor.conversations[0].peer, "{tag}");
@@ -3281,6 +3556,447 @@ mod tests {
         }
     }
 
+    /// 不成對的對話行程等 `ready` 的起點：停在 `Starting`、不是一對的葉子、沒在收才有；一對的葉子由組合行程那一條管，兩邊都算會殺兩次。
+    #[test]
+    fn only_an_unpaired_conversation_waiting_for_ready_has_a_start_time() {
+        let mut starting = conversation(1, 1, false);
+        starting.phase = Phase::Starting;
+        assert_eq!(starting.starting_since(), Some(starting.started_at));
+
+        let mut leaf = conversation(2, 1, false);
+        leaf.phase = Phase::Starting;
+        leaf.pair = Some(1);
+        assert_eq!(leaf.starting_since(), None);
+
+        for phase in [Phase::Warm, Phase::Binding, Phase::Up] {
+            let mut past = conversation(3, 1, false);
+            past.phase = phase;
+            assert_eq!(past.starting_since(), None);
+        }
+
+        let mut stopping = conversation(4, 1, false);
+        stopping.phase = Phase::Starting;
+        stopping
+            .proc
+            .begin_stop(Instant::now(), Duration::from_secs(1));
+        assert_eq!(stopping.starting_since(), None);
+    }
+
+    /// 等 `ready` 的起點不是 `used_at`：同一條 thread 在 `Starting` 時又被 `ensure` 要到，`used_at` 會更新，期限不能跟著延後。
+    #[test]
+    fn asking_again_while_starting_does_not_move_the_start_time() {
+        let mut starting = conversation(1, 1, false);
+        starting.phase = Phase::Starting;
+        let started = Instant::now() - Duration::from_secs(10);
+        starting.started_at = started;
+        starting.used_at = Instant::now();
+        assert_eq!(starting.starting_since(), Some(started));
+    }
+
+    /// 手上有一條不成對、停在 `Starting` 等 `ready` 的對話行程：`thread` 是 `Some` 是已指派的，`None` 是預熱池裡的。
+    /// argv 不帶 `--composition`（帶了就是成對）、`--warm 0`；pid 是假的，`kill_now` 只會拿到 ESRCH。
+    fn with_an_unpaired_starter(
+        tag: &str,
+        thread: Option<&[u8]>,
+        since: Instant,
+    ) -> (Supervisor, PathBuf) {
+        let dir = temp(tag);
+        let audit = dir.join("audit.jsonl");
+        let events = dir.join("memory.events");
+        std::fs::write(&events, "oom_kill 0\n").unwrap();
+        let argv: Vec<OsString> = [
+            "--run-dir",
+            dir.join("run").to_str().unwrap(),
+            "--audit",
+            "a",
+            "--front",
+            "/bin/true",
+            "--conversation",
+            "/bin/true",
+            "--warm",
+            "0",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        let mut supervisor = Supervisor::assemble(
+            args::parse(&argv).unwrap(),
+            Audit::open(&audit).unwrap(),
+            -1,
+            4,
+        );
+        supervisor.oom = OomCounter::at(Some(events));
+        let mut starter = conversation(LEAF, 1, false);
+        starter.phase = Phase::Starting;
+        starter.thread = thread.map(<[u8]>::to_vec);
+        starter.started_at = since;
+        supervisor.conversations.push(starter);
+        (supervisor, audit)
+    }
+
+    /// 不成對、等 `ready` 的（已指派的與預熱池裡的）到了 `--start-timeout-ms` 才殺：死因 `stalled`、稽核帶 `error`、沒有 `pair`；差 1 ms 不動。
+    /// 死因只累計一次。已指派的 `down` 與預熱池的補位由 `tests/supervisor.rs` 釘。
+    #[test]
+    fn an_unpaired_conversation_still_waiting_for_ready_at_the_start_deadline_is_killed() {
+        let since = Instant::now();
+        for (tag, thread) in [
+            ("unpaired-assigned", Some(&b"t"[..])),
+            ("unpaired-warm", None),
+        ] {
+            let (mut supervisor, audit) = with_an_unpaired_starter(tag, thread, since);
+            let limit = supervisor.args.start_timeout.unwrap();
+            supervisor.check_starts(since + limit - Duration::from_millis(1));
+            assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+            supervisor.check_starts(since + limit);
+            let starter = &supervisor.conversations[0];
+            assert!(starter.proc.stop.is_some(), "{tag}");
+            assert_eq!(starter.cause, Some(DeathCause::Stalled), "{tag}");
+            assert!(starter.timed_out, "{tag}");
+
+            supervisor.on_exit(LEAF, KILLED);
+            let lines = audit_lines(&audit);
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert!(
+                lines[0].contains("\"role\":\"conversation\"")
+                    && lines[0].contains("\"cause\":\"stalled\"")
+                    && lines[0].contains("\"error\":\"ready 之前逾時\"")
+                    && !lines[0].contains("\"pair\""),
+                "{lines:?}"
+            );
+            assert_eq!(supervisor.deaths[DeathCause::Stalled as usize - 1], 1);
+            assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1, "{tag}");
+        }
+    }
+
+    /// 期限到的時候 `ready` 已經在管線裡、還沒讀：判之前先讀，讀到就不殺。`Chan` 兩端是同一對 socket，讀到 `Ready` 會往同一條寫 `bind`，
+    /// 所以 `check_starts` 只叫一次就斷言，不再讀第二次。
+    #[test]
+    fn an_unpaired_ready_already_in_the_pipe_at_the_start_deadline_is_read_first() {
+        let since = Instant::now();
+        for (tag, thread, phase) in [
+            ("unpaired-piped-assigned", Some(&b"t"[..]), Phase::Binding),
+            ("unpaired-piped-warm", None, Phase::Warm),
+        ] {
+            let (mut supervisor, _) = with_an_unpaired_starter(tag, thread, since);
+            let limit = supervisor.args.start_timeout.unwrap();
+            let starter = &mut supervisor.conversations[0];
+            starter.proc.hello = true;
+            starter
+                .proc
+                .chan
+                .send(&crate::supervisor_protocol::encode_conversation_report(
+                    &ConversationReport::Ready,
+                ));
+            supervisor.check_starts(since + limit);
+            let starter = &supervisor.conversations[0];
+            assert_eq!(starter.phase, phase, "{tag}");
+            assert!(
+                starter.proc.stop.is_none() && starter.cause.is_none() && !starter.timed_out,
+                "{tag}"
+            );
+        }
+    }
+
+    /// 不判起動期限的：`--start-timeout-ms 0`、停機中、已經在收。
+    #[test]
+    fn the_start_deadline_skips_an_unpaired_conversation_when_off_shutdown_or_stopping() {
+        let since = Instant::now();
+        let late = since + Duration::from_secs(3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("un-off", Some(b"t"), since);
+        supervisor.args.start_timeout = None;
+        supervisor.check_starts(late);
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+
+        let (mut supervisor, _) = with_an_unpaired_starter("un-shutdown", Some(b"t"), since);
+        supervisor.shutting_down = true;
+        supervisor.check_starts(late);
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+
+        let (mut supervisor, _) = with_an_unpaired_starter("un-stopping", Some(b"t"), since);
+        let eof_grace = supervisor.args.eof_grace;
+        supervisor.conversations[0]
+            .proc
+            .begin_stop(since, eof_grace);
+        supervisor.check_starts(late);
+        let starter = &supervisor.conversations[0];
+        assert!(starter.cause.is_none() && !starter.timed_out);
+    }
+
+    /// 等 `ready` 的不成對對話行程，poll 最晚在它的起動期限醒來；停機中不算。
+    #[test]
+    fn the_start_deadline_wakes_the_poll_for_an_unpaired_conversation() {
+        let since = Instant::now();
+        let (mut supervisor, _) = with_an_unpaired_starter("un-wake", Some(b"t"), since);
+        let limit = supervisor.args.start_timeout.unwrap();
+        let far = since + Duration::from_secs(24 * 3600);
+        supervisor.rss_poll_at = far;
+        supervisor.stats_at = None;
+        assert_eq!(supervisor.next_deadline(), Some(since + limit));
+        supervisor.shutting_down = true;
+        assert_eq!(supervisor.next_deadline(), Some(far));
+    }
+
+    /// 整棵樹被凍住過：不成對的等 `ready` 的時間也從判定那一刻重新起算，門檻是 `--start-timeout-ms` 的一半，`--stall-ms` 關著也一樣；
+    /// 已經 `ready` 的（`started_at` 不是它的事）不動。
+    #[test]
+    fn resuming_from_a_freeze_restarts_the_start_deadline_of_an_unpaired_conversation() {
+        let since = Instant::now() - Duration::from_secs(3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("un-resume", Some(b"t"), since);
+        let mut up = conversation(LEAF - 1, 1, false);
+        up.started_at = since;
+        supervisor.conversations.push(up);
+        supervisor.args.stall = None;
+        let limit = supervisor.args.start_timeout.unwrap();
+        let now = Instant::now();
+        supervisor.check_resumed(now, limit / 2 - Duration::from_millis(1));
+        assert_eq!(supervisor.conversations[0].starting_since(), Some(since));
+        supervisor.check_resumed(now, limit / 2);
+        assert_eq!(supervisor.conversations[0].starting_since(), Some(now));
+        assert_eq!(supervisor.conversations[1].started_at, since);
+        supervisor.check_starts(now);
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+    }
+
+    /// 起不來的監督行程：`--conversation`（成對時 `--composition`）指到不存在的程式，`spawn` 回 `Err`。
+    fn with_an_unspawnable(tag: &str, paired: bool) -> Supervisor {
+        with_an_audited_unspawnable(tag, paired).0
+    }
+
+    /// 同 [`with_an_unspawnable`]，另回稽核檔的路徑。
+    fn with_an_audited_unspawnable(tag: &str, paired: bool) -> (Supervisor, PathBuf) {
+        let dir = temp(tag);
+        let mut argv: Vec<OsString> = [
+            "--run-dir",
+            dir.join("run").to_str().unwrap(),
+            "--audit",
+            "a",
+            "--front",
+            "/bin/true",
+            "--conversation",
+            "/nonexistent/conversation",
+            "--warm",
+            "0",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        if paired {
+            argv.extend(["--composition", "/nonexistent/composition"].map(OsString::from));
+        }
+        let audit = dir.join("audit.jsonl");
+        let supervisor = Supervisor::assemble(
+            args::parse(&argv).unwrap(),
+            Audit::open(&audit).unwrap(),
+            -1,
+            4,
+        );
+        (supervisor, audit)
+    }
+
+    /// 下一次補要等多久（`warm_failed` 排的）。
+    fn warm_wait(supervisor: &Supervisor, now: Instant) -> Duration {
+        supervisor.warm_retry_at.unwrap().duration_since(now)
+    }
+
+    /// 連續失敗的等待從 `--front-restart-ms` 起、每次兩倍：直接叫 `warm_failed`。
+    #[test]
+    fn warm_failures_wait_twice_as_long_each_time() {
+        let mut supervisor = with_an_unspawnable("warm-grow", false);
+        let base = supervisor.args.front_restart;
+        let now = Instant::now();
+        for factor in [1u32, 2, 4, 8] {
+            supervisor.warm_failed(now, false);
+            assert_eq!(warm_wait(&supervisor, now), base * factor);
+        }
+    }
+
+    /// 到 [`args::WARM_BACKOFF_MAX`] 就不再長；`--front-restart-ms` 比它大的時候上限跟著它，不會一開始就被壓小。
+    #[test]
+    fn warm_backoff_stops_growing_at_the_cap() {
+        let mut supervisor = with_an_unspawnable("warm-cap", false);
+        let now = Instant::now();
+        for _ in 0..20 {
+            supervisor.warm_failed(now, false);
+        }
+        assert_eq!(warm_wait(&supervisor, now), args::WARM_BACKOFF_MAX);
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), args::WARM_BACKOFF_MAX);
+
+        let mut supervisor = with_an_unspawnable("warm-cap-big", false);
+        let big = args::WARM_BACKOFF_MAX * 2;
+        supervisor.args.front_restart = big;
+        supervisor.warm_backoff = big;
+        supervisor.warm_failed(now, false);
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), big);
+    }
+
+    /// `settled` 為真：這一次等的就是 `--front-restart-ms`，下一次從兩倍接著長。
+    #[test]
+    fn a_settled_warm_failure_goes_back_to_the_start() {
+        let mut supervisor = with_an_unspawnable("warm-settled", false);
+        let base = supervisor.args.front_restart;
+        let now = Instant::now();
+        for _ in 0..3 {
+            supervisor.warm_failed(now, false);
+        }
+        supervisor.warm_failed(now, true);
+        assert_eq!(warm_wait(&supervisor, now), base);
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), base * 2);
+    }
+
+    /// 四處排重補的地方都經過 `warm_failed`：每一處失敗一次，`warm_backoff` 變兩倍、`warm_retry_at` 有排。
+    #[test]
+    fn every_place_that_schedules_a_warm_retry_goes_through_warm_failed() {
+        let since = Instant::now();
+        // 不成對：起不來、預熱的行程死了。
+        let mut supervisor = with_an_unspawnable("warm-site-1", false);
+        let base = supervisor.args.front_restart;
+        supervisor.start_conversation(None, OpenMode::Run);
+        assert_eq!(supervisor.warm_backoff, base * 2, "起不來");
+        assert!(supervisor.warm_retry_at.is_some());
+
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-site-2", None, since);
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2, "預熱的行程死了");
+        assert!(supervisor.warm_retry_at.is_some());
+
+        // 成對：組合行程起不來、預熱的一對收屍。
+        let mut supervisor = with_an_unspawnable("warm-site-3", true);
+        supervisor.start_conversation(None, OpenMode::Run);
+        assert_eq!(supervisor.warm_backoff, base * 2, "組合行程起不來");
+        assert!(supervisor.warm_retry_at.is_some());
+
+        let (mut supervisor, _, _) = with_a_pair("warm-site-4", PairState::Ready);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2, "預熱的一對收屍");
+        assert!(supervisor.warm_retry_at.is_some());
+    }
+
+    /// 沒到過 `ready` 的活再久也不歸零：這是 `--start-timeout-ms` 大過 [`args::WARM_STABLE`] 時永不 `ready` 的行程。
+    #[test]
+    fn a_warm_process_that_never_got_ready_does_not_reset_the_backoff() {
+        let long_ago = Instant::now() - Duration::from_secs(2 * 3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-never-ready", None, long_ago);
+        let base = supervisor.args.front_restart;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+
+        let (mut supervisor, _, _) = with_a_pair(
+            "warm-never-ready-pair",
+            PairState::Starting { since: long_ago },
+        );
+        // 還沒 `ready` 的一對有 thread（`with_a_pair` 只有 `Ready` 是預熱的），這裡改成預熱的。
+        supervisor.compositions[0].thread = None;
+        supervisor.conversations[0].thread = None;
+        supervisor.compositions[0].started_at = long_ago;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+    }
+
+    /// 到過 `ready` 而且活過 [`args::WARM_STABLE`] 的歸零；到過 `ready` 但只活了一下的不歸零。
+    #[test]
+    fn a_warm_process_that_got_ready_and_lived_long_resets_the_backoff() {
+        let long_ago = Instant::now() - Duration::from_secs(2 * 3600);
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-stable", None, long_ago);
+        supervisor.conversations[0].phase = Phase::Warm;
+        let base = supervisor.args.front_restart;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-short", None, Instant::now());
+        supervisor.conversations[0].phase = Phase::Warm;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+
+        let (mut supervisor, _, _) = with_a_pair("warm-stable-pair", PairState::Ready);
+        supervisor.compositions[0].started_at = long_ago;
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+
+        let (mut supervisor, _, _) = with_a_pair("warm-short-pair", PairState::Ready);
+        supervisor.warm_backoff = base * 4;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 8);
+    }
+
+    /// 停機的死因不排、也不長：停機中沒有人要補。
+    #[test]
+    fn a_warm_process_dying_in_shutdown_schedules_nothing() {
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-shutdown", None, Instant::now());
+        supervisor.conversations[0].cause = Some(DeathCause::Shutdown);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 有 thread 的行程死了走 `down`，不是預熱池的事：不排、不長。
+    #[test]
+    fn an_assigned_process_dying_does_not_touch_the_warm_backoff() {
+        let (mut supervisor, _) =
+            with_an_unpaired_starter("warm-assigned", Some(b"t"), Instant::now());
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 預熱的行程被殺到收屍之間，`fill_warm` 照樣把它算進池子，不會當場補一個繞過等待。
+    #[test]
+    fn a_killed_warm_process_still_holds_its_slot_until_it_is_collected() {
+        let (mut supervisor, _) = with_an_unpaired_starter("warm-slot", None, Instant::now());
+        supervisor.args.warm = 1;
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.fill_warm();
+        assert_eq!(supervisor.conversations.len(), 1);
+
+        let (mut supervisor, _, _) = with_a_pair("warm-slot-pair", PairState::Ready);
+        supervisor.args.warm = 1;
+        supervisor.compositions[0].proc.kill_now();
+        supervisor.fill_warm();
+        assert_eq!(supervisor.compositions.len(), 1);
+    }
+
+    /// 成對那一側：預熱的一對在停機時收屍，不排、不長。
+    #[test]
+    fn a_warm_pair_dying_in_shutdown_schedules_nothing() {
+        let (mut supervisor, _, _) = with_a_pair("warm-pair-shutdown", PairState::Ready);
+        supervisor.compositions[0].cause = Some(DeathCause::Shutdown);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 成對那一側：有 thread 的一對收屍走 `down`，不是預熱池的事，不排、不長。
+    #[test]
+    fn an_assigned_pair_dying_does_not_touch_the_warm_backoff() {
+        let (mut supervisor, _, _) = with_a_pair("assigned-pair", PairState::Bound);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.warm_retry_at.is_none());
+        assert_eq!(supervisor.warm_backoff, base);
+    }
+
+    /// 預熱的一對葉子先死、組合行程跟著收屍：這一個事件只長一次（葉子那一側算過；連帶收組合行程時 `collect` 設了 `peer`、`on_leaf_gone` 設了 `told`，兩個都擋住組合行程那一側，這支測的是結果「只長一次」，不單獨守其中一個）。
+    #[test]
+    fn a_warm_pair_whose_leaf_dies_first_counts_one_failure() {
+        let (mut supervisor, _, _) = with_a_pair("warm-pair-leaf-first", PairState::Ready);
+        let base = supervisor.args.front_restart;
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.warm_backoff, base * 2);
+        assert!(supervisor.warm_retry_at.is_some());
+    }
+
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
     #[test]
     fn resuming_from_a_freeze_restarts_the_silence_of_both_processes() {
@@ -3333,5 +4049,578 @@ mod tests {
             "d".repeat(SUN_PATH - LONGEST_SOCKET_NAME.len())
         ));
         assert!(prepare_run_dir(&long, false).unwrap_err().contains("太長"));
+    }
+
+    fn entry<'a>(supervisor: &'a Supervisor, thread: &[u8]) -> &'a ThreadBackoff {
+        supervisor
+            .thread_backoff
+            .get(thread)
+            .unwrap_or_else(|| panic!("沒有 {thread:?} 這一筆"))
+    }
+
+    /// 這一筆的窗有多長（第一次失敗是 0）。
+    fn window(supervisor: &Supervisor, thread: &[u8]) -> Duration {
+        let e = entry(supervisor, thread);
+        e.until - e.at
+    }
+
+    /// 讓這條的窗過去：`until` 往前挪。
+    fn expire_window(supervisor: &mut Supervisor, thread: &[u8]) {
+        supervisor.thread_backoff.get_mut(thread).unwrap().until =
+            Instant::now() - Duration::from_millis(1);
+    }
+
+    fn down(thread: &[u8], cause: DeathCause) -> FrontEvent {
+        FrontEvent::Down {
+            thread_id: thread.to_vec(),
+            cause,
+        }
+    }
+
+    /// 起不來的監督行程接好假前台、清掉接前台那次的空回應。
+    fn unspawnable_with_front(tag: &str, paired: bool) -> Supervisor {
+        let mut supervisor = with_an_unspawnable(tag, paired);
+        front_events(&mut supervisor);
+        supervisor
+    }
+
+    /// 第一次失敗沒有窗：`ensure` 照樣去起（這裡起不來，再記一次），不把 #2905 修掉的那一次失敗長回來。
+    #[test]
+    fn the_first_failure_of_a_thread_opens_no_window() {
+        let mut supervisor = unspawnable_with_front("tb-first", false);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+        assert_eq!(window(&supervisor, b"t"), Duration::ZERO);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(entry(&supervisor, b"t").failures, 2, "第二次還是去起了");
+    }
+
+    /// 第二次失敗開 `--front-restart-ms` 的窗，窗內的 `ensure` 只得到 `down`：不起、不排隊；窗過了才放行。
+    #[test]
+    fn the_second_failure_opens_a_window_that_turns_ensure_away() {
+        let mut supervisor = unspawnable_with_front("tb-second", false);
+        let start = supervisor.args.front_restart;
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(window(&supervisor, b"t"), start);
+        front_events(&mut supervisor);
+
+        for _ in 0..3 {
+            supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+            assert_eq!(
+                front_events(&mut supervisor),
+                [down(b"t", DeathCause::Crash)]
+            );
+        }
+        assert_eq!(entry(&supervisor, b"t").failures, 2, "窗內沒有再去起");
+        assert!(supervisor.pending.is_empty() && supervisor.conversations.is_empty());
+
+        expire_window(&mut supervisor, b"t");
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(entry(&supervisor, b"t").failures, 3, "窗過了放行");
+        assert_eq!(window(&supervisor, b"t"), start * 2);
+    }
+
+    /// 窗 0、起始、兩倍、四倍……到上限不再長；`--front-restart-ms` 比上限大時上限跟著它。
+    #[test]
+    fn the_window_doubles_up_to_the_cap() {
+        let mut supervisor = unspawnable_with_front("tb-double", false);
+        let start = supervisor.args.front_restart;
+        let now = Instant::now();
+        let waits: Vec<Duration> = (0..9u64)
+            .map(|i| {
+                supervisor.note_thread_failure(
+                    b"t".to_vec(),
+                    DeathCause::Crash,
+                    now + Duration::from_millis(i),
+                );
+                window(&supervisor, b"t")
+            })
+            .collect();
+        let secs = |s: u64| Duration::from_secs(s);
+        assert_eq!(start, secs(1));
+        assert_eq!(
+            waits,
+            [0, 1, 2, 4, 8, 16, 30, 30, 30].map(secs),
+            "{waits:?}"
+        );
+
+        supervisor.thread_backoff.clear();
+        supervisor.args.front_restart = secs(40);
+        let waits: Vec<Duration> = (0..4u64)
+            .map(|i| {
+                supervisor.note_thread_failure(
+                    b"t".to_vec(),
+                    DeathCause::Crash,
+                    now + Duration::from_millis(i),
+                );
+                window(&supervisor, b"t")
+            })
+            .collect();
+        assert_eq!(waits, [0, 40, 40, 40].map(secs), "{waits:?}");
+    }
+
+    /// 距上一次失敗滿 [`args::THREAD_BACKOFF_FORGET`] 就從頭數；差 1 ms 還算連續。忘記時間至少是上限的兩倍，
+    /// 不然窗開到上限那天就先被忘掉，退避永遠長不到上限。
+    #[test]
+    fn a_failure_after_the_forget_time_counts_from_the_start() {
+        let mut supervisor = unspawnable_with_front("tb-forget", false);
+        let t0 = Instant::now();
+        let forget = args::THREAD_BACKOFF_FORGET;
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, t0);
+        supervisor.note_thread_failure(
+            b"t".to_vec(),
+            DeathCause::Crash,
+            t0 + forget - Duration::from_millis(1),
+        );
+        assert_eq!(entry(&supervisor, b"t").failures, 2);
+        supervisor.note_thread_failure(
+            b"t".to_vec(),
+            DeathCause::Crash,
+            t0 + forget - Duration::from_millis(1) + forget,
+        );
+        assert_eq!(entry(&supervisor, b"t").failures, 1, "滿了就忘");
+        assert_eq!(window(&supervisor, b"t"), Duration::ZERO);
+
+        // `--front-restart-ms` 大過 30 秒：上限跟著它，忘記時間是上限的兩倍（80 秒），不是 60 秒。
+        supervisor.thread_backoff.clear();
+        supervisor.args.front_restart = Duration::from_secs(40);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, t0);
+        supervisor.note_thread_failure(
+            b"t".to_vec(),
+            DeathCause::Crash,
+            t0 + Duration::from_millis(79_999),
+        );
+        assert_eq!(entry(&supervisor, b"t").failures, 2);
+        supervisor.thread_backoff.clear();
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, t0);
+        supervisor.note_thread_failure(
+            b"t".to_vec(),
+            DeathCause::Crash,
+            t0 + Duration::from_secs(80),
+        );
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+
+        // 旗標 120 秒：上限 120 秒，忘記時間 240 秒；窗退到上限時（每 120 秒一次失敗）這條不會在兩次失敗之間過期。
+        supervisor.thread_backoff.clear();
+        supervisor.args.front_restart = Duration::from_secs(120);
+        let mut at = t0;
+        for _ in 0..4 {
+            supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, at);
+            at += Duration::from_secs(120);
+        }
+        assert_eq!(entry(&supervisor, b"t").failures, 4);
+        assert_eq!(window(&supervisor, b"t"), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn the_forget_time_is_at_least_twice_the_cap() {
+        assert!(args::THREAD_BACKOFF_FORGET >= args::THREAD_BACKOFF_MAX * 2);
+    }
+
+    /// 死因表：heap、memory、host-oom、stalled、crash、protocol 算失敗；evicted、shutdown 不算（逐出與停機不是 thread 自己的毛病）。
+    #[test]
+    fn only_a_threads_own_deaths_count_as_failures() {
+        for (cause, counts) in [
+            (DeathCause::Heap, true),
+            (DeathCause::Memory, true),
+            (DeathCause::HostOom, true),
+            (DeathCause::Stalled, true),
+            (DeathCause::Crash, true),
+            (DeathCause::Protocol, true),
+            (DeathCause::Evicted, false),
+            (DeathCause::Shutdown, false),
+        ] {
+            let mut supervisor = unspawnable_with_front("tb-causes", false);
+            supervisor.thread_down(b"t".to_vec(), cause);
+            assert_eq!(
+                supervisor.thread_backoff.contains_key(&b"t"[..]),
+                counts,
+                "{cause:?}"
+            );
+            assert_eq!(front_events(&mut supervisor), [down(b"t", cause)]);
+        }
+    }
+
+    /// 不成對的 `spawn` 失敗記一筆（死因 crash）。
+    #[test]
+    fn a_failed_unpaired_spawn_is_counted() {
+        let mut supervisor = unspawnable_with_front("tb-6a", false);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(entry(&supervisor, b"t").cause, DeathCause::Crash);
+    }
+
+    /// 不成對的對話行程死了記一筆，帶它的死因。
+    #[test]
+    fn an_unpaired_conversation_exit_is_counted() {
+        let (mut supervisor, _) = with_an_unpaired_starter("tb-6b", Some(b"t"), Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(entry(&supervisor, b"t").cause, DeathCause::Memory);
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+    }
+
+    /// 葉子死了、組合行程留著（`Leafless`）的這條連續失敗：窗裡的 `ensure` 只得到一則 `down`，不補葉子；
+    /// 閘排在找行程之前，否則這條會走「只補一個葉子」的路繞過去。
+    #[test]
+    fn a_gated_ensure_does_not_refill_a_leafless_pair() {
+        let (mut supervisor, _, _) = with_a_pair("tb-6e", PairState::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Crash);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Leafless { .. }
+        ));
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+        front_events(&mut supervisor);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, Instant::now());
+        assert_eq!(entry(&supervisor, b"t").failures, 2);
+
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Leafless { .. }
+        ));
+        assert!(supervisor.conversations.is_empty(), "沒有補葉子");
+        assert!(supervisor.pending.is_empty());
+    }
+
+    /// 成對的 `start_pair` 失敗記一筆。
+    #[test]
+    fn a_failed_pair_start_is_counted() {
+        let mut supervisor = unspawnable_with_front("tb-6c", true);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(entry(&supervisor, b"t").cause, DeathCause::Crash);
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+    }
+
+    /// 成對的組合行程死了記一筆，帶它的死因。
+    #[test]
+    fn a_composition_exit_is_counted() {
+        let (mut supervisor, _, _) = with_a_pair("tb-6d", PairState::Bound);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(entry(&supervisor, b"t").cause, DeathCause::Stalled);
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+    }
+
+    /// 一對的兩個行程死的先後不同，這條只記一次、前台只收到一則 `down`。
+    #[test]
+    fn a_pair_dying_counts_once_in_either_order() {
+        for (tag, order) in [
+            ("tb-7-leaf-first", [LEAF, COMPOSITION]),
+            ("tb-7-composition-first", [COMPOSITION, LEAF]),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, PairState::Bound);
+            supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+            supervisor.conversations[0].cause = Some(DeathCause::Stalled);
+            supervisor.compositions[0].proc.kill_now();
+            supervisor.conversations[0].proc.kill_now();
+            front_events(&mut supervisor);
+            for pid in order {
+                supervisor.on_exit(pid, KILLED);
+            }
+            assert_eq!(entry(&supervisor, b"t").failures, 1, "{tag}");
+            let downs = front_events(&mut supervisor);
+            assert_eq!(downs, [down(b"t", DeathCause::Stalled)], "{tag}");
+        }
+    }
+
+    /// 閘回的是表裡記的死因，不是固定值。
+    #[test]
+    fn the_gate_answers_with_the_recorded_cause() {
+        let mut supervisor = unspawnable_with_front("tb-cause", false);
+        let now = Instant::now();
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Memory, now);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Memory, now);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Memory)]
+        );
+    }
+
+    /// 事件順序：當場殺、收屍前的 `ensure` 不回；收屍送一則 `down`；窗裡再來的 `ensure` 被閘回一則 `down`，排在收屍的那則後面。
+    #[test]
+    fn the_gate_down_follows_the_death_notice() {
+        let (mut supervisor, _) = with_an_unpaired_starter("tb-order", Some(b"t"), Instant::now());
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Memory, Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(front_events(&mut supervisor), []);
+        supervisor.on_exit(LEAF, KILLED);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [
+                down(b"t", DeathCause::Memory),
+                down(b"t", DeathCause::Memory)
+            ]
+        );
+        assert!(supervisor.conversations.is_empty() && supervisor.pending.is_empty());
+    }
+
+    /// 名額滿、有可逐出的閒置行程時，被閘擋下的 `ensure` 不排隊、不讓位、不收任何行程。
+    #[test]
+    fn a_gated_ensure_makes_no_room_and_queues_nothing() {
+        let mut supervisor = unspawnable_with_front("tb-room", false);
+        for i in 0..4 {
+            let mut idle = conversation(LEAF - i, 1, false);
+            idle.thread = Some(vec![b'a' + i as u8]);
+            idle.idle_since = Some(Instant::now() - Duration::from_secs(3600));
+            supervisor.conversations.push(idle);
+        }
+        let now = Instant::now();
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert!(supervisor.pending.is_empty());
+        assert!(supervisor
+            .conversations
+            .iter()
+            .all(|c| c.proc.stop.is_none() && c.drain.is_none()));
+    }
+
+    /// 每個窗只寫一行稽核（`event:"backoff"`），帶這條的連續次數與窗長；`deaths` 不因被擋的請求變動。
+    #[test]
+    fn one_audit_line_per_window() {
+        let (mut supervisor, audit) = with_an_audited_unspawnable("tb-audit", false);
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        let before = audit_lines(&audit).len();
+        let deaths = supervisor.deaths;
+        for _ in 0..5 {
+            supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        }
+        let lines = audit_lines(&audit);
+        assert_eq!(lines.len(), before + 1, "{lines:?}");
+        let last = lines.last().unwrap();
+        assert!(
+            last.contains("\"event\":\"backoff\"")
+                && last.contains("\"thread\":\"t\"")
+                && last.contains("\"cause\":\"crash\"")
+                && last.contains("\"failures\":2")
+                && last.contains("\"wait_ms\":1000"),
+            "{last}"
+        );
+        assert_eq!(supervisor.deaths, deaths, "被擋的請求不算死亡");
+
+        // 下一個窗再寫一行。
+        expire_window(&mut supervisor, b"t");
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        let backoffs = audit_lines(&audit)
+            .iter()
+            .filter(|line| line.contains("\"event\":\"backoff\""))
+            .count();
+        assert_eq!(backoffs, 2);
+    }
+
+    /// 窗裡的 `ensure` 不動預熱池的行程。
+    #[test]
+    fn a_gated_ensure_leaves_the_warm_pool_alone() {
+        let mut supervisor = unspawnable_with_front("tb-warm", false);
+        let mut warm = conversation(LEAF, 1, false);
+        warm.thread = None;
+        warm.phase = Phase::Warm;
+        supervisor.conversations.push(warm);
+        let now = Instant::now();
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(supervisor.conversations.len(), 1);
+        assert_eq!(supervisor.conversations[0].thread, None);
+    }
+
+    /// 表不長過 [`args::THREAD_BACKOFF_ENTRIES`]：滿了丟最舊的；過了忘記時間的順手清掉。
+    #[test]
+    fn the_table_is_bounded_and_expires() {
+        let mut supervisor = unspawnable_with_front("tb-table", false);
+        let t0 = Instant::now();
+        for i in 0..args::THREAD_BACKOFF_ENTRIES + 10 {
+            supervisor.note_thread_failure(
+                format!("t{i}").into_bytes(),
+                DeathCause::Crash,
+                t0 + Duration::from_micros(i as u64),
+            );
+        }
+        assert_eq!(
+            supervisor.thread_backoff.len(),
+            args::THREAD_BACKOFF_ENTRIES
+        );
+        assert!(!supervisor.thread_backoff.contains_key(&b"t0"[..]));
+        let last = format!("t{}", args::THREAD_BACKOFF_ENTRIES + 9).into_bytes();
+        assert!(supervisor.thread_backoff.contains_key(&last));
+
+        supervisor.note_thread_failure(
+            b"late".to_vec(),
+            DeathCause::Crash,
+            t0 + args::THREAD_BACKOFF_FORGET + Duration::from_secs(1),
+        );
+        assert_eq!(supervisor.thread_backoff.len(), 1);
+    }
+
+    /// 停機中的 `ensure` 回 `down(shutdown)`，閘在它後面、不搶它。
+    #[test]
+    fn shutdown_is_answered_before_the_gate() {
+        let mut supervisor = unspawnable_with_front("tb-shutdown", false);
+        let now = Instant::now();
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Memory, now);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Memory, now);
+        supervisor.shutting_down = true;
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Shutdown)]
+        );
+        assert!(!entry(&supervisor, b"t").noted, "閘沒有跑");
+    }
+
+    /// 預熱池的退避與每條 thread 的表各算各的，互不牽動。
+    #[test]
+    fn the_warm_backoff_and_the_thread_table_are_independent() {
+        let mut supervisor = unspawnable_with_front("tb-indep", false);
+        let now = Instant::now();
+        supervisor.warm_failed(now, false);
+        assert!(supervisor.thread_backoff.is_empty());
+        let (backoff, retry) = (supervisor.warm_backoff, supervisor.warm_retry_at);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        assert_eq!(
+            (supervisor.warm_backoff, supervisor.warm_retry_at),
+            (backoff, retry)
+        );
+    }
+
+    /// 已經排在隊伍裡、表上沒有窗的 thread，名額出來就起（閘只在 `ensure`），成功起來也不多記一筆。
+    #[test]
+    fn a_queued_thread_without_a_window_is_started_by_serve_pending() {
+        let (mut supervisor, _) = with_an_unpaired_starter("tb-queued", Some(b"x"), Instant::now());
+        supervisor.conversations.clear();
+        supervisor.pending.push((b"t".to_vec(), OpenMode::Run));
+        supervisor.serve_pending();
+        assert_eq!(supervisor.conversations.len(), 1);
+        assert_eq!(
+            supervisor.conversations[0].thread.as_deref(),
+            Some(&b"t"[..])
+        );
+        assert!(supervisor.thread_backoff.is_empty());
+    }
+
+    /// 等 `drain` 回答時被 `ensure` 排進隊伍的 thread，行程自己死了而這次開了窗：前台只收到那一則 `down`，隊伍裡的拿掉，
+    /// `serve_pending` 不替它起；窗內再 `ensure` 得到閘的 `down`。
+    #[test]
+    fn an_unpaired_thread_queued_during_a_drain_is_not_restarted_when_its_death_opens_a_window() {
+        let (mut supervisor, _) = with_an_unpaired_starter("tb-17", Some(b"t"), Instant::now());
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].drain = Some(Instant::now());
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(supervisor.pending.len(), 1, "排進隊伍");
+        supervisor.conversations[0].cause = Some(DeathCause::Crash);
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert!(supervisor.pending.is_empty());
+        assert!(supervisor.conversations.is_empty(), "沒有替它起新的");
+        assert_eq!(entry(&supervisor, b"t").failures, 2);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+    }
+
+    /// 成對同一件：組合行程留在 `Leafless`，`serve_pending` 不替排著的補葉子。
+    #[test]
+    fn a_paired_thread_queued_during_a_drain_is_not_refilled_when_its_death_opens_a_window() {
+        let (mut supervisor, _, _) = with_a_pair("tb-18", PairState::Bound);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, Instant::now());
+        supervisor.conversations[0].drain = Some(Instant::now());
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        assert_eq!(supervisor.pending.len(), 1, "排進隊伍");
+        supervisor.conversations[0].cause = Some(DeathCause::Crash);
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert!(supervisor.pending.is_empty());
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Leafless { .. }
+        ));
+        assert!(supervisor.conversations.is_empty(), "沒有補葉子");
+    }
+
+    /// 等 `drain` 回答時被排進隊伍的 thread，行程自己死了、這是第一次失敗（沒有窗）：隊伍裡的留著，`serve_pending` 照起。
+    #[test]
+    fn a_thread_queued_during_a_drain_is_restarted_when_its_first_failure_opens_no_window() {
+        let (mut supervisor, _) = with_an_unpaired_starter("tb-19", Some(b"t"), Instant::now());
+        supervisor.conversations[0].phase = Phase::Up;
+        supervisor.conversations[0].drain = Some(Instant::now());
+        front_events(&mut supervisor);
+        supervisor.ensure(b"t".to_vec(), OpenMode::Run);
+        supervisor.conversations[0].cause = Some(DeathCause::Crash);
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Crash)]
+        );
+        assert_eq!(supervisor.conversations.len(), 1, "照起");
+        assert_eq!(
+            supervisor.conversations[0].thread.as_deref(),
+            Some(&b"t"[..])
+        );
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+    }
+
+    /// 排在隊伍裡的 thread 自己的行程死了、這一次開了窗：它已經拿到那則 `down`，從隊伍拿掉，`serve_pending` 不再替它起；
+    /// 沒開窗（第一次失敗）的照舊留著，由 `serve_pending` 起。
+    #[test]
+    fn a_failure_that_opens_a_window_takes_the_thread_out_of_the_queue() {
+        let mut supervisor = unspawnable_with_front("tb-f1", false);
+        supervisor.pending.push((b"t".to_vec(), OpenMode::Run));
+        supervisor.pending.push((b"u".to_vec(), OpenMode::Run));
+        supervisor.thread_down(b"t".to_vec(), DeathCause::Memory);
+        assert_eq!(supervisor.pending.len(), 2, "第一次失敗沒有窗");
+        supervisor.thread_down(b"t".to_vec(), DeathCause::Memory);
+        assert_eq!(
+            supervisor.pending,
+            [(b"u".to_vec(), OpenMode::Run)],
+            "第二次開了窗，t 拿掉，別的不動"
+        );
+        supervisor.thread_down(b"u".to_vec(), DeathCause::Evicted);
+        assert_eq!(supervisor.pending.len(), 1, "逐出不算失敗");
     }
 }

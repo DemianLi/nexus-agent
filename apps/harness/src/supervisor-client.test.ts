@@ -125,6 +125,150 @@ describe('SupervisorClient', () => {
     await expect(ensured).resolves.toEqual({ type: 'down', cause: 'crash' });
   });
 
+  it('舊行程的 down 在 ensure 之後才到：不了結、重送一次 ensure，接著的 up 才是回答', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    let settled = false;
+    const ensured = h.client.ensure('t1', 'run').finally(() => {
+      settled = true;
+    });
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await tick();
+    expect(settled).toBe(false);
+    expect(h.sent).toEqual([
+      { type: 'ensure', threadId: 't1', open: 'run' },
+      { type: 'ensure', threadId: 't1', open: 'run' },
+    ]);
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c2.sock' });
+    await expect(ensured).resolves.toEqual({ type: 'up', socket: '/run/c2.sock' });
+    expect(h.client.socketOf('t1')).toBe('/run/c2.sock');
+  });
+
+  it('重送過一次就不再重送：接著又來的 down 了結', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    h.emit({ type: 'down', threadId: 't1', cause: 'memory' });
+    await expect(ensured).resolves.toEqual({ type: 'down', cause: 'memory' });
+    expect(h.sent).toHaveLength(2);
+  });
+
+  it('重送之後新行程的第一顆 down 再重送一次，第二顆才了結', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c2.sock' });
+    await expect(ensured).resolves.toEqual({ type: 'up', socket: '/run/c2.sock' });
+    const again = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await tick();
+    expect(h.sent).toHaveLength(4);
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await expect(again).resolves.toEqual({ type: 'down', cause: 'crash' });
+    expect(h.sent).toHaveLength(4);
+  });
+
+  it('送 ensure 時表上沒有這條（沒見過 up）：down 是真的回答，當場了結、不重送', async () => {
+    const h = harness();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await expect(ensured).resolves.toEqual({ type: 'down', cause: 'crash' });
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('down(shutdown) 了結、不重送', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'shutdown' });
+    await expect(ensured).resolves.toEqual({ type: 'down', cause: 'shutdown' });
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('down(evicted) 之後表上已無此條的 down：了結，只送過一則 ensure', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'evicted' });
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await expect(ensured).resolves.toEqual({ type: 'down', cause: 'crash' });
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('down(evicted) 不重送：監督行程自己會排隊重起', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    void h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'evicted' });
+    await tick();
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('只讀的 ensure 之後併進一個 run 的，重送的那則帶 run', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    void h.client.ensure('t1', 'read-only');
+    void h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await tick();
+    expect(h.sent).toEqual([
+      { type: 'ensure', threadId: 't1', open: 'read-only' },
+      { type: 'ensure', threadId: 't1', open: 'run' },
+      { type: 'ensure', threadId: 't1', open: 'run' },
+    ]);
+  });
+
+  it('重送之後併進來的等待：下一顆 down 一起了結，不再重送', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const first = h.client.ensure('t1', 'read-only');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await tick();
+    const second = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { type: 'down', cause: 'crash' },
+      { type: 'down', cause: 'crash' },
+    ]);
+    expect(h.sent.filter((request) => request.type === 'ensure')).toHaveLength(3);
+  });
+
+  it('重送之後控制通道斷了：在等的照舊以 SupervisorGoneError 拒絕', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await tick();
+    h.end();
+    await expect(ensured).rejects.toBeInstanceOf(SupervisorGoneError);
+  });
+
+  it('重送之後請求斷了：那個等待拿掉，之後的 up 只更新行程表', async () => {
+    const h = harness();
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c1.sock' });
+    await tick();
+    const controller = new AbortController();
+    const ensured = h.client.ensure('t1', 'run', controller.signal);
+    h.emit({ type: 'down', threadId: 't1', cause: 'crash' });
+    await tick();
+    controller.abort(new Error('client gone'));
+    await expect(ensured).rejects.toThrow('client gone');
+    h.emit({ type: 'up', threadId: 't1', socket: '/run/c2.sock' });
+    await tick();
+    expect(h.client.socketOf('t1')).toBe('/run/c2.sock');
+  });
+
   it('沒人要的 up（前台重啟後的重建）也進行程表', async () => {
     const h = harness();
     h.emit({ type: 'up', threadId: 'a', socket: '/run/c1.sock' });

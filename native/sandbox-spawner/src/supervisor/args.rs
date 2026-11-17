@@ -42,6 +42,19 @@ pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(5_000);
 pub const DEFAULT_STATS: Duration = Duration::from_millis(10_000);
 /// 停機時等前台回「已停准入」多久。
 pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_millis(5_000);
+/// 預熱池補不起來（行程起不來、沒到 `ready` 就死、或沒活多久就死）時，下一次補之前最多等多久：從 `--front-restart-ms` 起、每次失敗加倍到這裡為止。
+/// 不開旗標：這是監督行程內部的節流，沒有理由讓營運者調。
+pub const WARM_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
+/// 預熱的行程到過 `ready`、而且活過這麼久才死，下一次補的等待回到 `--front-restart-ms`。兩個條件缺一個都不歸零（[`super::Supervisor::warm_failed`]）。
+pub const WARM_STABLE: Duration = Duration::from_millis(60_000);
+/// 一條 thread 的行程連續失敗時，下一次 `ensure` 之前最多等多久：第一次失敗不等，第二次起從 `--front-restart-ms` 開始、每次加倍；實際上限是這個值與 `--front-restart-ms` 的較大者
+/// （[`super::Supervisor::note_thread_failure`]）。不開旗標：這是監督行程內部的節流。
+pub const THREAD_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
+/// 同一條 thread 距上一次失敗超過這麼久才再失敗，算第一次。要至少是實際上限的兩倍，不然退避長不到上限：那一筆會在兩次失敗之間過期，每次都變回第一次（`the_forget_time_is_at_least_twice_the_cap` 釘住預設的上限；
+/// `--front-restart-ms` 大過 [`THREAD_BACKOFF_MAX`] 時用實際上限的兩倍，見 [`super::Supervisor::note_thread_failure`]）。
+pub const THREAD_BACKOFF_FORGET: Duration = Duration::from_millis(60_000);
+/// 每條 thread 的失敗紀錄最多留幾筆；滿了丟最舊的（那一條等於被原諒一次）。
+pub const THREAD_BACKOFF_ENTRIES: usize = 4096;
 /// 宿主結束後第一次重起前等多久；之後每次加倍，到 [`DEFAULT_HOST_BACKOFF_MAX`] 為止。
 pub const DEFAULT_HOST_BACKOFF: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_HOST_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
@@ -88,8 +101,9 @@ pub struct Args {
     pub rss_poll: Duration,
     /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就當場對它的群組送 SIGKILL（不走拆除梯度），死因 `stalled`。`None`（`--stall-ms 0`）是不判。
     pub stall: Option<Duration>,
-    /// 一對從起組合行程（補葉子時從補的那一刻）到讀到它的 `ready` 最多這麼久，過了就當場對組合行程的群組送 SIGKILL，死因 `stalled`。
-    /// `None`（`--start-timeout-ms 0`）是不判。只管成對的。
+    /// 一對從起組合行程（補葉子時從補的那一刻）到讀到它的 `ready` 最多這麼久，過了就當場對組合行程的群組送 SIGKILL，死因 `stalled`；
+    /// 不成對的對話行程（含預熱池裡的）從 spawn 起到讀到它的 `ready` 同一個期限，過了殺它自己。
+    /// `None`（`--start-timeout-ms 0`）是不判。
     pub start_timeout: Option<Duration>,
     /// 同時活著的對話行程（含預熱池、起動中與正在收的）最多幾個。沒給就照記憶體上限算（[`super::memory::auto_capacity`]）。
     pub capacity: Option<u32>,
