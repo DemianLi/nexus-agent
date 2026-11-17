@@ -425,7 +425,7 @@ export interface WireClient {
    * 另外還會回 `thread_not_deleted`（不在已刪除存放區）與 `thread_busy`。
    */
   threadRestore(threadId: string): Promise<CommandOutcome<ThreadRestoreResult>>;
-  /** 列出這個專案格已刪除、還在寬限期內的會話（`GET /threads/deleted`）。`rejected` 是這台 server 沒接已刪除存放區。 */
+  /** 列出這個專案格已刪除的會話（`GET /threads/deleted`），含已過寬限期的（`expiresAt` 已過，不能復原）。`rejected` 是這台 server 沒接已刪除存放區。 */
   deletedThreads(): Promise<CommandOutcome<DeletedThreadsResult>>;
   /** 改這條 thread 的標題（`thread.rename`）。回受理後的標題與事件 `seq`；標題不合法回 `title_invalid`，標題不變。 */
   threadRename(threadId: string, title: string): Promise<CommandOutcome<ThreadRenameResult>>;

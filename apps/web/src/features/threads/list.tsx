@@ -172,7 +172,7 @@ export function ThreadList({
   const fellBack = current !== undefined && 'fallback' in current;
   const fallback = fellBack ? current.fallback : null;
   const deletion = management?.deletion;
-  // 已經在已刪除清單上的不列：刪除成功到列表重抓回來之間，那一列不會留在原處。
+  // 已經在已刪除清單上的不列：已刪除清單先讀回來、列表還沒重抓回來的那段時間，那一列不留在原處。
   const deletedIds = useMemo(
     () => new Set((deletion?.deleted ?? []).map((item) => item.threadId)),
     [deletion?.deleted],
@@ -424,7 +424,7 @@ function ThreadGroupList({
   readonly isBlank: (item: ThreadSummary) => boolean;
   /** 這一列要不要一定看得到；一定要看得到的列排在組內前 50 條以內時，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
   readonly mustShow: (item: ThreadSummary) => boolean;
-  /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`）。 */
+  /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`、最近刪除是 `deleted`）。 */
   readonly expanded: ReadonlyMap<string, number>;
   readonly onExpand: (group: string, count: number) => void;
   readonly row: (item: ThreadSummary) => ReactNode;
@@ -500,7 +500,7 @@ function BucketGroup({
 /**
  * 一組的列，先畫前幾條，組尾「顯示更多（還有 N 條）」（`show-more.ts`）。
  *
- * 按下後焦點移到新露出的第一列，鍵盤與報讀器不用回頭找；那一列是目前這條（按鈕停用）時落在它的「⋯」，沒有選單時落在下一列。
+ * 按下後焦點移到新露出的列裡第一顆可按的鈕，鍵盤與報讀器不用回頭找（會話列是它本身，目前這條落在「⋯」；最近刪除的列是「復原」），沒有就往下找。
  */
 function LimitedRows<T>({
   items,
@@ -557,8 +557,8 @@ const DELETED_GROUP = 'deleted';
 
 /**
  * 「最近刪除」（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)）：清單最下面、「已封存」之後，預設收著、標題帶份數。
- * 每列寫標題與還剩幾天，唯一的動作是「復原」；列本身點不開（檔案已經搬走了）。過了寬限期的不列：server 也不會再給，
- * 這一頁開著跨過到期時刻的那幾列在這裡濾掉。搜尋時不畫：它不在搜尋的範圍裡。
+ * 每列寫標題與還剩幾天，唯一的動作是「復原」；列本身點不開（檔案已經搬走了）。過了寬限期的不列：server 的清單照樣帶著（索引不清），
+ * 只在這裡用 `expiresAt` 濾；濾只在重畫時做，沒有計時器。搜尋時不畫：它不在搜尋的範圍裡。
  */
 function RecentlyDeleted({
   items,

@@ -1,12 +1,12 @@
 /**
- * 側欄的會話管理：釘選、封存、改名、刪除（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 的 web 那一半）。
+ * 側欄的會話管理：釘選、封存、改名（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 的 web 那一半）、刪除（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)）。
  *
  * **有沒有這個功能看 server**：列表（`GET /threads`）帶了釘選與封存兩個集合（{@link readSets}）才算支援，沒帶（還沒實作的
- * server、列表還在讀或讀失敗）整個功能不出現——列的選單、「已釘選」「已封存」兩區、改名輸入都沒有，畫面與以前逐像素相同。
+ * server、列表還在讀或讀失敗）整個功能不出現——列的選單、「已釘選」「已封存」兩區、改名輸入都沒有，畫面與沒有這個功能時逐像素相同。刪除另看已刪除清單，見 {@link ThreadDeletion}。
  * 附件寫死開關是因為沒有可以先問的東西，這裡列表本身就是答案。實作在 `features/threads/use-management.ts`。
  *
  * **畫面一律以 server 回的完整集合為準，本機不自己推**（例如「封存同時取消釘選」是 server 的規則，不在這裡重算）：
- * 動作成功就拿回應裡的整份集合取代，封存與改名之後再重抓一次列表。規則照 dsh（`workspace-controller/src/commands.ts:155-230`）：
+ * 動作成功就拿回應裡的整份集合取代，封存、刪除、復原成功之後再重抓一次列表。規則照 dsh（`workspace-controller/src/commands.ts:155-230`）：
  * 封存的會話不能釘、取消是冪等的、釘選的順序是最近釘的在前。
  *
  * @module
@@ -97,13 +97,14 @@ export function daysLeft(expiresAt: number, now: number): number {
 
 /**
  * 刪除與復原（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)，server 那一半是 #2957）。
- * server 沒接已刪除存放區（`GET /deleted-threads` 被拒）時整個沒有：選單沒有「刪除」，也沒有「最近刪除」。
+ * 已刪除清單（`GET /threads/deleted`）還沒讀到、被拒（server 沒接已刪除存放區）或讀不到時整個沒有：選單沒有「刪除」，也沒有「最近刪除」。
  */
 export interface ThreadDeletion {
-  /** 已刪除、還在寬限期內的，照 server 回的順序。 */
+  /** server 的已刪除索引，照 server 回的順序。含已過寬限期的（server 不濾），由「最近刪除」用 `expiresAt` 濾掉。 */
   readonly deleted: readonly DeletedThread[];
   /** server 一律先停掉它正在做的事再搬，所以沒有 `stopActivity`：在跑的只是確認框的字不同。 */
   readonly onDelete: (threadId: string) => ThreadActionResult;
+  /** 復原到原處。失敗回原因（過期、原處已有同一條、不在已刪除裡）；不論成敗都重讀已刪除清單。 */
   readonly onRestore: (threadId: string) => ThreadActionResult;
 }
 
@@ -121,7 +122,7 @@ export interface ThreadManagement {
   ) => ArchiveAnswer;
   readonly onUnarchive: (threadId: string) => ThreadActionResult;
   readonly onRename: (threadId: string, title: string) => ThreadActionResult;
-  /** 刪除與最近刪除；server 沒接就沒有這一格。 */
+  /** 刪除與最近刪除；已刪除清單還沒讀到、被拒或讀不到時沒有這一格。 */
   readonly deletion?: ThreadDeletion;
 }
 

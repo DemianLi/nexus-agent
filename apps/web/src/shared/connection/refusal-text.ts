@@ -118,7 +118,7 @@ const REFUSALS: ReadonlyMap<string, Row> = new Map<string, Row>([
   ],
   [
     THREAD_DELETED,
-    // 復原之前重試幾次都一樣。
+    // 已刪除的，復原之前重試幾次都一樣。刪除進行中也回這個碼（最後沒做成的話其實打得開），少見，一樣當永久。
     { text: THREAD_DELETED_TEXT, permanent: true, during: ANYTIME },
   ],
   [
