@@ -3,12 +3,14 @@ import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import {
-  DropdownMenu,
+  createDropdownMenuHandle,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRoot,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import type { DropdownMenuHandle } from '@/components/ui/dropdown-menu';
 import { SidebarInput, SidebarMenuAction } from '@/components/ui/sidebar';
 import {
   AlertDialog,
@@ -26,27 +28,47 @@ import type { ThreadActivityKind } from '@nexus/wire';
 
 /**
  * 會話列的管理：「⋯」選單（釘選、改名、封存）與行內改名輸入（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
- * 只在側欄拿到 `ThreadManagement` 時才畫（`thread-list.tsx`）；規則與開關見 `features/threads/management.ts`。
+ * 只在側欄拿到 `ThreadManagement` 時才畫（`list.tsx`）；規則與開關見 `features/threads/management.ts`。
  *
  * - **選單**：桌面滑過那一列才現身（鍵盤聚焦也算），觸控（1024 以下）常駐。選項依狀態換：釘選／取消釘選、封存／取消封存。
- *   **封存的不能釘**，所以封存的那一列沒有釘選。**目前這條不給封存**：人還在這條裡講話。
+ *   **封存的不能釘**，所以封存的那一列沒有釘選。目前這條也能封存：人留在這條，輸入框上方換成已封存的橫幅（`archived-banner.tsx`）。
+ * - **整張清單共用一份選單與確認框**（`ThreadRowMenus`），每一列只有一顆觸發鈕（`ThreadRowMenuTrigger`），按下時帶著那一列的
+ *   `RowMenuTarget`。
  * - **改名**：那一列原地換成輸入框，Enter 送出、Esc 放棄、點旁邊算送出（沒改或空的算放棄）。送出失敗（伺服器說了原因）留在輸入框、
  *   講出原因，不蓋掉人打的字。
  *
  * @module
  */
 
-export interface RowMenuProps {
+/** 「⋯」按下去時那一列的樣子：選單的選項依它換。 */
+export interface RowMenuTarget {
+  readonly threadId: string;
   readonly label: string;
   readonly pinned: boolean;
   readonly archived: boolean;
   readonly current: boolean;
-  readonly onPin: () => ThreadActionResult;
-  readonly onUnpin: () => ThreadActionResult;
-  readonly onArchive: (options?: { readonly stopActivity?: boolean }) => ArchiveAnswer;
-  readonly onUnarchive: () => ThreadActionResult;
-  readonly onRename: () => void;
 }
+
+/** 選單上的動作，按 thread id 呼叫。`onRename` 等選單收完（`onOpenChangeComplete`）才呼叫。 */
+export interface RowMenuActions {
+  readonly onPin: (threadId: string) => ThreadActionResult;
+  readonly onUnpin: (threadId: string) => ThreadActionResult;
+  readonly onArchive: (
+    threadId: string,
+    options?: { readonly stopActivity?: boolean },
+  ) => ArchiveAnswer;
+  readonly onUnarchive: (threadId: string) => ThreadActionResult;
+  readonly onRename: (threadId: string) => void;
+}
+
+/**
+ * 一張清單一份：交給該清單每一顆 `ThreadRowMenuTrigger` 與唯一一份 `ThreadRowMenus`。元件存活期間要保持同一個
+ * （例如 `useState(createRowMenuHandle)`），`ThreadRow` 的 `memo` 比對它的身分。
+ */
+export type RowMenuHandle = DropdownMenuHandle<RowMenuTarget>;
+
+/** 建一份 {@link RowMenuHandle}。 */
+export const createRowMenuHandle = (): RowMenuHandle => createDropdownMenuHandle<RowMenuTarget>();
 
 /** 動作失敗時講出原因；成功什麼都不說（那一列的位置變了就是回饋）。 */
 function report(action: string, result: ThreadActionResult): void {
@@ -64,11 +86,12 @@ function report(action: string, result: ThreadActionResult): void {
 
 /** 封存一條會話；它還在跑時 server 要人先說「要停掉」，那一句交給 `onNeedsStop` 去問（確認框）。 */
 function archive(
-  props: RowMenuProps,
+  actions: RowMenuActions,
+  threadId: string,
   options: { readonly stopActivity?: boolean } | undefined,
   onNeedsStop: (activity: readonly ThreadActivityKind[]) => void,
 ): void {
-  void props.onArchive(options).then(
+  void actions.onArchive(threadId, options).then(
     (answer) => {
       if (answer === undefined) return;
       if (typeof answer === 'string') toast.error('封存失敗', { description: answer });
@@ -82,69 +105,110 @@ function archive(
   );
 }
 
-export function ThreadRowMenu(props: RowMenuProps) {
-  const { label, pinned, archived, current } = props;
-  // 封存還在跑的會話要多問一句；`undefined` 是沒有在問，陣列是 server 說它在跑什麼（舊 server 沒帶就是空的）。
-  const [confirmStop, setConfirmStop] = useState<readonly ThreadActivityKind[] | undefined>(
-    undefined,
-  );
-  // 選「改名」之後選單關閉會把焦點還給「⋯」，蓋掉輸入框剛要到的焦點；那一次不還。
-  const renaming = useRef(false);
+/** 一列上的「⋯」：只是一顆觸發鈕，選單本身整張清單共用一份（`ThreadRowMenus`）。 */
+export function ThreadRowMenuTrigger({
+  handle,
+  target,
+}: {
+  readonly handle: RowMenuHandle;
+  readonly target: RowMenuTarget;
+}) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <SidebarMenuAction
-            showOnHover
-            aria-label={`「${label}」的選項`}
-            className="size-8 lg:size-6"
-          />
-        }
-      >
-        <MoreHorizontal aria-hidden />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        finalFocus={() => {
-          if (!renaming.current) return true;
-          renaming.current = false;
-          return false;
+    <DropdownMenuTrigger
+      handle={handle}
+      payload={target}
+      render={
+        <SidebarMenuAction
+          showOnHover
+          aria-label={`「${target.label}」的選項`}
+          className="size-8 lg:size-6"
+        />
+      }
+    >
+      <MoreHorizontal aria-hidden />
+    </DropdownMenuTrigger>
+  );
+}
+
+/**
+ * 整張清單共用的選單與確認框：按下哪一列的「⋯」，選單就照那一列（觸發鈕帶的 `payload`）換選項。
+ * 每一列各掛一份的話，清單每重畫一次就要重畫幾百份選單（回歸測試在 `list.rerender.test.tsx`）。
+ */
+export function ThreadRowMenus({
+  handle,
+  actions,
+}: {
+  readonly handle: RowMenuHandle;
+  readonly actions: RowMenuActions;
+}) {
+  // 封存還在跑的會話要多問一句：問的是哪一條、server 說它在跑什麼（舊 server 沒帶就是空的）。
+  const [confirmStop, setConfirmStop] = useState<
+    { readonly target: RowMenuTarget; readonly activity: readonly ThreadActivityKind[] } | undefined
+  >(undefined);
+  // 選了「改名」的那一條：等選單收完才換成輸入框。選單還開著時，輸入框拿到的焦點會被選單拉回去，一失焦就當成沒改收起來。
+  // 選單關掉時也不把焦點還給「⋯」，那一次焦點要留給輸入框。
+  const renaming = useRef<string | undefined>(undefined);
+  return (
+    <>
+      <DropdownMenuRoot
+        handle={handle}
+        onOpenChangeComplete={(open) => {
+          const threadId = renaming.current;
+          if (open || threadId === undefined) return;
+          renaming.current = undefined;
+          actions.onRename(threadId);
         }}
       >
-        {!archived && (
-          <DropdownMenuItem
-            onClick={() => {
-              report(pinned ? '取消釘選' : '釘選', pinned ? props.onUnpin() : props.onPin());
-            }}
-          >
-            {pinned ? <PinOff aria-hidden /> : <Pin aria-hidden />}
-            {pinned ? '取消釘選' : '釘選'}
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem
-          onClick={() => {
-            renaming.current = true;
-            props.onRename();
-          }}
-        >
-          <Pencil aria-hidden />
-          重新命名
-        </DropdownMenuItem>
-        {(archived || !current) && <DropdownMenuSeparator />}
-        {archived ? (
-          <DropdownMenuItem onClick={() => report('取消封存', props.onUnarchive())}>
-            <ArchiveRestore aria-hidden />
-            取消封存
-          </DropdownMenuItem>
-        ) : (
-          !current && (
-            <DropdownMenuItem onClick={() => archive(props, undefined, setConfirmStop)}>
-              <Archive aria-hidden />
-              封存
-            </DropdownMenuItem>
+        {({ payload: target }) =>
+          target !== undefined && (
+            <DropdownMenuContent align="start" finalFocus={() => renaming.current === undefined}>
+              {!target.archived && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    report(
+                      target.pinned ? '取消釘選' : '釘選',
+                      target.pinned
+                        ? actions.onUnpin(target.threadId)
+                        : actions.onPin(target.threadId),
+                    );
+                  }}
+                >
+                  {target.pinned ? <PinOff aria-hidden /> : <Pin aria-hidden />}
+                  {target.pinned ? '取消釘選' : '釘選'}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onClick={() => {
+                  renaming.current = target.threadId;
+                }}
+              >
+                <Pencil aria-hidden />
+                重新命名
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {target.archived ? (
+                <DropdownMenuItem
+                  onClick={() => report('取消封存', actions.onUnarchive(target.threadId))}
+                >
+                  <ArchiveRestore aria-hidden />
+                  取消封存
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  onClick={() =>
+                    archive(actions, target.threadId, undefined, (activity) =>
+                      setConfirmStop({ target, activity }),
+                    )
+                  }
+                >
+                  <Archive aria-hidden />
+                  封存
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
           )
-        )}
-      </DropdownMenuContent>
+        }
+      </DropdownMenuRoot>
       <AlertDialog
         open={confirmStop !== undefined}
         onOpenChange={(open) => {
@@ -155,21 +219,29 @@ export function ThreadRowMenu(props: RowMenuProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>這條會話還在執行</AlertDialogTitle>
             <AlertDialogDescription>
-              {explainArchiveStop(label, confirmStop ?? [])}
+              {explainArchiveStop(confirmStop?.target.label ?? '', confirmStop?.activity ?? [])}
               封存會先停掉它正在做的事，之後可以從「已封存」取消封存。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>先不要</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => archive(props, { stopActivity: true }, () => undefined)}
+              onClick={() => {
+                if (confirmStop === undefined) return;
+                archive(
+                  actions,
+                  confirmStop.target.threadId,
+                  { stopActivity: true },
+                  () => undefined,
+                );
+              }}
             >
               停掉並封存
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </DropdownMenu>
+    </>
   );
 }
 

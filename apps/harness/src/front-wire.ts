@@ -598,7 +598,7 @@ export function threadActivityOverSocket(
 ): NonNullable<WireHandlerOptions['threadActivityElsewhere']> {
   async function call(
     threadId: string,
-    action: 'activity' | 'stop',
+    action: 'activity' | 'stop' | 'release',
   ): Promise<Response | undefined> {
     const socket = supervisor.socketOf(threadId);
     if (socket === undefined) return undefined;
@@ -630,6 +630,10 @@ export function threadActivityOverSocket(
     },
     stop: async (threadId) => {
       const response = await call(threadId, 'stop');
+      await response?.body?.cancel();
+    },
+    release: async (threadId) => {
+      const response = await call(threadId, 'release');
       await response?.body?.cancel();
     },
   };

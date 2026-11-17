@@ -42,12 +42,21 @@ pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(5_000);
 pub const DEFAULT_STATS: Duration = Duration::from_millis(10_000);
 /// 停機時等前台回「已停准入」多久。
 pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_millis(5_000);
-/// 預熱池補不起來（行程起不來、沒到 `ready` 就死、或沒活多久就死）時，下一次補之前最多等多久：從 `--front-restart-ms` 起、每次失敗加倍到這裡為止。
+/// 預熱池補不起來（行程起不來、沒到 `ready` 就死、或沒活多久就死）時，下一次補之前最多等多久：從 [`backoff_start`] 起、每次失敗加倍到這裡為止。
 /// 不開旗標：這是監督行程內部的節流，沒有理由讓營運者調。
 pub const WARM_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
-/// 預熱的行程到過 `ready`、而且活過這麼久才死，下一次補的等待回到 `--front-restart-ms`。兩個條件缺一個都不歸零（[`super::Supervisor::warm_failed`]）。
+/// 預熱失敗距上一次至少這麼久，或這個行程到過 `ready` 而且活過這麼久才死，下一次補的等待回到 [`backoff_start`]（[`super::Supervisor::warm_failed`]）。
 pub const WARM_STABLE: Duration = Duration::from_millis(60_000);
-/// 一條 thread 的行程連續失敗時，下一次 `ensure` 之前最多等多久：第一次失敗不等，第二次起從 `--front-restart-ms` 開始、每次加倍；實際上限是這個值與 `--front-restart-ms` 的較大者
+/// 退避（預熱池補不起來、一條 thread 連續失敗）起點的下限。`--front-restart-ms` 設得比它小（含 0）時，退避的起點是它，不然 0 乘二還是 0，退避長不起來（[`backoff_start`]）。
+/// 前台重起的間隔仍是旗標本身，不受這個下限影響。
+pub const BACKOFF_FLOOR: Duration = Duration::from_millis(100);
+
+/// 退避的起點：`--front-restart-ms` 與 [`BACKOFF_FLOOR`] 的較大者。預熱池與每條 thread 兩處共用這一個，起點才不會各走各的。
+pub fn backoff_start(front_restart: Duration) -> Duration {
+    front_restart.max(BACKOFF_FLOOR)
+}
+
+/// 一條 thread 的行程連續失敗時，下一次 `ensure` 之前最多等多久：第一次失敗不等，第二次起從 [`backoff_start`] 開始、每次加倍；實際上限是這個值與 `--front-restart-ms` 的較大者
 /// （[`super::Supervisor::note_thread_failure`]）。不開旗標：這是監督行程內部的節流。
 pub const THREAD_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
 /// 同一條 thread 距上一次失敗超過這麼久才再失敗，算第一次。要至少是實際上限的兩倍，不然退避長不到上限：那一筆會在兩次失敗之間過期，每次都變回第一次（`the_forget_time_is_at_least_twice_the_cap` 釘住預設的上限；

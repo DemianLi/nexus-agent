@@ -785,6 +785,22 @@ jq -rs '
 換過 home。**零違規是弱證據**：一個人在自己機器上跑一陣子沒報過，不代表檢查沒有價值（它們擋的是回歸，
 測試也擋回歸）。這份記錄是 dsh 沒有的、我們自己加的；第二刀若選全部拿掉，它跟著拿掉。
 
+## 已刪除存放區
+
+刪除一條會話時，它的整條軌跡（主對話與所有子代理的日誌）會搬到已刪除存放區，不會真的刪掉。寬限期內可以復原；過了寬限期只是不能復原，檔案留著。
+
+> **目前狀態**：存放區的搬移、復原與啟動恢復已經實作（`apps/harness/src/thread-deletion.ts`）；網頁端的入口還沒接。下面的位置與做法是接上之後的樣子。
+
+- **位置**：預設在 harness home 底下的 `sessions-deleted/`（`<home>/sessions-deleted/<專案格>/`）。搬過去的檔名與原處一樣。
+- **寬限天數**：預設 30 天，由 `DEFAULT_GRACE_DAYS` 定。
+- **改路徑**：設定改了不會自動搬。啟動時如果舊路徑底下還有檔，會印一行警告，附上搬移指令（`mv "<舊路徑>"/* "<新路徑>"/`）。舊路徑清空之後警告就不再出現。
+- **狀態檔**：`<home>/thread-deletions.json`。`intent` 是正在做的那一件（沒有就是 `null`），`deleted` 是已刪除的索引。索引只存專案格名與 thread id，不存絕對路徑。
+- **刪除記錄**：`<home>/thread-deletions.log.jsonl`，每次刪除或復原附加一行（誰、何時、哪條、原標題）。同一個操作不會寫兩次。
+- **怎麼看記錄**：`tail -n 20 ~/.nexus-agent/thread-deletions.log.jsonl | jq .`（有 `NEXUS_AGENT_HOME` 的話換成那個目錄）。
+- **怎麼手動搬**：先確認 serve 已經停掉（home 鎖擋住的是同時寫入）。把 `sessions-deleted/<專案格>/` 裡要復原的項目搬回 `sessions/<專案格>/`，然後從 `thread-deletions.json` 的 `deleted` 裡拿掉那一筆。不要只搬檔案不改索引。
+- **不搬的東西**：`tool-results/`（外溢的工具結果）與 `attachments/`（附件）不搬。分叉會沿著祖先鏈讀外溢檔，祖先被刪之後也還要找得到；它們有自己的保留期。
+- **沒有永久刪除**：這個功能不清除存放區裡的任何東西。清除的方式與保存期限另見 #2956。
+
 ## 接著上一次跑下去
 
 CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、往同一個檔續寫；serve 不用旗標——
@@ -1714,9 +1730,9 @@ nexus-agent serve --process-model per-thread
 - 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去；宿主 `nexus-host` 也要放在它旁邊（見〈宿主 `nexus-host`〉）。
 - **執行檔不能帶 setuid／setgid，node 行程不能帶 capability**（例如對 node 做過 `setcap cap_net_bind_service`）。監督行程替子行程設了「父行程死了就跟著死」（`PR_SET_PDEATHSIG`），這兩種情形下核心在 exec 時會把它清掉，監督行程被 `SIGKILL` 時就留下孤兒，所以起動時查到就拒起。capability 是看 serve 自己行程的 `CapPrm`，以 root 跑時不查（root 本來就有全部的 capability）；監督行程執行檔上的 file capability 查不到、**不擋**，不要對它做 `setcap`。要綁 1024 以下的 port，放在反向代理後面（見〈放在反向代理後面〉）。
 - `startTimeoutMs`（毫秒，非負整數，`0` 不判）交給監督行程的 `--start-timeout-ms`：對話行程從起行程到它回 `ready` 的上限，已指派 thread 與預熱池裡的都算；逾時被殺，那條 thread 的前台請求回「對話行程沒起來（stalled）」。**省略就不傳旗標，用監督行程的預設（30000），行為與沒有這個鍵時相同。**只在 `per-thread` 下有作用。
-  成對的（組合行程加葉子）從起到讀到組合行程的 `ready` 算一筆，補葉子時另算一筆，過了就整對收、`down` 帶 `stalled`；`nexus-agent serve` 起的是不成對的，從 spawn 到讀到對話行程自己的 `ready` 算一筆，預熱池裡的也算，過了殺它；已指派的回 `down(stalled)`，預熱池的沒有 thread、不回 `down`，之後照預熱池的退避再補：從 `--front-restart-ms` 起、每失敗一次加倍、最多 30 秒。級數只在預熱行程到過 `ready`、活過 60 秒才死時回到起始值；預熱行程正常是被指派走的，所以預熱行程多半被指派走的系統上，出過事之後會一直留在上限，到監督行程重起為止（只是預熱補得慢，`ensure` 照樣當場起）。`--front-restart-ms 0` 時沒有間隔，也不加倍。預設 30000 是跟 `--host-ready-timeout-ms` 取同一個值；依據是 CI 兩輪共 40 個樣本，冷起動 1.4–2.3 秒（最大 2274 ms）。量的是跑原始碼的對話行程，不含外掛與 MCP，也不是客戶主機，所以只說 30 秒對這個量測有餘裕，不是對任何部署都夠（細節見 [#2852](https://github.com/DemianLi/nexus-agent/issues/2852)）。
-- **一條 thread 一直死會被放慢重起**（#2815）：同一條 thread 的行程（成對是一對）連續死在 60 秒內（`--front-restart-ms` 大過 30 秒時是實際上限的兩倍），第一次照常重起，第二次起前台再要它時監督行程先不起，只回上一次的死因（`down`），等一個窗過了才又起；窗從 `--front-restart-ms`（預設 1 秒）起、每連續失敗一次加倍、最多 30 秒（`--front-restart-ms` 比 30 秒大就用它），不放棄。別的 thread 不受影響。逐出（`evicted`）與停機不算失敗。
-  - `--front-restart-ms 0` 的意思是**沒有退避**：窗長是 0，每次都照起。
+  成對的（組合行程加葉子）從起到讀到組合行程的 `ready` 算一筆，補葉子時另算一筆，過了就整對收、`down` 帶 `stalled`；`nexus-agent serve` 起的是不成對的，從 spawn 到讀到對話行程自己的 `ready` 算一筆，預熱池裡的也算，過了殺它；已指派的回 `down(stalled)`，預熱池的沒有 thread、不回 `down`，之後照預熱池的退避再補：從退避起點（`--front-restart-ms` 與 100 毫秒的較大者）起、每失敗一次加倍、最多 30 秒。距上一次預熱失敗至少 60 秒，或這個預熱行程到過 `ready`、活過 60 秒才死，等待就回到起點；看的是失敗的時間，不看有沒有行程被指派走。永不 `ready` 的預熱行程每次要活到逾時才死，預設 30 秒，所以等待長到 30 秒那一輪之後會回到起點重來，補的間隔仍至少隔一個逾時。旗標小於 100 毫秒（含 0）時退避起點是 100 毫秒，前台重起的間隔仍是旗標本身。`startTimeoutMs` 的預設 30000 是跟 `--host-ready-timeout-ms` 取同一個值；依據是 CI 兩輪共 40 個樣本，冷起動 1.4–2.3 秒（最大 2274 ms）。量的是跑原始碼的對話行程，不含外掛與 MCP，也不是客戶主機，所以只說 30 秒對這個量測有餘裕，不是對任何部署都夠（細節見 [#2852](https://github.com/DemianLi/nexus-agent/issues/2852)）。
+- **一條 thread 一直死會被放慢重起**（#2815）：同一條 thread 的行程（成對是一對）連續死在 60 秒內（`--front-restart-ms` 大過 30 秒時是實際上限的兩倍），第一次照常重起，第二次起前台再要它時監督行程先不起，只回上一次的死因（`down`），等一個窗過了才又起；窗從退避起點（`--front-restart-ms` 與 100 毫秒的較大者，預設 1 秒）起、每連續失敗一次加倍、最多 30 秒（起點比 30 秒大就用它），不放棄。別的 thread 不受影響。逐出（`evicted`）與停機不算失敗。
+  - `--front-restart-ms` 小於 100 毫秒（含 0）時，退避的起點是 100 毫秒，不是沒有退避；前台重起的間隔仍是旗標本身（0 就是馬上重起）。
   - 稽核紀錄多一種：`{"ts_ms":…,"event":"backoff","thread":"…","cause":"memory","failures":3,"wait_ms":2000}`。**每個窗一行**，寫在窗內第一個被擋的請求上；它不是被擋請求的次數，監督行程不記被擋了幾次。`cause` 是回給前台的死因，`failures` 是連續第幾次，`wait_ms` 是這個窗的長度。解析監督行程稽核的腳本要放過這一種 `event`。
 - 前台與對話行程之間走 home 底下 `run/` 的 Unix socket，目錄權限 0700；監督行程的稽核紀錄寫在 home 的 `supervisor-audit.jsonl`。
 - `thread-capacity` 的 `idleEvictAfterMs` 交給監督行程：對話行程閒置這麼久就收掉（`0` 不收）。

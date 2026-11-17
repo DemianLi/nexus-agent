@@ -1,11 +1,26 @@
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
 import { X } from 'lucide-react';
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 
 import { Chevron } from '@/shared/blocks/chevron';
-import { RenameField, ThreadRowMenu } from '@/features/threads/row-menu';
-import type { RowMenuProps } from '@/features/threads/row-menu';
+import {
+  createRowMenuHandle,
+  RenameField,
+  ThreadRowMenus,
+  ThreadRowMenuTrigger,
+} from '@/features/threads/row-menu';
+import type { RowMenuActions, RowMenuHandle } from '@/features/threads/row-menu';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
@@ -19,6 +34,7 @@ import {
 import type { ThreadDirectory } from '@/features/threads/use-directory';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BUCKET_LABEL, groupThreads } from '@/features/threads/groups';
+import { showMore, shownCount } from '@/features/threads/show-more';
 import {
   highlightMatches,
   mergeThreadSearch,
@@ -27,11 +43,7 @@ import {
 } from '@/features/threads/search';
 import type { ContentMatches } from '@/features/threads/search';
 import { splitThreads } from '@/features/threads/management';
-import type {
-  ThreadActionResult,
-  ThreadManagement,
-  ThreadSections,
-} from '@/features/threads/management';
+import type { ThreadManagement, ThreadSections } from '@/features/threads/management';
 import { ROW_STATUS_TEXT, withPlaceholders } from '@/features/threads/status';
 import type { RowStatus } from '@/features/threads/status';
 import { threadLabel, withCurrentTitle } from '@/features/threads/title';
@@ -67,14 +79,21 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
  * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
  * 自動展開）。沒給就跟以前一樣，什麼都不多畫。規則與開關見 `features/threads/management.ts`。
+ *
+ * **每組先畫幾條**（[#2960](https://github.com/DemianLi/nexus-agent/issues/2960)）：時間組、搜尋結果、已封存每組先 10 條，組尾「顯示更多」，
+ * 規則在 `features/threads/show-more.ts`。釘選區全畫。水位跟著搜尋字記：換了搜尋字就當成沒按過；側欄收起時清單卸掉，也回到起點。
  */
+
+const NO_WATERMARKS: ReadonlyMap<string, number> = new Map();
 
 function labelOf(item: ThreadSummary): string {
   return threadLabel(item.title, item.blank);
 }
 
+const TIME_FORMAT = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+
 function formatTime(updatedAt: number): string {
-  return new Date(updatedAt).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+  return TIME_FORMAT.format(updatedAt);
 }
 
 export function ThreadList({
@@ -170,26 +189,47 @@ export function ThreadList({
     management === undefined
       ? { pinned: [], rest: view.items, archived: [] }
       : splitThreads(view.items, management.pinnedIds, management.archivedIds);
-  const rowManagement = (item: ThreadSummary): RowManagement => {
-    const id = item.threadId;
-    return {
-      title: management?.titles.get(id),
-      pinned: management?.pinnedIds.includes(id) ?? false,
-      archived: management?.archivedIds.has(id) ?? false,
-      current: id === currentThreadId,
-      onPin: () => management!.onPin(id),
-      onUnpin: () => management!.onUnpin(id),
-      onArchive: (options) => management!.onArchive(id, options),
-      onUnarchive: () => management!.onUnarchive(id),
-      onRename: () => setRenamingId(id),
-      onCommitRename: async (title: string) => {
-        const failure = await management!.onRename(id, title);
-        if (failure === undefined) setRenamingId(null);
-        return failure;
-      },
-      onCancelRename: () => setRenamingId(null),
-    };
-  };
+  // 列只在自己的資料變了才重畫（`ThreadRow` 是 `memo`）：交給列的回呼身分要穩，所以經 ref 讀最新的 `onPick` 與 `management`。
+  // 外層（`ConversationView`）每一格串流都重畫，傳進來的回呼每次都是新的。
+  const latest = useRef({ onPick, management });
+  useLayoutEffect(() => {
+    latest.current = { onPick, management };
+  });
+  const [menuHandle] = useState(createRowMenuHandle);
+  const pick = useCallback((threadId: string) => latest.current.onPick(threadId), []);
+  const menuActions = useMemo<RowMenuActions>(
+    () => ({
+      onPin: (id) => latest.current.management!.onPin(id),
+      onUnpin: (id) => latest.current.management!.onUnpin(id),
+      onArchive: (id, options) => latest.current.management!.onArchive(id, options),
+      onUnarchive: (id) => latest.current.management!.onUnarchive(id),
+      onRename: (id) => setRenamingId(id),
+    }),
+    [],
+  );
+  const commitRename = useCallback(async (threadId: string, title: string) => {
+    const failure = await latest.current.management!.onRename(threadId, title);
+    if (failure === undefined) setRenamingId(null);
+    return failure;
+  }, []);
+  const cancelRename = useCallback(() => setRenamingId(null), []);
+  const [watermarks, setWatermarks] = useState<{
+    readonly needle: string;
+    readonly byGroup: ReadonlyMap<string, number>;
+  }>({ needle: '', byGroup: new Map() });
+  const expanded = watermarks.needle === needle ? watermarks.byGroup : NO_WATERMARKS;
+  const expand = useCallback(
+    (group: string, count: number) =>
+      setWatermarks((before) => ({
+        needle,
+        byGroup: new Map(before.needle === needle ? before.byGroup : []).set(group, count),
+      })),
+    [needle],
+  );
+  const mustShow = useCallback(
+    (item: ThreadSummary) => item.threadId === currentThreadId || statusOf(item) !== undefined,
+    [currentThreadId, statusOf],
+  );
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-body">
@@ -251,23 +291,38 @@ export function ThreadList({
                 <ThreadGroupList
                   sections={sections}
                   isBlank={blankOf}
-                  row={(item) => (
-                    <ThreadRow
-                      key={item.threadId}
-                      item={item}
-                      snippet={view.snippets.get(item.threadId)}
-                      query={needle}
-                      status={statusOf(item)}
-                      current={item.threadId === currentThreadId}
-                      onPick={onPick}
-                      {...(management === undefined
-                        ? {}
-                        : {
-                            management: rowManagement(item),
-                            renaming: renamingId === item.threadId,
-                          })}
-                    />
-                  )}
+                  mustShow={mustShow}
+                  expanded={expanded}
+                  onExpand={expand}
+                  row={(item) => {
+                    const snippet = view.snippets.get(item.threadId);
+                    const id = item.threadId;
+                    return (
+                      <ThreadRow
+                        key={id}
+                        item={item}
+                        snippet={snippet}
+                        // 只有帶摘要的列用得到搜尋字：其餘的列打字時不必重畫。
+                        query={snippet === undefined ? '' : needle}
+                        status={statusOf(item)}
+                        current={id === currentThreadId}
+                        onPick={pick}
+                        {...(management === undefined
+                          ? {}
+                          : {
+                              management: {
+                                handle: menuHandle,
+                                title: management.titles.get(id),
+                                pinned: management.pinnedIds.includes(id),
+                                archived: management.archivedIds.has(id),
+                                renaming: renamingId === id,
+                                onCommitRename: commitRename,
+                                onCancelRename: cancelRename,
+                              },
+                            })}
+                      />
+                    );
+                  }}
                   archivedOpen={archivedOpen || needle !== ''}
                   onArchivedOpenChange={setArchivedOpen}
                 />
@@ -317,6 +372,7 @@ export function ThreadList({
           )}
         </>
       )}
+      {management !== undefined && <ThreadRowMenus handle={menuHandle} actions={menuActions} />}
     </SidebarGroup>
   );
 }
@@ -328,12 +384,20 @@ export function ThreadList({
 function ThreadGroupList({
   sections,
   isBlank,
+  mustShow,
+  expanded,
+  onExpand,
   row,
   archivedOpen,
   onArchivedOpenChange,
 }: {
   readonly sections: ThreadSections;
   readonly isBlank: (item: ThreadSummary) => boolean;
+  /** 這一列要不要一定看得到；一定要看得到的列排在組內前 50 條以內時，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
+  readonly mustShow: (item: ThreadSummary) => boolean;
+  /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`）。 */
+  readonly expanded: ReadonlyMap<string, number>;
+  readonly onExpand: (group: string, count: number) => void;
   readonly row: (item: ThreadSummary) => ReactNode;
   readonly archivedOpen: boolean;
   readonly onArchivedOpenChange: (open: boolean) => void;
@@ -343,13 +407,19 @@ function ThreadGroupList({
     <>
       {sections.pinned.length > 0 && (
         <BucketGroup label="已釘選" testId="thread-pinned">
-          {sections.pinned.map(row)}
+          <SidebarMenu>{sections.pinned.map(row)}</SidebarMenu>
         </BucketGroup>
       )}
       {blank.length > 0 && <SidebarMenu>{blank.map(row)}</SidebarMenu>}
       {groups.map(({ bucket, items: members }) => (
         <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
-          {members.map(row)}
+          <LimitedRows
+            items={members}
+            mustShow={mustShow}
+            expanded={expanded.get(bucket)}
+            onExpand={(count) => onExpand(bucket, count)}
+            row={row}
+          />
         </BucketGroup>
       ))}
       {sections.archived.length > 0 && (
@@ -364,7 +434,13 @@ function ThreadGroupList({
             已封存（{sections.archived.length}）
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <SidebarMenu>{sections.archived.map(row)}</SidebarMenu>
+            <LimitedRows
+              items={sections.archived}
+              mustShow={mustShow}
+              expanded={expanded.get('archived')}
+              onExpand={(count) => onExpand('archived', count)}
+              row={row}
+            />
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -387,8 +463,63 @@ function BucketGroup({
       <div id={labelId} className="text-muted-foreground px-2 pb-1 text-ui font-medium">
         {label}
       </div>
-      <SidebarMenu>{children}</SidebarMenu>
+      {children}
     </div>
+  );
+}
+
+/**
+ * 一組的列，先畫前幾條，組尾「顯示更多（還有 N 條）」（`show-more.ts`）。
+ *
+ * 按下後焦點移到新露出的第一列，鍵盤與報讀器不用回頭找；那一列是目前這條（按鈕停用）時落在它的「⋯」，沒有選單時落在下一列。
+ */
+function LimitedRows({
+  items,
+  mustShow,
+  expanded,
+  onExpand,
+  row,
+}: {
+  readonly items: readonly ThreadSummary[];
+  readonly mustShow: (item: ThreadSummary) => boolean;
+  /** 按過「顯示更多」之後的水位；沒按過是 `undefined`。 */
+  readonly expanded: number | undefined;
+  readonly onExpand: (count: number) => void;
+  readonly row: (item: ThreadSummary) => ReactNode;
+}) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const focusFrom = useRef<number | null>(null);
+  const shown = shownCount(items, mustShow, expanded);
+  useEffect(() => {
+    const from = focusFrom.current;
+    if (from === null) return;
+    focusFrom.current = null;
+    for (const item of Array.from(listRef.current?.children ?? []).slice(from)) {
+      const target = item.querySelector<HTMLElement>('button:not(:disabled)');
+      if (target !== null) {
+        target.focus();
+        return;
+      }
+    }
+  }, [shown]);
+  const hidden = items.length - shown;
+  return (
+    <>
+      <SidebarMenu ref={listRef}>{items.slice(0, shown).map(row)}</SidebarMenu>
+      {hidden > 0 && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-muted-foreground h-11 w-full justify-start px-2 text-ui font-normal lg:h-8"
+          onClick={() => {
+            focusFrom.current = shown;
+            onExpand(showMore(shown));
+          }}
+        >
+          顯示更多（還有 {hidden} 條）
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -401,23 +532,32 @@ const BAR_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
   completed: 'bg-success',
 };
 
-/** 一列上的管理（#633）：有它才畫「⋯」選單與改名輸入。 */
+/**
+ * 一列上的管理（#633）：有它才畫「⋯」與改名輸入。每一欄都是原始值或身分穩定的參照（`handle` 與回呼），`ThreadRow` 的 `memo` 才擋得住。
+ */
 interface RowManagement {
+  readonly handle: RowMenuHandle;
   /** 使用者改過的標題。 */
   readonly title: string | undefined;
   readonly pinned: boolean;
   readonly archived: boolean;
-  readonly current: boolean;
-  readonly onPin: () => ThreadActionResult;
-  readonly onUnpin: () => ThreadActionResult;
-  readonly onArchive: RowMenuProps['onArchive'];
-  readonly onUnarchive: () => ThreadActionResult;
-  readonly onRename: () => void;
-  readonly onCommitRename: (title: string) => ThreadActionResult;
+  /** 這一列正在改名：原地換成輸入框。 */
+  readonly renaming: boolean;
+  readonly onCommitRename: (threadId: string, title: string) => Promise<string | undefined>;
   readonly onCancelRename: () => void;
 }
 
-function ThreadRow({
+interface ThreadRowProps {
+  readonly item: ThreadSummary;
+  readonly snippet: string | undefined;
+  readonly query: string;
+  readonly status: RowStatus;
+  readonly current: boolean;
+  readonly onPick: (threadId: string) => void;
+  readonly management?: RowManagement | undefined;
+}
+
+const ThreadRow = memo(function ThreadRow({
   item,
   snippet,
   query,
@@ -425,25 +565,14 @@ function ThreadRow({
   current,
   onPick,
   management,
-  renaming = false,
-}: {
-  readonly item: ThreadSummary;
-  readonly snippet: string | undefined;
-  readonly query: string;
-  readonly status: RowStatus;
-  readonly current: boolean;
-  readonly onPick: (threadId: string) => void;
-  readonly management?: RowManagement;
-  /** 這一列正在改名：原地換成輸入框。 */
-  readonly renaming?: boolean;
-}) {
+}: ThreadRowProps) {
   const label = management?.title ?? labelOf(item);
-  if (management !== undefined && renaming) {
+  if (management?.renaming === true) {
     return (
       <SidebarMenuItem>
         <RenameField
           initial={label}
-          onCommit={management.onCommitRename}
+          onCommit={(title) => management.onCommitRename(item.threadId, title)}
           onCancel={management.onCancelRename}
         />
       </SidebarMenuItem>
@@ -519,18 +648,43 @@ function ThreadRow({
         </span>
       </SidebarMenuButton>
       {management !== undefined && (
-        <ThreadRowMenu
-          label={label}
-          pinned={management.pinned}
-          archived={management.archived}
-          current={management.current}
-          onPin={management.onPin}
-          onUnpin={management.onUnpin}
-          onArchive={management.onArchive}
-          onUnarchive={management.onUnarchive}
-          onRename={management.onRename}
+        <ThreadRowMenuTrigger
+          handle={management.handle}
+          target={{
+            threadId: item.threadId,
+            label,
+            pinned: management.pinned,
+            archived: management.archived,
+            current,
+          }}
         />
       )}
     </SidebarMenuItem>
+  );
+}, sameRow);
+
+/** `management` 每次都是新物件，逐欄比；其餘欄位逐一 `===`。`ThreadRowProps` 加欄位要一起加進來。 */
+function sameRow(before: ThreadRowProps, after: ThreadRowProps): boolean {
+  const a = before.management;
+  const b = after.management;
+  const sameManagement =
+    a === b ||
+    (a !== undefined &&
+      b !== undefined &&
+      a.handle === b.handle &&
+      a.title === b.title &&
+      a.pinned === b.pinned &&
+      a.archived === b.archived &&
+      a.renaming === b.renaming &&
+      a.onCommitRename === b.onCommitRename &&
+      a.onCancelRename === b.onCancelRename);
+  return (
+    sameManagement &&
+    before.item === after.item &&
+    before.snippet === after.snippet &&
+    before.query === after.query &&
+    before.status === after.status &&
+    before.current === after.current &&
+    before.onPick === after.onPick
   );
 }
