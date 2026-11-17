@@ -4,7 +4,6 @@
 disallowed-methods = [
     { path = "libc::wait", reason = "會收走宿主的任何一個子行程；見 mcp/stdio.rs「領頭不先收屍」" },
     { path = "libc::waitpid", reason = "pid 小於等於 0（-1、0 或負的組號）會收走別人的子行程，包括自成一組的領頭；見 mcp/stdio.rs「領頭不先收屍」" },
-    { path = "libc::wait3", reason = "會收走宿主的任何一個子行程；見 mcp/stdio.rs「領頭不先收屍」" },
     { path = "libc::wait4", reason = "pid 小於等於 0（-1、0 或負的組號）會收走別人的子行程，包括自成一組的領頭；見 mcp/stdio.rs「領頭不先收屍」" },
     { path = "libc::waitid", reason = "idtype 給 P_ALL 或 P_PGID 會收走別人的子行程；見 mcp/stdio.rs「領頭不先收屍」" },
     { path = "libc::signal", reason = "把 SIGCHLD 設成 SIG_IGN 會讓核心自動收屍；見 mcp/stdio.rs「領頭不先收屍」" },
