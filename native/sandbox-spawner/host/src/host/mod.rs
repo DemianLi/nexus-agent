@@ -11,6 +11,10 @@
 //! 控制通道是 stdin／stdout（[`nexus_sandbox_spawner::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
 //! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪掉 socket、回 0。
 //!
+//! 宿主剛起來（或重起）時，監督行程在 `ready` 之後送整張身分表，最後送一筆 `synced`（表是空的也送）。`synced` 到之前宿主不讀任何客戶端連線：
+//! 連線照常 accept（占 [`MAX_CONNECTIONS`]），`hello` 留在核心的緩衝區，到了之後才照下面的規則驗；到齊之前連上的連線也照 [`HELLO_TIMEOUT`] 斷，
+//! 斷的時候不回 `rejected`、不報 `unregistered`，客戶端看到的是斷線、照退避重連。表一直不來宿主不自己放行也不自己結束，只記一行 log。
+//!
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
 //! uid 要跟自己相同；`hello` 帶的 token 要跟表上那個 pid 的相同、版本要相等。驗每一個 `hello` 之前，先把控制通道讀到 EAGAIN：
 //! 宿主 `ready` 而且沒在停時，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就先殺掉宿主的群組，再收屍），pid 被重用之後才 `connect()` 的連線，
@@ -121,6 +125,10 @@ struct Host {
     accept_paused_until: Option<Instant>,
     /// 這一段開檔數用完的期間已經記過 log：接下一條連線之後才再記。
     out_of_fds: bool,
+    /// 監督行程已經送了 [`HostCommand::Synced`]：身分表送完了。起來是 `false`，到齊之前不讀任何客戶端連線（`hello` 留在核心的緩衝區），收到之後不再變回去。
+    synced: bool,
+    /// 表還沒到齊、已經有連線等滿 [`HELLO_TIMEOUT`] 被斷，而且記過 log：每個宿主行程只記一次。
+    unsynced_drop_logged: bool,
     kernel: Kernel,
 }
 
@@ -235,6 +243,8 @@ pub fn run(args: Vec<OsString>) -> i32 {
         spare: open_spare(),
         accept_paused_until: None,
         out_of_fds: false,
+        synced: false,
+        unsynced_drop_logged: false,
         kernel,
     };
     host.step_kernel();
@@ -393,6 +403,10 @@ impl Host {
                     self.revoke(pid);
                 }
                 Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
+                Ok(HostCommand::Synced) if self.synced => {
+                    say!("監督行程又送了一次 synced，不理")
+                }
+                Ok(HostCommand::Synced) => self.synced = true,
                 Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
             }
         }
@@ -446,7 +460,13 @@ impl Host {
                 if !conn.paused() {
                     events |= libc::POLLIN;
                 }
-                fds.push(pollfd(read.or(write).unwrap_or(-1), events));
+                // 到齊之前 fd 放 -1，不是只把 events 設成 0：對方先關掉的連線會一直回報 POLLHUP，事件遮罩擋不掉，poll 會立刻返回、空轉到那條逾時。
+                let fd = if self.synced {
+                    read.or(write).unwrap_or(-1)
+                } else {
+                    -1
+                };
+                fds.push(pollfd(fd, events));
             }
             let polled_conns = self.conns.len();
             for fd in self.wake_fds() {
@@ -466,7 +486,7 @@ impl Host {
                 let Some(conn) = self.conns.get(i) else {
                     continue;
                 };
-                if conn.dead || (fd.revents == 0 && !conn.backlog_ready()) {
+                if conn.dead || !self.synced || (fd.revents == 0 && !conn.backlog_ready()) {
                     continue;
                 }
                 if !self.on_readable(i) {
@@ -490,6 +510,19 @@ impl Host {
                     && !conn.chan.write_closed()
                     && (conn.hello || now < conn.opened + HELLO_TIMEOUT)
             };
+            if !self.synced
+                && !self.unsynced_drop_logged
+                && self
+                    .conns
+                    .iter()
+                    .any(|conn| !conn.hello && now >= conn.opened + HELLO_TIMEOUT)
+            {
+                self.unsynced_drop_logged = true;
+                say!(
+                    "身分表還沒到齊，斷掉等了 {} 秒的連線",
+                    HELLO_TIMEOUT.as_secs()
+                );
+            }
             for i in 0..self.conns.len() {
                 if !keep(&self.conns[i]) {
                     self.drop_calls(i);

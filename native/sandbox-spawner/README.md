@@ -110,7 +110,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 
 - 插件清單（`--plugins`，`host/src/host/plugins.rs`）：跟監督行程換完 `hello`、bind socket 之前讀。JSON 陣列，一列一個插件：`name`（必填，編進執行檔的插件名；出貨的建置只有 `mcp`，見 [`docs/host-mcp.md`](../../docs/host-mcp.md)）、`config`（選填，原封不動交給插件，裡面的鍵由插件自己判）、`disabled`（選填，只收字面布林；`null` 當沒寫）。沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了、超過 1 MiB、JSON 壞了（重複的鍵不算壞，取後者），或哪一列少了 `name`、是不認得的鍵、名字對不上、型別不對，整份拒絕：寫一行 stderr、送 `config-broken`（帶同一句錯誤）取代 `ready`、回 4，不 bind。`intercept` 還沒做（#2596），寫了一樣整份拒絕，錯誤指到那張卡。插件自己不收它的 `config` 的，只有那一列沒掛（寫一行 stderr），其他照掛。插件的每一筆事件（狀態轉換、apply 失敗…）寫一行 stderr。整合測試用的 `test-echo` 只在 `test-hooks` 的建置裡有。
 
-- 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`；插件清單壞了的改送 `config-broken`，不 bind（見上一條）。之後收身分表的 `grant`／`revoke`，回報 `violation`／`unregistered`。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪 socket、回 0。
+- 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`；插件清單壞了的改送 `config-broken`，不 bind（見上一條）。之後收身分表：先是整張表的 `grant`，最後一筆 `synced`（表是空的也送；收到之前不讀客戶端連線），之後是增量的 `grant`／`revoke`；回報 `violation`／`unregistered`。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪 socket、回 0。
 - 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON（`serde_json`：數字收小數；宿主編出來的 payload 裡，物件的鍵照碼位順序；解的時候任何一層重複的鍵都取後者），協定在 `host/src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。版本是 `HOST_PROTOCOL_VERSION`（4），跟控制通道的版本各自獨立；不用 3（那是控制通道的版本）：客戶端送 3 進來會被判版本不對。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條（收監督行程的 `revoke` 時收 backlog 不受這個上限），宿主起來時把開檔數的軟上限拉到硬上限；連上 5 s 內沒送 `hello` 就斷。開檔數還是用完時，排著的連線接下來就關（宿主先留著一個 fd，用完時關掉它騰出位子），不留在 backlog、也不空轉；連那個 fd 都開不回來（整台主機的 fd 用完）、或 backlog 收空了，停 100 ms 不 poll listener 再試（收 `revoke` 時照樣收 backlog）；EMFILE、ENFILE 以外的 accept 錯也一樣停 100 ms。
 - 呼叫（`host/src/host/calls.rs`）：驗過身分之後，客戶端送 `call`（`side`、`id`、`service`、`method`、`payload`）與 `cancel`（`side`、`id`）；宿主回 `chunk`（`seq` 從 0 起）與 `result`（`ok` 或 `error{code,message}`），並主動推 `event`（`service`、`topic`、`payload`）給服務指名的那一條連線（它的某個呼叫所在的連線），不廣播。只傳資料。
   - 服務是插件用 `Cx::expose` 提供的（`host/src/kernel/remote.rs`），照服務名找；沒有就回 `unknown_service`，沒有那個方法回 `unknown_method`。
@@ -131,6 +131,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 一條連線在宿主這邊的狀態：
 
 - **B**：還在 listen backlog，宿主還沒 accept。
+- **U**：已 accept，但身分表還沒到齊（監督行程還沒送 `synced`）。宿主不讀這種連線，`hello` 留在核心的緩衝區；表到齊之後它變成下面 A⁺、A⁻、A⁰ 的其中一種。
 - **A⁺**：已 accept、還沒送 `hello`，pid 在表上。
 - **A⁻**：同上，pid 不在表上。
 - **A⁰**：同上，`SO_PEERCRED` 讀不到 pid 或 uid 不同。
@@ -144,6 +145,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 | 狀態 | `hello`，token 與版本都對 | `hello`，token 或版本錯 | 壞框（框太大、解不開） | 重複的 `hello` | 監督行程的 `revoke` | 同 pid 的新登記 | EOF／5 s 沒送 `hello` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | B | accept 之後照 A 那幾列 [n5] | 同左 | 同左 | — | 先收進來，記成撤過，變 R [t8]；accept 出錯的除外 [n3] | accept 之後照 A⁺ [n5] | accept 之後照 A [n5] |
+| U | 不讀，`hello` 留著，表到齊後照 A 那幾列 [t21][t22] | 同左 | 同左 | — | 先套用 [n9] | 先套用，到齊後照新的驗 [t21] | 連上滿 5 s 就斷（送了 `hello` 也一樣），不回、不報 [t23]；對方先關的連線也等到那時才收 [n9] |
 | A⁺ | 回 `hello`，變 V，不報 [t1] | 回 `rejected token 不對`／`版本不對`，報 `violation`，撤 pid [t2] | 回 `rejected <理由>`，報 `violation`，撤 pid [t3] | — | 變 R，不回 [t5][t6] | 整筆換掉，之後照新的驗 [t11] | 斷，不報 [t15][n4] |
 | A⁻ | 回 `rejected 沒有登記`，報 `unregistered` [t9][t17] | 同左（不看 token 與版本）[t17][t18] | 回 `rejected <理由>`，報 `violation`，撤 pid [t13] | — | 變 R [t12] | 變 A⁺ [t11] | 斷，不報 [t15][t16] |
 | A⁰ | 回 `rejected 沒有登記`，報 `unregistered`，pid 0 [n1] | 同左 [n1] | 回 `rejected <理由>`，報 `violation`，pid 0，沒有 pid 可撤 [n1] | — | 不適用 | 不適用 | 斷，不報 [n1] |
@@ -179,6 +181,9 @@ nexus-host [--plugins <檔>] --socket <路徑>
 - t18 `a_hello_is_judged_by_the_connection_state_before_its_version_or_token`（A⁻、R 送錯版本與 token，V 送錯版本與 token 的重複 `hello`）
 - t19 `a_violation_carries_the_generation_of_the_grant_it_belongs_to`（`violation` 帶的序號：V 是驗它時那一筆的，A⁺ 是表上現在那一筆的；A⁻ 是 0，由 t13）
 - t20 `running_out_of_fds_closes_queued_connections_instead_of_spinning`（n3）
+- t21 `a_hello_is_not_answered_until_the_table_is_synced`（U：`hello` 先到不回、不報；`grant` 來了還是不回；`synced` 到才接受）
+- t22 `an_empty_table_is_also_waited_for_and_then_rejects`（空表也要等 `synced`，到了之後 A⁻ 才被回 `沒有登記`）
+- t23 `a_connection_waiting_for_a_table_that_never_comes_is_dropped_silently`（U 逾時：斷，沒回任何框、沒報）
 - s1 `a_violation_revokes_the_live_identity_on_the_host`
 - s2 `conversations_reach_the_host_and_violations_are_audited_and_quarantined`
 - s3 `a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_again`（收屍之後數 `revoke`：隔離一次、收屍一次）
@@ -205,6 +210,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 - n6 已驗過身分的連線送重複的 `hello` 或壞框時，撤銷剛好已經寫進 pipe、宿主還沒讀：宿主先讀乾淨控制通道，這條連線先變成撤過，結果跟 R 那一列的壞框格一樣：回 `rejected`、報 `unregistered`，理由照違規（`重複的 hello` 或框的錯），不撤表上那一筆。窗口只有幾行程式，測試造不穩。
 - n7 前台的格跟對話行程走同一段程式（`role` 換成 `front`），監督行程這邊的測試只用對話行程。
 - n8 「撤 pid」的前三件在 `Host::revoke`；不收 backlog 是因為違規時 `violate` 直接呼叫它，收監督行程的 `revoke` 時才由 `Host::sync` 先 `accept(usize::MAX)` 再呼叫它。表上拿掉由 t1、t2、t3、t14 釘住；還沒送 `hello` 的記成撤過由 t13、t18；驗過身分的斷由 t2；不收 backlog 沒有測試，要讓連線停在 backlog 得先把連線數撐到上限（t8 的做法），沒另外造。
+- n9 U：`synced` 之前的 `revoke` 照常套用，但協定上它不會比 `synced` 早到（監督行程只對 `ready` 的宿主送 `revoke`，而設 `ready`、送表、送 `synced` 在同一段）；到齊之前連線的 fd 放 `-1`，所以對方先關掉的連線要等 5 s 逾時才收（不是 `POLLHUP` 空轉）；兩者測試都抓不到，靠讀碼。
 
 **已知限制**
 
