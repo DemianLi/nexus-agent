@@ -257,35 +257,34 @@ fn r4a_題目帶型別沒有的欄位() {
             .is_none(),
         "額外欄位現況會被丟掉：{result}"
     );
+    assert_eq!(
+        result["inputRequests"]["q1"]["params"]["message"], "請問怎麼稱呼？",
+        "題目其餘的欄位還在：{result}"
+    );
 }
 
-/// R4b：題目不是 `elicitation/create`（例如 `sampling/createMessage`）：現況是解不進任何一種題目，整個呼叫回錯誤。只釘現況。
+/// R4b：題目不是 `elicitation/create`（例如 `sampling/createMessage`）：現況是整包原樣回給呼叫方（`resultType`、`inputRequests`、`requestState` 逐欄位等於 server 送的），宿主不擋。只釘現況。
 #[test]
-fn r4b_題目不是反問() {
-    let question = json!({
+fn r4b_題目不是反問_整包原樣回來() {
+    let questions = json!({ "q1": {
         "method": "sampling/createMessage",
         "params": { "messages": [], "maxTokens": 10 }
-    });
-    let rig = Rig::start(
-        "r4b",
-        &input_required(json!({ "q1": question }), json!("state-1")),
-    );
-    let result = rig.call(10, json!({}));
-    assert!(result.is_err(), "現況是整個呼叫失敗：{result:?}");
+    } });
+    let rig = Rig::start("r4b", &input_required(questions.clone(), json!("state-1")));
+    let result = json_of(rig.call(10, json!({})));
+    assert_eq!(result["resultType"], "input_required", "{result}");
+    assert_eq!(result["inputRequests"], questions, "{result}");
+    assert_eq!(result["requestState"], "state-1", "{result}");
 }
 
-/// R5′：`requestState` 不是字串（數字、物件）：rmcp 的欄位是 `Option<String>`，現況是整個呼叫回錯誤。只釘現況。
+/// R5′：`requestState` 不是字串（數字、物件）：rmcp 的欄位是 `Option<String>`，現況是整包原樣回給呼叫方，`requestState` 與 `inputRequests` 都等於 server 送的。只釘現況。
 #[test]
-fn r5_request_state_不是字串() {
+fn r5_request_state_不是字串_原樣回來() {
     for (tag, state) in [("r5n", json!(7)), ("r5o", json!({ "step": 1 }))] {
-        let rig = Rig::start(
-            tag,
-            &input_required(json!({ "q1": form_question() }), state.clone()),
-        );
-        let result = rig.call(10, json!({}));
-        assert!(
-            result.is_err(),
-            "requestState={state} 現況是失敗：{result:?}"
-        );
+        let questions = json!({ "q1": form_question() });
+        let rig = Rig::start(tag, &input_required(questions.clone(), state.clone()));
+        let result = json_of(rig.call(10, json!({})));
+        assert_eq!(result["requestState"], state, "{result}");
+        assert_eq!(result["inputRequests"], questions, "{result}");
     }
 }
