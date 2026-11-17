@@ -30,10 +30,19 @@ pub struct Member {
 }
 
 /// 解 `/proc/<pid>/stat` 的一行：`pid (comm) state ppid pgrp session ... starttime ...`。
-/// 行程名在括號裡，可以有空白與 `)`，所以從**最後一個** `)` 切開。
-pub fn parse_stat(text: &str) -> Option<Member> {
-    let (head, rest) = text.rsplit_once(')')?;
-    let pid = head.split_whitespace().next()?.parse().ok()?;
+/// 行程名在括號裡，可以有空白與 `)`，也可以不是合法 UTF-8（`prctl(PR_SET_NAME)` 設什麼都行），所以讀位元組、從**最後一個** `)` 切開：
+/// 名字之後都是 ASCII 的狀態字母與數字。
+pub fn parse_stat(text: impl AsRef<[u8]>) -> Option<Member> {
+    let text = text.as_ref();
+    let close = text.iter().rposition(|byte| *byte == b')')?;
+    let (head, rest) = (&text[..close], &text[close + 1..]);
+    let digits: Vec<u8> = head
+        .iter()
+        .copied()
+        .take_while(u8::is_ascii_digit)
+        .collect();
+    let pid = std::str::from_utf8(&digits).ok()?.parse().ok()?;
+    let rest = std::str::from_utf8(rest).ok()?;
     let fields: Vec<&str> = rest.split_whitespace().collect();
     Some(Member {
         pid,
@@ -50,7 +59,7 @@ fn is_gone(err: &io::Error) -> bool {
 
 /// 讀一個行程：不在了是 `Ok(None)`；讀不了（fd 用完之類）或解不開是 `Err`，**不能**當成不在。
 pub fn read_member(pid: libc::pid_t) -> io::Result<Option<Member>> {
-    match fs::read_to_string(format!("/proc/{pid}/stat")) {
+    match fs::read(format!("/proc/{pid}/stat")) {
         Ok(text) => parse_stat(&text).map(Some).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -62,23 +71,44 @@ pub fn read_member(pid: libc::pid_t) -> io::Result<Option<Member>> {
     }
 }
 
-/// 列出 `/proc` 底下所有看得到的行程。掃的當下消失的略過；開不了 `/proc`、讀到一半出錯是 `Err`，不回空清單。
-pub fn list_members() -> io::Result<Vec<Member>> {
-    let mut members = Vec::new();
+/// 一次列出的結果：成員，加上列的過程中遇到的第一個錯（單一行程讀不了、解不開；那一個跳過，其餘照列）。
+#[derive(Debug, Default)]
+pub struct Listing {
+    pub members: Vec<Member>,
+    pub error: Option<String>,
+}
+
+/// 列出 `/proc` 底下所有看得到的行程。開不了 `/proc` 本身是 `Err`（整輪停，不回空清單）。
+/// 單一行程剛好不在了（`ENOENT`／`ESRCH`）略過、不算錯；其他讀錯或解不開：跳過那一個、記進 `error`，其餘照列：
+/// 別人的一個行程不該讓保底層整個失效，但也不能靜靜跳過。
+pub fn list_members() -> io::Result<Listing> {
+    let mut listing = Listing::default();
     for entry in fs::read_dir("/proc")? {
-        let entry = entry?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse().ok())
-        else {
-            continue;
+        let pid = match entry {
+            Ok(entry) => match entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+            {
+                Some(pid) => pid,
+                None => continue,
+            },
+            Err(err) => {
+                listing
+                    .error
+                    .get_or_insert(format!("讀 /proc 的一筆：{err}"));
+                continue;
+            }
         };
-        if let Some(member) = read_member(pid)? {
-            members.push(member);
+        match read_member(pid) {
+            Ok(Some(member)) => listing.members.push(member),
+            Ok(None) => {}
+            Err(err) => {
+                listing.error.get_or_insert(format!("讀 {pid}：{err}"));
+            }
         }
     }
-    Ok(members)
+    Ok(listing)
 }
 
 /// 送訊號的結果。
@@ -122,21 +152,29 @@ impl Sweep {
 /// 列不出成員（`list` 回錯誤）就停，錯記在 `error`：不當成「沒有成員」。
 pub fn sweep(
     host: libc::pid_t,
-    mut list: impl FnMut() -> io::Result<Vec<Member>>,
+    mut list: impl FnMut() -> io::Result<Listing>,
     mut kill: impl FnMut(&Member) -> Kill,
 ) -> Sweep {
     let mut result = Sweep::default();
     let mut seen: Vec<(libc::pid_t, u64)> = Vec::new();
-    let mut fresh = |seen: &[(libc::pid_t, u64)]| -> io::Result<Vec<Member>> {
-        Ok(list()?
+    let mut fresh = |seen: &[(libc::pid_t, u64)]| -> io::Result<(Vec<Member>, Option<String>)> {
+        let listing = list()?;
+        let members = listing
+            .members
             .into_iter()
             .filter(|m| m.session == host && m.pid != host && !m.zombie)
             .filter(|m| !seen.contains(&(m.pid, m.start)))
-            .collect())
+            .collect();
+        Ok((members, listing.error))
     };
     for _ in 0..MAX_ROUNDS {
         let members = match fresh(&seen) {
-            Ok(members) => members,
+            Ok((members, error)) => {
+                if let Some(error) = error {
+                    result.error.get_or_insert(error);
+                }
+                members
+            }
             Err(err) => {
                 result.error.get_or_insert(format!("列不出行程：{err}"));
                 return result;
@@ -174,7 +212,12 @@ pub fn sweep(
         }
     }
     match fresh(&seen) {
-        Ok(left) => result.left = left.iter().map(|m| m.pid).collect(),
+        Ok((left, error)) => {
+            result.left = left.iter().map(|m| m.pid).collect();
+            if let Some(error) = error {
+                result.error.get_or_insert(error);
+            }
+        }
         Err(err) => {
             result.error.get_or_insert(format!("列不出行程：{err}"));
         }
@@ -301,8 +344,11 @@ mod tests {
         }
     }
 
-    fn ok(members: Vec<Member>) -> io::Result<Vec<Member>> {
-        Ok(members)
+    fn ok(members: Vec<Member>) -> io::Result<Listing> {
+        Ok(Listing {
+            members,
+            error: None,
+        })
     }
 
     /// 給 `kill_member_with` 用的把手：隨便一個開著的 fd。
@@ -481,6 +527,43 @@ mod tests {
         assert!(parse_stat("42 (x) S 1 2").is_none());
     }
 
+    /// 行程名可以不是合法 UTF-8（`prctl(PR_SET_NAME)` 設什麼都行）：讀位元組照樣解得出來。
+    #[test]
+    fn u2_parses_stat_with_a_name_that_is_not_utf8() {
+        let mut line = b"42 (".to_vec();
+        line.extend_from_slice(&[0xff, 0xfe, b')', 0x80]);
+        line.extend_from_slice(b") S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22");
+        let parsed = parse_stat(&line).unwrap();
+        assert_eq!((parsed.pid, parsed.session, parsed.start), (42, 3, 19));
+        // 名字之後的欄位不是 UTF-8 才是真的解不開。
+        let mut broken = b"42 (x) S 1 2 3".to_vec();
+        broken.push(0xff);
+        assert!(parse_stat(&broken).is_none());
+    }
+
+    /// 清單裡夾一個單一行程讀錯的（`error`）：其餘成員照樣被送到，錯留在結果裡、值得寫稽核；掃描沒有停。
+    #[test]
+    fn one_unreadable_process_does_not_stop_the_sweep() {
+        let sent = RefCell::new(Vec::new());
+        let result = sweep(
+            50,
+            || {
+                Ok(Listing {
+                    members: vec![member(7, 50), member(8, 50)],
+                    error: Some("讀 99：解不開 /proc/99/stat".into()),
+                })
+            },
+            |m| {
+                sent.borrow_mut().push(m.pid);
+                Kill::Sent
+            },
+        );
+        assert_eq!(*sent.borrow(), vec![7, 8]);
+        assert_eq!(result.signalled, vec![7, 8]);
+        assert!(result.error.as_deref().unwrap().contains("99"));
+        assert!(result.worth_recording());
+    }
+
     /// U3：再核的判斷：不在了、換了行程（啟動時間不同）、換了 session、變成殭屍，都不算成員。
     #[test]
     fn u3_still_member_checks_every_field() {
@@ -641,11 +724,15 @@ mod tests {
             let leader = libc::fork();
             assert!(leader >= 0);
             if leader == 0 {
-                libc::close(fds[0]);
+                // 測試行程的 fd 副本不留在這三個不會 exec 的行程裡（別的測試等某條管線 EOF 時會被拖住）：領頭只留管線寫端，成員一個都不留。
+                let keep = fds[1] as libc::c_uint;
+                libc::syscall(libc::SYS_close_range, 3u32, keep.wrapping_sub(1), 0u32);
+                libc::syscall(libc::SYS_close_range, keep + 1, u32::MAX, 0u32);
                 libc::setsid();
                 for i in 0..2 {
                     let child = libc::fork();
                     if child == 0 {
+                        libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
                         if i == 1 {
                             libc::setpgid(0, 0);
                         }
@@ -699,9 +786,12 @@ mod tests {
         }
         let leader_alive = alive(leader);
         let survivors: Vec<_> = pids.iter().filter(|pid| alive(**pid)).collect();
-        // 清掉領頭，不留行程：成員已死（領頭的殭屍），領頭 SIGKILL 之後收屍。
-        // SAFETY：只動這個測試自己 fork 出來的領頭。
+        // 清掉領頭，不留行程：成員已死（領頭的殭屍），領頭 SIGKILL 之後收屍；掃描壞了而成員還活著時也一併送 SIGKILL。
+        // SAFETY：只動這個測試自己 fork 出來的行程。
         unsafe {
+            for pid in pids {
+                libc::kill(pid, libc::SIGKILL);
+            }
             libc::kill(leader, libc::SIGKILL);
             libc::waitpid(leader, std::ptr::null_mut(), 0);
         }
@@ -727,7 +817,9 @@ mod tests {
         assert_eq!(read.pid, me);
         // SAFETY：`getsid(0)` 只回自己的 session。
         assert_eq!(read.session, unsafe { libc::getsid(0) });
-        assert!(list_members().unwrap().iter().any(|m| m.pid == me));
+        let listing = list_members().unwrap();
+        assert!(listing.members.iter().any(|m| m.pid == me));
+        assert!(listing.error.is_none(), "{:?}", listing.error);
         assert_eq!(read_member(i32::MAX).unwrap(), None);
     }
 }

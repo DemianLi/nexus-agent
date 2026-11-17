@@ -718,7 +718,7 @@ mod group {
 
     /// 被 spawner 的單次模式包起來的 server：`--exec` 的 `setsid` 在領頭是組長、不是 session 長時回 `EPERM`，
     /// 沒有控制終端就留在宿主的 session 裡跑（#2920）。起得來、孫行程也收得掉。核心沒有 Landlock 時 `--exec` 起不來，這裡紅，不跳過。
-    /// 測試行程有控制終端時（從終端機直接跑 `cargo test`）spawner 會拒絕，這條也紅；CI 與容器裡沒有控制終端。
+    /// 測試行程有控制終端時（從終端機直接跑 `cargo test`）spawner 會拒絕，這條跳過並印原因；`CI` 有設時不跳過、直接紅。CI 與容器裡沒有控制終端。
     #[test]
     fn reap_收掉被_spawner_exec_包起來的整組() {
         // 測試行程自己有控制終端時（從終端機直接跑 `cargo test`），spawner 照設計拒絕：跳過並說明原因。
