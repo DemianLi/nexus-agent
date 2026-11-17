@@ -34,6 +34,7 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import { fromLoggedMessage, inheritedEventCount } from '@nexus/core';
+import { SessionNotFoundError } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
@@ -75,6 +76,34 @@ export function inheritedStashNames(events: readonly SessionEvent[]): ReadonlySe
     }
   }
   return names;
+}
+
+/**
+ * 冷讀祖先的 header 時，活的目錄找不到就退回已刪除存放區（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）。
+ *
+ * 祖先被刪之後它的日誌搬進了存放區；分叉出來的子會話還要沿它往上找外溢檔（外溢檔本身不搬，見 `operations.md`），
+ * 所以 header 也要找得到，不然祖先鏈在那一格斷掉、更早的外溢檔就讀不到。讀不到就照樣回 undefined。
+ *
+ * @param readLive - 活的目錄的冷讀（找不到回 undefined）。
+ * @param deletedDirectory - 已刪除存放區裡這個專案格的目錄。
+ */
+export function withDeletedFallback(
+  readLive: (threadId: string) => Promise<StoredSessionHeader | undefined>,
+  deletedDirectory: string,
+  openDeleted: (directory: string) => {
+    open(id: string, mode: 'read'): Promise<{ header: StoredSessionHeader }>;
+  },
+): (threadId: string) => Promise<StoredSessionHeader | undefined> {
+  return async (threadId) => {
+    const live = await readLive(threadId);
+    if (live !== undefined) return live;
+    try {
+      return (await openDeleted(deletedDirectory).open(threadId, 'read')).header;
+    } catch (error: unknown) {
+      if (error instanceof SessionNotFoundError) return undefined;
+      throw error;
+    }
+  };
 }
 
 /**

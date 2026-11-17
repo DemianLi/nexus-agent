@@ -120,7 +120,7 @@ import {
 } from './session-header-metadata.js';
 import { installFailLoud } from './fail-loud.js';
 import type { FailLoudProcess } from './fail-loud.js';
-import { forkAncestors, inheritedStashNames } from './fork-stash.js';
+import { forkAncestors, inheritedStashNames, withDeletedFallback } from './fork-stash.js';
 import { createProcessShutdown, PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import {
@@ -1134,6 +1134,7 @@ async function startServer(
   // 已刪除存放區（#2957）：路徑與寬限天數起動期讀一次。落盤關掉就沒有會話可刪，不接。啟動先恢復意圖，再看路徑有沒有被改過。
   const deletionStore = startupSetting(plugins, threadDeletionStorePlugin);
   const deletedDefaultRoot = join(resolveHarnessHome(env), DELETED_STORE_DIR_NAME);
+  const deletedStoreRoot = deletionStore.path ?? deletedDefaultRoot;
   const threadDeletions =
     sessionLogDir === undefined
       ? undefined
@@ -1885,9 +1886,17 @@ async function startServer(
           sessionStore !== undefined && history?.header.isSeeded === true
             ? {
                 names: inheritedStashNames(history.events),
-                sessions: (await forkAncestors(history.header, coldSessionHeader, warn)).map(
-                  (ancestor) => `${sessionStore.directory}\0${ancestor}`,
-                ),
+                sessions: (
+                  await forkAncestors(
+                    history.header,
+                    withDeletedFallback(
+                      coldSessionHeader,
+                      join(deletedStoreRoot, projectKey(cwd)),
+                      (directory) => openJsonlSessionStore({ directory }),
+                    ),
+                    warn,
+                  )
+                ).map((ancestor) => `${sessionStore.directory}\0${ancestor}`),
               }
             : undefined;
         built = await assembly.create(

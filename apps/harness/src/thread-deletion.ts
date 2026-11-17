@@ -42,7 +42,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
-import { sessionDirectoryName } from '@nexus/core';
+import { isSubagentSessionHeader, sessionDirectoryName } from '@nexus/core';
 
 import { syncDirectory, writeAtomic } from './atomic-file.js';
 import {
@@ -384,8 +384,14 @@ export async function planItems(projectDir: string, threadId: string): Promise<D
   for (let grew = true; grew;) {
     grew = false;
     for (const { header } of sessions) {
+      // 只收子代理：分叉出去的子會話是獨立的 thread，不跟著搬（它帶 `parentSession` 但不是子代理）。
       const parent = header.parentSession;
-      if (parent !== undefined && ids.has(parent) && !ids.has(header.id)) {
+      if (
+        parent !== undefined &&
+        isSubagentSessionHeader(header) &&
+        ids.has(parent) &&
+        !ids.has(header.id)
+      ) {
         ids.add(header.id);
         grew = true;
       }
