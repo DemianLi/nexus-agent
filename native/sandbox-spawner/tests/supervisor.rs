@@ -4359,22 +4359,24 @@ fn an_unpaired_conversation_has_no_pair_in_the_audit() {
 // 不留 `sleep` 在測試機上（腳本的 `sleep` 只有 60 秒，是最後一道保險）。
 
 /// 一個 MCP server 的腳本：起一個孫行程、把孫行程的 pid 寫進 `$1`。`$2` 是模式：
-/// `threads-outlive-leader` server 本身換成 `leader_exits member`（主執行緒結束、執行緒還在；pid 檔寫的是 server 自己，沒有孫行程）；
-/// `leader-exits` 領頭先結束；`setsid` 孫行程自己開 session；`ignore-term` 領頭與孫行程都忽略 SIGTERM（忽略跨 `exec` 繼承），
+/// `threads-outlive-leader` 孫行程是 `leader_exits member`（主執行緒結束、執行緒還在），server 本身 `exec sleep`；
+/// `leader-exits` 領頭先結束；`setsid` 孫行程自己開 session，另外先起一個留在 session 裡的 `sleep`，pid 寫進 `$1.kept`；`ignore-term` 領頭與孫行程都忽略 SIGTERM（忽略跨 `exec` 繼承），
 /// 這樣「保底層改送 SIGTERM」的改動收不掉它們。
 fn server_script(dir: &Path) -> PathBuf {
     let path = dir.join("server.sh");
     std::fs::write(
         &path,
         format!(
-            "#!/bin/sh\ncase \"$2\" in\n  threads-outlive-leader) exec '{}' member \"$1\" ;;\nesac\n",
+            "#!/bin/sh\ncase \"$2\" in\n  threads-outlive-leader) '{}' member \"$1\" & exec /bin/sleep 60 ;;\nesac\n",
             example("leader_exits").display()
         ) + "\
          case \"$2\" in\n\
            ignore-term) trap '' TERM ;;\n\
          esac\n\
          case \"$2\" in\n\
-           setsid) setsid /bin/sleep 60 & ;;\n\
+           setsid) /bin/sleep 60 &\n\
+                   echo $! > \"$1.kept.tmp\" && mv \"$1.kept.tmp\" \"$1.kept\"\n\
+                   setsid /bin/sleep 60 & ;;\n\
            *) /bin/sleep 60 & ;;\n\
          esac\n\
          echo $! > \"$1\"\n\
@@ -4414,6 +4416,10 @@ fn stdio_host_wrapped(
     let script = server_script(&dir);
     let grandchild_file = dir.join("grandchild.pid");
     let mut args: Vec<String> = flags.iter().map(|f| f.to_string()).collect();
+    // 帶 --exit-after-spawn 的宿主要等孫行程的 pid 檔寫好才結束，否則掃描可能沒東西可掃；pid 檔路徑在這裡才定，所以由這裡補 --exit-when-file。
+    if flags.iter().any(|f| f.starts_with("--exit-after-spawn")) {
+        args.push(format!("--exit-when-file={}", grandchild_file.display()));
+    }
     args.push("--".into());
     let spawner = Path::new(SUPERVISOR)
         .parent()
@@ -4530,7 +4536,8 @@ fn assert_sweep_left_the_conversation_alone(conversation_pid: i32, line: &str) {
 }
 
 /// 宿主被殺，它 session 裡的 server 領頭與孫行程都被收掉，稽核有 `sweep`；同時已 `up` 的對話行程不受影響。
-/// server 與孫行程都忽略 SIGTERM，所以只有掃描送的 SIGKILL 收得掉它們（`sweep::kill_member`）。
+/// server 與孫行程都忽略 SIGTERM，所以只有 SIGKILL 收得掉它們：孫行程只有掃描會送（`sweep::kill_member`），`signalled` 一定有它。
+/// 領頭是宿主那條執行緒的直接子行程：它若設了 `PR_SET_PDEATHSIG`，宿主一死就被核心殺掉，可能早於掃描，所以不斷言領頭在不在 `signalled`。
 #[test]
 fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
     let (host, file, _dir) = stdio_host(&[], Some("ignore-term"));
@@ -4548,10 +4555,7 @@ fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
     );
     let line = sweep_line(&h);
     let signalled = signalled_pids(&line);
-    assert!(
-        signalled.contains(&leader) && signalled.contains(&grandchild),
-        "{line}"
-    );
+    assert!(signalled.contains(&grandchild), "{line}");
     assert!(line.contains("\"left\":[]"), "{line}");
     assert_sweep_left_the_conversation_alone(conversation, &line);
     finish(h);
@@ -4611,7 +4615,8 @@ fn zu5_a_member_whose_main_thread_exited_is_swept_in_a_real_session() {
     assert!(wait_until(|| gone(member)), "{member} 還在：{result:?}");
 }
 
-/// 整條路：宿主被殺，它 session 裡主執行緒已結束、執行緒還在的 server 照樣被收，稽核的 `signalled` 有它。
+/// 整條路：宿主被殺，它 session 裡主執行緒已結束、執行緒還在的行程照樣被收，稽核的 `signalled` 有它。
+/// 這個行程是 server 的孫行程（server 本身是 `sleep`），不是宿主的直接子行程，不受 `PR_SET_PDEATHSIG` 影響，只有掃描收得掉它。
 /// 這支的斷言有兩半：`gone`（行程真的死了）與稽核 `signalled`（掃真的送到了，不靠 `gone` 的判斷）。
 #[test]
 fn zs1_a_server_whose_main_thread_exited_is_swept_when_the_host_dies() {
@@ -4623,24 +4628,23 @@ fn zs1_a_server_whose_main_thread_exited_is_swept_when_the_host_dies() {
     let socket = h.up("a");
     let conversation = logged_pid(&socket, "pid");
     let host = nth_logged(&h, "start", 0);
-    let server = grandchild_pid(&file);
-    assert_eq!(
-        server,
-        nth_logged(&h, "spawned", 0),
-        "pid 檔寫的該是 server 自己"
-    );
-    wait_until_zombie_with_threads(server);
-    assert!(!gone(server));
+    let member = grandchild_pid(&file);
+    let leader = nth_logged(&h, "spawned", 0);
+    assert_ne!(member, leader, "pid 檔寫的該是孫行程，不是 server 自己");
+    assert_eq!(session_of(member), Some(host), "孫行程要留在宿主的 session");
+    wait_until_zombie_with_threads(member);
+    assert!(!gone(member));
     kill(host as u32, libc::SIGKILL);
-    assert!(wait_until(|| gone(server)), "{server} 還在");
+    assert!(wait_until(|| gone(member)), "{member} 還在");
     let line = sweep_line(&h);
-    assert!(signalled_pids(&line).contains(&server), "{line}");
+    assert!(signalled_pids(&line).contains(&member), "{line}");
     assert!(line.contains("\"left\":[]"), "{line}");
     assert_sweep_left_the_conversation_alone(conversation, &line);
     finish(h);
 }
 
-/// 宿主自己結束（不經收線），結果同宿主被殺。
+/// 宿主自己結束（不經收線），結果同宿主被殺。宿主等孫行程的 pid 檔寫好才結束（`--exit-when-file`），所以掃描一定有孫行程可收。
+/// 領頭若設了 `PR_SET_PDEATHSIG`，可能在掃描前就被核心殺掉，所以不斷言它在不在 `signalled`。
 #[test]
 fn s1e_a_host_that_exits_by_itself_leaves_nothing_behind() {
     let (host, file, _dir) = stdio_host(&["--exit-after-spawn"], None);
@@ -4654,7 +4658,9 @@ fn s1e_a_host_that_exits_by_itself_leaves_nothing_behind() {
         wait_until(|| gone(leader) && gone(grandchild)),
         "{leader} {grandchild}"
     );
-    assert!(sweep_line(&h).contains("\"left\":[]"));
+    let line = sweep_line(&h);
+    assert!(signalled_pids(&line).contains(&grandchild), "{line}");
+    assert!(line.contains("\"left\":[]"), "{line}");
     finish(h);
 }
 
@@ -4816,6 +4822,8 @@ fn a_host_killed_before_ready_is_still_swept() {
 
 /// 自己 `setsid` 的後代掃不到，這是已知的界線（`docs/host-mcp.md`）；這條釘住它，改了要連文件一起改。
 /// 殺宿主之前先等孫行程的 session 欄真的換掉，不靠 pid 檔出現：腳本是先寫 pid、`setsid` 才換，不等的話孫行程可能還在宿主的 session 裡、被掃掉，測試就靠運氣才綠。
+/// 腳本另外先起一個留在 session 裡的 `sleep`（`$1.kept`）：它一定被掃到，`signalled` 有它、沒有自己換 session 的那個，
+/// 這樣「掃描有跑、只是這個後代不在範圍」不靠領頭有沒有先被 `PR_SET_PDEATHSIG` 殺掉來證明。
 #[test]
 fn l1_a_descendant_that_calls_setsid_is_out_of_reach() {
     let (host, file, _dir) = stdio_host(&[], Some("setsid"));
@@ -4824,14 +4832,24 @@ fn l1_a_descendant_that_calls_setsid_is_out_of_reach() {
         ..Options::default()
     });
     let (host, leader, grandchild) = host_with_members(&h, &file);
+    // `kept` 先於孫行程的 pid 檔寫好（腳本的順序），`grandchild_pid` 讀到之後它一定在。
+    let kept: i32 = std::fs::read_to_string(format!("{}.kept", file.display()))
+        .expect("kept 檔")
+        .trim()
+        .parse()
+        .expect("kept pid");
+    assert_eq!(session_of(kept), Some(host), "kept 要留在宿主的 session");
     assert!(
         wait_until(|| session_of(grandchild).is_some_and(|session| session != host)),
         "孫行程 {grandchild} 的 session 一直沒換掉：{:?}",
         session_of(grandchild)
     );
     kill(host as u32, libc::SIGKILL);
-    assert!(wait_until(|| gone(leader)));
-    sweep_line(&h);
+    assert!(wait_until(|| gone(leader) && gone(kept)));
+    let line = sweep_line(&h);
+    let signalled = signalled_pids(&line);
+    assert!(signalled.contains(&kept), "{line}");
+    assert!(!signalled.contains(&grandchild), "{line}");
     let survived = !gone(grandchild);
     kill(grandchild as u32, libc::SIGKILL);
     // 宿主重起後新一代的 server 也有一個自己 `setsid` 的孫行程：停機前先收掉，不留在測試機上。
