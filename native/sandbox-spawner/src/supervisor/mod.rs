@@ -2115,12 +2115,17 @@ impl Supervisor {
             self.reap();
         }
         if stop {
-            if self.shutting_down {
-                say!("停機中又收到停止訊號，所有對話行程與宿主當場 SIGKILL");
-                self.kill_children();
-            } else {
-                self.begin_shutdown(0);
-            }
+            self.on_stop_signal();
+        }
+    }
+
+    /// 這一輪讀到停止訊號。
+    fn on_stop_signal(&mut self) {
+        if self.shutting_down {
+            say!("停機中又收到停止訊號，所有對話行程與宿主當場 SIGKILL");
+            self.kill_children();
+        } else {
+            self.begin_shutdown(0);
         }
     }
 
@@ -3039,6 +3044,37 @@ mod tests {
         );
         assert_eq!(supervisor.deaths[DeathCause::Crash as usize - 1], 1);
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 外部停止訊號開始的停機：第一輪開始停機、不殺；第二輪才當場 SIGKILL。
+    #[test]
+    fn a_stop_signal_that_starts_the_shutdown_kills_only_on_the_second_round() {
+        let (mut supervisor, _, _) = with_a_pair("stop-external", PairState::Bound);
+        supervisor.on_stop_signal();
+        assert!(supervisor.shutting_down);
+        assert_eq!(supervisor.conversations[0].cause, None);
+        supervisor.on_stop_signal();
+        assert_eq!(
+            supervisor.conversations[0].cause,
+            Some(DeathCause::Shutdown)
+        );
+        assert_eq!(supervisor.exit_code, 0);
+    }
+
+    /// 內部觸發的停機（這裡用 `begin_shutdown(4)`）之後，第一輪外部停止訊號照梯度走、不殺；第二輪才當場 SIGKILL。結束碼還是內部記的 4。
+    #[test]
+    fn the_first_stop_signal_after_an_internal_shutdown_does_not_kill() {
+        let (mut supervisor, _, _) = with_a_pair("stop-internal", PairState::Bound);
+        supervisor.begin_shutdown(4);
+        supervisor.on_stop_signal();
+        assert_eq!(supervisor.conversations[0].cause, None);
+        assert_eq!(supervisor.compositions[0].cause, None);
+        supervisor.on_stop_signal();
+        assert_eq!(
+            supervisor.conversations[0].cause,
+            Some(DeathCause::Shutdown)
+        );
+        assert_eq!(supervisor.exit_code, 4);
     }
 
     /// 停機中，還沒有死因的一對被 [`Supervisor::kill_children`] 當場殺掉：兩邊都記 `shutdown`，不管誰先收屍，
