@@ -13,18 +13,6 @@ use super::redact::{check_value, Use};
 use super::supervisor::Policy;
 use crate::json::{Map, Value};
 
-/// 協定層、一定不是秘密的 header（小寫）：值不進遮蔽器。
-/// 宿主收到的是 TS 解好的成品，分不出一個值是憑證還是字面值，所以其餘的 header 值一律當秘密收；
-/// 不排除這幾個，`Accept: application/json` 這種每個回應都可能出現的字串會把成功結果裡的同樣字串遮掉。
-/// 過渡：憑證引用接到宿主（PR-E）之後，宿主只收憑證解出來的值，這份清單就拿掉。
-pub const LITERAL_HEADERS: [&str; 5] = [
-    "accept",
-    "content-type",
-    "user-agent",
-    "accept-language",
-    "mcp-protocol-version",
-];
-
 /// stdio 這一代從起行程到列完工具最久等多久（[`Stdio::startup_timeout`] 的預設），逾時就收掉子行程、回連線失敗。server 讀了 stdin 卻不回時，沒有它 `Open` 永遠不回、子行程活到橋關閉。
 /// 30 秒：夠 `npx` 冷啟動下載與起動；dsh 的 `startupTimeoutMs` 沒有預設值（要使用者設，`mcp-client/src/index.ts:170`），TS 這邊沒有上限。HTTP 沒有這個上限。
 pub const STDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -46,6 +34,9 @@ pub enum Connection {
     Http {
         url: Url,
         headers: Vec<(HeaderName, HeaderValue)>,
+        /// `headers` 裡值來自憑證的名字與各自的 prefix（值以 prefix 開頭，之後那一段是憑證本身）。每個名字在 `headers` 裡剛好一個。
+        /// header 裡只有這些值進遮蔽器；沒列的 header 是字面值，不遮。
+        credential_headers: Vec<(HeaderName, String)>,
     },
     Stdio(Stdio),
 }
@@ -98,11 +89,18 @@ impl std::fmt::Debug for Server {
         let mut shown = f.debug_struct("Server");
         shown.field("name", &self.name);
         match &self.connection {
-            Connection::Http { headers, .. } => {
+            Connection::Http {
+                headers,
+                credential_headers,
+                ..
+            } => {
                 let header_names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+                let credential_names: Vec<&str> =
+                    credential_headers.iter().map(|(n, _)| n.as_str()).collect();
                 shown
                     .field("url", &self.shown_url())
-                    .field("headers", &header_names);
+                    .field("headers", &header_names)
+                    .field("credential_headers", &credential_names);
             }
             Connection::Stdio(stdio) => {
                 shown.field("stdio", stdio);
@@ -136,10 +134,17 @@ fn boolean(fields: &Map<String, Value>, name: &str, default: bool) -> Result<boo
     })
 }
 
-/// HTTP 那一支：`url` 與 `headers`。回解好的連線，與池的鍵裡 `connection` 那一段。
+/// 需要列進 `credentialHeaders` 的 header：值沒有不是憑證的用法。
+const AUTHORIZATION_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
+
+/// HTTP 那一支：`url`、`headers`、`credentialHeaders`。回解好的連線，與池的鍵裡 `connection` 那一段。
+///
+/// `headers` 是 TS 代入之後的成品字串；`credentialHeaders` 標出其中哪幾個 header 的值來自憑證，與各自的 prefix。
+/// `headers` 不是空的時候這個欄位一定要在（沒有憑證就給 `{}`），`headers` 裡的 `authorization`／`proxy-authorization` 一定要列進去：
+/// 漏送時憑證不進遮蔽器、也沒有任何東西報錯，所以缺了就整列拒絕。錯誤訊息只講欄位與名字，不帶值。
 fn parse_http(connection: &Map<String, Value>) -> Result<(Connection, Map<String, Value>), String> {
     for key in connection.keys() {
-        if !["transport", "url", "headers"].contains(&key.as_str()) {
+        if !["transport", "url", "headers", "credentialHeaders"].contains(&key.as_str()) {
             return Err(format!("connection 不認得的欄位 {key}"));
         }
     }
@@ -152,7 +157,10 @@ fn parse_http(connection: &Map<String, Value>) -> Result<(Connection, Map<String
     if !url.username().is_empty() || url.password().is_some() {
         return Err("connection.url 不能帶帳號或密碼".into());
     }
-    let mut headers = Vec::new();
+    let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
+    // 與 `headers` 同序，放 TS 給的原字串（`HeaderValue` 的位元組是它的 UTF-8），切 prefix 用。
+    let mut header_texts: Vec<&str> = Vec::new();
+    let mut header_keys: Vec<&str> = Vec::new();
     match connection.get("headers") {
         None => {}
         Some(Value::Object(map)) => {
@@ -162,25 +170,103 @@ fn parse_http(connection: &Map<String, Value>) -> Result<(Connection, Map<String
                 let text = match value {
                     Value::String(text) => text,
                     Value::Object(_) => {
-                        return Err(format!("connection.headers.{key} 是憑證引用：宿主還不支援"))
+                        return Err(format!(
+                            "connection.headers.{key} 要是 TS 代入之後的字串，憑證用 connection.credentialHeaders 標出"
+                        ))
                     }
                     _ => return Err(format!("connection.headers.{key} 要是字串")),
                 };
                 let value = HeaderValue::from_str(text)
                     .map_err(|_| format!("connection.headers.{key} 的值不是合法的 header 值"))?;
                 headers.push((header, value));
+                header_texts.push(text);
+                header_keys.push(key);
             }
         }
         Some(_) => return Err("connection.headers 要是物件".into()),
     }
-    // 照 zod 解出來的樣子編。
+    let mut credential_headers: Vec<(HeaderName, String)> = Vec::new();
+    match connection.get("credentialHeaders") {
+        None if !headers.is_empty() => return Err(
+            "connection.headers 不是空的時候 connection.credentialHeaders 要在（沒有憑證就給 {}）"
+                .into(),
+        ),
+        None => {}
+        Some(Value::Object(map)) => {
+            for (key, prefix) in map {
+                let Value::String(prefix) = prefix else {
+                    return Err(format!(
+                        "connection.credentialHeaders.{key} 要是字串（prefix，沒有就空字串）"
+                    ));
+                };
+                let name = HeaderName::from_bytes(key.as_bytes()).map_err(|_| {
+                    format!("connection.credentialHeaders 的鍵 {key} 不是合法的 header 名")
+                })?;
+                if credential_headers.iter().any(|(n, _)| *n == name) {
+                    return Err(format!(
+                        "connection.credentialHeaders 的 {key} 與另一個鍵是同一個 header 名（不分大小寫）"
+                    ));
+                }
+                let mut hits = headers.iter().enumerate().filter(|(_, (n, _))| *n == name);
+                let (at, _) = hits.next().ok_or_else(|| {
+                    format!("connection.credentialHeaders 的 {key} 不在 connection.headers 裡")
+                })?;
+                if hits.next().is_some() {
+                    return Err(format!(
+                        "connection.credentialHeaders 的 {key} 對到 connection.headers 裡不只一個鍵（大小寫不同的同名 header）"
+                    ));
+                }
+                let header = header_keys[at];
+                let Some(rest) = header_texts[at].strip_prefix(prefix.as_str()) else {
+                    return Err(format!(
+                        "connection.headers.{header}（憑證）不是以 connection.credentialHeaders.{key} 的 prefix 開頭"
+                    ));
+                };
+                let checked = check_value(rest, Use::Header).map_err(|rejection| {
+                    rejection.message(&format!("connection.headers.{header}（憑證）"))
+                })?;
+                // 檢查的是修剪後的值，遮蔽器收的是 prefix 之後的原樣：兩者不同，server 回顯修剪後的值就遮不到。TS 只交修剪過的。
+                if checked != rest {
+                    return Err(format!(
+                        "connection.headers.{header}（憑證）prefix 之後頭尾有空白，宿主只收 TS 修剪過的值"
+                    ));
+                }
+                credential_headers.push((name, prefix.clone()));
+            }
+        }
+        Some(_) => return Err("connection.credentialHeaders 要是物件".into()),
+    }
+    for (key, (name, _)) in header_keys.iter().zip(&headers) {
+        if AUTHORIZATION_HEADERS.contains(&name.as_str())
+            && !credential_headers.iter().any(|(n, _)| n == name)
+        {
+            return Err(format!(
+                "connection.headers.{key} 是授權用的 header，要列進 connection.credentialHeaders"
+            ));
+        }
+    }
+    // 照 zod 解出來的樣子編；`credentialHeaders` 是宿主自己的欄位：空的與沒給是同一份，所以空的不進鍵；名字取小寫、值是 prefix，鍵的順序不計。
     let mut key = Map::new();
     key.insert("transport".into(), "http".into());
     key.insert("url".into(), connection["url"].clone());
     if let Some(headers) = connection.get("headers") {
         key.insert("headers".into(), headers.clone());
     }
-    Ok((Connection::Http { url, headers }, key))
+    if !credential_headers.is_empty() {
+        let mut listed = Map::new();
+        for (name, prefix) in &credential_headers {
+            listed.insert(name.as_str().into(), prefix.clone().into());
+        }
+        key.insert("credentialHeaders".into(), Value::Object(listed));
+    }
+    Ok((
+        Connection::Http {
+            url,
+            headers,
+            credential_headers,
+        },
+        key,
+    ))
 }
 
 /// 絕對路徑、不含 NUL。
@@ -422,13 +508,18 @@ impl Server {
 
     /// 這一列要遮的字串，交給 [`super::redact::Redactor::new`]。
     ///
-    /// - HTTP：header 的值，除了 [`LITERAL_HEADERS`] 那幾個：值取原始位元組，能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串；
-    ///   `Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）。網址的 query：整串、每個值的原樣與解碼後。
-    ///   reqwest 的錯誤會印出帶 query 的網址。
+    /// - HTTP：`credentialHeaders` 標的那幾個 header：整個值與 prefix 之後的憑證本身（server 可能只回顯憑證），各取原始位元組，
+    ///   能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串；`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段
+    ///   （沒寫 prefix 時 scheme 在憑證值裡，server 常只回顯 token）。沒標的 header 是字面值，不收。
+    ///   網址的 query：整串、每個值的原樣與解碼後，設定格式分不出哪些是憑證所以一律收，代價是多遮、不會漏。reqwest 的錯誤會印出帶 query 的網址。
     /// - stdio：只收 `credentialEnv` 標的那幾個環境變數的值。TS 看得到每個值的來源，`PATH`、`HOME` 這類清洗後的父環境不進，否則成功結果會被遮得不能用。
     pub fn secrets(&self) -> Vec<String> {
-        let (url, headers) = match &self.connection {
-            Connection::Http { url, headers } => (url, headers),
+        let (url, headers, credential_headers) = match &self.connection {
+            Connection::Http {
+                url,
+                headers,
+                credential_headers,
+            } => (url, headers, credential_headers),
             Connection::Stdio(stdio) => {
                 return stdio
                     .credential_env
@@ -440,19 +531,25 @@ impl Server {
             }
         };
         let mut out: Vec<String> = Vec::new();
-        for (name, value) in headers {
-            if LITERAL_HEADERS.contains(&name.as_str()) {
+        for (name, prefix) in credential_headers {
+            let Some((_, value)) = headers.iter().find(|(n, _)| n == name) else {
                 continue;
+            };
+            let Ok(text) = std::str::from_utf8(value.as_bytes()) else {
+                continue;
+            };
+            let mut parts = vec![text];
+            if !prefix.is_empty() {
+                parts.extend(text.strip_prefix(prefix.as_str()));
             }
-            let bytes = value.as_bytes();
-            let mut texts = Vec::new();
-            if let Ok(text) = std::str::from_utf8(bytes) {
-                texts.push(text.to_string());
+            let mut texts: Vec<String> = Vec::new();
+            for part in parts {
+                texts.push(part.to_string());
+                if !part.is_ascii() {
+                    texts.push(part.bytes().map(char::from).collect());
+                }
             }
-            if !bytes.is_ascii() {
-                texts.push(bytes.iter().map(|&b| b as char).collect::<String>());
-            }
-            if matches!(name.as_str(), "authorization" | "proxy-authorization") {
+            if AUTHORIZATION_HEADERS.contains(&name.as_str()) {
                 let tokens: Vec<String> = texts
                     .iter()
                     .filter_map(|t| t.split_once(char::is_whitespace))
@@ -460,6 +557,8 @@ impl Server {
                     .collect();
                 texts.extend(tokens);
             }
+            texts.sort();
+            texts.dedup();
             out.extend(texts);
         }
         if let Some(query) = url.query() {
