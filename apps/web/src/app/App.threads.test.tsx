@@ -886,6 +886,34 @@ describe('以前的會話', () => {
       await waitFor(() => expect(server.sent).toEqual(['還能說嗎']));
     });
 
+    it('封存目前這條：留在這條、輸入框上方出現已封存的橫幅（#2958）', async () => {
+      setSeq(0);
+      const server = managed();
+      render(<App client={server.client} />);
+      fireEvent.click(within(await openList()).getByText(UNTITLED_THREAD_LABEL));
+      // 換了會話，側欄的清單會重掛：每次重新拿。
+      await waitFor(async () =>
+        expect(
+          within(await openList()).getByText(UNTITLED_THREAD_LABEL).closest('button')?.disabled,
+        ).toBe(true),
+      );
+      const list = await openList();
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('封存');
+      const banner = await screen.findByTestId('archived-banner');
+      expect(within(banner).getByText('此會話已封存')).toBeTruthy();
+      expect(server.calls).toContain('archive 目標那條');
+      // 還在同一條：那一列仍是目前這條，只是移到了「已封存」。
+      fireEvent.click(
+        within(screen.getByTestId('thread-archived')).getByRole('button', { name: '已封存（1）' }),
+      );
+      expect(
+        within(screen.getByTestId('thread-archived'))
+          .getByText(UNTITLED_THREAD_LABEL)
+          .closest('button')?.disabled,
+      ).toBe(true);
+    });
+
     it('封存的會話不能釘：server 回 thread_archived，說出原因', async () => {
       setSeq(0);
       const server = managed({ archived: ['目標那條'] });
