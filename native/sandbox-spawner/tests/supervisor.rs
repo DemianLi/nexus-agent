@@ -7,6 +7,7 @@
 #![cfg(target_os = "linux")]
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
+use nexus_sandbox_spawner::supervisor::sweep;
 use nexus_sandbox_spawner::supervisor_protocol::{
     decode_front_event, encode_front_request, DeathCause, FrontEvent, FrontRequest, OpenMode,
     PROTOCOL_VERSION,
@@ -49,12 +50,12 @@ fn wait_until(mut done: impl FnMut() -> bool) -> bool {
 }
 
 /// 行程不在了，或已經死了、只剩還沒被收的 zombie。
+/// 「死了」寫在這裡、不叫 `Member::dead()`：測試的判斷要獨立於被測的判斷。`Z` 而且還有執行緒的行程沒死（主執行緒結束、其他執行緒在跑）。
+/// 讀不了不是「不在」：`read_member` 回錯就 panic。
 fn gone(pid: i32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Err(_) => true,
-        Ok(stat) => stat
-            .rsplit_once(") ")
-            .is_some_and(|(_, rest)| rest.starts_with('Z')),
+    match sweep::read_member(pid).unwrap() {
+        None => true,
+        Some(member) => member.zombie && member.threads <= 1,
     }
 }
 
@@ -4358,13 +4359,17 @@ fn an_unpaired_conversation_has_no_pair_in_the_audit() {
 // 不留 `sleep` 在測試機上（腳本的 `sleep` 只有 60 秒，是最後一道保險）。
 
 /// 一個 MCP server 的腳本：起一個孫行程、把孫行程的 pid 寫進 `$1`。`$2` 是模式：
+/// `threads-outlive-leader` server 本身換成 `leader_exits member`（主執行緒結束、執行緒還在；pid 檔寫的是 server 自己，沒有孫行程）；
 /// `leader-exits` 領頭先結束；`setsid` 孫行程自己開 session；`ignore-term` 領頭與孫行程都忽略 SIGTERM（忽略跨 `exec` 繼承），
 /// 這樣「保底層改送 SIGTERM」的改動收不掉它們。
 fn server_script(dir: &Path) -> PathBuf {
     let path = dir.join("server.sh");
     std::fs::write(
         &path,
-        "#!/bin/sh\n\
+        format!(
+            "#!/bin/sh\ncase \"$2\" in\n  threads-outlive-leader) exec {} member \"$1\" ;;\nesac\n",
+            example("leader_exits").display()
+        ) + "\
          case \"$2\" in\n\
            ignore-term) trap '' TERM ;;\n\
          esac\n\
@@ -4547,6 +4552,89 @@ fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
         signalled.contains(&leader) && signalled.contains(&grandchild),
         "{line}"
     );
+    assert!(line.contains("\"left\":[]"), "{line}");
+    assert_sweep_left_the_conversation_alone(conversation, &line);
+    finish(h);
+}
+
+/// 等到成員真的是「主執行緒結束、其他執行緒還在」：`stat` 是 `Z`、執行緒數至少 2。不等的話掃到的是主執行緒還沒結束的普通行程，
+/// 測試會綠，卻沒測到 #2942 要補的洞。
+fn wait_until_zombie_with_threads(pid: i32) {
+    assert!(
+        wait_until(|| sweep::read_member(pid)
+            .unwrap()
+            .is_some_and(|m| m.zombie && m.threads >= 2)),
+        "{pid} 沒變成主執行緒結束、執行緒還在的樣子：{:?}",
+        sweep::read_member(pid)
+    );
+}
+
+/// 自成 session 的 `leader_exits leader`：收尾時殺它那一組（成員也在組內）再收屍，測試中途 panic 也照跑。
+struct SessionLeader(Child);
+
+impl Drop for SessionLeader {
+    fn drop(&mut self) {
+        let pid = self.0.id() as i32;
+        // SAFETY：只送訊號給這個測試自己起的行程與它那一組。
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// 真的 `/proc`、真的 `pidfd`：session 裡有一個主執行緒已結束、執行緒還在的成員，掃要送到它、收得掉它，不當成殭屍濾掉。
+#[test]
+fn zu5_a_member_whose_main_thread_exited_is_swept_in_a_real_session() {
+    let file = temp_dir("zu5").join("member.pid");
+    let leader = SessionLeader(
+        Command::new(example("leader_exits"))
+            .arg("leader")
+            .arg(&file)
+            .spawn()
+            .unwrap(),
+    );
+    let leader_pid = leader.0.id() as i32;
+    let member = grandchild_pid(&file);
+    wait_until_zombie_with_threads(member);
+    assert_eq!(session_of(member), Some(leader_pid));
+    assert!(!gone(member));
+    let result = sweep::sweep(leader_pid, sweep::list_members, |m| {
+        sweep::kill_member(leader_pid, m)
+    });
+    assert!(result.signalled.contains(&member), "{result:?}");
+    assert!(
+        result.left.is_empty() && result.error.is_none() && !result.fallback,
+        "{result:?}"
+    );
+    assert!(wait_until(|| gone(member)), "{member} 還在：{result:?}");
+}
+
+/// 整條路：宿主被殺，它 session 裡主執行緒已結束、執行緒還在的 server 照樣被收，稽核的 `signalled` 有它。
+/// 這支的斷言有兩半：`gone`（行程真的死了）與稽核 `signalled`（掃真的送到了，不靠 `gone` 的判斷）。
+#[test]
+fn zs1_a_server_whose_main_thread_exited_is_swept_when_the_host_dies() {
+    let (host, file, _dir) = stdio_host(&[], Some("threads-outlive-leader"));
+    let mut h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let socket = h.up("a");
+    let conversation = logged_pid(&socket, "pid");
+    let host = nth_logged(&h, "start", 0);
+    let server = grandchild_pid(&file);
+    assert_eq!(
+        server,
+        nth_logged(&h, "spawned", 0),
+        "pid 檔寫的該是 server 自己"
+    );
+    wait_until_zombie_with_threads(server);
+    assert!(!gone(server));
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(server)), "{server} 還在");
+    let line = sweep_line(&h);
+    assert!(signalled_pids(&line).contains(&server), "{line}");
     assert!(line.contains("\"left\":[]"), "{line}");
     assert_sweep_left_the_conversation_alone(conversation, &line);
     finish(h);
