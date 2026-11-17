@@ -1,5 +1,11 @@
-import type { CommandOutcome, ThreadActivityKind, ThreadListResult, WireClient } from '@nexus/wire';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type {
+  CommandOutcome,
+  DeletedThread,
+  ThreadActivityKind,
+  ThreadListResult,
+  WireClient,
+} from '@nexus/wire';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ThreadDirectory } from '@/features/threads/use-directory';
 import { refusalText } from '@/shared/connection/refusal-text';
@@ -7,6 +13,7 @@ import { explainThreadFailure, normalizeTitle, readSets } from '@/features/threa
 import type {
   ThreadActionResult,
   ArchiveAnswer,
+  ThreadDeletion,
   ThreadManagement,
 } from '@/features/threads/management';
 
@@ -108,7 +115,34 @@ export async function forkThread(
 }
 
 /**
- * 側欄的釘選、封存、改名（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。回 `undefined` 就是這一檔沒有這個功能：
+ * 已刪除清單（#2958）：`undefined` 是還沒讀到，`null` 是這台 server 沒接（被拒或讀不到），那就沒有刪除這件事。
+ * **只在掛上時與刪除、復原之後讀**，不跟著列表讀：列表每次重抓都多打一次 `GET /deleted-threads` 沒有必要。
+ */
+function useDeletedThreads(client: WireClient) {
+  const [deleted, setDeleted] = useState<readonly DeletedThread[] | null | undefined>(undefined);
+  const ticket = useRef(0);
+  const reload = useCallback(() => {
+    ticket.current += 1;
+    const mine = ticket.current;
+    void (async () => {
+      let items: readonly DeletedThread[] | null;
+      try {
+        const outcome = await client.deletedThreads();
+        items = outcome.kind === 'ok' ? outcome.result.items : null;
+      } catch {
+        items = null;
+      }
+      if (mine === ticket.current) setDeleted(items);
+    })();
+  }, [client]);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  return { deleted, reload };
+}
+
+/**
+ * 側欄的釘選、封存、改名、刪除（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。回 `undefined` 就是這一檔沒有這個功能：
  * 列表沒帶釘選與封存兩個集合（還沒實作的 server）、還在讀、或讀失敗，側欄什麼都不多畫。規則見 `features/threads/management.ts`。
  *
  * **集合一律以 server 為準**：畫面上的集合是最近一份列表帶的；動作成功就拿回應裡的整份取代（蓋在列表上，直到下一份列表
@@ -216,6 +250,34 @@ export function useThreadManagement(
     [client, accept],
   );
 
+  const { deleted, reload: reloadDeleted } = useDeletedThreads(client);
+  const onDelete = useCallback(
+    async (threadId: string) => {
+      const result = await settle(() => client.threadDelete(threadId));
+      if ('message' in result) return result.message;
+      refresh();
+      reloadDeleted();
+      return undefined;
+    },
+    [client, refresh, reloadDeleted],
+  );
+  const onRestore = useCallback(
+    async (threadId: string) => {
+      const result = await settle(() => client.threadRestore(threadId));
+      // 過期、已經復原過：那一列都不該再掛在「最近刪除」，照 server 的清單重讀。
+      reloadDeleted();
+      if ('message' in result) return result.message;
+      refresh();
+      return undefined;
+    },
+    [client, refresh, reloadDeleted],
+  );
+  const deletion = useMemo<ThreadDeletion | undefined>(
+    () =>
+      deleted === undefined || deleted === null ? undefined : { deleted, onDelete, onRestore },
+    [deleted, onDelete, onRestore],
+  );
+
   const pinned = current?.pinned ?? sets?.pinned;
   const archived = current?.archived ?? sets?.archived;
   // 列表已經追上的（列上的標題等於我們頂著的）不再蓋；列表上沒有那一列的留著。
@@ -240,7 +302,19 @@ export function useThreadManagement(
             onArchive,
             onUnarchive,
             onRename,
+            ...(deletion === undefined ? {} : { deletion }),
           },
-    [pinned, archived, archivedIds, titles, onPin, onUnpin, onArchive, onUnarchive, onRename],
+    [
+      pinned,
+      archived,
+      archivedIds,
+      titles,
+      onPin,
+      onUnpin,
+      onArchive,
+      onUnarchive,
+      onRename,
+      deletion,
+    ],
   );
 }

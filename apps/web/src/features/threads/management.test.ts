@@ -2,6 +2,7 @@ import type { ThreadSummary } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
+  daysLeft,
   explainArchiveStop,
   explainThreadFailure,
   normalizeTitle,
@@ -92,5 +93,30 @@ describe('explainArchiveStop（#633）：封存還在跑的會話前，確認框
     [[], '「甲」正在執行。要停掉再封存嗎？'],
   ] as const)('%j', (activity, text) => {
     expect(explainArchiveStop('甲', activity)).toBe(text);
+  });
+});
+
+describe('刪除與復原的失敗（#2958）', () => {
+  it.each([
+    ['thread_busy', '這條會話另一件事還沒做完，稍後再試。'],
+    ['thread_deleted', '這條會話已經刪掉了。'],
+    ['thread_not_deleted', '這條會話不在最近刪除裡（可能已經復原了）。'],
+    ['restore_expired', '已經過了寬限期，不能復原。'],
+    ['restore_conflict', '原處已經有同一條會話，沒有復原。'],
+  ])('%s', (code, text) => {
+    expect(explainThreadFailure({ code })).toBe(text);
+  });
+});
+
+describe('daysLeft（#2958）：最近刪除每列寫的「還剩 N 天」', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  it.each([
+    ['剛好三天', 3 * DAY, 3],
+    ['三天多一毫秒', 3 * DAY + 1, 4],
+    ['只剩一毫秒', 1, 1],
+    ['剛好到期', 0, 0],
+    ['過期了', -DAY, 0],
+  ])('%s', (_case, left, days) => {
+    expect(daysLeft(1_000_000 + left, 1_000_000)).toBe(days);
   });
 });

@@ -1,4 +1,4 @@
-import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
+import type { DeletedThread, ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
 import { X } from 'lucide-react';
 import {
   Fragment,
@@ -12,6 +12,7 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
+import { toast } from 'sonner';
 
 import { Chevron } from '@/shared/blocks/chevron';
 import {
@@ -42,7 +43,7 @@ import {
   SEARCH_DEBOUNCE_MS,
 } from '@/features/threads/search';
 import type { ContentMatches } from '@/features/threads/search';
-import { splitThreads } from '@/features/threads/management';
+import { daysLeft, splitThreads } from '@/features/threads/management';
 import type { ThreadManagement, ThreadSections } from '@/features/threads/management';
 import { ROW_STATUS_TEXT, withPlaceholders } from '@/features/threads/status';
 import type { RowStatus } from '@/features/threads/status';
@@ -126,6 +127,7 @@ export function ThreadList({
   const needle = query.trim();
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [deletedOpen, setDeletedOpen] = useState(false);
   // **被拒不記住**：`rejected` 分不出是沒開、查詢不合法還是搜尋失敗（線上只帶訊息），記住的話偶發失敗一次這一頁就再也不搜
   // 內容。所以每一次都問，被拒或失敗就那一次只比標題。
   // 伺服器回過一次「有」之前不畫骨架：出廠是關的，先畫的話每次搜都會閃一下，「搜不到」也晚一拍（同 #653 的選單）。
@@ -169,13 +171,22 @@ export function ThreadList({
   const pending = searching && on && current === undefined;
   const fellBack = current !== undefined && 'fallback' in current;
   const fallback = fellBack ? current.fallback : null;
+  const deletion = management?.deletion;
+  // 已經在已刪除清單上的不列：刪除成功到列表重抓回來之間，那一列不會留在原處。
+  const deletedIds = useMemo(
+    () => new Set((deletion?.deleted ?? []).map((item) => item.threadId)),
+    [deletion?.deleted],
+  );
   const visible =
     listing.kind === 'ok'
       ? withCurrentTitle(
           withPlaceholders(listing.result.items, placeholders),
           currentThreadId,
           currentTitle,
-        ).filter((item) => !blankOf(item) || item.threadId === currentThreadId)
+        ).filter(
+          (item) =>
+            (!blankOf(item) || item.threadId === currentThreadId) && !deletedIds.has(item.threadId),
+        )
       : [];
   const view = mergeThreadSearch(
     visible,
@@ -204,6 +215,8 @@ export function ThreadList({
       onArchive: (id, options) => latest.current.management!.onArchive(id, options),
       onUnarchive: (id) => latest.current.management!.onUnarchive(id),
       onRename: (id) => setRenamingId(id),
+      onDelete: (id) =>
+        latest.current.management?.deletion?.onDelete(id) ?? Promise.resolve(undefined),
     }),
     [],
   );
@@ -372,7 +385,23 @@ export function ThreadList({
           )}
         </>
       )}
-      {management !== undefined && <ThreadRowMenus handle={menuHandle} actions={menuActions} />}
+      {listing.kind === 'ok' && deletion !== undefined && needle === '' && (
+        <RecentlyDeleted
+          items={deletion.deleted}
+          open={deletedOpen}
+          onOpenChange={setDeletedOpen}
+          expanded={expanded.get(DELETED_GROUP)}
+          onExpand={(count) => expand(DELETED_GROUP, count)}
+          onRestore={deletion.onRestore}
+        />
+      )}
+      {management !== undefined && (
+        <ThreadRowMenus
+          handle={menuHandle}
+          actions={menuActions}
+          deletable={deletion !== undefined}
+        />
+      )}
     </SidebarGroup>
   );
 }
@@ -473,19 +502,19 @@ function BucketGroup({
  *
  * 按下後焦點移到新露出的第一列，鍵盤與報讀器不用回頭找；那一列是目前這條（按鈕停用）時落在它的「⋯」，沒有選單時落在下一列。
  */
-function LimitedRows({
+function LimitedRows<T>({
   items,
   mustShow,
   expanded,
   onExpand,
   row,
 }: {
-  readonly items: readonly ThreadSummary[];
-  readonly mustShow: (item: ThreadSummary) => boolean;
+  readonly items: readonly T[];
+  readonly mustShow: (item: T) => boolean;
   /** 按過「顯示更多」之後的水位；沒按過是 `undefined`。 */
   readonly expanded: number | undefined;
   readonly onExpand: (count: number) => void;
-  readonly row: (item: ThreadSummary) => ReactNode;
+  readonly row: (item: T) => ReactNode;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
   const focusFrom = useRef<number | null>(null);
@@ -520,6 +549,89 @@ function LimitedRows({
         </Button>
       )}
     </>
+  );
+}
+
+/** 「最近刪除」在水位表裡的組名；時間組的 bucket 與 `archived` 都不會是這個字。 */
+const DELETED_GROUP = 'deleted';
+
+/**
+ * 「最近刪除」（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)）：清單最下面、「已封存」之後，預設收著、標題帶份數。
+ * 每列寫標題與還剩幾天，唯一的動作是「復原」；列本身點不開（檔案已經搬走了）。過了寬限期的不列：server 也不會再給，
+ * 這一頁開著跨過到期時刻的那幾列在這裡濾掉。搜尋時不畫：它不在搜尋的範圍裡。
+ */
+function RecentlyDeleted({
+  items,
+  open,
+  onOpenChange,
+  expanded,
+  onExpand,
+  onRestore,
+}: {
+  readonly items: readonly DeletedThread[];
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly expanded: number | undefined;
+  readonly onExpand: (count: number) => void;
+  readonly onRestore: (threadId: string) => Promise<string | undefined>;
+}) {
+  const now = Date.now();
+  const live = items.filter((item) => item.expiresAt > now);
+  if (live.length === 0) return null;
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={onOpenChange}
+      className="mt-2"
+      data-testid="thread-deleted"
+    >
+      <CollapsibleTrigger className="group text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-ui font-medium lg:min-h-8">
+        <Chevron className="size-3.5" />
+        最近刪除（{live.length}）
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <LimitedRows
+          items={live}
+          mustShow={() => false}
+          expanded={expanded}
+          onExpand={onExpand}
+          row={(item) => {
+            const label = threadLabel(item.title, true);
+            return (
+              <SidebarMenuItem key={item.threadId} className="flex items-center gap-2 px-2 py-1">
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-muted-foreground truncate">{label}</span>
+                  <span className="text-muted-foreground text-tip">
+                    還剩 {daysLeft(item.expiresAt, now)} 天
+                  </span>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 shrink-0 px-2 text-ui lg:h-8"
+                  aria-label={`復原「${label}」`}
+                  onClick={() => {
+                    void onRestore(item.threadId).then(
+                      (message) => {
+                        if (message !== undefined)
+                          toast.error('復原失敗', { description: message });
+                      },
+                      (error: unknown) => {
+                        toast.error('復原失敗', {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      },
+                    );
+                  }}
+                >
+                  復原
+                </Button>
+              </SidebarMenuItem>
+            );
+          }}
+        />
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -656,6 +768,7 @@ const ThreadRow = memo(function ThreadRow({
             pinned: management.pinned,
             archived: management.archived,
             current,
+            active: status !== undefined && status !== 'completed',
           }}
         />
       )}
