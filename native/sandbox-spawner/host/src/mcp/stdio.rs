@@ -127,22 +127,22 @@ pub async fn reap(mut guard: ChildGuard) {
     let Some(pid) = guard.id() else {
         return;
     };
-    match exited_within(pid, STDIN_GRACE).await {
-        // 領頭自己結束了：落到下面的 SIGKILL。
-        Leader::Exited => {}
+    let state = match exited_within(pid, STDIN_GRACE).await {
         Leader::Running => {
             kill_group(pid, libc::SIGTERM);
-            exited_within(pid, TERM_GRACE).await;
+            exited_within(pid, TERM_GRACE).await
         }
-        // 查不了狀態就不能保證領頭還沒被收屍，pgid 可能已被重用：不對 pgid 送訊號，只殺領頭再 `wait`。
-        Leader::Unknown => {
-            let Some(mut child) = guard.0.take() else {
-                return;
-            };
-            let _ = child.kill();
-            wait_killed(child, pid).await;
+        // 領頭自己結束了，或查不了狀態（下面處理）。
+        other => other,
+    };
+    // 任何一段查不了狀態，就不能保證領頭還沒被收屍，pgid 可能已被重用：不對 pgid 送訊號，只殺領頭再 `wait`。
+    if let Leader::Unknown = state {
+        let Some(mut child) = guard.0.take() else {
             return;
-        }
+        };
+        let _ = child.kill();
+        wait_killed(child, pid).await;
+        return;
     }
     let Some(child) = guard.0.take() else {
         return;
@@ -171,7 +171,7 @@ fn kill_group(pgid: u32, sig: libc::c_int) {
     if pgid <= 1 {
         return;
     }
-    // SAFETY：呼叫端保證 `pgid` 是還沒 `wait` 的領頭的 pid。它自成一組（`spawn` 的 `process_group(0)`），組號就是這個 pid；pid 沒被收屍前不會被重用，`-pgid` 不會指到別組。
+    // SAFETY：呼叫端保證 `pgid` 是還沒 `wait` 的領頭的 pid。它自成一個 session 也就自成一組（`spawn` 的 `setsid`），組號就是這個 pid；pid 沒被收屍前不會被重用，`-pgid` 不會指到別組。
     unsafe { libc::kill(-pgid, sig) };
 }
 

@@ -1,10 +1,9 @@
 //! `nexus_host::mcp` 的 stdio（#2570 D2b-2）：設定怎麼收、環境怎麼交給子行程、成功結果裡的憑證值遮掉、收線不留子行程。
 //! 假 server 是一段 `/bin/sh`：照行讀 JSON-RPC、回罐頭回應，不依賴別的執行環境。
 
-#![cfg(target_os = "linux")]
-
 mod common;
 /// spawner 在另一個 package，見 `spawner_common::built`。
+#[cfg(target_os = "linux")]
 #[path = "../../tests/common/mod.rs"]
 mod spawner_common;
 
@@ -527,302 +526,312 @@ fn reap_收掉忽略_sigterm_的子行程() {
     });
 }
 
-/// 孫行程的 pid 檔：孫行程是 `sh -c 'echo $$ > 檔; exec sleep 300'`，所以檔裡的 pid 就是那個 `sleep`。
-fn grandchild_script(file: &str, prefix: &str) -> String {
-    format!("{prefix}/bin/sh -c 'echo $$ > {file}; exec /bin/sleep 300' & ")
-}
+/// 整組收線的測試：用 `/proc` 與 `setsid`，只在 Linux 上編。
+#[cfg(target_os = "linux")]
+mod group {
+    use super::*;
 
-/// 等孫行程把 pid 寫進檔。等不到就明確失敗，不跳過（`setsid` 不在的環境也在這裡紅）。
-fn read_grandchild(file: &str) -> i32 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(pid) = std::fs::read_to_string(file)
-            .ok()
-            .and_then(|text| text.trim().parse::<i32>().ok())
-        {
-            return pid;
-        }
-        assert!(
+    /// 孫行程的 pid 檔：孫行程是 `sh -c 'echo $$ > 檔; exec sleep 300'`，所以檔裡的 pid 就是那個 `sleep`。
+    fn grandchild_script(file: &str, prefix: &str) -> String {
+        format!("{prefix}/bin/sh -c 'echo $$ > {file}; exec /bin/sleep 300' & ")
+    }
+
+    /// 等孫行程把 pid 寫進檔。等不到就明確失敗，不跳過（`setsid` 不在的環境也在這裡紅）。
+    fn read_grandchild(file: &str) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(pid) = std::fs::read_to_string(file)
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                return pid;
+            }
+            assert!(
             Instant::now() < deadline,
             "孫行程 5 秒內沒有寫下 pid（腳本沒跑起來；包 `--exec` 的測試多半是 spawner 起不來，用到 setsid 的測試要確認它在 PATH 上）：{file}"
         );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// 行程不在了（Linux）：沒有 `/proc/<pid>`，或已是殭屍（孤兒的收屍者在容器裡可能不收）。
-fn process_gone(pid: i32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Err(_) => true,
-        Ok(stat) => stat
-            .rsplit(')')
-            .next()
-            .is_some_and(|rest| rest.trim_start().starts_with('Z')),
-    }
-}
-
-fn wait_gone(pid: i32, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    while Instant::now() < deadline {
-        if process_gone(pid) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    process_gone(pid)
-}
-
-/// 領頭不理 stdin 的 EOF、孫行程也在同一組：SIGTERM 送整組，兩個都要收掉。
-#[test]
-fn reap_收掉領頭與同組的孫行程() {
-    let file = pid_file("group-term");
-    let _ = std::fs::remove_file(&file);
-    reap_runtime().block_on(async {
-        let script = format!("{}wait", grandchild_script(&file, ""));
-        let (stdio::Spawned { child, transport }, leader) =
-            spawn_for_reap("/bin/sh", &["-c", &script]);
-        let grandchild = read_grandchild(&file);
-        drop(transport);
-        stdio::reap(child).await;
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-        // SAFETY: 訊號 0 只查行程在不在；`reap` 回來時領頭已經 `wait` 過，查不到才對。
-        assert_eq!(unsafe { libc::kill(leader, 0) }, -1, "領頭還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
-
-/// 領頭讀到 EOF 自己結束，孫行程還活著：領頭一結束就整組 SIGKILL，不再等寬限。
-#[test]
-fn reap_領頭自己結束時仍收掉孫行程() {
-    let file = pid_file("group-leader-exit");
-    let _ = std::fs::remove_file(&file);
-    reap_runtime().block_on(async {
-        let script = format!("{}read line", grandchild_script(&file, ""));
-        let (stdio::Spawned { child, transport }, _) = spawn_for_reap("/bin/sh", &["-c", &script]);
-        let grandchild = read_grandchild(&file);
-        drop(transport);
-        let started = Instant::now();
-        stdio::reap(child).await;
-        let took = started.elapsed();
-        assert!(took < STDIN_GRACE, "領頭已經結束還在等寬限：{took:?}");
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
-
-/// 領頭與孫行程都忽略 SIGTERM：等滿兩段寬限之後整組 SIGKILL。
-#[test]
-fn reap_孫行程忽略_sigterm_也被_sigkill_收掉() {
-    let file = pid_file("group-kill");
-    let _ = std::fs::remove_file(&file);
-    reap_runtime().block_on(async {
-        let script = format!("{}wait", grandchild_script(&file, "trap '' TERM; "));
-        let (stdio::Spawned { child, transport }, _) = spawn_for_reap("/bin/sh", &["-c", &script]);
-        let grandchild = read_grandchild(&file);
-        drop(transport);
-        let started = Instant::now();
-        stdio::reap(child).await;
-        let took = started.elapsed();
-        assert!(
-            took >= STDIN_GRACE + TERM_GRACE,
-            "SIGTERM 之後沒有等滿 TERM_GRACE 就 SIGKILL：{took:?}"
-        );
-        assert!(
-            took < REAP_BUDGET + Duration::from_millis(500),
-            "超過收線預算：{took:?}"
-        );
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
-
-/// guard 被丟下（例如連線的 future 在握手中途被丟下）：drop 把整組收掉。
-#[test]
-fn drop_守衛時整組收掉() {
-    let file = pid_file("group-drop");
-    let _ = std::fs::remove_file(&file);
-    reap_runtime().block_on(async {
-        let script = format!("{}wait", grandchild_script(&file, ""));
-        let (spawned, leader) = spawn_for_reap("/bin/sh", &["-c", &script]);
-        let grandchild = read_grandchild(&file);
-        drop(spawned);
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-        assert!(wait_gone(leader, Duration::from_secs(3)), "領頭還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
-
-/// 領頭先結束、孫行程還在時 drop：一樣整組收掉（不能因為領頭已結束就放過孫行程）。
-#[test]
-fn drop_守衛時領頭已結束仍收掉孫行程() {
-    let file = pid_file("group-drop-exited");
-    let _ = std::fs::remove_file(&file);
-    reap_runtime().block_on(async {
-        let script = grandchild_script(&file, "");
-        let (spawned, leader) = spawn_for_reap("/bin/sh", &["-c", &format!("{script}exit 0")]);
-        let grandchild = read_grandchild(&file);
-        // 領頭已結束但還沒被 `wait`（殭屍）。
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !std::fs::read_to_string(format!("/proc/{leader}/stat")).is_ok_and(|stat| {
-            stat.rsplit(')')
-                .next()
-                .is_some_and(|r| r.trim_start().starts_with('Z'))
-        }) {
-            assert!(Instant::now() < deadline, "領頭沒有結束");
             std::thread::sleep(Duration::from_millis(20));
         }
-        drop(spawned);
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
+    }
 
-/// 子行程自成一個 session：領頭同時是組長與 session 長，而且都不是宿主的。
-#[test]
-fn spawn_子行程自成一個_session() {
-    reap_runtime().block_on(async {
-        let (stdio::Spawned { child, transport }, pid) = spawn_for_reap("/bin/sleep", &["30"]);
-        // SAFETY: 只查行程群組 id。
-        let (group, own) = unsafe { (libc::getpgid(pid), libc::getpgid(0)) };
-        assert_eq!(group, pid, "子行程不是自己那一組的領頭");
-        assert_ne!(group, own, "子行程跟宿主同一組");
-        // SAFETY: 只查 session id。
-        let (session, own_session) = unsafe { (libc::getsid(pid), libc::getsid(0)) };
-        assert_eq!(session, pid, "子行程不是 session 長");
-        assert_ne!(session, own_session, "子行程跟宿主同一個 session");
-        drop(transport);
-        stdio::reap(child).await;
-    });
-}
-
-/// 被 spawner 的單次模式包起來的 server：`--exec` 自己要 `setsid`，領頭不是 session 長時會 125 結束，
-/// 所以宿主起的子行程必須已經是 session 長。起得來、孫行程也收得掉。核心沒有 Landlock 時 `--exec` 起不來，這裡紅，不跳過。
-#[test]
-fn reap_收掉被_spawner_exec_包起來的整組() {
-    let file = pid_file("group-exec");
-    let _ = std::fs::remove_file(&file);
-    let dir = std::path::Path::new(&file).parent().unwrap();
-    let write_root = std::fs::canonicalize(dir).expect("寫根");
-    let spawner = spawner_common::built("nexus-sandbox-spawner");
-    let mut args: Vec<String> = vec!["--exec".into()];
-    for root in ["/usr", "/bin", "/lib", "/lib64"] {
-        if let Ok(real) = std::fs::canonicalize(root) {
-            args.extend(["--read".into(), real.to_string_lossy().into_owned()]);
+    /// 行程不在了（Linux）：沒有 `/proc/<pid>`，或已是殭屍（孤兒的收屍者在容器裡可能不收）。
+    fn process_gone(pid: i32) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => true,
+            Ok(stat) => stat
+                .rsplit(')')
+                .next()
+                .is_some_and(|rest| rest.trim_start().starts_with('Z')),
         }
     }
-    args.extend(["--write".into(), write_root.to_string_lossy().into_owned()]);
-    let script = format!("{}wait", grandchild_script(&file, ""));
-    args.extend(["--".into(), "/bin/sh".into(), "-c".into(), script]);
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    reap_runtime().block_on(async {
-        let (stdio::Spawned { child, transport }, _) =
-            spawn_for_reap(spawner.to_str().unwrap(), &args);
-        let grandchild = read_grandchild(&file);
-        drop(transport);
-        stdio::reap(child).await;
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
 
-/// 被 spawner 的 `--guard` 包起來的 server：guard 不 `setsid`，整組照樣收得掉。
-#[test]
-fn reap_收掉被_spawner_guard_包起來的整組() {
-    let file = pid_file("group-guard");
-    let _ = std::fs::remove_file(&file);
-    let spawner = spawner_common::built("nexus-sandbox-spawner");
-    let script = format!("{}wait", grandchild_script(&file, ""));
-    reap_runtime().block_on(async {
-        let (stdio::Spawned { child, transport }, _) = spawn_for_reap(
-            spawner.to_str().unwrap(),
-            &["--guard", "--", "/bin/sh", "-c", &script],
-        );
-        let grandchild = read_grandchild(&file);
-        drop(transport);
-        stdio::reap(child).await;
-        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
-    });
-    let _ = std::fs::remove_file(&file);
-}
-
-/// 負向：孫行程自己 `setsid` 換了組，收不到。這是接受的限制（`docs/host-mcp.md` 寫明），測試釘住行為，也防止哪天誤以為收得到。
-/// `setsid` 不在 PATH 上時紅（[`read_grandchild`] 等不到 pid），不跳過。
-#[test]
-fn reap_孫行程自己_setsid_收不到() {
-    let file = pid_file("group-setsid");
-    let _ = std::fs::remove_file(&file);
-    reap_runtime().block_on(async {
-        let script = format!("{}wait", grandchild_script(&file, "setsid "));
-        let (stdio::Spawned { child, transport }, _) = spawn_for_reap("/bin/sh", &["-c", &script]);
-        let grandchild = read_grandchild(&file);
-        drop(transport);
-        stdio::reap(child).await;
-        let survived = !process_gone(grandchild);
-        // SAFETY: 清掉這個測試自己造出來的行程，不留洩漏。
-        unsafe { libc::kill(grandchild, libc::SIGKILL) };
-        assert!(
-            survived,
-            "換了組的孫行程被收掉了：group 收得到的範圍變了，文件要跟著改"
-        );
-    });
-    let _ = std::fs::remove_file(&file);
-}
-
-fn vectors() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../credentials-vectors.json");
-    serde_json::from_str(&std::fs::read_to_string(path).expect("讀樣本檔")).expect("樣本檔是 JSON")
-}
-
-fn parse_connection(connection: &Value) -> Result<Server, String> {
-    Server::parse(&json!({ "serverName": "a", "connection": connection }))
-}
-
-/// TS 的 `hostStdioConnection` 輸出的那一列，宿主一律收（TS 的 `mcp-host-stdio-row.test.ts` 跑同一份 `stdioRow`）。
-#[test]
-fn 樣本_stdio_row_ts_交出的列宿主收得下() {
-    let doc = vectors();
-    let mut seen = 0;
-    for vector in doc["stdioRow"].as_array().expect("stdioRow") {
-        let name = vector["name"].as_str().expect("name");
-        let Some(row) = vector["ts"].get("row") else {
-            assert!(
-                vector["ts"]["error"].is_string(),
-                "{name}：要有 row 或 error"
-            );
-            continue;
-        };
-        let server = parse_connection(row).unwrap_or_else(|e| panic!("{name}：{e}"));
-        let Connection::Stdio(stdio) = &server.connection else {
-            panic!("{name}：要是 stdio");
-        };
-        assert_eq!(
-            stdio.credential_env,
-            row["credentialEnv"]
-                .as_array()
-                .expect("credentialEnv")
-                .iter()
-                .map(|v| v.as_str().expect("字串").to_string())
-                .collect::<Vec<_>>(),
-            "{name}"
-        );
-        seen += 1;
-    }
-    assert!(seen >= 5, "有 row 的樣本太少：{seen}");
-}
-
-#[test]
-fn 樣本_stdio_host_宿主自己的拒絕() {
-    let doc = vectors();
-    for vector in doc["stdioHost"].as_array().expect("stdioHost") {
-        let name = vector["name"].as_str().expect("name");
-        let result = parse_connection(&vector["connection"]);
-        match vector["error"].as_str() {
-            None => {
-                result.unwrap_or_else(|e| panic!("{name}：{e}"));
+    fn wait_gone(pid: i32, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if process_gone(pid) {
+                return true;
             }
-            Some(want) => {
-                let err = result.err().unwrap_or_else(|| panic!("{name}：要拒絕"));
-                assert!(err.contains(want), "{name}：{err} 不含 {want}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        process_gone(pid)
+    }
+
+    /// 領頭不理 stdin 的 EOF、孫行程也在同一組：SIGTERM 送整組，兩個都要收掉。
+    #[test]
+    fn reap_收掉領頭與同組的孫行程() {
+        let file = pid_file("group-term");
+        let _ = std::fs::remove_file(&file);
+        reap_runtime().block_on(async {
+            let script = format!("{}wait", grandchild_script(&file, ""));
+            let (stdio::Spawned { child, transport }, leader) =
+                spawn_for_reap("/bin/sh", &["-c", &script]);
+            let grandchild = read_grandchild(&file);
+            drop(transport);
+            stdio::reap(child).await;
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+            // SAFETY: 訊號 0 只查行程在不在；`reap` 回來時領頭已經 `wait` 過，查不到才對。
+            assert_eq!(unsafe { libc::kill(leader, 0) }, -1, "領頭還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// 領頭讀到 EOF 自己結束，孫行程還活著：領頭一結束就整組 SIGKILL，不再等寬限。
+    #[test]
+    fn reap_領頭自己結束時仍收掉孫行程() {
+        let file = pid_file("group-leader-exit");
+        let _ = std::fs::remove_file(&file);
+        reap_runtime().block_on(async {
+            let script = format!("{}read line", grandchild_script(&file, ""));
+            let (stdio::Spawned { child, transport }, _) =
+                spawn_for_reap("/bin/sh", &["-c", &script]);
+            let grandchild = read_grandchild(&file);
+            drop(transport);
+            let started = Instant::now();
+            stdio::reap(child).await;
+            let took = started.elapsed();
+            assert!(took < STDIN_GRACE, "領頭已經結束還在等寬限：{took:?}");
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// 領頭與孫行程都忽略 SIGTERM：等滿兩段寬限之後整組 SIGKILL。
+    #[test]
+    fn reap_孫行程忽略_sigterm_也被_sigkill_收掉() {
+        let file = pid_file("group-kill");
+        let _ = std::fs::remove_file(&file);
+        reap_runtime().block_on(async {
+            let script = format!("{}wait", grandchild_script(&file, "trap '' TERM; "));
+            let (stdio::Spawned { child, transport }, _) =
+                spawn_for_reap("/bin/sh", &["-c", &script]);
+            let grandchild = read_grandchild(&file);
+            drop(transport);
+            let started = Instant::now();
+            stdio::reap(child).await;
+            let took = started.elapsed();
+            assert!(
+                took >= STDIN_GRACE + TERM_GRACE,
+                "SIGTERM 之後沒有等滿 TERM_GRACE 就 SIGKILL：{took:?}"
+            );
+            assert!(
+                took < REAP_BUDGET + Duration::from_millis(500),
+                "超過收線預算：{took:?}"
+            );
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// guard 被丟下（例如連線的 future 在握手中途被丟下）：drop 把整組收掉。
+    #[test]
+    fn drop_守衛時整組收掉() {
+        let file = pid_file("group-drop");
+        let _ = std::fs::remove_file(&file);
+        reap_runtime().block_on(async {
+            let script = format!("{}wait", grandchild_script(&file, ""));
+            let (spawned, leader) = spawn_for_reap("/bin/sh", &["-c", &script]);
+            let grandchild = read_grandchild(&file);
+            drop(spawned);
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+            assert!(wait_gone(leader, Duration::from_secs(3)), "領頭還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// 領頭先結束、孫行程還在時 drop：一樣整組收掉（不能因為領頭已結束就放過孫行程）。
+    #[test]
+    fn drop_守衛時領頭已結束仍收掉孫行程() {
+        let file = pid_file("group-drop-exited");
+        let _ = std::fs::remove_file(&file);
+        reap_runtime().block_on(async {
+            let script = grandchild_script(&file, "");
+            let (spawned, leader) = spawn_for_reap("/bin/sh", &["-c", &format!("{script}exit 0")]);
+            let grandchild = read_grandchild(&file);
+            // 領頭已結束但還沒被 `wait`（殭屍）。
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !std::fs::read_to_string(format!("/proc/{leader}/stat")).is_ok_and(|stat| {
+                stat.rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            }) {
+                assert!(Instant::now() < deadline, "領頭沒有結束");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            drop(spawned);
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// 子行程自成一個 session：領頭同時是組長與 session 長，而且都不是宿主的。
+    #[test]
+    fn spawn_子行程自成一個_session() {
+        reap_runtime().block_on(async {
+            let (stdio::Spawned { child, transport }, pid) = spawn_for_reap("/bin/sleep", &["30"]);
+            // SAFETY: 只查行程群組 id。
+            let (group, own) = unsafe { (libc::getpgid(pid), libc::getpgid(0)) };
+            assert_eq!(group, pid, "子行程不是自己那一組的領頭");
+            assert_ne!(group, own, "子行程跟宿主同一組");
+            // SAFETY: 只查 session id。
+            let (session, own_session) = unsafe { (libc::getsid(pid), libc::getsid(0)) };
+            assert_eq!(session, pid, "子行程不是 session 長");
+            assert_ne!(session, own_session, "子行程跟宿主同一個 session");
+            drop(transport);
+            stdio::reap(child).await;
+        });
+    }
+
+    /// 被 spawner 的單次模式包起來的 server：`--exec` 自己要 `setsid`，領頭不是 session 長時會 125 結束，
+    /// 所以宿主起的子行程必須已經是 session 長。起得來、孫行程也收得掉。核心沒有 Landlock 時 `--exec` 起不來，這裡紅，不跳過。
+    #[test]
+    fn reap_收掉被_spawner_exec_包起來的整組() {
+        let file = pid_file("group-exec");
+        let _ = std::fs::remove_file(&file);
+        let dir = std::path::Path::new(&file).parent().unwrap();
+        let write_root = std::fs::canonicalize(dir).expect("寫根");
+        let spawner = spawner_common::built("nexus-sandbox-spawner");
+        let mut args: Vec<String> = vec!["--exec".into()];
+        for root in ["/usr", "/bin", "/lib", "/lib64"] {
+            if let Ok(real) = std::fs::canonicalize(root) {
+                args.extend(["--read".into(), real.to_string_lossy().into_owned()]);
+            }
+        }
+        args.extend(["--write".into(), write_root.to_string_lossy().into_owned()]);
+        let script = format!("{}wait", grandchild_script(&file, ""));
+        args.extend(["--".into(), "/bin/sh".into(), "-c".into(), script]);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        reap_runtime().block_on(async {
+            let (stdio::Spawned { child, transport }, _) =
+                spawn_for_reap(spawner.to_str().unwrap(), &args);
+            let grandchild = read_grandchild(&file);
+            drop(transport);
+            stdio::reap(child).await;
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// 被 spawner 的 `--guard` 包起來的 server：guard 不 `setsid`，整組照樣收得掉。
+    #[test]
+    fn reap_收掉被_spawner_guard_包起來的整組() {
+        let file = pid_file("group-guard");
+        let _ = std::fs::remove_file(&file);
+        let spawner = spawner_common::built("nexus-sandbox-spawner");
+        let script = format!("{}wait", grandchild_script(&file, ""));
+        reap_runtime().block_on(async {
+            let (stdio::Spawned { child, transport }, _) = spawn_for_reap(
+                spawner.to_str().unwrap(),
+                &["--guard", "--", "/bin/sh", "-c", &script],
+            );
+            let grandchild = read_grandchild(&file);
+            drop(transport);
+            stdio::reap(child).await;
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// 負向：孫行程自己 `setsid` 換了組，收不到。這是接受的限制（`docs/host-mcp.md` 寫明），測試釘住行為，也防止哪天誤以為收得到。
+    /// `setsid` 不在 PATH 上時紅（[`read_grandchild`] 等不到 pid），不跳過。
+    #[test]
+    fn reap_孫行程自己_setsid_收不到() {
+        let file = pid_file("group-setsid");
+        let _ = std::fs::remove_file(&file);
+        reap_runtime().block_on(async {
+            let script = format!("{}wait", grandchild_script(&file, "setsid "));
+            let (stdio::Spawned { child, transport }, _) =
+                spawn_for_reap("/bin/sh", &["-c", &script]);
+            let grandchild = read_grandchild(&file);
+            drop(transport);
+            stdio::reap(child).await;
+            let survived = !process_gone(grandchild);
+            // SAFETY: 清掉這個測試自己造出來的行程，不留洩漏。
+            unsafe { libc::kill(grandchild, libc::SIGKILL) };
+            assert!(
+                survived,
+                "換了組的孫行程被收掉了：group 收得到的範圍變了，文件要跟著改"
+            );
+        });
+        let _ = std::fs::remove_file(&file);
+    }
+
+    fn vectors() -> Value {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../credentials-vectors.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("讀樣本檔"))
+            .expect("樣本檔是 JSON")
+    }
+
+    fn parse_connection(connection: &Value) -> Result<Server, String> {
+        Server::parse(&json!({ "serverName": "a", "connection": connection }))
+    }
+
+    /// TS 的 `hostStdioConnection` 輸出的那一列，宿主一律收（TS 的 `mcp-host-stdio-row.test.ts` 跑同一份 `stdioRow`）。
+    #[test]
+    fn 樣本_stdio_row_ts_交出的列宿主收得下() {
+        let doc = vectors();
+        let mut seen = 0;
+        for vector in doc["stdioRow"].as_array().expect("stdioRow") {
+            let name = vector["name"].as_str().expect("name");
+            let Some(row) = vector["ts"].get("row") else {
+                assert!(
+                    vector["ts"]["error"].is_string(),
+                    "{name}：要有 row 或 error"
+                );
+                continue;
+            };
+            let server = parse_connection(row).unwrap_or_else(|e| panic!("{name}：{e}"));
+            let Connection::Stdio(stdio) = &server.connection else {
+                panic!("{name}：要是 stdio");
+            };
+            assert_eq!(
+                stdio.credential_env,
+                row["credentialEnv"]
+                    .as_array()
+                    .expect("credentialEnv")
+                    .iter()
+                    .map(|v| v.as_str().expect("字串").to_string())
+                    .collect::<Vec<_>>(),
+                "{name}"
+            );
+            seen += 1;
+        }
+        assert!(seen >= 5, "有 row 的樣本太少：{seen}");
+    }
+
+    #[test]
+    fn 樣本_stdio_host_宿主自己的拒絕() {
+        let doc = vectors();
+        for vector in doc["stdioHost"].as_array().expect("stdioHost") {
+            let name = vector["name"].as_str().expect("name");
+            let result = parse_connection(&vector["connection"]);
+            match vector["error"].as_str() {
+                None => {
+                    result.unwrap_or_else(|e| panic!("{name}：{e}"));
+                }
+                Some(want) => {
+                    let err = result.err().unwrap_or_else(|| panic!("{name}：要拒絕"));
+                    assert!(err.contains(want), "{name}：{err} 不含 {want}");
+                }
             }
         }
     }
