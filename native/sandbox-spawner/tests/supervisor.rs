@@ -4319,3 +4319,232 @@ fn an_unpaired_conversation_has_no_pair_in_the_audit() {
     let line = h.audit_line("\"thread\":\"x,exit:3\"");
     assert!(!line.contains("pair"), "{line}");
 }
+
+// ---- 宿主死掉時掃它 session 裡的行程（#2920） ----
+//
+// 宿主是 `host/examples/stdio_host.rs`：用真的 `stdio::spawn` 起一個 MCP server（`sh` 腳本），腳本再起一個孫行程。
+// server 與孫行程各自成一組、都留在宿主的 session 裡。
+
+/// 一個 MCP server 的腳本：起一個孫行程、把孫行程的 pid 寫進 `$1`。`$2` 是 `leader-exits` 時領頭先結束，是 `setsid` 時孫行程自己開 session。
+fn server_script(dir: &Path) -> PathBuf {
+    let path = dir.join("server.sh");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\n\
+         case \"$2\" in\n\
+           setsid) setsid /bin/sleep 600 & ;;\n\
+           *) /bin/sleep 600 & ;;\n\
+         esac\n\
+         echo $! > \"$1\"\n\
+         case \"$2\" in\n\
+           leader-exits) exit 0 ;;\n\
+           *) exec /bin/sleep 600 ;;\n\
+         esac\n",
+    )
+    .unwrap();
+    path
+}
+
+/// 用 `stdio_host` 起宿主：`flags` 是它自己的旗標，之後接 `-- /bin/sh <腳本> <孫行程 pid 檔> [<模式>]`。回宿主設定與孫行程 pid 檔的路徑。
+fn stdio_host(
+    flags: &[&str],
+    mode: Option<&str>,
+) -> (Option<(PathBuf, Vec<String>)>, PathBuf, PathBuf) {
+    let dir = temp_dir("sh");
+    let script = server_script(&dir);
+    let grandchild_file = dir.join("grandchild.pid");
+    let mut args: Vec<String> = flags.iter().map(|f| f.to_string()).collect();
+    args.extend(["--".into(), "/bin/sh".into(), script.display().to_string()]);
+    args.push(grandchild_file.display().to_string());
+    args.extend(mode.map(String::from));
+    (Some((example("stdio_host"), args)), grandchild_file, dir)
+}
+
+fn host_socket_log(h: &Harness) -> PathBuf {
+    h.dir.join("run/host.sock")
+}
+
+/// 宿主紀錄裡第 `n`（從 0）個 `<key> <pid>` 的 pid。
+fn nth_logged(h: &Harness, key: &str, n: usize) -> i32 {
+    let mut pid = None;
+    assert!(
+        wait_until(|| {
+            pid = log(&host_socket_log(h))
+                .iter()
+                .filter_map(|line| line.strip_prefix(&format!("{key} ")))
+                .nth(n)
+                .map(|p| p.parse().unwrap());
+            pid.is_some()
+        }),
+        "{:?}",
+        raw_log(&host_socket_log(h))
+    );
+    pid.unwrap()
+}
+
+fn grandchild_pid(file: &Path) -> i32 {
+    let mut pid = None;
+    assert!(wait_until(|| {
+        pid = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| t.trim().parse().ok());
+        pid.is_some()
+    }));
+    pid.unwrap()
+}
+
+/// 宿主已經起了 server 與孫行程，兩個都還活著；回（宿主 pid、server 領頭 pid、孫行程 pid）。
+fn host_with_members(h: &Harness, file: &Path) -> (i32, i32, i32) {
+    let host = nth_logged(h, "start", 0);
+    let leader = nth_logged(h, "spawned", 0);
+    let grandchild = grandchild_pid(file);
+    assert!(!gone(leader) && !gone(grandchild));
+    (host, leader, grandchild)
+}
+
+fn sweep_line(h: &Harness) -> String {
+    h.audit_line("\"event\":\"sweep\"")
+}
+
+/// S1：宿主被殺，它 session 裡的 server 領頭與孫行程都被收掉，稽核有 `sweep`。
+#[test]
+fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    let line = sweep_line(&h);
+    assert!(
+        line.contains(&format!("{leader}")) && line.contains(&format!("{grandchild}")),
+        "{line}"
+    );
+    assert!(line.contains("\"left\":[]"), "{line}");
+}
+
+/// S1e：宿主自己結束（不經收線），結果同 S1。
+#[test]
+fn s1e_a_host_that_exits_by_itself_leaves_nothing_behind() {
+    let (host, file, _dir) = stdio_host(&["--exit-after-spawn"], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let leader = nth_logged(&h, "spawned", 0);
+    let grandchild = grandchild_pid(&file);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    assert!(sweep_line(&h).contains("\"left\":[]"));
+}
+
+/// S1g：領頭先走、孫行程成了孤兒，宿主死後孫行程照樣被收（它還在宿主的 session 裡）。
+#[test]
+fn s1g_an_orphaned_grandchild_is_swept_after_its_leader_is_gone() {
+    let (host, file, _dir) = stdio_host(&[], Some("leader-exits"));
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let host = nth_logged(&h, "start", 0);
+    let grandchild = grandchild_pid(&file);
+    let leader = nth_logged(&h, "spawned", 0);
+    assert!(wait_until(|| gone(leader)));
+    assert!(!gone(grandchild));
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(grandchild)), "孤兒 {grandchild} 還在");
+}
+
+/// S2：停機收宿主時也掃。
+#[test]
+fn s2_shutdown_sweeps_the_host_session_too() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let mut h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (_, leader, grandchild) = host_with_members(&h, &file);
+    kill(h.pid(), libc::SIGTERM);
+    assert!(h.wait_exit().success());
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    sweep_line(&h);
+}
+
+/// S3：前台已經不在了才停機，照樣掃。
+#[test]
+fn s3_shutdown_with_the_front_already_gone_still_sweeps() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let mut h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (_, leader, grandchild) = host_with_members(&h, &file);
+    h.front = None;
+    kill(h.pid(), libc::SIGTERM);
+    assert!(h.wait_exit().success());
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+}
+
+/// S4：宿主被殺後重起，舊宿主的成員先收乾淨，新宿主有自己的一組。
+#[test]
+fn s4_a_restarted_host_starts_from_a_clean_session() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(leader) && gone(grandchild)));
+    let new_host = nth_logged(&h, "start", 1);
+    let new_leader = nth_logged(&h, "spawned", 1);
+    assert_ne!(new_host, host);
+    assert_ne!(new_leader, leader);
+    assert!(!gone(new_leader), "新宿主的 server 不能被舊的掃描帶走");
+}
+
+/// 宿主還沒 `ready` 就被殺，也要掃：server 已經起了。
+#[test]
+fn a_host_killed_before_ready_is_still_swept() {
+    let (host, file, _dir) = stdio_host(&["--spawn-before-ready", "--no-ready"], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+}
+
+/// L1：自己 `setsid` 的後代掃不到，這是已知的界線（`docs/host-mcp.md`）；這條釘住它，改了要連文件一起改。
+#[test]
+fn l1_a_descendant_that_calls_setsid_is_out_of_reach() {
+    let (host, file, _dir) = stdio_host(&[], Some("setsid"));
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(leader)));
+    sweep_line(&h);
+    let survived = !gone(grandchild);
+    kill(grandchild as u32, libc::SIGKILL);
+    assert!(survived, "自己開 session 的後代不在掃描範圍");
+}
