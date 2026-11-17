@@ -1,7 +1,7 @@
 /**
  * 刪除、復原與已刪除清單的 wire 往返（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）。
  *
- * 走真的 `createWireClient`：刪除 → `GET /threads` 看不到、`GET /deleted-threads` 看得到 → 復原 → `GET /threads` 又看得到。
+ * 走真的 `createWireClient`：刪除 → `GET /threads` 看不到、`GET /threads/deleted` 看得到 → 復原 → `GET /threads` 又看得到。
  * 會話日誌是真的磁碟上的 jsonl，搬移與寬限期都是真的 `ThreadDeletions`；沒有 thread 組起來（沒有執行中的 agent）。
  */
 
@@ -217,7 +217,7 @@ describe('刪除、復原與已刪除清單：真的 wire 往返', () => {
     expect(trash.kind === 'ok' && trash.result.items.map((i) => i.threadId)).toEqual(['t-gone']);
   }, 30_000);
 
-  it('沒接已刪除存放區：thread.delete 與 GET /deleted-threads 回 not_supported，列表不動', async () => {
+  it('沒接已刪除存放區：thread.delete 與 GET /threads/deleted 回 not_supported，列表不動', async () => {
     await seed('t-live');
     const { client } = setup({ withDeletion: false });
     expect(await client.threadDelete('t-live')).toEqual({

@@ -4254,7 +4254,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /deleted-threads`：這個專案格已刪除、還在寬限期內的會話。**不經 `threadFor`**，同 `handleList`。
+   * `GET /threads/deleted`：這個專案格已刪除、還在寬限期內的會話。**不經 `threadFor`**，同 `handleList`。
    */
   async function handleDeletedList(): Promise<Response> {
     const port = options.threadDeletion;

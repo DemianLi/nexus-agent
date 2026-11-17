@@ -64,9 +64,11 @@ describe('每一支未實作的方法都回 not_supported', () => {
       expect([...THREAD_MANAGEMENT_METHODS, SUBAGENT_LIST_METHOD].sort()).toEqual([
         'subagent.list',
         'thread.archive',
+        'thread.delete',
         'thread.fork',
         'thread.pin',
         'thread.rename',
+        'thread.restore',
         'thread.unarchive',
         'thread.unpin',
       ]);
@@ -78,6 +80,9 @@ describe('每一支未實作的方法都回 not_supported', () => {
         await client.threadArchive('t', { stopActivity: true }),
         await client.threadUnarchive('t'),
         await client.threadFork('t', 'm-1'),
+        // 刪除與復原的真行為在 `thread-deletion-wire.test.ts`；手搭的組裝沒有已刪除存放區。
+        await client.threadDelete('t'),
+        await client.threadRestore('t'),
       ];
       for (const outcome of outcomes) expect(outcome).toMatchObject(NOT_SUPPORTED);
       for (const outcome of outcomes) {

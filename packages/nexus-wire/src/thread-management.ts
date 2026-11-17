@@ -252,7 +252,7 @@ export type ThreadRestoreResult =
   | { readonly ok: false; readonly error: ThreadRestoreError };
 
 /**
- * 已刪除清單的一列（`GET /deleted-threads`，全域，只列這個專案格的）。`expiresAt` 是寬限期到期的毫秒時間戳，過了就不能復原。
+ * 已刪除清單的一列（`GET /threads/deleted`，全域，只列這個專案格的）。`expiresAt` 是寬限期到期的毫秒時間戳，過了就不能復原。
  */
 export interface DeletedThread {
   readonly threadId: string;
@@ -261,7 +261,7 @@ export interface DeletedThread {
   readonly expiresAt: number;
 }
 
-/** `GET /deleted-threads` 的結果。 */
+/** `GET /threads/deleted` 的結果。 */
 export interface DeletedThreadsResult {
   readonly items: readonly DeletedThread[];
 }

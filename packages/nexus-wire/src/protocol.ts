@@ -948,8 +948,8 @@ export type SkillListResult = { readonly skills: readonly SkillEntry[] };
  */
 export const THREADS_PATH = '/threads';
 
-/** 已刪除清單（`GET`，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：全域路由，只列這個專案格的。 */
-export const DELETED_THREADS_PATH = '/deleted-threads';
+/** 已刪除清單（`GET`，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：全域路由，只列這個專案格的。放在 `/threads` 底下才會分到 wire 那一面（`surfaceOf`），同 `THREAD_SEARCH_PATH`。 */
+export const DELETED_THREADS_PATH = '/threads/deleted';
 
 /**
  * 嵌入的對話框（`<nexus-chat>`）走的路徑前綴（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：疊在 thread 那一族的路徑前面，
