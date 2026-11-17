@@ -282,7 +282,8 @@ impl Conversation {
             && self.heard_at.is_some()
     }
 
-    /// 閒置、已經 `up`、沒在收也沒在等 `drain` 的回答：可以送 `drain`。
+    /// 閒置、已經 `up`、沒在收也沒在等 `drain` 的回答。只講葉子自己；成對時組合行程正在收的不能逐出，
+    /// 那一半在 [`Supervisor::can_evict`]，要不要送 `drain` 一律問它，不直接呼叫這個。
     fn evictable(&self) -> bool {
         self.idle_since.is_some()
             && self.phase == Phase::Up
@@ -413,6 +414,9 @@ pub fn run(argv: Vec<OsString>) -> i32 {
             return 2;
         }
     };
+    if let Some(warning) = args::stall_warning(args.stall) {
+        say!("{warning}");
+    }
     match start(args) {
         Ok(mut supervisor) => supervisor.run(),
         Err(err) => {
@@ -1427,7 +1431,7 @@ impl Supervisor {
                 .conversations
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| c.evictable())
+                .filter(|(_, c)| self.can_evict(c))
                 .min_by_key(|(_, c)| (!c.read_only, c.idle_from()))
                 .map(|(index, _)| index);
             let Some(index) = victim else { break };
@@ -1598,27 +1602,27 @@ impl Supervisor {
         if self.shutting_down {
             return;
         }
-        let Some(conversation) = self
+        let Some(index) = self
             .conversations
-            .iter_mut()
-            .find(|c| c.thread.as_deref() == Some(thread))
+            .iter()
+            .position(|c| c.thread.as_deref() == Some(thread))
         else {
             return;
         };
-        if !conversation.read_only {
+        if !self.conversations[index].read_only {
             return;
         }
-        if conversation.evictable() {
-            Self::drain(conversation);
-        } else if conversation.proc.stop.is_none() {
-            conversation.released = true;
+        if self.can_evict(&self.conversations[index]) {
+            Self::drain(&mut self.conversations[index]);
+        } else if self.conversations[index].proc.stop.is_none() {
+            self.conversations[index].released = true;
         }
     }
 
     /// 這條的閒置時限到期的時間點；還沒 `up`、不在閒置、在收、在等 `drain` 的回答、這種開啟方式不照時間逐出的，沒有。
     /// 停機中也沒有：停機不送 `drain`，全部照停機收。
     fn idle_deadline(&self, conversation: &Conversation) -> Option<Instant> {
-        if self.shutting_down || !conversation.evictable() {
+        if self.shutting_down || !self.can_evict(conversation) {
             return None;
         }
         let limit = if conversation.read_only {
@@ -1946,6 +1950,7 @@ impl Supervisor {
             self.conversations[index].hear(Instant::now());
         }
         for payload in frames {
+            let composition_stopping = self.composition_stopping(&self.conversations[index]);
             let conversation = &mut self.conversations[index];
             let report = match decode_conversation_report(&payload) {
                 Ok(report) => report,
@@ -2025,7 +2030,11 @@ impl Supervisor {
                         now.checked_sub(Duration::from_millis(idle_ms.into()))
                             .unwrap_or(now),
                     );
-                    if conversation.released && conversation.evictable() && !self.shutting_down {
+                    if self.conversations[index].released
+                        && self.can_evict(&self.conversations[index])
+                        && !self.shutting_down
+                    {
+                        let conversation = &mut self.conversations[index];
                         conversation.released = false;
                         Self::drain(conversation);
                     }
@@ -2037,7 +2046,9 @@ impl Supervisor {
                         conversation.idle_since = None;
                     }
                 }
-                ConversationReport::Drained if conversation.proc.stop.is_none() => {
+                ConversationReport::Drained
+                    if conversation.proc.stop.is_none() && !composition_stopping =>
+                {
                     conversation.drain = None;
                     // 停機中才回的不算逐出：留給停機照順序收，回的 `down(shutdown)` 才是排著等它的那則 `ensure` 的回答。
                     if !self.shutting_down {
@@ -3332,6 +3343,120 @@ mod tests {
             front_events(&mut supervisor)[..],
             [FrontEvent::Up { ref thread_id, .. }] if thread_id == b"t"
         ));
+    }
+
+    /// 成對、已 `up`、閒置很久的葉子；`collected` 為真時組合行程已經被當場殺、還沒收屍。
+    fn an_idle_pair(tag: &str, collected: bool) -> Supervisor {
+        let (mut supervisor, _, _) = with_a_pair(tag, PairState::Bound);
+        front_events(&mut supervisor);
+        supervisor.args.idle = Some(Duration::from_secs(60));
+        supervisor.conversations[0].proc.hello = true;
+        supervisor.conversations[0].idle_since =
+            Instant::now().checked_sub(Duration::from_secs(3600));
+        if collected {
+            supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+            supervisor.compositions[0].proc.kill_now();
+        }
+        supervisor
+    }
+
+    fn the_leaf_reports(supervisor: &mut Supervisor, report: &ConversationReport) {
+        supervisor.conversations[0].proc.chan.send(
+            &crate::supervisor_protocol::encode_conversation_report(report),
+        );
+        supervisor.on_conversation_readable(0);
+    }
+
+    /// 組合行程被當場殺、還沒收屍：名額不夠時不選這一對的葉子逐出（它不會騰出名額，`drain` 只會多一個沒人收的等待）。
+    #[test]
+    fn make_room_does_not_evict_a_leaf_whose_composition_is_being_collected() {
+        let mut supervisor = an_idle_pair("evict-make-room", true);
+        // 兩條排著：組合行程在收算騰出一個，還差一個，才會去找可逐出的。
+        supervisor.pending.push((b"u".to_vec(), OpenMode::Run));
+        supervisor.pending.push((b"v".to_vec(), OpenMode::Run));
+        supervisor.make_room();
+        assert!(supervisor.conversations[0].drain.is_none());
+    }
+
+    /// 葉子已經被送了 `drain`、之後組合行程才被殺，這時葉子回 `drained`：不記 `evicted`、不收葉子；
+    /// 組合行程收屍後前台只收到一則 `down`，死因是組合行程的。
+    #[test]
+    fn a_drained_from_a_leaf_whose_composition_is_being_collected_is_not_an_eviction() {
+        let mut supervisor = an_idle_pair("evict-drained", false);
+        supervisor.conversations[0].drain = Some(Instant::now());
+        supervisor.pending.push((b"t".to_vec(), OpenMode::Run));
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        the_leaf_reports(&mut supervisor, &ConversationReport::Drained);
+        assert!(supervisor.conversations[0].cause.is_none());
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [FrontEvent::Down {
+                thread_id: b"t".to_vec(),
+                cause: DeathCause::Stalled,
+            }]
+        );
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(front_events(&mut supervisor), []);
+    }
+
+    /// 唯讀閒置的葉子，前台放開（`release`）：組合行程在收時不逐出它；組合行程沒在收時照舊逐出。
+    #[test]
+    fn release_does_not_evict_a_read_only_leaf_whose_composition_is_being_collected() {
+        let mut supervisor = an_idle_pair("evict-release", true);
+        supervisor.conversations[0].read_only = true;
+        supervisor.release(b"t");
+        assert!(supervisor.conversations[0].drain.is_none());
+
+        let mut supervisor = an_idle_pair("evict-release-control", false);
+        supervisor.conversations[0].read_only = true;
+        supervisor.release(b"t");
+        assert!(supervisor.conversations[0].drain.is_some());
+    }
+
+    /// 唯讀被放開（`released`）的葉子回報閒置：組合行程在收時不補送 `drain`。
+    #[test]
+    fn an_idle_report_does_not_drain_a_released_leaf_whose_composition_is_being_collected() {
+        let mut supervisor = an_idle_pair("evict-idle", true);
+        supervisor.conversations[0].read_only = true;
+        supervisor.conversations[0].released = true;
+        the_leaf_reports(&mut supervisor, &ConversationReport::Idle { idle_ms: 5 });
+        assert!(supervisor.conversations[0].drain.is_none());
+    }
+
+    /// 到期的時間點只給還會被逐出的葉子；組合行程在收的這一對整對照收，不照時間逐出。
+    #[test]
+    fn a_leaf_whose_composition_is_being_collected_has_no_idle_deadline() {
+        let supervisor = an_idle_pair("evict-deadline", true);
+        assert_eq!(supervisor.idle_deadline(&supervisor.conversations[0]), None);
+    }
+
+    /// 對照：組合行程沒在收時，四件事照舊（防條件寫反）。
+    #[test]
+    fn a_leaf_whose_composition_is_running_is_still_evicted() {
+        let mut supervisor = an_idle_pair("evict-control-room", false);
+        supervisor.pending.push((b"u".to_vec(), OpenMode::Run));
+        supervisor.pending.push((b"v".to_vec(), OpenMode::Run));
+        supervisor.make_room();
+        assert!(supervisor.conversations[0].drain.is_some());
+
+        let mut supervisor = an_idle_pair("evict-control-idle", false);
+        supervisor.conversations[0].read_only = true;
+        supervisor.conversations[0].released = true;
+        the_leaf_reports(&mut supervisor, &ConversationReport::Idle { idle_ms: 5 });
+        assert!(supervisor.conversations[0].drain.is_some());
+
+        let supervisor = an_idle_pair("evict-control-deadline", false);
+        assert!(supervisor
+            .idle_deadline(&supervisor.conversations[0])
+            .is_some());
+
+        let mut supervisor = an_idle_pair("evict-control-drained", false);
+        supervisor.conversations[0].drain = Some(Instant::now());
+        the_leaf_reports(&mut supervisor, &ConversationReport::Drained);
+        assert_eq!(supervisor.conversations[0].cause, Some(DeathCause::Evicted));
     }
 
     /// 組合行程的通道讀端讀到 EOF 為止（最多 5 秒），一路把可讀的事件交給 [`Supervisor::on_composition_readable`]。
