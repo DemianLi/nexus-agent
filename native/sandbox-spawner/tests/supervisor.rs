@@ -3627,6 +3627,47 @@ fn an_unpaired_conversation_that_never_says_ready_stays_when_the_start_deadline_
     let pid = logged_pid(&h.dir.join("run/c1.sock"), "pid");
     std::thread::sleep(Duration::from_millis(1_500));
     assert!(!gone(pid));
+    assert!(
+        h.audit()
+            .iter()
+            .all(|line| !line.contains("ready 之前逾時")),
+        "{:?}",
+        h.audit()
+    );
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// 期限內 `ready` 的不受影響：過了 `--start-timeout-ms` 還是同一個行程，沒有人被判 `stalled`。
+#[test]
+fn an_unpaired_conversation_that_is_ready_in_time_outlives_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "300".into()],
+        extra: vec!["--start-timeout-ms", "1500"],
+        ..Options::default()
+    });
+    let socket = h.up("a");
+    std::thread::sleep(Duration::from_millis(2_000));
+    assert_eq!(h.up("a"), socket);
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+    assert!(
+        h.audit()
+            .iter()
+            .all(|line| !line.contains("ready 之前逾時")),
+        "{:?}",
+        h.audit()
+    );
 }
 
 /// 預熱池裡不成對的行程逾時：沒有 thread，不回 `down`、稽核有逾時那一行，之後補一個新的（換了 pid）。
@@ -4440,7 +4481,7 @@ fn assert_sweep_left_the_conversation_alone(conversation_pid: i32, line: &str) {
 }
 
 /// 宿主被殺，它 session 裡的 server 領頭與孫行程都被收掉，稽核有 `sweep`；同時已 `up` 的對話行程不受影響。
-/// server 與孫行程都忽略 SIGTERM：保底層送的必須是擋不掉的訊號。
+/// server 與孫行程都忽略 SIGTERM，所以只有掃描送的 SIGKILL 收得掉它們（`sweep::kill_member`）。
 #[test]
 fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
     let (host, file, _dir) = stdio_host(&[], Some("ignore-term"));
@@ -4556,7 +4597,7 @@ fn s2_shutdown_sweeps_the_host_session_too() {
     finish_checking(h, leader, grandchild);
 }
 
-/// `finish`，並確認 server 與孫行程都被收掉、稽核有 `sweep`。
+/// 同 `finish`，另外確認 server 與孫行程都被收掉、稽核有 `sweep`。
 fn finish_checking(h: Harness, leader: i32, grandchild: i32) {
     let socket_log = h.dir.clone();
     kill(h.pid(), libc::SIGTERM);
