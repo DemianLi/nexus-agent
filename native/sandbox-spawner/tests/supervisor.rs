@@ -917,15 +917,15 @@ fn supervisor_stderr(h: &Harness) -> String {
     String::from_utf8_lossy(&std::fs::read(h.dir.join("supervisor.err")).unwrap()).into_owned()
 }
 
-/// 警告在起任何行程之前就印，照常起得來。
+/// 邊界：4000 警告、4001 與預設不警告；警告的那個照常起得來。
 #[test]
 fn a_small_stall_ms_warns_at_startup_and_still_starts() {
     let mut small = Harness::start(Options {
-        extra: vec!["--stall-ms", "300"],
+        extra: vec!["--stall-ms", "4000"],
         ..Options::default()
     });
     assert!(
-        supervisor_stderr(&small).contains("--stall-ms 300 "),
+        supervisor_stderr(&small).contains("--stall-ms 4000 "),
         "{}",
         supervisor_stderr(&small)
     );
@@ -1264,7 +1264,7 @@ fn drain_lets_a_held_leader_run_first() {
 #[test]
 fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
     let mut h = Harness::start(Options {
-        extra: vec!["--stall-ms", "300"],
+        extra: vec!["--stall-ms", "4000"],
         piped_stderr: true,
         ..Options::default()
     });
@@ -1392,7 +1392,7 @@ fn a_freeze_that_starts_before_the_poll_is_not_stalled() {
 fn stalled_counts_from_ready_not_from_spawn() {
     let mut h = Harness::start(Options {
         conversation_args: vec!["--ready-after-ms".into(), "800".into()],
-        extra: vec!["--stall-ms", "300"],
+        extra: vec!["--stall-ms", "4000"],
         ..Options::default()
     });
     let socket = h.up("r");
@@ -1405,7 +1405,7 @@ fn silence_during_the_teardown_ladder_is_not_cut_short_as_stalled() {
     let mut h = Harness::start(Options {
         eof_grace_ms: 1_000,
         term_grace_ms: 1_000,
-        extra: vec!["--stall-ms", "300"],
+        extra: vec!["--stall-ms", "4000"],
         ..Options::default()
     });
     // 收到 EOF 之後心跳就停，要等到 SIGTERM 那一步才結束。
