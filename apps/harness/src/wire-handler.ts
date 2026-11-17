@@ -744,6 +744,11 @@ export interface WireHandlerOptions {
   readonly threadActivityElsewhere?: {
     activity(threadId: string): Promise<readonly ThreadActivityKind[]>;
     stop(threadId: string): Promise<void>;
+    /**
+     * 刪除時放手寫入方（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，H）：請那一條的對話行程停掉、等閒置、撤出。
+     * 沒有行程就什麼都不做（沒有寫入方）。缺席＝不是 per-thread 的前台。
+     */
+    release?(threadId: string): Promise<void>;
   };
   /**
    * 全域下行用這一條，不自己建（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台：每件都由 `front-feed.ts`
@@ -1032,7 +1037,15 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
  */
 export function internalThreadPath(
   threadId: string,
-  action: 'activity' | 'stop' | 'plugins' | 'turn-failures' | 'fork-seed' | 'fork-adopt' | 'flush',
+  action:
+    | 'activity'
+    | 'stop'
+    | 'plugins'
+    | 'turn-failures'
+    | 'fork-seed'
+    | 'fork-adopt'
+    | 'flush'
+    | 'release',
 ): string {
   return `/internal/threads/${encodeURIComponent(threadId)}/${action}`;
 }
@@ -2108,7 +2121,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       return;
     }
     const state = ready.get(threadId);
-    if (state === undefined) return;
+    if (state === undefined) {
+      // 本地沒有：per-thread 的前台，寫入方在對話行程裡，問那一條（沒有行程就是沒有寫入方，直接回）。
+      await options.threadActivityElsewhere?.release?.(threadId);
+      return;
+    }
     state.pump.cancel();
     const waitMs = options.releaseIdleWaitMs ?? RELEASE_IDLE_WAIT_MS;
     const deadline = Date.now() + waitMs;
@@ -5102,7 +5119,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   ): Response | Promise<Response> | undefined {
     if (options.boundThread === undefined || principal.kind === 'embed') return undefined;
     const match =
-      /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures|fork-seed|fork-adopt|flush)$/u.exec(
+      /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures|fork-seed|fork-adopt|flush|release)$/u.exec(
         pathname,
       );
     if (match === null) return undefined;
@@ -5127,6 +5144,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       return forkAdoptRoute(threadId, request);
     }
     if (match[2] === 'flush' && request.method === 'POST') return flushRoute(threadId);
+    if (match[2] === 'release' && request.method === 'POST') return releaseRoute(threadId);
     return new Response('method not allowed', { status: 405 });
   }
 
@@ -5135,6 +5153,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 不能讓監督行程因為有人在搜而晚收它。還沒建好、或已離開 `ready`（行程收尾：`close()` 先清 `ready`，最後一次排空在之後的 `dispose`）的回 204。
    * 寫不出去回 500，前台照舊冷讀。
    */
+  /**
+   * 對話行程那一側的放手寫入方（H）：停、等閒置、撤出，回來時寫租約已放掉。等不到閒置或撤不出去回 500，不硬撤。
+   */
+  async function releaseRoute(threadId: string): Promise<Response> {
+    try {
+      await releaseThreadWriter(threadId);
+      return new Response(null, { status: 204 });
+    } catch (error: unknown) {
+      options.warn?.(`[刪除] thread "${threadId}" 放手寫入方失敗：${errorChain(error)}`);
+      return new Response('release failed', { status: 500 });
+    }
+  }
+
   async function flushRoute(threadId: string): Promise<Response> {
     const state = ready.get(threadId);
     if (state === undefined) return new Response(null, { status: 204 });

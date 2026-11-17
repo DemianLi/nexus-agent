@@ -1153,7 +1153,8 @@ async function startServer(
             await handler.releaseWriter(threadId);
           },
         });
-  if (threadDeletions !== undefined) {
+  // 恢復只在前台（或單行程）做：對話行程是前台起的，同一份意圖由前台收，子行程不搶著恢復（H）。
+  if (threadDeletions !== undefined && options.conversation === undefined) {
     const startup = await runDeletionStartup(threadDeletions, deletedDefaultRoot);
     if (startup.recovered !== undefined) {
       warn(

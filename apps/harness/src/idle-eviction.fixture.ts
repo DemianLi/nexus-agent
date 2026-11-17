@@ -33,7 +33,10 @@ export interface Gate {
   open(): void;
 }
 
-/** 等閘門放行，或中止訊號先到就拋（測試用的工具照真的工具那樣在中止時回來）。 */
+/**
+ * 等閘門放行；若帶進來的中止訊號先到就拋。實測：`pump.cancel()` 送不到一個已經卡在這裡的工具（它的中止訊號不是那一條），
+ * 所以卡住的工具仍要靠放行才回來，中止只能擋住放行之後的下一步。
+ */
 export function untilOpenOrAborted(open: Promise<void>, signal?: AbortSignal): Promise<void> {
   if (signal === undefined) return open;
   if (signal.aborted) return Promise.reject(new Error('已中止'));
@@ -85,7 +88,7 @@ export function toolsPlugin(probe: Probe): PluginEntry {
           tool(
             async (_input: unknown, ...rest: unknown[]) => {
               probe.started += 1;
-              // 真的工具會在中止時回來：中止訊號先到就拋，不必等放行（#2957 的 releaseWriter 靠這一條）。
+              // 中止訊號若帶到這裡就拋（見 {@link untilOpenOrAborted}）。
               // 中止訊號在執行設定裡，位置依 LangChain 版本而定，所以從其餘參數裡找。
               const signal = rest
                 .map((arg) => (arg as { signal?: unknown } | undefined)?.signal)
