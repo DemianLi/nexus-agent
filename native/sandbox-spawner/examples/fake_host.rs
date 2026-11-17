@@ -185,6 +185,7 @@ fn main() {
                     }
                 }
                 HostCommand::Revoke { pid } => log(&format!("revoke {pid}")),
+                HostCommand::Synced => log("synced"),
             }
         }
     }

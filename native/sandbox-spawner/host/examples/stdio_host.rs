@@ -3,7 +3,7 @@
 //! 編在 `nexus-host` 這個 package（要用 `nexus_host::mcp`），由 spawner 的 `tests/supervisor.rs` 從共用的 target 目錄起。只在 Linux 跑。
 //!
 //! ```text
-//! stdio_host [--spawn-before-ready] [--exit-after-spawn[=<碼>]] [--spawn-thread=short] [--no-ready] [--env K=V]... -- <指令> [參數]... --socket <路徑>
+//! stdio_host [--spawn-before-ready] [--exit-after-spawn[=<碼>] [--exit-when-file=<路徑>]] [--spawn-thread=short] [--no-ready] [--env K=V]... -- <指令> [參數]... --socket <路徑>
 //! ```
 //!
 //! `--socket <路徑>` 是監督行程接在最後的，所以測試用 `--host-arg` 給的是前面那段（含 `--` 與指令）。
@@ -11,6 +11,8 @@
 //! - 握手同 `fake_host`：送 `hello`，等監督行程的 `hello`；之後的命令（`grant`、`revoke`）一律忽略。
 //! - 預設送 `ready` **之後**才 spawn。`--spawn-before-ready`：spawn 完成之後才送 `ready`。「spawn 之後、`ready` 之前被殺」由測試去殺，旗標不自己模擬。
 //! - `--exit-after-spawn[=<碼>]`：spawn 完、送 `ready` 後以 `std::process::exit(<碼>)` 結束，預設 9。不收線、不讓 `ChildGuard::drop` 跑，否則子行程會被宿主自己收掉，掃描就測不到了。
+//! - `--exit-when-file=<路徑>`：只搭 `--exit-after-spawn`。結束之前先等該檔的內容（去掉空白後）是一個 pid；最多等 `EXIT_WHEN_FILE_LIMIT`，到了照樣結束，測試的斷言會抓到腳本沒寫檔。
+//!   用來等 server 腳本把孫行程的 pid 寫好：不等的話宿主可能在孫行程起來之前就結束，掃描沒東西可掃，測試靠運氣才綠。
 //! - `--no-ready`：永遠不送 `ready`（配 `--spawn-before-ready`，測宿主 `ready` 之前就被殺）。
 //! - `--spawn-thread=short`：在另一條執行緒上 spawn，那條執行緒起完就結束，主執行緒繼續活；預設在主執行緒的 current-thread runtime 上 spawn。
 //!   `PR_SET_PDEATHSIG` 綁的是起子行程的那條執行緒，短命執行緒上 spawn 的子行程會跟著那條執行緒一起被收，所以預設一定在主執行緒上。
@@ -26,6 +28,8 @@ use nexus_sandbox_spawner::supervisor_protocol::{
 };
 use std::io::{Read, Write};
 use std::time::Duration;
+
+const EXIT_WHEN_FILE_LIMIT: Duration = Duration::from_secs(20);
 
 /// 在呼叫的這條執行緒上、自己建的 current-thread runtime 裡 spawn。呼叫的執行緒就是 `PR_SET_PDEATHSIG` 綁的那一條。
 fn spawn_here(spec: &Stdio) -> Spawned {
@@ -67,6 +71,13 @@ fn main() {
                 .map(|code| code.parse().expect("--exit-after-spawn 的碼"))
         }
     });
+    let exit_when_file: Option<String> = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--exit-when-file=").map(String::from));
+    assert!(
+        exit_when_file.is_none() || exit_after_spawn.is_some(),
+        "--exit-when-file 要搭 --exit-after-spawn"
+    );
     let no_ready = args.iter().any(|a| a == "--no-ready");
     assert!(
         !no_ready || spawn_before_ready,
@@ -160,6 +171,15 @@ fn main() {
                     spawn(&mut log);
                 }
                 if let Some(code) = exit_after_spawn {
+                    if let Some(path) = &exit_when_file {
+                        let deadline = std::time::Instant::now() + EXIT_WHEN_FILE_LIMIT;
+                        while std::time::Instant::now() < deadline
+                            && !std::fs::read_to_string(path)
+                                .is_ok_and(|text| text.trim().parse::<i32>().is_ok())
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    }
                     // 不走 drop：`Spawned` 的 `ChildGuard` 一 drop 就會 SIGKILL 子行程。
                     std::process::exit(code);
                 }
