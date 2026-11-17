@@ -714,6 +714,7 @@ mod tests {
     }
 
     /// 真的 `/proc` 與 `pidfd`：自成 session 的領頭（宿主）底下兩個成員，一個留在領頭那一組、一個自己換了行程群組（`setpgid`，沒換 session）。
+    /// 留在組內的那一個把名字設成非 UTF-8 位元組加 `)`（`prctl(PR_SET_NAME)`），掃得到才算數。
     /// 兩個都掃得到、送得到、掃完都不在（死了留成領頭的殭屍也算）；領頭不動。結束時領頭一併收掉，不留行程。
     #[test]
     fn kills_members_of_a_session_including_one_that_changed_group() {
@@ -735,6 +736,10 @@ mod tests {
                         libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
                         if i == 1 {
                             libc::setpgid(0, 0);
+                        } else {
+                            // 行程名帶非 UTF-8 位元組與 `)`：`read_to_string` 會在這裡回 `InvalidData`，讀位元組才掃得到它。
+                            let name: [u8; 6] = [0xff, 0xfe, b')', 0x80, b'x', 0];
+                            libc::prctl(libc::PR_SET_NAME, name.as_ptr());
                         }
                         loop {
                             libc::pause();
@@ -768,6 +773,15 @@ mod tests {
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "第二個成員沒換組");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // 第一個的名字也要設好（`stat` 裡看得到 0xff）才掃，不然這支測不到非 UTF-8。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !fs::read(format!("/proc/{}/stat", pids[0])).is_ok_and(|stat| stat.contains(&0xff)) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "第一個成員的名字沒設成非 UTF-8"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         // SAFETY：只查行程群組。
