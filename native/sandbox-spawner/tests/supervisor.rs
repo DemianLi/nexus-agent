@@ -917,14 +917,13 @@ fn supervisor_stderr(h: &Harness) -> String {
     String::from_utf8_lossy(&std::fs::read(h.dir.join("supervisor.err")).unwrap()).into_owned()
 }
 
-/// T1：`--stall-ms` 不超過 4000 時啟動就在 stderr 警告一行（寫出值與原因），照常起來；預設值與超過 4000 的不警告。
+/// 警告在起任何行程之前就印，照常起得來。
 #[test]
 fn a_small_stall_ms_warns_at_startup_and_still_starts() {
     let mut small = Harness::start(Options {
         extra: vec!["--stall-ms", "300"],
         ..Options::default()
     });
-    // 警告在起任何行程之前就印了；照常起得來。
     assert!(
         supervisor_stderr(&small).contains("--stall-ms 300 "),
         "{}",
