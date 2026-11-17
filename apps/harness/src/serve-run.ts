@@ -1134,14 +1134,17 @@ async function startServer(
   // 已刪除存放區（#2957）：路徑與寬限天數起動期讀一次。落盤關掉就沒有會話可刪，不接。啟動先恢復意圖，再看路徑有沒有被改過。
   const deletionStore = startupSetting(plugins, threadDeletionStorePlugin);
   const deletedDefaultRoot = join(resolveHarnessHome(env), DELETED_STORE_DIR_NAME);
-  if (sessionLogDir !== undefined) {
-    const threadDeletions = new ThreadDeletions({
-      home: resolveHarnessHome(env),
-      sessionsRoot: sessionLogDir,
-      deletedRoot: deletionStore.path ?? deletedDefaultRoot,
-      graceMs: graceMsOfDays(deletionStore.graceDays),
-      now: () => Date.now(),
-    });
+  const threadDeletions =
+    sessionLogDir === undefined
+      ? undefined
+      : new ThreadDeletions({
+          home: resolveHarnessHome(env),
+          sessionsRoot: sessionLogDir,
+          deletedRoot: deletionStore.path ?? deletedDefaultRoot,
+          graceMs: graceMsOfDays(deletionStore.graceDays),
+          now: () => Date.now(),
+        });
+  if (threadDeletions !== undefined) {
     const startup = await runDeletionStartup(threadDeletions, deletedDefaultRoot);
     if (startup.recovered !== undefined) {
       warn(
@@ -1617,6 +1620,11 @@ async function startServer(
       : new ThreadFeed({ maxQueuedBytes: downlink.maxQueuedBytes, warn });
   if (frontThreadFeed !== undefined) options.front?.feed.connect(frontThreadFeed);
   const handler = createWireHandler({
+    // 刪除會話的閘門（#2957）：刪除中或已刪的不組起來、不觀察。
+    deletionGate:
+      threadDeletions === undefined
+        ? undefined
+        : { hiddenReason: (threadId) => threadDeletions.hiddenReason(projectKey(cwd), threadId) },
     auth,
     trustedHosts: invocation.trustedHosts,
     // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。

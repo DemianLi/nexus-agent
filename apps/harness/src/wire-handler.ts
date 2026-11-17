@@ -474,6 +474,13 @@ export interface ThreadForkSeed {
 
 export interface WireHandlerOptions {
   /**
+   * 刪除會話的閘門（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：這條 thread 正在刪或已刪就回原因。
+   * 組裝之前（等完收尾之後也一樣）查一次，觀察（{@link observeThread}）也查。沒給就不擋。
+   */
+  readonly deletionGate?: {
+    hiddenReason(threadId: string): Promise<'deleting' | 'deleted' | undefined>;
+  };
+  /**
    * 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。
    *
    * @param fork - 這條是剛分叉出來的子 thread（`thread.fork`，#1580）：不讀磁碟，從這一份 seed 組裝，其餘照續接那條路。
@@ -828,6 +835,10 @@ export interface IdleSweepingWireHandler extends WireHandler {
    * 撤完才兌現。內部計時器每隔一段時間呼叫同一支；公開是為了測試用假時鐘決定性地驅動它。沒設 `idleEvictMs` 時什麼也不做。
    */
   sweepIdle(): Promise<void>;
+  /**
+   * 刪除會話時讓寫入方放手（[#2957]）：停、等閒置、撤出，回來時寫租約已放。見 `releaseThreadWriter`。
+   */
+  releaseWriter(threadId: string): Promise<void>;
   /**
    * 行程裡現在佔著名額的 thread 數（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)）：`threads.size + closing.size`，
    * 與 `threadFor` 檢查 {@link WireHandlerOptions.maxThreads} 用的同一個數——建構中的算、撤到一半的也算。只讀，給記憶體警告寫「現在幾條」用。
@@ -1761,6 +1772,24 @@ export class ThreadNotBoundError extends Error {
  * （照 dsh 背景工作准入的第 5 點）：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
  * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
  */
+/**
+ * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：組裝與觀察都拒，不建任何資源。
+ * 寬限期內可以復原，那是另一條路，不是這裡的事。
+ */
+export class ThreadDeletedError extends Error {
+  readonly reason: 'deleting' | 'deleted';
+  constructor(threadId: string, reason: 'deleting' | 'deleted') {
+    super(
+      `thread "${threadId}" ${reason === 'deleting' ? '正在刪除' : '已刪除'}，不能再開啟（寬限期內可以復原）`,
+    );
+    this.name = 'ThreadDeletedError';
+    this.reason = reason;
+  }
+}
+
+/** 刪除時等寫入方閒置的上限（毫秒）；超過就拋，不硬撤。 */
+const RELEASE_IDLE_WAIT_MS = 30_000;
+
 export class ThreadCapacityError extends Error {
   constructor(
     /** 拒收那一刻行程裡的 thread 數（含建構中的）。 */
@@ -2020,6 +2049,35 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 掃一遍：不閒的重新計時，閒夠久的撤掉。計時器與測試共用這一支；回的 promise 在這一次撤的都撤完才兌現。
    */
+  /**
+   * 刪除會話時的寫入方放手（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，single 模式）：停掉還在跑的一輪、等到閒置
+   * （含背景子代理），再走閒置逐出的那一條撤出記憶體。**回來時寫租約已經放掉**：撤出的 promise 在 `release` 收完之後才兌現。
+   * 不在記憶體裡就直接回；等不到閒置超過 {@link RELEASE_IDLE_WAIT_MS} 就拋，不硬撤。
+   */
+  async function releaseThreadWriter(threadId: string): Promise<void> {
+    const building = threads.get(threadId);
+    if (building !== undefined) await building.catch(() => undefined);
+    const retiring = closing.get(threadId);
+    if (retiring !== undefined) {
+      await retiring;
+      return;
+    }
+    const state = ready.get(threadId);
+    if (state === undefined) return;
+    state.pump.cancel();
+    const deadline = Date.now() + RELEASE_IDLE_WAIT_MS;
+    while (!isIdle(threadId, state)) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `thread "${threadId}" 等不到閒置（${String(RELEASE_IDLE_WAIT_MS)} 毫秒），不撤`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (ready.get(threadId) !== state) return releaseThreadWriter(threadId);
+    await evictThread(threadId, state);
+  }
+
   async function sweepIdle(): Promise<void> {
     const limit = options.idleEvictMs;
     if (limit === undefined || closed) return;
@@ -2087,6 +2145,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     const created = (async (): Promise<ThreadState> => {
+      // 刪除閘門（#2957）：等完收尾的重試也走這裡，所以收尾之後的重建在這一道再查一次，不靠呼叫端記得。
+      const hidden = await options.deletionGate?.hiddenReason(threadId);
+      if (hidden !== undefined) throw new ThreadDeletedError(threadId, hidden);
       const threadAgent = await (fork === undefined
         ? profile === 'full'
           ? options.createAgent(threadId)
@@ -3917,6 +3978,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   > {
     const retiring = closing.get(threadId);
     if (retiring !== undefined) await retiring.catch(() => undefined);
+    // 等完收尾之後再查一次：刪除中或已刪的，當成沒有這條（#2957）。
+    if ((await options.deletionGate?.hiddenReason(threadId)) !== undefined) return undefined;
     const building = threads.get(threadId);
     const live = building === undefined ? undefined : await building.catch(() => undefined);
     let stored = await readStored(threadId);
@@ -4974,6 +5037,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
     },
     sweepIdle,
+    releaseWriter: releaseThreadWriter,
     idleState: (threadId) => {
       const state = ready.get(threadId);
       if (state !== undefined)
