@@ -393,7 +393,7 @@ function ThreadGroupList({
 }: {
   readonly sections: ThreadSections;
   readonly isBlank: (item: ThreadSummary) => boolean;
-  /** 這一列要不要一定看得到；排在組內前 50 條的，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
+  /** 這一列要不要一定看得到；一定要看得到的列排在組內前 50 條以內時，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
   readonly mustShow: (item: ThreadSummary) => boolean;
   /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`）。 */
   readonly expanded: ReadonlyMap<string, number>;
