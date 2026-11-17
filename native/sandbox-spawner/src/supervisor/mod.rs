@@ -3376,6 +3376,22 @@ mod tests {
                 cause: DeathCause::Stalled,
             }]
         );
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(front_events(&mut supervisor), []);
+    }
+
+    /// 唯讀閒置的葉子，前台放開（`release`）：組合行程在收時不逐出它；組合行程沒在收時照舊逐出。
+    #[test]
+    fn release_does_not_evict_a_read_only_leaf_whose_composition_is_being_collected() {
+        let mut supervisor = an_idle_pair("evict-release", true);
+        supervisor.conversations[0].read_only = true;
+        supervisor.release(b"t");
+        assert!(supervisor.conversations[0].drain.is_none());
+
+        let mut supervisor = an_idle_pair("evict-release-control", false);
+        supervisor.conversations[0].read_only = true;
+        supervisor.release(b"t");
+        assert!(supervisor.conversations[0].drain.is_some());
     }
 
     /// 唯讀被放開（`released`）的葉子回報閒置：組合行程在收時不補送 `drain`。
