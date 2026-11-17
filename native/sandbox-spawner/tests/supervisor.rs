@@ -917,6 +917,38 @@ fn supervisor_stderr(h: &Harness) -> String {
     String::from_utf8_lossy(&std::fs::read(h.dir.join("supervisor.err")).unwrap()).into_owned()
 }
 
+/// T1：`--stall-ms` 不超過 4000 時啟動就在 stderr 警告一行（寫出值與原因），照常起來；預設值與超過 4000 的不警告。
+#[test]
+fn a_small_stall_ms_warns_at_startup_and_still_starts() {
+    let mut small = Harness::start(Options {
+        extra: vec!["--stall-ms", "300"],
+        ..Options::default()
+    });
+    // 警告在起任何行程之前就印了；照常起得來。
+    assert!(
+        supervisor_stderr(&small).contains("--stall-ms 300 "),
+        "{}",
+        supervisor_stderr(&small)
+    );
+    small.up("w,small-stall");
+    kill(small.pid(), libc::SIGTERM);
+    let mut plain = Harness::start(Options::default());
+    plain.up("w,default-stall");
+    assert!(
+        !supervisor_stderr(&plain).contains("--stall-ms"),
+        "{}",
+        supervisor_stderr(&plain)
+    );
+    let mut large = Harness::start(Options {
+        extra: vec!["--stall-ms", "4001"],
+        ..Options::default()
+    });
+    large.up("w,large-stall");
+    assert!(!supervisor_stderr(&large).contains("--stall-ms"));
+    kill(plain.pid(), libc::SIGTERM);
+    kill(large.pid(), libc::SIGTERM);
+}
+
 #[test]
 fn abort_with_the_v8_heap_message_is_heap() {
     let mut h = Harness::start(Options::default());
