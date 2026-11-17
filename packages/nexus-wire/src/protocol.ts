@@ -499,8 +499,9 @@ export const THREAD_LOG_TOO_LARGE = 'thread_log_too_large';
 export const THREAD_LOG_BUSY = 'thread_log_busy';
 
 /**
- * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)），serve 不開它。**重試沒用**：寬限期內用 `thread.restore`
- * 復原之後才打得開。任何會經 `threadFor` 續接舊 thread 的路都可能回（例如開下行、送話）。`thread.delete` 對已刪除的那一條回的是業務結果裡的同名碼，不是這個錯誤回應。
+ * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)），serve 不開它。任何會經 `threadFor` 續接舊 thread 的路都可能回（例如開下行、送話）。
+ * **已刪除的重試沒用**：寬限期內用 `thread.restore` 復原之後才打得開。正在刪除的等刪除結束：做成了同已刪除，沒做成就打得開。
+ * `thread.delete` 對已刪除的那一條回的是業務結果裡的同名碼，不是這個錯誤回應。
  */
 export const THREAD_DELETED = 'thread_deleted';
 

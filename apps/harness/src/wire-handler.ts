@@ -1804,7 +1804,7 @@ export class ThreadNotBoundError extends Error {
 }
 
 /**
- * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：組裝與觀察都拒，不建任何資源，回 `thread_deleted`。
+ * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：`threadFor` 在組裝之前拋它，不建任何資源；`threadFailure` 把它回成 `thread_deleted`。
  * 寬限期內可以復原，那是另一條路，不是這裡的事。
  */
 export class ThreadDeletedError extends Error {
@@ -1832,7 +1832,7 @@ function deletionErrorCode(
   if (method === 'thread.delete') {
     if (code === 'not_found') return 'thread_not_found';
     if (code === 'busy') return 'thread_busy';
-    if (code === 'already_deleted') return 'thread_deleted';
+    if (code === 'already_deleted') return THREAD_DELETED;
     return undefined;
   }
   if (code === 'not_deleted' || code === 'not_found') return 'thread_not_deleted';
@@ -1845,8 +1845,8 @@ function deletionErrorCode(
 /**
  * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
  *
- * 只有 `threadFor` 拋、只有 `threadOrError` 接，回 `thread_at_capacity`。**message 是給管理者看的，寫出上限與下一步**
- * （照 dsh 背景工作准入的第 5 點）：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
+ * 只有 `threadFor` 拋；上線時經 `threadFailure` 回 `thread_at_capacity`（`open` 直接叫 `threadFor`，失敗由它的呼叫端接）。
+ * **message 是給管理者看的，寫出上限與下一步**：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
  * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
  */
 export class ThreadCapacityError extends Error {
@@ -2556,7 +2556,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）；
    * 還有**寫租約被別的寫入者握著**（{@link SessionAlreadyOwnedError}，[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：回 `thread_writer_held`；
    * 以及**日誌超過這個行程的額度**（{@link SessionLogTooLargeError}，[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）：單份太大回 `thread_log_too_large`，額度被佔滿回 `thread_log_busy`；
-   * 還有**日誌記的可寫根這台接不上**（{@link ResumeWorkspaceConflictError}，[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：回 `thread_root_mismatch`，訊息不帶主機路徑。
+   * 還有**日誌記的可寫根這台接不上**（{@link ResumeWorkspaceConflictError}，[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：回 `thread_root_mismatch`，訊息不帶主機路徑；
+   * 還有**這條會話正在刪除或已刪除**（{@link ThreadDeletedError}，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：回 `thread_deleted`，什麼時候打得開見 `THREAD_DELETED`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。

@@ -222,7 +222,7 @@ describe('刪除、復原與已刪除清單：真的 wire 往返', () => {
     expect(rest).toEqual([]);
   });
 
-  it('刪掉之後再開這條（重連、送話）：回專用碼 thread_deleted，客戶端分得出是刪了、不是暫時連不上', async () => {
+  it('刪掉之後再開這條（開下行、送話）：回專用碼 thread_deleted，客戶端分得出是刪了、不是暫時連不上', async () => {
     await seed('t-live');
     await seed('t-gone');
     const { client } = setup();
