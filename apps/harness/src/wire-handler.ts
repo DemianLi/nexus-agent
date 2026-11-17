@@ -2041,15 +2041,15 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 見 {@link WireHandlerOptions.idleEvictMs}：那裡列的每一條都要成立；`viewersBlock: false` 時「沒有下行掛著」那一條不看。
+   * 見 {@link WireHandlerOptions.idleEvictMs}：那裡列的每一條都要成立；`releasing: true` 時「沒有下行掛著」與「沒有 LLM 標題在產生」兩條不看。
    *
-   * `viewersBlock: false` 給刪除用（`releaseThreadWriter`）：開著下行的人只讀不寫，撤出時 `pump.close()` 讓那幾條正常結束；
-   * 閒置逐出照舊不撤有人在看的。
+   * `releasing: true` 給刪除用（`releaseThreadWriter`）：開著下行的人只讀不寫，撤出時 `pump.close()` 讓那幾條正常結束；
+   * 在飛的標題由撤出時的拆掉中止，結果寫不進去，不等它自己逾時。閒置逐出照舊不撤有人在看的、也不中止標題。
    */
   function isIdle(
     threadId: string,
     state: ThreadState,
-    { viewersBlock = true }: { readonly viewersBlock?: boolean } = {},
+    { releasing = false }: { readonly releasing?: boolean } = {},
   ): boolean {
     const { pump } = state;
     return (
@@ -2059,10 +2059,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       pump.inbox.length === 0 &&
       pump.nextStep.length === 0 &&
       !pump.goalRoundInFlight &&
-      (!viewersBlock || pump.subscriberCount === 0) &&
+      (releasing || pump.subscriberCount === 0) &&
       (state.background?.quiescent() ?? true) &&
       !state.goalArmed() &&
-      !state.titleBusy() &&
+      (releasing || !state.titleBusy()) &&
       !state.slashInFlight &&
       state.promptRequestsInFlight.size === 0 &&
       (httpInFlight.get(threadId) ?? 0) === 0
@@ -2117,7 +2117,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 刪除會話時的寫入方放手（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，single 模式）：停掉還在跑的一輪、等到閒置
    * （含背景子代理），再走閒置逐出的那一條撤出記憶體。**回來時寫租約已經放掉**：撤出的 promise 在 `release` 收完之後才兌現。
-   * 開著的下行不擋：撤出時 `pump.close()` 讓它們正常結束（閒置逐出照舊等下行放掉）。
+   * 開著的下行與在飛的標題不擋，撤出時一併收掉（閒置逐出照舊等它們）。
    * 不在記憶體裡就問對話行程，沒有行程就直接回；等不到閒置超過 {@link WireHandlerOptions.releaseIdleWaitMs}（預設 {@link RELEASE_IDLE_WAIT_MS}）就拋，不硬撤。
    */
   async function releaseThreadWriter(threadId: string): Promise<void> {
@@ -2137,7 +2137,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     state.pump.cancel();
     const waitMs = options.releaseIdleWaitMs ?? RELEASE_IDLE_WAIT_MS;
     const deadline = Date.now() + waitMs;
-    while (!isIdle(threadId, state, { viewersBlock: false })) {
+    while (!isIdle(threadId, state, { releasing: true })) {
       if (Date.now() > deadline) {
         throw new Error(`thread "${threadId}" 等不到閒置（${String(waitMs)} 毫秒），不撤`);
       }
