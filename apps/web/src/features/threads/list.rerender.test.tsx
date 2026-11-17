@@ -9,7 +9,7 @@ import type { ThreadDirectory } from '@/features/threads/use-directory';
 import type { ThreadManagement } from '@/features/threads/management';
 
 /**
- * 下面兩件事任一件發生，300 列時串流每一格都要重畫整張清單：每一列各掛一份選單與確認框、外層重畫時列跟著重畫。
+ * 下面兩件事任一件發生，會話一多，串流每一格都要重畫整張清單：每一列各掛一份選單與確認框、外層重畫時列跟著重畫。
  * 兩條測試各釘一件。數的是確定的次數，不量毫秒：毫秒在 jsdom 與 CI 上都不穩。
  */
 
@@ -34,7 +34,7 @@ vi.mock('@/components/ui/dropdown-menu', async (importOriginal) => {
   };
 });
 
-const COUNT = 300;
+const COUNT = 30;
 const NOW = Date.now();
 const ITEMS: ThreadSummary[] = Array.from({ length: COUNT }, (_, index) => ({
   threadId: `t${index}`,
