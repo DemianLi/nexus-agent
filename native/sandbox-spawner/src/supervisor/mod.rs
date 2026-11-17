@@ -2491,6 +2491,7 @@ impl Supervisor {
                             signalled: &swept.signalled,
                             left: &swept.left,
                             fallback: swept.fallback,
+                            error: swept.error.as_deref(),
                         });
                     }
                 }

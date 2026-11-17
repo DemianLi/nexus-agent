@@ -531,6 +531,21 @@ fn reap_收掉忽略_sigterm_的子行程() {
 mod group {
     use super::*;
 
+    /// 這個行程有沒有控制終端：`/proc/self/stat` 的 `tty_nr` 不是 0。讀不到也當成有（保守，不跳過）。
+    fn has_controlling_terminal() -> bool {
+        std::fs::read_to_string("/proc/self/stat")
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(')')?
+                    .1
+                    .split_whitespace()
+                    .nth(4)?
+                    .parse::<i64>()
+                    .ok()
+            })
+            .is_none_or(|tty| tty != 0)
+    }
+
     /// 孫行程的 pid 檔：孫行程是 `sh -c 'echo $$ > 檔; exec sleep 300'`，所以檔裡的 pid 就是那個 `sleep`。
     fn grandchild_script(file: &str, prefix: &str) -> String {
         format!("{prefix}/bin/sh -c 'echo $$ > {file}; exec /bin/sleep 300' & ")
@@ -706,6 +721,16 @@ mod group {
     /// 測試行程有控制終端時（從終端機直接跑 `cargo test`）spawner 會拒絕，這條也紅；CI 與容器裡沒有控制終端。
     #[test]
     fn reap_收掉被_spawner_exec_包起來的整組() {
+        // 測試行程自己有控制終端時（從終端機直接跑 `cargo test`），spawner 照設計拒絕：跳過並說明原因。
+        // `CI` 有設就不跳過、直接往下跑到紅，免得 CI 上靜靜跳過；要在終端機跑它用 `setsid cargo test`（`docs/host-mcp.md`）。
+        if has_controlling_terminal() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI 環境的測試行程有控制終端：spawner 會拒絕包 --exec 的 server，這一支測不了"
+            );
+            eprintln!("跳過：測試行程有控制終端，spawner 的 --exec 會拒絕留在這個 session（用 `setsid cargo test` 跑）");
+            return;
+        }
         let file = pid_file("group-exec");
         let _ = std::fs::remove_file(&file);
         let dir = std::path::Path::new(&file).parent().unwrap();

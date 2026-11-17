@@ -5,11 +5,15 @@
 //! 所以宿主結束、還沒收屍時（殭屍還在，session 號就是它的 pid，不會被別人拿去用）掃 `/proc` 找 session 等於宿主 pid 的行程，一個個送 SIGKILL。
 //! 收不到：自己再 `setsid` 的子孫，與已經不是宿主的後代而被別人收養的。
 //!
+//! 這一層是保底，「送不出去」不能被當成「已經不在」：只有 `ESRCH`（行程沒了）與再核之後不是這個 session 的成員才算不在；
+//! 其他錯（fd 用完、記憶體不足、沒有權限）是 [`Kill::Failed`]，不算送過、算進剩下的、記進稽核。
+//!
 //! 掃與殺分開：[`sweep`] 只管迴圈與上限，吃一個「列出成員」與一個「送訊號」的函式，測試可以餵假的行程清單；
-//! 真的 `/proc` 與 `pidfd` 在 [`list_members`]、[`kill_member`]。
+//! 真的 `/proc` 與 `pidfd` 在 [`list_members`]、[`kill_member`]；送訊號前的再核與各個系統呼叫在 [`kill_member_with`]，同樣可以換成假的。
 
 use std::fs;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 /// 最多掃幾輪。每一輪只對「還沒送過訊號」的活行程送；到了上限還有新的就停，照常收屍並記稽核。
 pub const MAX_ROUNDS: usize = 8;
@@ -39,20 +43,42 @@ pub fn parse_stat(text: &str) -> Option<Member> {
     })
 }
 
-/// 讀一個行程；不在了（或讀不了）是 `None`。
-pub fn read_member(pid: libc::pid_t) -> Option<Member> {
-    parse_stat(&fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+/// 行程不在了的錯：`/proc/<pid>` 沒有（`ENOENT`）或行程沒了（`ESRCH`）。
+fn is_gone(err: &io::Error) -> bool {
+    matches!(err.raw_os_error(), Some(libc::ENOENT | libc::ESRCH))
 }
 
-/// 列出 `/proc` 底下所有看得到的行程。掃的當下消失的略過。
-pub fn list_members() -> Vec<Member> {
-    let Ok(dir) = fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    dir.flatten()
-        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
-        .filter_map(read_member)
-        .collect()
+/// 讀一個行程：不在了是 `Ok(None)`；讀不了（fd 用完之類）或解不開是 `Err`，**不能**當成不在。
+pub fn read_member(pid: libc::pid_t) -> io::Result<Option<Member>> {
+    match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(text) => parse_stat(&text).map(Some).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("解不開 /proc/{pid}/stat"),
+            )
+        }),
+        Err(err) if is_gone(&err) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// 列出 `/proc` 底下所有看得到的行程。掃的當下消失的略過；開不了 `/proc`、讀到一半出錯是 `Err`，不回空清單。
+pub fn list_members() -> io::Result<Vec<Member>> {
+    let mut members = Vec::new();
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse().ok())
+        else {
+            continue;
+        };
+        if let Some(member) = read_member(pid)? {
+            members.push(member);
+        }
+    }
+    Ok(members)
 }
 
 /// 送訊號的結果。
@@ -62,8 +88,10 @@ pub enum Kill {
     Sent,
     /// 沒有 `pidfd`（核心太舊或不准），退回對單一 pid 送。
     Fallback,
-    /// 送之前再核一次，已經不是這個 session 的、或已經不在：不送。
+    /// 行程已經沒了（`ESRCH`），或送之前再核一次，已經不是這個 session 的成員：不用送。
     Gone,
+    /// 沒送成、而且不能說它不在了（錯誤碼）：fd 用完、記憶體不足、沒有權限。
+    Failed(i32),
 }
 
 /// 掃的結果。
@@ -73,62 +101,84 @@ pub struct Sweep {
     pub rounds: usize,
     /// 送過訊號的 pid（含退路送的）。
     pub signalled: Vec<libc::pid_t>,
-    /// 到上限時還掃得到的、沒送過訊號的活行程。
+    /// 到上限時還掃得到的、沒送過訊號的活行程（含送不成的）。
     pub left: Vec<libc::pid_t>,
     /// 有任何一個走了退路。
     pub fallback: bool,
+    /// 第一個沒處理好的錯：列不出成員，或某個行程送不成。
+    pub error: Option<String>,
 }
 
 impl Sweep {
-    /// 值得寫一筆稽核：送過訊號、走過退路，或到上限還有剩的。
+    /// 值得寫一筆稽核：送過訊號、走過退路、有錯，或到上限還有剩的。
     pub fn worth_recording(&self) -> bool {
-        !self.signalled.is_empty() || self.fallback || !self.left.is_empty()
+        !self.signalled.is_empty() || self.fallback || !self.left.is_empty() || self.error.is_some()
     }
 }
 
 /// 收 session 等於 `host` 的行程，`host` 自己不算。每一輪列一次，對還沒送過訊號的活行程各送一次；
 /// 掃到沒有新的為止，最多 [`MAX_ROUNDS`] 輪。送過訊號的不再送（它可能還沒死透、還在清單上）。
-/// `kill` 回 [`Kill::Gone`] 的不算送過。
+/// `kill` 回 [`Kill::Gone`] 的不算送過；回 [`Kill::Failed`] 的也不算，下一輪再試，到上限還在就留在 `left`。
+/// 列不出成員（`list` 回錯誤）就停，錯記在 `error`：不當成「沒有成員」。
 pub fn sweep(
     host: libc::pid_t,
-    mut list: impl FnMut() -> Vec<Member>,
+    mut list: impl FnMut() -> io::Result<Vec<Member>>,
     mut kill: impl FnMut(&Member) -> Kill,
 ) -> Sweep {
     let mut result = Sweep::default();
     let mut seen: Vec<(libc::pid_t, u64)> = Vec::new();
-    let fresh = |list: &mut dyn FnMut() -> Vec<Member>, seen: &[(libc::pid_t, u64)]| {
-        list()
+    let mut fresh = |seen: &[(libc::pid_t, u64)]| -> io::Result<Vec<Member>> {
+        Ok(list()?
             .into_iter()
             .filter(|m| m.session == host && m.pid != host && !m.zombie)
             .filter(|m| !seen.contains(&(m.pid, m.start)))
-            .collect::<Vec<_>>()
+            .collect())
     };
     for _ in 0..MAX_ROUNDS {
-        let members = fresh(&mut list, &seen);
+        let members = match fresh(&seen) {
+            Ok(members) => members,
+            Err(err) => {
+                result.error.get_or_insert(format!("列不出行程：{err}"));
+                return result;
+            }
+        };
         if members.is_empty() {
             return result;
         }
         let mut sent = false;
         for member in &members {
-            seen.push((member.pid, member.start));
             match kill(member) {
                 Kill::Sent => {
+                    seen.push((member.pid, member.start));
                     sent = true;
                     result.signalled.push(member.pid);
                 }
                 Kill::Fallback => {
+                    seen.push((member.pid, member.start));
                     sent = true;
                     result.fallback = true;
                     result.signalled.push(member.pid);
                 }
-                Kill::Gone => {}
+                Kill::Gone => seen.push((member.pid, member.start)),
+                Kill::Failed(errno) => {
+                    result.error.get_or_insert(format!(
+                        "送不出去 {}：{}",
+                        member.pid,
+                        io::Error::from_raw_os_error(errno)
+                    ));
+                }
             }
         }
         if sent {
             result.rounds += 1;
         }
     }
-    result.left = fresh(&mut list, &seen).iter().map(|m| m.pid).collect();
+    match fresh(&seen) {
+        Ok(left) => result.left = left.iter().map(|m| m.pid).collect(),
+        Err(err) => {
+            result.error.get_or_insert(format!("列不出行程：{err}"));
+        }
+    }
     result
 }
 
@@ -140,56 +190,101 @@ pub fn still_member(host: libc::pid_t, scanned: &Member, now: Option<&Member>) -
     })
 }
 
-/// 對 `member` 送 SIGKILL。先開 `pidfd`（之後的訊號只會到這個行程，pid 之後被重用也不會打錯人），再核一次它還是這個 session 的成員，才用把手送。
-/// `pidfd_open` 或 `pidfd_send_signal` 回 `ENOSYS`／`EPERM` 時退回對**單一 pid** 送（不對組），回 [`Kill::Fallback`]，呼叫端記稽核。
+/// 對 `member` 送 SIGKILL，用真的 `/proc` 與 `pidfd`。
 pub fn kill_member(host: libc::pid_t, member: &Member) -> Kill {
-    // SAFETY：`pidfd_open` 只回一個新的 fd，成功時交給 `OwnedFd` 管。
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, member.pid, 0) };
-    if fd < 0 {
-        return match errno() {
-            libc::ENOSYS | libc::EPERM => fallback(host, member),
-            _ => Kill::Gone,
-        };
-    }
-    // SAFETY：`fd` 是剛開成功的 fd，沒有別人持有。
-    let pidfd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
-    if !still_member(host, member, read_member(member.pid).as_ref()) {
-        return Kill::Gone;
-    }
-    // SAFETY：`pidfd` 有效；`info` 傳空指標，核心用預設的。
-    let rc = unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            std::os::fd::AsRawFd::as_raw_fd(&pidfd),
-            libc::SIGKILL,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        )
-    };
-    if rc == 0 {
-        return Kill::Sent;
-    }
-    match errno() {
-        libc::ENOSYS | libc::EPERM => fallback(host, member),
-        _ => Kill::Gone,
-    }
+    kill_member_with(
+        host,
+        member,
+        read_member,
+        |pid| {
+            // SAFETY：`pidfd_open` 只回一個新的 fd，成功時交給 `OwnedFd` 管。
+            let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+            if fd < 0 {
+                return Err(errno());
+            }
+            // SAFETY：`fd` 是剛開成功的 fd，沒有別人持有。
+            Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+        },
+        |pidfd| {
+            // SAFETY：`pidfd` 有效；`info` 傳空指標，核心用預設的。
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    pidfd.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(errno())
+            }
+        },
+        |pid| {
+            // SAFETY：只送訊號給單一 pid。
+            if unsafe { libc::kill(pid, libc::SIGKILL) } == 0 {
+                Ok(())
+            } else {
+                Err(errno())
+            }
+        },
+    )
 }
 
-/// 沒有把手時：對單一 pid 送。不對組；pid 重用的窗留著（核一次再送，之間仍有極小的窗），所以只在把手不能用時走這裡。
-fn fallback(host: libc::pid_t, member: &Member) -> Kill {
-    if !still_member(host, member, read_member(member.pid).as_ref()) {
-        return Kill::Gone;
+/// [`kill_member`] 的本體，讀行程與三個系統呼叫都由呼叫端給（測試換成假的）。
+///
+/// 先開 `pidfd`（之後的訊號只會到這個行程，pid 之後被重用也不會打錯人），再用 `read` 核一次它還是這個 session 的成員，才用把手送。
+/// `open` 或 `send` 回 `ENOSYS`／`EPERM` 時退回 `kill`：對**單一 pid** 送（不對組），核了再送，回 [`Kill::Fallback`]，呼叫端記稽核。
+/// 只有 `ESRCH` 與再核不是成員才是 [`Kill::Gone`]；其他錯（含再核時讀不到）是 [`Kill::Failed`]。
+pub fn kill_member_with(
+    host: libc::pid_t,
+    member: &Member,
+    read: impl Fn(libc::pid_t) -> io::Result<Option<Member>>,
+    open: impl Fn(libc::pid_t) -> Result<OwnedFd, i32>,
+    send: impl Fn(&OwnedFd) -> Result<(), i32>,
+    kill: impl Fn(libc::pid_t) -> Result<(), i32>,
+) -> Kill {
+    // 再核：讀不到不能當成不在。
+    let recheck = || -> Result<bool, i32> {
+        match read(member.pid) {
+            Ok(now) => Ok(still_member(host, member, now.as_ref())),
+            Err(err) => Err(err.raw_os_error().unwrap_or(libc::EIO)),
+        }
+    };
+    let fallback = || -> Kill {
+        match recheck() {
+            Ok(true) => match kill(member.pid) {
+                Ok(()) => Kill::Fallback,
+                Err(libc::ESRCH) => Kill::Gone,
+                Err(code) => Kill::Failed(code),
+            },
+            Ok(false) => Kill::Gone,
+            Err(code) => Kill::Failed(code),
+        }
+    };
+    let pidfd = match open(member.pid) {
+        Ok(pidfd) => pidfd,
+        Err(libc::ENOSYS | libc::EPERM) => return fallback(),
+        Err(libc::ESRCH) => return Kill::Gone,
+        Err(code) => return Kill::Failed(code),
+    };
+    match recheck() {
+        Ok(true) => {}
+        Ok(false) => return Kill::Gone,
+        Err(code) => return Kill::Failed(code),
     }
-    // SAFETY：只送訊號給單一 pid。
-    if unsafe { libc::kill(member.pid, libc::SIGKILL) } == 0 {
-        Kill::Fallback
-    } else {
-        Kill::Gone
+    match send(&pidfd) {
+        Ok(()) => Kill::Sent,
+        Err(libc::ENOSYS | libc::EPERM) => fallback(),
+        Err(libc::ESRCH) => Kill::Gone,
+        Err(code) => Kill::Failed(code),
     }
 }
 
 fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -206,6 +301,15 @@ mod tests {
         }
     }
 
+    fn ok(members: Vec<Member>) -> io::Result<Vec<Member>> {
+        Ok(members)
+    }
+
+    /// 給 `kill_member_with` 用的把手：隨便一個開著的 fd。
+    fn some_fd() -> OwnedFd {
+        OwnedFd::from(fs::File::open("/dev/null").unwrap())
+    }
+
     /// U1：每一輪清單都冒出新的成員（像一直 fork 的行程）：到 [`MAX_ROUNDS`] 輪就停，不再掃，剩下的記在 `left`。
     #[test]
     fn u1_stops_after_the_round_limit_and_reports_what_is_left() {
@@ -217,7 +321,7 @@ mod tests {
                 lists.set(lists.get() + 1);
                 let pid = next.get();
                 next.set(pid + 1);
-                vec![member(pid, 50)]
+                ok(vec![member(pid, 50)])
             },
             |_| Kill::Sent,
         );
@@ -229,13 +333,36 @@ mod tests {
         assert!(result.worth_recording());
     }
 
+    /// A10：到上限只剩下 `left`、一個都沒送成時也要記稽核（`signalled` 是空的，只靠 `left` 為真）。
+    #[test]
+    fn a_leftover_alone_is_worth_recording() {
+        let only_left = Sweep {
+            left: vec![9],
+            ..Sweep::default()
+        };
+        assert!(only_left.worth_recording());
+        assert!(!Sweep::default().worth_recording());
+        let only_error = Sweep {
+            error: Some("x".into()),
+            ..Sweep::default()
+        };
+        assert!(only_error.worth_recording());
+    }
+
     /// 清單乾淨了就停，不用等滿上限；送過訊號、還掛在清單上的不再送第二次。
     #[test]
     fn stops_when_nothing_new_and_never_signals_twice() {
         let sent = RefCell::new(Vec::new());
         let result = sweep(
             50,
-            || vec![member(7, 50), member(8, 50), member(9, 51), member(50, 50)],
+            || {
+                ok(vec![
+                    member(7, 50),
+                    member(8, 50),
+                    member(9, 51),
+                    member(50, 50),
+                ])
+            },
             |m| {
                 sent.borrow_mut().push(m.pid);
                 Kill::Sent
@@ -251,23 +378,86 @@ mod tests {
     fn zombies_are_neither_signalled_nor_left() {
         let mut dead = member(7, 50);
         dead.zombie = true;
-        let result = sweep(50, || vec![dead.clone()], |_| panic!("不該送"));
+        let result = sweep(50, || ok(vec![dead.clone()]), |_| panic!("不該送"));
         assert_eq!(result, Sweep::default());
         assert!(!result.worth_recording());
     }
 
-    /// `Gone` 不算送過：送之前再核一次發現已經離開的，不進 `signalled`。
+    /// `Gone` 不算送過：送之前再核一次發現已經離開的，不進 `signalled`，也不再試。
     #[test]
-    fn gone_members_are_not_counted() {
-        let result = sweep(50, || vec![member(7, 50)], |_| Kill::Gone);
+    fn gone_members_are_not_counted_or_retried() {
+        let calls = Cell::new(0);
+        let result = sweep(
+            50,
+            || ok(vec![member(7, 50)]),
+            |_| {
+                calls.set(calls.get() + 1);
+                Kill::Gone
+            },
+        );
         assert!(result.signalled.is_empty());
         assert_eq!(result.rounds, 0);
+        assert_eq!(calls.get(), 1);
+        assert!(!result.worth_recording());
+    }
+
+    /// 送不成（`Failed`）不是不在：不進 `signalled`、每一輪再試、到上限還在就留在 `left`，錯記下來、值得寫稽核。
+    #[test]
+    fn a_failed_kill_is_retried_and_ends_up_in_left() {
+        let calls = Cell::new(0);
+        let result = sweep(
+            50,
+            || ok(vec![member(7, 50)]),
+            |_| {
+                calls.set(calls.get() + 1);
+                Kill::Failed(libc::EMFILE)
+            },
+        );
+        assert_eq!(calls.get(), MAX_ROUNDS);
+        assert!(result.signalled.is_empty());
+        assert_eq!(result.left, vec![7]);
+        assert!(result.error.as_deref().unwrap().contains('7'));
+        assert!(result.worth_recording());
+    }
+
+    /// 前面失敗、後面送成了：之後不再列為剩下的。
+    #[test]
+    fn a_failed_kill_that_later_succeeds_is_not_left() {
+        let calls = Cell::new(0);
+        let result = sweep(
+            50,
+            || ok(vec![member(7, 50)]),
+            |_| {
+                calls.set(calls.get() + 1);
+                if calls.get() < 3 {
+                    Kill::Failed(libc::ENOMEM)
+                } else {
+                    Kill::Sent
+                }
+            },
+        );
+        assert_eq!(result.signalled, vec![7]);
+        assert!(result.left.is_empty());
+        assert!(result.error.is_some(), "曾經失敗過的錯留著，稽核才看得到");
+    }
+
+    /// 列不出成員（`/proc` 開不了）：不當成「沒有成員」，停下來、記錯、值得寫稽核，一個都不送。
+    #[test]
+    fn a_failed_listing_is_an_error_not_an_empty_list() {
+        let result = sweep(
+            50,
+            || Err(io::Error::from_raw_os_error(libc::EMFILE)),
+            |_| panic!("不該送"),
+        );
+        assert!(result.error.as_deref().unwrap().contains("列不出"));
+        assert!(result.worth_recording());
+        assert!(result.signalled.is_empty());
     }
 
     /// 走過退路的要留記號，稽核才寫得出來。
     #[test]
     fn fallback_is_remembered() {
-        let result = sweep(50, || vec![member(7, 50)], |_| Kill::Fallback);
+        let result = sweep(50, || ok(vec![member(7, 50)]), |_| Kill::Fallback);
         assert!(result.fallback);
         assert_eq!(result.signalled, vec![7]);
     }
@@ -291,9 +481,9 @@ mod tests {
         assert!(parse_stat("42 (x) S 1 2").is_none());
     }
 
-    /// U3：送訊號前再核一次：不在了、換了行程（啟動時間不同）、換了 session、變成殭屍，都不送。
+    /// U3：再核的判斷：不在了、換了行程（啟動時間不同）、換了 session、變成殭屍，都不算成員。
     #[test]
-    fn u3_rechecks_before_signalling() {
+    fn u3_still_member_checks_every_field() {
         let scanned = member(7, 50);
         assert!(still_member(50, &scanned, Some(&scanned)));
         assert!(!still_member(50, &scanned, None));
@@ -311,64 +501,233 @@ mod tests {
         assert!(!still_member(50, &scanned, Some(&other)));
     }
 
-    /// 真的 `/proc` 與 `pidfd`：自成 session 的 sh 底下兩個 `sleep`（其中一個自己換了行程群組），掃完兩個都不在了，領頭（宿主）不動。
+    /// A8：掃到時在、送之前 pid 被別人拿去用（啟動時間不同）：**一個訊號都不送**，也不走退路。這一支守的是「不誤殺別人」。
     #[test]
-    fn kills_the_real_members_of_a_session_but_not_its_leader() {
-        use std::os::unix::process::CommandExt;
-        use std::process::Command;
-        let mut leader = Command::new("/bin/sh");
-        leader
-            .arg("-c")
-            .arg("sleep 300 & echo $!; (exec setsid -w sleep 300) & wait");
-        leader.stdout(std::process::Stdio::piped());
-        // SAFETY：pre_exec 裡只有 setsid。
-        unsafe {
-            leader.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
+    fn a8_a_reused_pid_is_not_signalled() {
+        let scanned = member(7, 50);
+        let mut reused = scanned.clone();
+        reused.start = 99;
+        let sent = Cell::new(0);
+        let killed = Cell::new(0);
+        let got = kill_member_with(
+            50,
+            &scanned,
+            |_| Ok(Some(reused.clone())),
+            |_| Ok(some_fd()),
+            |_| {
+                sent.set(sent.get() + 1);
                 Ok(())
-            });
-        }
-        let mut leader = leader.spawn().unwrap();
-        let host = leader.id() as libc::pid_t;
-        let mut line = String::new();
-        std::io::BufRead::read_line(
-            &mut std::io::BufReader::new(leader.stdout.take().unwrap()),
-            &mut line,
-        )
-        .unwrap();
-        let first: libc::pid_t = line.trim().parse().unwrap();
-        // 等第二個 sleep 也起來（setsid -w 之下它自己開了新 session，不在宿主的 session，預期掃不到：這是限制）。
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while read_member(first).is_none() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let result = sweep(host, list_members, |member| kill_member(host, member));
-        assert!(result.signalled.contains(&first), "{result:?}");
-        assert!(!result.fallback, "{result:?}");
-        assert!(result.left.is_empty(), "{result:?}");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while read_member(first).is_some_and(|m| !m.zombie) && std::time::Instant::now() < deadline
-        {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert!(read_member(first).is_none_or(|m| m.zombie));
-        assert!(read_member(host).is_some_and(|m| !m.zombie), "領頭不該被動");
-        // 自己 `setsid` 的那個不在這個 session，掃不到：已知限制（L1 在整合測試釘）。
-        assert!(result.signalled.iter().all(|pid| *pid != host));
-        leader.kill().unwrap();
-        leader.wait().unwrap();
+            },
+            |_| {
+                killed.set(killed.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(got, Kill::Gone);
+        assert_eq!((sent.get(), killed.get()), (0, 0));
     }
 
-    /// 真的 `/proc`：自己讀得到自己，session 欄與 `getsid` 一致。
+    /// 同上，退路那條：沒有 `pidfd` 時送之前也要核。
+    #[test]
+    fn a8_the_fallback_rechecks_too() {
+        let scanned = member(7, 50);
+        let mut moved = scanned.clone();
+        moved.session = 7;
+        let killed = Cell::new(0);
+        let got = kill_member_with(
+            50,
+            &scanned,
+            |_| Ok(Some(moved.clone())),
+            |_| Err(libc::ENOSYS),
+            |_| unreachable!("沒有把手"),
+            |_| {
+                killed.set(killed.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(got, Kill::Gone);
+        assert_eq!(killed.get(), 0);
+    }
+
+    /// 還是成員就送：用把手；把手不能用（`ENOSYS`）才退回單一 pid。
+    #[test]
+    fn a_confirmed_member_is_signalled_through_the_handle_or_the_fallback() {
+        let scanned = member(7, 50);
+        let read = |_| Ok(Some(member(7, 50)));
+        let sent = Cell::new(0);
+        let got = kill_member_with(
+            50,
+            &scanned,
+            read,
+            |_| Ok(some_fd()),
+            |_| {
+                sent.set(sent.get() + 1);
+                Ok(())
+            },
+            |_| unreachable!("有把手不該退回"),
+        );
+        assert_eq!((got, sent.get()), (Kill::Sent, 1));
+        let got = kill_member_with(
+            50,
+            &scanned,
+            read,
+            |_| Ok(some_fd()),
+            |_| Err(libc::ENOSYS),
+            |_| Ok(()),
+        );
+        assert_eq!(got, Kill::Fallback);
+    }
+
+    /// 只有 `ESRCH` 是不在；其他錯都是 `Failed`：開把手失敗（fd 用完）、再核讀不到、送不出去、退路的 `kill` 沒權限。
+    #[test]
+    fn only_esrch_means_gone_everything_else_failed() {
+        let scanned = member(7, 50);
+        let read = |_| Ok(Some(member(7, 50)));
+        let run = |open: Result<OwnedFd, i32>, send: Result<(), i32>, kill: Result<(), i32>| {
+            let open = Cell::new(Some(open));
+            kill_member_with(
+                50,
+                &scanned,
+                read,
+                |_| open.take().unwrap(),
+                |_| send,
+                |_| kill,
+            )
+        };
+        assert_eq!(run(Err(libc::ESRCH), Ok(()), Ok(())), Kill::Gone);
+        assert_eq!(
+            run(Err(libc::EMFILE), Ok(()), Ok(())),
+            Kill::Failed(libc::EMFILE)
+        );
+        assert_eq!(
+            run(Err(libc::ENFILE), Ok(()), Ok(())),
+            Kill::Failed(libc::ENFILE)
+        );
+        assert_eq!(
+            run(Err(libc::ENOMEM), Ok(()), Ok(())),
+            Kill::Failed(libc::ENOMEM)
+        );
+        assert_eq!(run(Ok(some_fd()), Err(libc::ESRCH), Ok(())), Kill::Gone);
+        assert_eq!(
+            run(Ok(some_fd()), Err(libc::ENOMEM), Ok(())),
+            Kill::Failed(libc::ENOMEM)
+        );
+        // 退路：沒有權限的 `kill` 不是「不在」。
+        assert_eq!(
+            run(Err(libc::ENOSYS), Ok(()), Err(libc::EPERM)),
+            Kill::Failed(libc::EPERM)
+        );
+        assert_eq!(run(Err(libc::ENOSYS), Ok(()), Err(libc::ESRCH)), Kill::Gone);
+        // 再核時讀不到（fd 用完）：不能當成不在。
+        let got = kill_member_with(
+            50,
+            &scanned,
+            |_| Err(io::Error::from_raw_os_error(libc::EMFILE)),
+            |_| Ok(some_fd()),
+            |_| unreachable!("核不了就不送"),
+            |_| unreachable!("核不了就不送"),
+        );
+        assert_eq!(got, Kill::Failed(libc::EMFILE));
+    }
+
+    /// 真的 `/proc` 與 `pidfd`：自成 session 的領頭（宿主）底下兩個成員，一個留在領頭那一組、一個自己換了行程群組（`setpgid`，沒換 session）。
+    /// 兩個都掃得到、送得到、掃完都不在（死了留成領頭的殭屍也算）；領頭不動。結束時領頭一併收掉，不留行程。
+    #[test]
+    fn kills_members_of_a_session_including_one_that_changed_group() {
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY：fork 之後子行程只呼叫 async-signal-safe 的函式（setsid、fork、setpgid、write、pause）。
+        let leader = unsafe {
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            let leader = libc::fork();
+            assert!(leader >= 0);
+            if leader == 0 {
+                libc::close(fds[0]);
+                libc::setsid();
+                for i in 0..2 {
+                    let child = libc::fork();
+                    if child == 0 {
+                        if i == 1 {
+                            libc::setpgid(0, 0);
+                        }
+                        loop {
+                            libc::pause();
+                        }
+                    }
+                    let bytes = child.to_ne_bytes();
+                    libc::write(fds[1], bytes.as_ptr().cast(), bytes.len());
+                }
+                loop {
+                    libc::pause();
+                }
+            }
+            libc::close(fds[1]);
+            leader
+        };
+        let mut pids = [0 as libc::pid_t; 2];
+        for pid in &mut pids {
+            let mut bytes = [0u8; 4];
+            // SAFETY：讀進長度正好的緩衝區。
+            let n = unsafe { libc::read(fds[0], bytes.as_mut_ptr().cast(), bytes.len()) };
+            assert_eq!(n, 4);
+            *pid = libc::pid_t::from_ne_bytes(bytes);
+        }
+        // SAFETY：關掉自己開的管線。
+        unsafe { libc::close(fds[0]) };
+        // 第二個的 setpgid 要等它跑到；等它的組號等於自己的 pid。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            // SAFETY：只查行程群組。
+            if unsafe { libc::getpgid(pids[1]) } == pids[1] {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "第二個成員沒換組");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // SAFETY：只查行程群組。
+        assert_eq!(
+            unsafe { libc::getpgid(pids[0]) },
+            leader,
+            "第一個該留在領頭那一組"
+        );
+
+        let result = sweep(leader, list_members, |member| kill_member(leader, member));
+
+        let alive = |pid| read_member(pid).unwrap().is_some_and(|m| !m.zombie);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pids.iter().any(|pid| alive(*pid)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let leader_alive = alive(leader);
+        let survivors: Vec<_> = pids.iter().filter(|pid| alive(**pid)).collect();
+        // 清掉領頭，不留行程：成員已死（領頭的殭屍），領頭 SIGKILL 之後收屍。
+        // SAFETY：只動這個測試自己 fork 出來的領頭。
+        unsafe {
+            libc::kill(leader, libc::SIGKILL);
+            libc::waitpid(leader, std::ptr::null_mut(), 0);
+        }
+        for pid in pids {
+            assert!(
+                result.signalled.contains(&pid),
+                "{pid} 沒被送到：{result:?}"
+            );
+        }
+        assert!(
+            !result.fallback && result.left.is_empty() && result.error.is_none(),
+            "{result:?}"
+        );
+        assert!(leader_alive, "領頭不該被動");
+        assert!(survivors.is_empty(), "{survivors:?} 還活著");
+    }
+
+    /// 真的 `/proc`：自己讀得到自己，session 欄與 `getsid` 一致；不存在的 pid 是 `Ok(None)`。
     #[test]
     fn reads_the_real_proc_for_this_process() {
         let me = std::process::id() as libc::pid_t;
-        let read = read_member(me).expect("讀得到自己");
+        let read = read_member(me).unwrap().expect("讀得到自己");
         assert_eq!(read.pid, me);
         // SAFETY：`getsid(0)` 只回自己的 session。
         assert_eq!(read.session, unsafe { libc::getsid(0) });
-        assert!(list_members().iter().any(|m| m.pid == me));
+        assert!(list_members().unwrap().iter().any(|m| m.pid == me));
+        assert_eq!(read_member(i32::MAX).unwrap(), None);
     }
 }

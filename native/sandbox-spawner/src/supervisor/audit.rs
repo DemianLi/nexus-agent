@@ -89,13 +89,15 @@ pub enum Record<'a> {
         reason: &'a str,
     },
     /// 宿主結束時掃它那個 session 裡剩下的行程（[`super::sweep`]）。`signalled`：送過 SIGKILL 的 pid；`left`：到上限還掃得到、沒送過的；
-    /// `rounds`：有送訊號的輪數；`fallback`：有沒有走過退回單一 pid 的路。只在有送過、走過退路或有剩下時寫。
+    /// `rounds`：有送訊號的輪數；`fallback`：有沒有走過退回單一 pid 的路；`error`：列不出成員或某個行程送不成的第一個錯。
+    /// 只在有送過、走過退路、有剩下或有錯時寫。
     Sweep {
         pid: i32,
         rounds: usize,
         signalled: &'a [i32],
         left: &'a [i32],
         fallback: bool,
+        error: Option<&'a str>,
     },
     /// 一條 thread 的行程連續失敗，這個窗第一次擋掉它的 `ensure`（[`super::Supervisor::ensure`]）；每個窗只寫一行，不代表被擋的次數。
     /// 不帶 `exit_code`、`signal`。`failures` 是連續第幾次，`wait_ms` 是這個窗的長度。
@@ -240,6 +242,7 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
             signalled,
             left,
             fallback,
+            error,
         } => {
             let list = |pids: &[i32]| {
                 pids.iter()
@@ -248,10 +251,15 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
                     .join(",")
             };
             out.push_str(&format!(
-                ",\"event\":\"sweep\",\"role\":\"host\",\"pid\":{pid},\"rounds\":{rounds},\"signalled\":[{}],\"left\":[{}],\"fallback\":{fallback}}}\n",
+                ",\"event\":\"sweep\",\"role\":\"host\",\"pid\":{pid},\"rounds\":{rounds},\"signalled\":[{}],\"left\":[{}],\"fallback\":{fallback}",
                 list(signalled),
                 list(left)
             ));
+            if let Some(error) = error {
+                out.push_str(",\"error\":");
+                json_string(&mut out, error);
+            }
+            out.push_str("}\n");
             return out;
         }
         Record::Backoff {
@@ -468,10 +476,23 @@ mod tests {
             signalled: &[11, 12],
             left: &[],
             fallback: false,
+            error: None,
         };
         assert_eq!(
             line(3, &record),
             "{\"ts_ms\":3,\"event\":\"sweep\",\"role\":\"host\",\"pid\":9,\"rounds\":2,\"signalled\":[11,12],\"left\":[],\"fallback\":false}\n"
+        );
+        let record = Record::Sweep {
+            pid: 9,
+            rounds: 0,
+            signalled: &[],
+            left: &[13],
+            fallback: false,
+            error: Some("送不出去 13：Too many open files"),
+        };
+        assert_eq!(
+            line(3, &record),
+            "{\"ts_ms\":3,\"event\":\"sweep\",\"role\":\"host\",\"pid\":9,\"rounds\":0,\"signalled\":[],\"left\":[13],\"fallback\":false,\"error\":\"送不出去 13：Too many open files\"}\n"
         );
     }
 

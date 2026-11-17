@@ -1439,7 +1439,7 @@ fn stat_session(text: &str) -> libc::pid_t {
 
 /// 讓 `--exec` 的 spawner 是組長、但不是 session 長，而且 session 是外層的（宿主起 MCP server 的樣子，#2920）：
 /// 外層 `pgexec` 自成 session（`controlling` 時再接上一個 pty 當控制終端），先 `setpgid` 成組長再 exec spawner。
-/// 回 (外層（也是 spawner）的 pid、spawner 的結束碼、spawner 裡 exec 出來的 `cat /proc/self/stat` 輸出、stderr)。
+/// 回 (外層 `pgexec` 的 pid（它是 session 長，spawner 是它 fork 出來的子行程）、spawner 的結束碼、spawner 裡 exec 出來的 `cat /proc/self/stat` 輸出、stderr)。
 fn exec_as_group_leader(controlling: bool) -> (libc::pid_t, Option<i32>, String, String) {
     let pgexec = Path::new(SPAWNER).parent().unwrap().join("examples/pgexec");
     let mut cmd = Command::new(pgexec);
