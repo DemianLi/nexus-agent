@@ -133,7 +133,14 @@ impl HostProc {
         host
     }
 
+    /// 握手、等到 `ready`，之後送一筆 `Synced`：這時表上什麼都沒有，宿主開始讀連線；要測表到齊之前的樣子用 [`HostProc::ready_without_table`]。
     fn handshake(&mut self) {
+        self.ready_without_table();
+        self.command(&HostCommand::Synced);
+    }
+
+    /// 握手、等到 `ready`，不送 `Synced`：宿主還不讀任何客戶端連線。
+    pub fn ready_without_table(&mut self) {
         assert_eq!(
             self.report(),
             Some(HostReport::Hello {

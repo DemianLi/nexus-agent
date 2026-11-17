@@ -1,13 +1,13 @@
 {
-  "protocolVersion": 4,
+  "protocolVersion": 5,
   "conversationCommands": [
     {
       "value": {
         "type": "hello",
-        "version": 4,
+        "version": 5,
         "token": "00112233445566778899aabbccddeeff"
       },
-      "hex": "7704000000200000003030313132323333343435353636373738383939616162626363646465656666"
+      "hex": "7705000000200000003030313132323333343435353636373738383939616162626363646465656666"
     },
     {
       "value": {
@@ -41,18 +41,18 @@
     {
       "value": {
         "type": "hello",
-        "version": 4,
+        "version": 5,
         "runsLoop": true
       },
-      "hex": "560400000001"
+      "hex": "560500000001"
     },
     {
       "value": {
         "type": "hello",
-        "version": 4,
+        "version": 5,
         "runsLoop": false
       },
-      "hex": "560400000000"
+      "hex": "560500000000"
     },
     {
       "value": {
@@ -118,9 +118,9 @@
     {
       "value": {
         "type": "hello",
-        "version": 4
+        "version": 5
       },
-      "hex": "4604000000"
+      "hex": "4605000000"
     },
     {
       "value": {
@@ -156,10 +156,10 @@
     {
       "value": {
         "type": "hello",
-        "version": 4,
+        "version": 5,
         "token": "00112233445566778899aabbccddeeff"
       },
-      "hex": "6604000000200000003030313132323333343435353636373738383939616162626363646465656666"
+      "hex": "6605000000200000003030313132323333343435353636373738383939616162626363646465656666"
     },
     {
       "value": {
@@ -272,9 +272,9 @@
     {
       "value": {
         "type": "hello",
-        "version": 4
+        "version": 5
       },
-      "hex": "6b04000000"
+      "hex": "6b05000000"
     },
     {
       "value": {
@@ -315,15 +315,21 @@
         "pid": 4242
       },
       "hex": "7292100000"
+    },
+    {
+      "value": {
+        "type": "synced"
+      },
+      "hex": "79"
     }
   ],
   "hostReports": [
     {
       "value": {
         "type": "hello",
-        "version": 4
+        "version": 5
       },
-      "hex": "4b04000000"
+      "hex": "4b05000000"
     },
     {
       "value": {
