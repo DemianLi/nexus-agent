@@ -683,9 +683,9 @@ mod group {
         let _ = std::fs::remove_file(&file);
     }
 
-    /// 子行程自成一個 session：領頭同時是組長與 session 長，而且都不是宿主的。
+    /// H1：子行程自成一組、留在宿主的 session：領頭是組長，組不是宿主的；session 還是宿主的（不是自己的）。
     #[test]
-    fn spawn_子行程自成一個_session() {
+    fn spawn_子行程自成一組但留在宿主的_session() {
         reap_runtime().block_on(async {
             let (stdio::Spawned { child, transport }, pid) = spawn_for_reap("/bin/sleep", &["30"]);
             // SAFETY: 只查行程群組 id。
@@ -694,15 +694,16 @@ mod group {
             assert_ne!(group, own, "子行程跟宿主同一組");
             // SAFETY: 只查 session id。
             let (session, own_session) = unsafe { (libc::getsid(pid), libc::getsid(0)) };
-            assert_eq!(session, pid, "子行程不是 session 長");
-            assert_ne!(session, own_session, "子行程跟宿主同一個 session");
+            assert_eq!(session, own_session, "子行程自己開了 session");
+            assert_ne!(session, pid, "子行程成了 session 長");
             drop(transport);
             stdio::reap(child).await;
         });
     }
 
-    /// 被 spawner 的單次模式包起來的 server：`--exec` 自己要 `setsid`，領頭不是 session 長時會 125 結束，
-    /// 所以宿主起的子行程必須已經是 session 長。起得來、孫行程也收得掉。核心沒有 Landlock 時 `--exec` 起不來，這裡紅，不跳過。
+    /// 被 spawner 的單次模式包起來的 server：`--exec` 的 `setsid` 在領頭是組長、不是 session 長時回 `EPERM`，
+    /// 沒有控制終端就留在宿主的 session 裡跑（#2920）。起得來、孫行程也收得掉。核心沒有 Landlock 時 `--exec` 起不來，這裡紅，不跳過。
+    /// 測試行程有控制終端時（從終端機直接跑 `cargo test`）spawner 會拒絕，這條也紅；CI 與容器裡沒有控制終端。
     #[test]
     fn reap_收掉被_spawner_exec_包起來的整組() {
         let file = pid_file("group-exec");

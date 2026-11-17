@@ -161,12 +161,12 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - 單行超過 16 MiB：rmcp 的行傳輸丟掉那一行（記一筆、連線不斷），server 等不到回應的那一次呼叫會等到逾時。
 - **args 與 env 在主機上看得到**：同一台主機上的其他使用者看得到 `/proc/<pid>/cmdline`（args），同 uid 的看得到 `/proc/<pid>/environ`（整份 env，含憑證值）。憑證不要放進 `args`。宿主只遮 `credentialEnv` 的值；父環境裡本來就有的值照舊不遮。
 - **池不回收**：池的鍵含整份成品（env 含憑證值），每組「憑證 × server」各起一個常駐子行程，活到橋關閉；憑證輪替之後舊行程帶著舊值繼續活。這跟 TS 那條路（子行程跟著對話行程死）不同，宿主是整台主機共用的。處理列在 #2570 (b)：最後一個使用者放掉時收掉 stdio 那一份，或給上限。
-- 子孫行程：子行程自成一個 session，也就自成一個行程群組（pgid 與 sid 都是它的 pid；不能只開組：被 spawner 的 `--exec` 包起來的 server，spawner 的 `setsid` 在組長不是 session 長時失敗而結束），收線的訊號與連線被丟下時的 SIGKILL 送整組，`npx` 底下的 `node` 一起收；查不到領頭狀態時只殺領頭。
+- 子孫行程：子行程自成一個行程群組（pgid 是它的 pid），**留在宿主的 session 裡**，不自己開 session。收線的訊號與連線被丟下時的 SIGKILL 送整組，`npx` 底下的 `node` 一起收；查不到領頭狀態時只殺領頭。被 spawner 的 `--exec` 包起來的 server：spawner 是組長但不是 session 長，它的 `setsid` 回 `EPERM`，沒有控制終端時留在這個 session 裡繼續跑；呼叫端的 session 有控制終端就拒絕（結束碼 125，訊息寫明原因），因為留在裡面的 server 與它的子孫讀寫得到那個終端。經監督行程起的宿主沒有控制終端；從終端機直接起宿主、再包 `--exec` 會被拒絕，要手動起請用 `setsid` 起宿主。
   - 兩段等待都只看領頭：領頭一結束（例如讀到 EOF 就退出），組裡剩下的子孫立刻 SIGKILL，不給寬限：沒有人能再跟它們溝通，等也沒用。代價是這條路上的子孫沒有收尾的機會。
-  - 宿主不追的：子孫自己再 `setsid` 或換了行程群組的。不用 cgroup（多人共用的主機不保證有權限）；`setsid` 那種有測試釘住。
+  - 宿主自己不追子孫自己再 `setsid` 的（換了 session 的收不到，也不用 cgroup：多人共用的主機不保證有權限），這種有測試釘住；只換行程群組、沒換 session 的，宿主正常收線時追不到，但宿主死掉時監督行程掃同 session 的行程會收到。
   - 領頭用 `waitid(WNOWAIT)` 判斷是否結束、不先收屍，pid 與 pgid 在自己 `wait` 之前不會被別的行程拿去用，對整組送訊號不會打到不相干的行程。前提是宿主行程裡沒有收別人子行程的呼叫（`waitpid(-1)`、`waitid(P_ALL)`、忽略 SIGCHLD）。
-  - session 長開終端裝置時不帶 `O_NOCTTY` 會取得控制終端，跟 spawner 的 `--exec` 自己 `setsid` 之後一樣；server 不需要終端就無影響。
-  - 子行程不在宿主那一組裡：終端機的 Ctrl-C、監督行程對宿主那一組送的訊號都打不到它；只有橋在宿主結束前跑完 `close`，或連線的 guard 被 drop 時才會收。
+  - 宿主死了（崩潰、被殺、讀到 EOF 直接結束）時沒有人替它跑上面的收線：監督行程起宿主時讓它自成 session，宿主結束、還沒收屍時掃 `/proc` 找 session 等於宿主 pid 的行程，各送 SIGKILL（用 `pidfd`，送之前再核一次還是這個 session 的；上限 8 輪，到上限記稽核 `event:"sweep"`）。要走到這條，子行程不能自己開 session，所以宿主起子行程只開組、不 `setsid`。監督行程被殺時沒有人掃，只有包了 spawner 的 server 的領頭靠 `PR_SET_PDEATHSIG` 隨之死，子孫不一定收得到；自己再 `setsid` 的子孫也收不到。
+  - 子行程不在宿主那一組裡：終端機的 Ctrl-C、監督行程對宿主那一組送的訊號都打不到它；橋在宿主結束前跑完 `close`、連線的 guard 被 drop，或宿主結束時監督行程掃同 session 的行程時才會收。
 - 池的鍵：整份成品（含 `env` 的值）；換了憑證是另一份，`credentialEnv` 的順序與重複不影響。
 - 缺口：「哪幾個名字是憑證」由誰產生（匯出外掛的 `substituted`，或外掛回報）留給 PR-E，與 dev-h2 一起定；在那之前沒有生產端呼叫 `hostStdioConnection`。
 
