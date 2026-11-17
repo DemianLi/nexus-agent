@@ -34,7 +34,7 @@ export interface Gate {
 }
 
 /**
- * 等閘門放行；若帶進來的中止訊號先到就拋。實測：`pump.cancel()` 送不到一個已經卡在這裡的工具（它的中止訊號不是那一條），
+ * 等閘門放行；若帶進來的中止訊號先到就拋，等待途中中止也拋。實測：`pump.cancel()` 送不到一個已經卡在這裡的工具（它的中止訊號不是那一條），
  * 所以卡住的工具仍要靠放行才回來，中止只能擋住放行之後的下一步。
  */
 export function untilOpenOrAborted(open: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -74,7 +74,7 @@ export interface Probe {
   /** 斜線命令 `/slow` 進來幾次、卡在哪道閘上。 */
   slashEntered: number;
   readonly slash: Gate;
-  /** `stall` 工具進來幾次；它只在中止訊號來時才回來（閘門不放行）。 */
+  /** `stall` 工具進來幾次；它只在中止訊號來時才以錯誤結束（閘門不放行）。 */
   stalled: number;
   readonly stall: Gate;
 }

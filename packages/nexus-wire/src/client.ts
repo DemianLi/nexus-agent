@@ -416,10 +416,14 @@ export interface WireClient {
   threadUnarchive(threadId: string): Promise<CommandOutcome<ThreadUnarchiveResult>>;
   /**
    * 刪除這條 thread（`thread.delete`，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：整條軌跡移到已刪除存放區，
-   * 寬限期內可以復原。還在跑的先停掉再搬。回 `thread_busy`（另一件還沒做完）或 `thread_deleted`（已經刪了）。
+   * 寬限期內可以復原。還在跑的先停掉再搬。業務失敗在 `result` 裡：`thread_not_found`（沒有這條）、`thread_busy`（另一件還沒做完）、
+   * `thread_deleted`（已經刪了）。
    */
   threadDelete(threadId: string): Promise<CommandOutcome<ThreadDeleteResult>>;
-  /** 復原已刪除的 thread（`thread.restore`）。寬限期過了回 `restore_expired`，原處已有同 id 回 `restore_conflict`，檔案都留著。 */
+  /**
+   * 復原已刪除的 thread（`thread.restore`）。寬限期過了回 `restore_expired`，原處已有同 id 回 `restore_conflict`，檔案都留著。
+   * 另外還會回 `thread_not_deleted`（不在已刪除存放區）與 `thread_busy`。
+   */
   threadRestore(threadId: string): Promise<CommandOutcome<ThreadRestoreResult>>;
   /** 列出這個專案格已刪除、還在寬限期內的會話（`GET /deleted-threads`）。`rejected` 是這台 server 沒接已刪除存放區。 */
   deletedThreads(): Promise<CommandOutcome<DeletedThreadsResult>>;

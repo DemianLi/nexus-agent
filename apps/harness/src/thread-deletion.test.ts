@@ -27,11 +27,17 @@ import {
   ThreadDeletions,
 } from './thread-deletion.js';
 import type { ThreadDeletionOptions } from './thread-deletion.js';
+import { DEFAULT_THREAD_DELETION_GRACE_DAYS } from './settings/thread-deletion-store.js';
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 
 const ROOT_ID = 'thread-root';
 const CHILD_ID = `${ROOT_ID}/run-1`;
 const GRACE_MS = graceMsOfDays(DEFAULT_GRACE_DAYS);
+
+it('設定列的出廠寬限天數與核心的預設一致（兩處各抄一份，這條守住它們不分岔）', () => {
+  expect(DEFAULT_THREAD_DELETION_GRACE_DAYS).toBe(DEFAULT_GRACE_DAYS);
+});
+
 const OWNER = { kind: 'owner' } as const;
 const CWD = '/work/p';
 const PROJECT = projectKey(CWD);

@@ -478,14 +478,14 @@ export interface ThreadForkSeed {
 
 export interface WireHandlerOptions {
   /**
-   * 刪除會話的閘門（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：這條 thread 正在刪或已刪就回原因。
-   * 組裝之前（等完收尾之後也一樣）查一次，觀察（{@link observeThread}）也查。沒給就不擋。
-   */
-  /**
    * 放手寫入方（{@link WireHandler.releaseWriter}）時等閒置的上限（毫秒）；超過就拋，不硬撤。省略就是 30 秒。測試用它縮短，
    * 產品路徑不設。
    */
   readonly releaseIdleWaitMs?: number;
+  /**
+   * 刪除會話的閘門（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：這條 thread 正在刪或已刪就回原因。
+   * 組裝之前（等完收尾之後也一樣）查一次，觀察（{@link observeThread}）也查。沒給就不擋。
+   */
   readonly deletionGate?: {
     hiddenReason(threadId: string): Promise<'deleting' | 'deleted' | undefined>;
     /** 列表與搜尋要藏起來的 thread id（刪除中與已刪除）。 */
@@ -745,7 +745,7 @@ export interface WireHandlerOptions {
     activity(threadId: string): Promise<readonly ThreadActivityKind[]>;
     stop(threadId: string): Promise<void>;
     /**
-     * 刪除時放手寫入方（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，H）：請那一條的對話行程停掉、等閒置、撤出。
+     * 刪除時放手寫入方（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：請那一條的對話行程停掉、等閒置、撤出。
      * 沒有行程就什麼都不做（沒有寫入方）。缺席＝不是 per-thread 的前台。
      */
     release?(threadId: string): Promise<void>;
@@ -2105,12 +2105,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 掃一遍：不閒的重新計時，閒夠久的撤掉。計時器與測試共用這一支；回的 promise 在這一次撤的都撤完才兌現。
-   */
-  /**
    * 刪除會話時的寫入方放手（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，single 模式）：停掉還在跑的一輪、等到閒置
    * （含背景子代理），再走閒置逐出的那一條撤出記憶體。**回來時寫租約已經放掉**：撤出的 promise 在 `release` 收完之後才兌現。
-   * 不在記憶體裡就直接回；等不到閒置超過 {@link WireHandlerOptions.releaseIdleWaitMs}（預設 {@link RELEASE_IDLE_WAIT_MS}）就拋，不硬撤。
+   * 不在記憶體裡就問對話行程，沒有行程就直接回；等不到閒置超過 {@link WireHandlerOptions.releaseIdleWaitMs}（預設 {@link RELEASE_IDLE_WAIT_MS}）就拋，不硬撤。
    */
   async function releaseThreadWriter(threadId: string): Promise<void> {
     const building = threads.get(threadId);
@@ -2139,6 +2136,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     await evictThread(threadId, state);
   }
 
+  /**
+   * 掃一遍：不閒的重新計時，閒夠久的撤掉。計時器與測試共用這一支；回的 promise 在這一次撤的都撤完才兌現。
+   */
   async function sweepIdle(): Promise<void> {
     const limit = options.idleEvictMs;
     if (limit === undefined || closed) return;
@@ -4186,8 +4186,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /threads`。**不經 `threadFor`**：一條 thread 都不為列表建（同 `run.cancel` 的理由，而且這裡更嚴——
-   * 列的正是還沒開起來的那些）。讀不動整個目錄是協定層的錯，同 `threadOrError` 的分寸。
+   * `thread.delete`／`thread.restore`（#2957）。**不經 `threadFor`**，同釘選與封存：刪的是落盤的軌跡，為了刪一條把它建起來是反的。
    */
   async function handleDeletion(
     threadId: string,
@@ -4282,6 +4281,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
   }
 
+  /**
+   * `GET /threads`。**不經 `threadFor`**：一條 thread 都不為列表建（同 `run.cancel` 的理由，而且這裡更嚴——
+   * 列的正是還沒開起來的那些）。讀不動整個目錄是協定層的錯，同 `threadOrError` 的分寸。
+   */
   async function handleList(signal: AbortSignal): Promise<Response> {
     if (options.listThreads === undefined) {
       return json(
@@ -5154,7 +5157,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 寫不出去回 500，前台照舊冷讀。
    */
   /**
-   * 對話行程那一側的放手寫入方（H）：停、等閒置、撤出，回來時寫租約已放掉。等不到閒置或撤不出去回 500，不硬撤。
+   * 對話行程那一側的放手寫入方：停、等閒置、撤出，回來時寫租約已放掉。等不到閒置或撤不出去回 500，不硬撤。
    */
   async function releaseRoute(threadId: string): Promise<Response> {
     try {

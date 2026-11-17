@@ -1,5 +1,5 @@
 /**
- * 刪除的寫入方放手，per-thread 這一半（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，H）。
+ * 刪除的寫入方放手，per-thread 這一半（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）。
  *
  * - 對話行程那一側：`POST /internal/threads/:id/release` 只認綁著的那一條，停、等閒置、撤出，回來時寫租約已放掉。
  * - 前台那一側：本地沒有這條 thread 時，`releaseWriter` 問對話行程（`threadActivityElsewhere.release`）；沒有行程就直接回。

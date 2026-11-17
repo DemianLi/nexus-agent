@@ -22,7 +22,8 @@
  * - 否則同磁碟就 `rename`；遇到 `EXDEV`，複製到 `<dst>.partial`、逐檔 fsync、用大小加 sha256 核對，
  *   `rename` 成 `dst`，fsync 父目錄，最後才刪來源。
  *
- * 恢復只做意圖點名的那一件事：往前做完。任何時刻磁碟上的結果只會是「全在原處、索引沒有」或「全在存放區、索引有」之一。
+ * 恢復只做意圖點名的那一件事：往前做完。恢復做完之後，磁碟上的結果只會是「全在原處、索引沒有」或「全在存放區、索引有」之一；
+ * 中途被殺時，意圖點名的那一件會在下次啟動往前做完，所以中途的狀態只在恢復之前存在。
  *
  * @module
  */
@@ -161,7 +162,7 @@ export interface ThreadDeletionOptions {
   readonly now: () => number;
   /**
    * 寫入方放手。`delete` 在列檔之前呼叫它：它要等到這條會話的寫租約真的放掉才兌現。
-   * 還沒接上 wire 的時候省略即可（見 `docs/operations.md` 的「怎麼刪」）。
+   * 省略時 `delete` 不等寫入方放手，只給沒有寫入方的組裝與測試用；產品路徑都會接上。
    */
   readonly releaseWriter?: (threadId: string) => Promise<void>;
   readonly fs?: DeletionFs;
@@ -177,6 +178,21 @@ export interface DeletedThreadView {
 }
 
 // ---------------------------------------------------------------- 狀態檔
+
+/** 藏起來的判準（清單與閘門共用，只這一份）：正在刪是 `deleting`，已經在存放區是 `deleted`，其餘 `undefined`。 */
+function hiddenIn(
+  state: ThreadDeletionState,
+  projectKey: string,
+  threadId: string,
+): 'deleting' | 'deleted' | undefined {
+  if (state.intent?.projectKey === projectKey && state.intent.threadId === threadId) {
+    return 'deleting';
+  }
+  if (state.deleted.some((r) => r.projectKey === projectKey && r.threadId === threadId)) {
+    return 'deleted';
+  }
+  return undefined;
+}
 
 function emptyState(): ThreadDeletionState {
   return { version: STATE_VERSION, intent: null, deleted: [] };
@@ -566,25 +582,18 @@ export class ThreadDeletions {
     projectKey: string,
     threadId: string,
   ): Promise<'deleting' | 'deleted' | undefined> {
-    const state = await this.#read();
-    if (state.intent?.projectKey === projectKey && state.intent.threadId === threadId) {
-      return 'deleting';
-    }
-    if (state.deleted.some((r) => r.projectKey === projectKey && r.threadId === threadId)) {
-      return 'deleted';
-    }
-    return undefined;
+    return hiddenIn(await this.#read(), projectKey, threadId);
   }
 
   /** 專案格裡要藏起來的 thread id：刪除中與已刪除的（列表與搜尋用）。 */
   async hiddenThreadIds(projectKey: string): Promise<ReadonlySet<string>> {
     const state = await this.#read();
-    const ids = new Set<string>();
+    const candidates = new Set<string>();
     if (state.intent !== null && state.intent.projectKey === projectKey)
-      ids.add(state.intent.threadId);
+      candidates.add(state.intent.threadId);
     for (const record of state.deleted)
-      if (record.projectKey === projectKey) ids.add(record.threadId);
-    return ids;
+      if (record.projectKey === projectKey) candidates.add(record.threadId);
+    return new Set([...candidates].filter((id) => hiddenIn(state, projectKey, id) !== undefined));
   }
 
   /** 刪除一條會話。 */
