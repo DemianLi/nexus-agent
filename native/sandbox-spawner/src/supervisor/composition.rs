@@ -146,6 +146,12 @@ impl Supervisor {
         })
     }
 
+    /// 這條可以送 `drain` 逐出嗎：葉子自己閒置、`up`、沒在收也沒在等回答，而且成對時組合行程沒在收。
+    /// 組合行程在收時整對一起收（死因是組合行程的），再送 `drain` 或把回來的 `drained` 記成 `evicted` 都是錯的。
+    pub(super) fn can_evict(&self, conversation: &Conversation) -> bool {
+        conversation.evictable() && !self.composition_stopping(conversation)
+    }
+
     /// 每一對的組合行程跟葉子兩邊對不上就 panic，訊息帶兩邊的狀態。
     #[cfg(any(test, debug_assertions))]
     pub(super) fn check_pairs(&self) {
