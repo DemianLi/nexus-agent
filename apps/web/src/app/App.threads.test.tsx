@@ -894,7 +894,9 @@ describe('以前的會話', () => {
       // 換了會話，側欄的清單會重掛：每次重新拿。
       await waitFor(async () =>
         expect(
-          within(await openList()).getByText(UNTITLED_THREAD_LABEL).closest('button')?.disabled,
+          within(await openList())
+            .getByText(UNTITLED_THREAD_LABEL)
+            .closest('button')?.disabled,
         ).toBe(true),
       );
       const list = await openList();
