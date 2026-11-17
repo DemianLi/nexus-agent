@@ -4,6 +4,7 @@ import {
   historyPath,
   streamPath,
   THREAD_AT_CAPACITY,
+  THREAD_DELETED,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
@@ -32,6 +33,7 @@ import {
 } from '@/shared/connection/reconnect';
 import {
   THREAD_AT_CAPACITY_TEXT,
+  THREAD_DELETED_TEXT,
   THREAD_HISTORY_TOO_DEEP_TEXT,
   THREAD_IS_SUBAGENT_TEXT,
   THREAD_LOG_BUSY_TEXT,
@@ -414,6 +416,18 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     const { result } = renderHook(() => useConversation({ client, threadId: 't/1' }));
     await tick();
     expect(result.current.refusal).toBe(THREAD_NOT_OWNED_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('別的頁籤刪掉了這條（#2958）：講已刪除、指向「最近刪除」，不排重試', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_DELETED, 'thread "t/1" 已刪除，不能再開啟（寬限期內可以復原）'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't/1' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_DELETED_TEXT);
     expect(result.current.connectionError).toBeUndefined();
     expect(result.current.reconnecting).toBeUndefined();
     await tick(60_000);
