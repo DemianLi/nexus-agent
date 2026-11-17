@@ -1,7 +1,7 @@
 //! 真的 spawner、真的核心（#1946）。只在 Linux 跑；核心沒有 Landlock 時整組跳過，
 //! 但設了 `NEXUS_REQUIRE_LANDLOCK=1`（CI）就改成紅，免得跳過看起來跟綠燈一樣。
 //!
-//! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低，啟動前訊號那條用它延後子行程的 setsid）。
+//! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低，啟動前訊號那條用它延後子行程的 setsid，子行程 panic 那幾條用它讓子行程故意 panic）。
 
 mod common;
 
@@ -213,7 +213,7 @@ fn request(id: u32, ws: &Path, argv: &[&str]) -> Spawn {
     }
 }
 
-/// 起一個正常的 spawner；核心沒有 Landlock 時回 None（`NEXUS_REQUIRE_LANDLOCK=1` 時直接紅）。
+/// 起一個正常的 spawner；啟動失敗（`Unavailable`）時回 None（`NEXUS_REQUIRE_LANDLOCK=1` 時直接紅）；核心沒有 Landlock 不算啟動失敗，子行程照常 panic。
 fn start() -> Option<Spawner> {
     let (s, first) = start_with(&[], None);
     match first {
