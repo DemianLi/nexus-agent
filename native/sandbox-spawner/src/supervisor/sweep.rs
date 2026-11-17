@@ -3,7 +3,7 @@
 //! 宿主起的 MCP server 各自一個行程群組，監督行程對「宿主那一組」送的 SIGKILL 打不到它們與它們的子孫。
 //! 監督行程起宿主時讓它自成 session（[`super::process::spawn_in_session`]），宿主底下不論分成幾組都還在這個 session 裡，
 //! 所以宿主結束、還沒收屍時（殭屍還在，session 號就是它的 pid，不會被別人拿去用）掃 `/proc` 找 session 等於宿主 pid 的行程，一個個送 SIGKILL。
-//! 收不到：自己再 `setsid` 的子孫，與已經不是宿主的後代而被別人收養的。
+//! 收不到：自己再 `setsid` 而換了 session 的子孫。被收養的孤兒子孫 session 沒變，掃得到。
 //!
 //! 這一層是保底，「送不出去」不能被當成「已經不在」：只有 `ESRCH`（行程沒了）與再核之後不是這個 session 的成員才算不在；
 //! 其他錯（fd 用完、記憶體不足、沒有權限）是 [`Kill::Failed`]，不算送過、算進剩下的、記進稽核。
@@ -356,7 +356,7 @@ mod tests {
         OwnedFd::from(fs::File::open("/dev/null").unwrap())
     }
 
-    /// U1：每一輪清單都冒出新的成員（像一直 fork 的行程）：到 [`MAX_ROUNDS`] 輪就停，不再掃，剩下的記在 `left`。
+    /// 每一輪清單都冒出新的成員（像一直 fork 的行程）：到 [`MAX_ROUNDS`] 輪就停，不再掃，剩下的記在 `left`。
     #[test]
     fn u1_stops_after_the_round_limit_and_reports_what_is_left() {
         let next = Cell::new(100);
@@ -379,7 +379,7 @@ mod tests {
         assert!(result.worth_recording());
     }
 
-    /// A10：到上限只剩下 `left`、一個都沒送成時也要記稽核（`signalled` 是空的，只靠 `left` 為真）。
+    /// 到上限只剩下 `left`、一個都沒送成時也要記稽核（`signalled` 是空的，只靠 `left` 為真）。
     #[test]
     fn a_leftover_alone_is_worth_recording() {
         let only_left = Sweep {
@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(result.signalled, vec![7]);
     }
 
-    /// U2：行程名裡有空白與 `)` 也讀對（從最後一個 `)` 切）。
+    /// 行程名裡有空白與 `)` 也讀對（從最後一個 `)` 切）。
     #[test]
     fn u2_parses_stat_with_awkward_names() {
         let tail = "S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22";
@@ -564,7 +564,7 @@ mod tests {
         assert!(result.worth_recording());
     }
 
-    /// U3：再核的判斷：不在了、換了行程（啟動時間不同）、換了 session、變成殭屍，都不算成員。
+    /// 再核的判斷：不在了、換了行程（啟動時間不同）、換了 session、變成殭屍，都不算成員。
     #[test]
     fn u3_still_member_checks_every_field() {
         let scanned = member(7, 50);
@@ -584,7 +584,7 @@ mod tests {
         assert!(!still_member(50, &scanned, Some(&other)));
     }
 
-    /// A8：掃到時在、送之前 pid 被別人拿去用（啟動時間不同）：**一個訊號都不送**，也不走退路。這一支守的是「不誤殺別人」。
+    /// 掃到時在、送之前 pid 被別人拿去用（啟動時間不同）：**一個訊號都不送**，也不走退路。這一支守的是「不誤殺別人」。
     #[test]
     fn a8_a_reused_pid_is_not_signalled() {
         let scanned = member(7, 50);

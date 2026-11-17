@@ -4406,7 +4406,7 @@ fn sweep_line(h: &Harness) -> String {
     h.audit_line("\"event\":\"sweep\"")
 }
 
-/// S1：宿主被殺，它 session 裡的 server 領頭與孫行程都被收掉，稽核有 `sweep`。
+/// 宿主被殺，它 session 裡的 server 領頭與孫行程都被收掉，稽核有 `sweep`。
 #[test]
 fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
     let (host, file, _dir) = stdio_host(&[], None);
@@ -4428,7 +4428,7 @@ fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
     assert!(line.contains("\"left\":[]"), "{line}");
 }
 
-/// S1e：宿主自己結束（不經收線），結果同 S1。
+/// 宿主自己結束（不經收線），結果同宿主被殺。
 #[test]
 fn s1e_a_host_that_exits_by_itself_leaves_nothing_behind() {
     let (host, file, _dir) = stdio_host(&["--exit-after-spawn"], None);
@@ -4445,7 +4445,7 @@ fn s1e_a_host_that_exits_by_itself_leaves_nothing_behind() {
     assert!(sweep_line(&h).contains("\"left\":[]"));
 }
 
-/// S1g：領頭先走、孫行程成了孤兒，宿主死後孫行程照樣被收（它還在宿主的 session 裡）。
+/// 領頭先走、孫行程成了孤兒，宿主死後孫行程照樣被收（它還在宿主的 session 裡）。
 #[test]
 fn s1g_an_orphaned_grandchild_is_swept_after_its_leader_is_gone() {
     let (host, file, _dir) = stdio_host(&[], Some("leader-exits"));
@@ -4462,7 +4462,7 @@ fn s1g_an_orphaned_grandchild_is_swept_after_its_leader_is_gone() {
     assert!(wait_until(|| gone(grandchild)), "孤兒 {grandchild} 還在");
 }
 
-/// S2：停機收宿主時也掃。
+/// 停機收宿主時也掃。
 #[test]
 fn s2_shutdown_sweeps_the_host_session_too() {
     let (host, file, _dir) = stdio_host(&[], None);
@@ -4480,7 +4480,7 @@ fn s2_shutdown_sweeps_the_host_session_too() {
     sweep_line(&h);
 }
 
-/// S3：前台已經不在了才停機，照樣掃。
+/// 前台已經不在了才停機，照樣掃。
 #[test]
 fn s3_shutdown_with_the_front_already_gone_still_sweeps() {
     let (host, file, _dir) = stdio_host(&[], None);
@@ -4498,7 +4498,7 @@ fn s3_shutdown_with_the_front_already_gone_still_sweeps() {
     );
 }
 
-/// S4：宿主被殺後重起，舊宿主的成員先收乾淨，新宿主有自己的一組。
+/// 宿主被殺後重起，舊宿主的成員先收乾淨，新宿主有自己的一組。
 #[test]
 fn s4_a_restarted_host_starts_from_a_clean_session() {
     let (host, file, _dir) = stdio_host(&[], None);
@@ -4532,7 +4532,7 @@ fn a_host_killed_before_ready_is_still_swept() {
     );
 }
 
-/// L1：自己 `setsid` 的後代掃不到，這是已知的界線（`docs/host-mcp.md`）；這條釘住它，改了要連文件一起改。
+/// 自己 `setsid` 的後代掃不到，這是已知的界線（`docs/host-mcp.md`）；這條釘住它，改了要連文件一起改。
 #[test]
 fn l1_a_descendant_that_calls_setsid_is_out_of_reach() {
     let (host, file, _dir) = stdio_host(&[], Some("setsid"));

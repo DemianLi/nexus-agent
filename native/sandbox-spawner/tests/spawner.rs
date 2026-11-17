@@ -1498,7 +1498,7 @@ fn exec_as_group_leader(controlling: bool) -> (libc::pid_t, Option<i32>, String,
     )
 }
 
-/// P1：呼叫端把它放成組長、沒有控制終端：`--exec` 起得來，留在呼叫端的 session 裡（不自己開新的）。
+/// 呼叫端把它放成組長、沒有控制終端：`--exec` 起得來，留在呼叫端的 session 裡（不自己開新的）。
 #[test]
 fn p1_exec_stays_in_the_callers_session_when_it_is_only_a_group_leader() {
     let (outer, code, stdout, stderr) = exec_as_group_leader(false);
@@ -1506,7 +1506,7 @@ fn p1_exec_stays_in_the_callers_session_when_it_is_only_a_group_leader() {
     assert_eq!(stat_session(&stdout), outer, "{stdout}");
 }
 
-/// P2：同一種起法，但呼叫端的 session 有控制終端：拒絕（125），說明原因，沒有 exec。
+/// 同一種起法，但呼叫端的 session 有控制終端：拒絕（125），說明原因，沒有 exec。
 #[test]
 fn p2_exec_refuses_a_group_leader_whose_session_has_a_controlling_terminal() {
     let (_, code, stdout, stderr) = exec_as_group_leader(true);
@@ -1515,7 +1515,7 @@ fn p2_exec_refuses_a_group_leader_whose_session_has_a_controlling_terminal() {
     assert!(stderr.contains("控制終端"), "{stderr}");
 }
 
-/// P3：呼叫端已經讓它當 session 長：放行，session 就是它自己。
+/// 呼叫端已經讓它當 session 長：放行，session 就是它自己。
 #[test]
 fn p3_exec_accepts_a_caller_that_already_made_it_session_leader() {
     let mut cmd = Command::new(SPAWNER);
