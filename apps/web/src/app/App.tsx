@@ -76,6 +76,7 @@ import { ThemeToggle } from '@/app/theme-toggle';
 import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { useConversation } from '@/shared/connection/use-conversation';
+import { THREAD_DELETED_TEXT } from '@/shared/connection/refusal-text';
 import { SM_BREAKPOINT, useMinWidth } from '@/shared/lib/use-min-width';
 import { useThemePreference } from '@/shared/lib/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/shared/connection/agent';
@@ -441,6 +442,12 @@ function ConversationView({
     stall: connectionStall(conversation),
     renderEntry: renderSubagentEntry,
   });
+  // 這條在別處被刪了：重抓列表，側欄的那一列跟著消失，「最近刪除」跟著列表重讀，拒絕文字指的復原入口才在。
+  const { refresh: refreshDirectory } = directory;
+  const deletedElsewhere = conversation.refusal === THREAD_DELETED_TEXT;
+  useEffect(() => {
+    if (deletedElsewhere) refreshDirectory();
+  }, [deletedElsewhere, refreshDirectory]);
   const sessionLinks = useMemo(() => {
     const listed =
       directory.listing.kind === 'ok'
