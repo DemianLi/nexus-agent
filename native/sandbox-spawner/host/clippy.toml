@@ -1,0 +1,11 @@
+# 宿主的 `mcp/stdio.rs` 用 `waitid(WNOWAIT)` 看領頭結束了沒、不收屍，好讓對整組送訊號時 pid／pgid 還沒被別的行程拿去用。
+# 這個做法的前提是宿主行程裡沒有別人會替它收屍：下面這些會收走別人的子行程、或把 SIGCHLD 設成自動收屍的呼叫一律禁掉。
+# 真的需要時在那一處加 `#[allow(clippy::disallowed_methods)]` 並寫為什麼不會收到別人的子行程。
+disallowed-methods = [
+    { path = "libc::wait", reason = "會收走宿主的任何一個子行程；見 mcp/stdio.rs「領頭不先收屍」" },
+    { path = "libc::waitpid", reason = "pid 小於等於 0（-1、0 或負的組號）會收走別人的子行程，包括自成一組的領頭；見 mcp/stdio.rs「領頭不先收屍」" },
+    { path = "libc::wait4", reason = "pid 小於等於 0（-1、0 或負的組號）會收走別人的子行程，包括自成一組的領頭；見 mcp/stdio.rs「領頭不先收屍」" },
+    { path = "libc::waitid", reason = "idtype 給 P_ALL 或 P_PGID 會收走別人的子行程；見 mcp/stdio.rs「領頭不先收屍」" },
+    { path = "libc::signal", reason = "把 SIGCHLD 設成 SIG_IGN 會讓核心自動收屍；見 mcp/stdio.rs「領頭不先收屍」" },
+    { path = "libc::sigaction", reason = "SA_NOCLDWAIT 或 SIGCHLD 設成 SIG_IGN 會讓核心自動收屍；見 mcp/stdio.rs「領頭不先收屍」" },
+]
