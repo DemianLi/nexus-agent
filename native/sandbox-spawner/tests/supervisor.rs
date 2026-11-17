@@ -4350,3 +4350,409 @@ fn an_unpaired_conversation_has_no_pair_in_the_audit() {
     let line = h.audit_line("\"thread\":\"x,exit:3\"");
     assert!(!line.contains("pair"), "{line}");
 }
+
+// ---- 宿主死掉時掃它 session 裡的行程（#2920） ----
+//
+// 宿主是 `host/examples/stdio_host.rs`：用真的 `stdio::spawn` 起一個 MCP server（`sh` 腳本），腳本再起一個孫行程。
+// server 與孫行程各自成一組、都留在宿主的 session 裡。每支測試結尾對監督行程 SIGTERM 並等它結束：停機會再掃一次，
+// 不留 `sleep` 在測試機上（腳本的 `sleep` 只有 60 秒，是最後一道保險）。
+
+/// 一個 MCP server 的腳本：起一個孫行程、把孫行程的 pid 寫進 `$1`。`$2` 是模式：
+/// `leader-exits` 領頭先結束；`setsid` 孫行程自己開 session；`ignore-term` 領頭與孫行程都忽略 SIGTERM（忽略跨 `exec` 繼承），
+/// 這樣「保底層改送 SIGTERM」的改動收不掉它們。
+fn server_script(dir: &Path) -> PathBuf {
+    let path = dir.join("server.sh");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\n\
+         case \"$2\" in\n\
+           ignore-term) trap '' TERM ;;\n\
+         esac\n\
+         case \"$2\" in\n\
+           setsid) setsid /bin/sleep 60 & ;;\n\
+           *) /bin/sleep 60 & ;;\n\
+         esac\n\
+         echo $! > \"$1\"\n\
+         case \"$2\" in\n\
+           leader-exits) exit 0 ;;\n\
+           *) exec /bin/sleep 60 ;;\n\
+         esac\n",
+    )
+    .unwrap();
+    path
+}
+
+/// server 的包法：`stdio::spawn` 直接起 `sh`，或被 spawner 的 `--guard`／`--exec` 包起來。
+#[derive(Clone, Copy, PartialEq)]
+enum Wrap {
+    Bare,
+    Guard,
+    Exec,
+}
+
+/// 用 `stdio_host` 起宿主：`flags` 是它自己的旗標，之後接 `-- [<spawner> --guard|--exec …] /bin/sh <腳本> <孫行程 pid 檔> [<模式>]`。
+/// 回宿主設定、孫行程 pid 檔與暫存目錄。
+fn stdio_host(
+    flags: &[&str],
+    mode: Option<&str>,
+) -> (Option<(PathBuf, Vec<String>)>, PathBuf, PathBuf) {
+    stdio_host_wrapped(flags, mode, Wrap::Bare)
+}
+
+fn stdio_host_wrapped(
+    flags: &[&str],
+    mode: Option<&str>,
+    wrap: Wrap,
+) -> (Option<(PathBuf, Vec<String>)>, PathBuf, PathBuf) {
+    // 先轉成真實路徑：`--exec` 的 Landlock 規則吃真實路徑。
+    let dir = std::fs::canonicalize(temp_dir("sh")).unwrap();
+    let script = server_script(&dir);
+    let grandchild_file = dir.join("grandchild.pid");
+    let mut args: Vec<String> = flags.iter().map(|f| f.to_string()).collect();
+    args.push("--".into());
+    let spawner = Path::new(SUPERVISOR)
+        .parent()
+        .unwrap()
+        .join("nexus-sandbox-spawner");
+    match wrap {
+        Wrap::Bare => {}
+        Wrap::Guard => {
+            args.extend([spawner.display().to_string(), "--guard".into(), "--".into()]);
+        }
+        Wrap::Exec => {
+            args.extend([spawner.display().to_string(), "--exec".into()]);
+            for root in ["/usr", "/bin", "/lib", "/lib64"] {
+                if let Ok(real) = std::fs::canonicalize(root) {
+                    args.extend(["--read".into(), real.display().to_string()]);
+                }
+            }
+            args.extend(["--write".into(), dir.display().to_string(), "--".into()]);
+        }
+    }
+    args.extend(["/bin/sh".into(), script.display().to_string()]);
+    args.push(grandchild_file.display().to_string());
+    args.extend(mode.map(String::from));
+    (Some((example("stdio_host"), args)), grandchild_file, dir)
+}
+
+fn host_socket_log(h: &Harness) -> PathBuf {
+    h.dir.join("run/host.sock")
+}
+
+/// 宿主紀錄裡第 `n`（從 0）個 `<key> <pid>` 的 pid。
+fn nth_logged(h: &Harness, key: &str, n: usize) -> i32 {
+    let mut pid = None;
+    assert!(
+        wait_until(|| {
+            pid = log(&host_socket_log(h))
+                .iter()
+                .filter_map(|line| line.strip_prefix(&format!("{key} ")))
+                .nth(n)
+                .map(|p| p.parse().unwrap());
+            pid.is_some()
+        }),
+        "{:?}",
+        raw_log(&host_socket_log(h))
+    );
+    pid.unwrap()
+}
+
+fn grandchild_pid(file: &Path) -> i32 {
+    let mut pid = None;
+    assert!(wait_until(|| {
+        pid = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| t.trim().parse().ok());
+        pid.is_some()
+    }));
+    pid.unwrap()
+}
+
+/// `/proc/<pid>/stat` 的 session 欄（括號後第 4 欄）；行程不在或讀不到是 `None`。
+fn session_of(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()
+}
+
+/// 宿主已經起了 server 與孫行程，兩個都還活著；回（宿主 pid、server 領頭 pid、孫行程 pid）。
+fn host_with_members(h: &Harness, file: &Path) -> (i32, i32, i32) {
+    let host = nth_logged(h, "start", 0);
+    let leader = nth_logged(h, "spawned", 0);
+    let grandchild = grandchild_pid(file);
+    assert!(!gone(leader) && !gone(grandchild));
+    (host, leader, grandchild)
+}
+
+fn sweep_line(h: &Harness) -> String {
+    h.audit_line("\"event\":\"sweep\"")
+}
+
+/// 測試結尾：停機（會再掃一次，宿主重起後新起的 server 也收掉）並等監督行程結束。
+fn finish(mut h: Harness) {
+    kill(h.pid(), libc::SIGTERM);
+    assert!(h.wait_exit().success());
+}
+
+/// 稽核 `sweep` 那一行的 `"signalled":[…]`，逐個 pid 取出來比，不用整行 `contains`（pid 可能剛好是時間戳或別的欄位的一段）。
+fn signalled_pids(line: &str) -> Vec<i32> {
+    let rest = line
+        .split("\"signalled\":[")
+        .nth(1)
+        .unwrap_or_else(|| panic!("sweep 行沒有 signalled：{line}"));
+    let list = rest.split(']').next().unwrap();
+    list.split(',')
+        .filter(|pid| !pid.is_empty())
+        .map(|pid| pid.parse().unwrap())
+        .collect()
+}
+
+/// 掃描只收宿主 session 裡的行程：已經 `up` 的對話行程（監督行程自己起的，不在宿主的 session）掃完還活著。
+/// 宿主死了不會連帶收對話行程，所以選這一種，不選「`signalled` 等於成員數」（那個數字含宿主重起時新起的 server，不穩）。
+fn assert_sweep_left_the_conversation_alone(conversation_pid: i32, line: &str) {
+    assert!(
+        !gone(conversation_pid),
+        "對話行程 {conversation_pid} 被誤殺：{line}"
+    );
+    assert!(
+        !signalled_pids(line).contains(&conversation_pid),
+        "sweep 把對話行程列進 signalled：{line}"
+    );
+}
+
+/// 宿主被殺，它 session 裡的 server 領頭與孫行程都被收掉，稽核有 `sweep`；同時已 `up` 的對話行程不受影響。
+/// server 與孫行程都忽略 SIGTERM，所以只有掃描送的 SIGKILL 收得掉它們（`sweep::kill_member`）。
+#[test]
+fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
+    let (host, file, _dir) = stdio_host(&[], Some("ignore-term"));
+    let mut h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let socket = h.up("a");
+    let conversation = logged_pid(&socket, "pid");
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    let line = sweep_line(&h);
+    let signalled = signalled_pids(&line);
+    assert!(
+        signalled.contains(&leader) && signalled.contains(&grandchild),
+        "{line}"
+    );
+    assert!(line.contains("\"left\":[]"), "{line}");
+    assert_sweep_left_the_conversation_alone(conversation, &line);
+    finish(h);
+}
+
+/// 宿主自己結束（不經收線），結果同宿主被殺。
+#[test]
+fn s1e_a_host_that_exits_by_itself_leaves_nothing_behind() {
+    let (host, file, _dir) = stdio_host(&["--exit-after-spawn"], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let leader = nth_logged(&h, "spawned", 0);
+    let grandchild = grandchild_pid(&file);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    assert!(sweep_line(&h).contains("\"left\":[]"));
+    finish(h);
+}
+
+/// 領頭先走、孫行程成了孤兒，宿主死後孫行程照樣被收（它還在宿主的 session 裡）。
+#[test]
+fn s1g_an_orphaned_grandchild_is_swept_after_its_leader_is_gone() {
+    let (host, file, _dir) = stdio_host(&[], Some("leader-exits"));
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let host = nth_logged(&h, "start", 0);
+    let grandchild = grandchild_pid(&file);
+    let leader = nth_logged(&h, "spawned", 0);
+    assert!(wait_until(|| gone(leader)));
+    assert!(!gone(grandchild));
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(grandchild)), "孤兒 {grandchild} 還在");
+    finish(h);
+}
+
+/// 被 spawner 的 `--guard` 包起來的 server 與它的孫行程，宿主被殺後都不在。
+#[test]
+fn a_guard_wrapped_server_and_its_grandchild_are_swept() {
+    let (host, file, _dir) = stdio_host_wrapped(&[], None, Wrap::Guard);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    sweep_line(&h);
+    finish(h);
+}
+
+/// 被 spawner 的 `--exec` 包起來的 server 與它的孫行程，宿主被殺後都不在。這條路在領頭不是 session 長時會走 `tty_nr` 的判斷
+/// （宿主自己是 session 長、沒有控制終端，所以放行），要有 Landlock 的核心才起得來；沒有時這支紅，不跳過。
+#[test]
+fn an_exec_wrapped_server_and_its_grandchild_are_swept() {
+    let (host, file, _dir) = stdio_host_wrapped(&[], None, Wrap::Exec);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    assert_eq!(
+        session_of(leader),
+        Some(host),
+        "包 --exec 的 server 要留在宿主的 session"
+    );
+    kill(host as u32, libc::SIGKILL);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    sweep_line(&h);
+    finish(h);
+}
+
+/// 停機收宿主時也掃：前台還在的那條路（對照 s3 前台已不在）。
+#[test]
+fn s2_shutdown_sweeps_the_host_session_too() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (_, leader, grandchild) = host_with_members(&h, &file);
+    finish_checking(h, leader, grandchild);
+}
+
+/// 同 `finish`，另外確認 server 與孫行程都被收掉、稽核有 `sweep`。
+fn finish_checking(h: Harness, leader: i32, grandchild: i32) {
+    let socket_log = h.dir.clone();
+    kill(h.pid(), libc::SIGTERM);
+    let mut h = h;
+    assert!(h.wait_exit().success());
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild} {socket_log:?}"
+    );
+    sweep_line(&h);
+}
+
+/// 前台已經不在了才停機：照樣掃。前台不在時監督行程不送 `stop-admission`、也不等它（`advance_shutdown` 的 `front_admitting`），
+/// 所以 `--admission-timeout-ms` 設成 20 秒，停機還是要在幾秒內結束，才證明走的是「前台不在」這條路，不是等逾時。
+/// `--front-restart-ms` 拉長，前台不會在殺掉之後立刻被重起。
+#[test]
+fn s3_shutdown_with_the_front_already_gone_still_sweeps() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let mut h = Harness::start(Options {
+        host,
+        extra: vec![
+            "--admission-timeout-ms",
+            "20000",
+            "--front-restart-ms",
+            "600000",
+        ],
+        ..Options::default()
+    });
+    let (_, leader, grandchild) = host_with_members(&h, &file);
+    h.front = None;
+    // 等監督行程認出前台沒了：稽核裡有前台那一行（行程結束的紀錄）。
+    h.audit_line("\"role\":\"front\"");
+    let started = Instant::now();
+    kill(h.pid(), libc::SIGTERM);
+    assert!(h.wait_exit().success());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "停機等了 {:?}：前台不在不該等 stop-admission 的回答",
+        started.elapsed()
+    );
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    sweep_line(&h);
+}
+
+/// 宿主被殺後重起，舊宿主的成員先收乾淨，新宿主有自己的一組。
+#[test]
+fn s4_a_restarted_host_starts_from_a_clean_session() {
+    let (host, file, _dir) = stdio_host(&[], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(leader) && gone(grandchild)));
+    let new_host = nth_logged(&h, "start", 1);
+    let new_leader = nth_logged(&h, "spawned", 1);
+    assert_ne!(new_host, host);
+    assert_ne!(new_leader, leader);
+    assert!(!gone(new_leader), "新宿主的 server 不能被舊的掃描帶走");
+    finish(h);
+}
+
+/// 宿主還沒 `ready` 就被殺，也要掃：server 已經起了。
+#[test]
+fn a_host_killed_before_ready_is_still_swept() {
+    let (host, file, _dir) = stdio_host(&["--spawn-before-ready", "--no-ready"], None);
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    kill(host as u32, libc::SIGKILL);
+    assert!(
+        wait_until(|| gone(leader) && gone(grandchild)),
+        "{leader} {grandchild}"
+    );
+    finish(h);
+}
+
+/// 自己 `setsid` 的後代掃不到，這是已知的界線（`docs/host-mcp.md`）；這條釘住它，改了要連文件一起改。
+/// 殺宿主之前先等孫行程的 session 欄真的換掉，不靠 pid 檔出現：腳本是先寫 pid、`setsid` 才換，不等的話孫行程可能還在宿主的 session 裡、被掃掉，測試就靠運氣才綠。
+#[test]
+fn l1_a_descendant_that_calls_setsid_is_out_of_reach() {
+    let (host, file, _dir) = stdio_host(&[], Some("setsid"));
+    let h = Harness::start(Options {
+        host,
+        ..Options::default()
+    });
+    let (host, leader, grandchild) = host_with_members(&h, &file);
+    assert!(
+        wait_until(|| session_of(grandchild).is_some_and(|session| session != host)),
+        "孫行程 {grandchild} 的 session 一直沒換掉：{:?}",
+        session_of(grandchild)
+    );
+    kill(host as u32, libc::SIGKILL);
+    assert!(wait_until(|| gone(leader)));
+    sweep_line(&h);
+    let survived = !gone(grandchild);
+    kill(grandchild as u32, libc::SIGKILL);
+    // 宿主重起後新一代的 server 也有一個自己 `setsid` 的孫行程：停機前先收掉，不留在測試機上。
+    let _ = nth_logged(&h, "spawned", 1);
+    assert!(wait_until(|| {
+        let next = grandchild_pid(&file);
+        next != grandchild && session_of(next) == Some(next)
+    }));
+    kill(grandchild_pid(&file) as u32, libc::SIGKILL);
+    finish(h);
+    assert!(survived, "自己開 session 的後代不在掃描範圍");
+}

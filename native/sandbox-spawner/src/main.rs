@@ -739,6 +739,17 @@ fn parse_exec(args: &[OsString]) -> Result<ExecRequest, String> {
     })
 }
 
+/// `/proc/self/stat` 的 `tty_nr`（控制終端的裝置號，0 是沒有）：行程名之後第 5 個欄位（state、ppid、pgrp、session、tty_nr）。
+/// 行程名在括號裡、可以有空白與 `)`，所以從最後一個 `)` 切。缺欄位或不是數字是 `None`。
+fn tty_nr_of(stat: &str) -> Option<i64> {
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(4)?
+        .parse()
+        .ok()
+}
+
 /// 單次模式：替這個行程自己上沙箱再 exec，給一條連線只起一次、stdio 由呼叫端接好的行程用。
 /// 過濾器與 Landlock 跟常駐模式走同一份程式；裝不上就結束，不跑。
 /// `<程式>` 是路徑，不找 PATH，呼叫端解好。exec 失敗照 shell 慣例回 127／126，其他失敗回 125。
@@ -771,8 +782,25 @@ fn exec_confined(args: &[OsString]) -> ! {
     // SAFETY：這幾個呼叫只動這個行程自己；Rust 執行期把 SIGPIPE 設成忽略，exec 會帶過去，所以還原。
     unsafe {
         // 呼叫端已經替它開了 session 時 setsid 回 EPERM，目的已達成。
+        // 呼叫端把它放成組長、但 session 還是呼叫端的（宿主起 MCP server 就是這樣，#2920）：留在那個 session 裡，宿主死了監督行程才掃得到；
+        // 條件是這個 session 沒有控制終端，否則 server 與它的子孫可以讀寫使用者的終端。問的是「有沒有控制終端」，所以直接讀 `/proc/self/stat` 的 `tty_nr`
+        // （0 是沒有），不開 `/dev/tty`（那會受 `/dev` 有沒有掛、權限影響，開不了就放行等於不知道也放行）。讀不到、解不開也拒絕，訊息另寫。
         if libc::setsid() < 0 && libc::getsid(0) != libc::getpid() {
-            die(format!("setsid：{}", std::io::Error::last_os_error()));
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EPERM) {
+                die(format!("setsid：{err}"));
+            }
+            match std::fs::read_to_string("/proc/self/stat")
+                .map_err(|e| e.to_string())
+                .and_then(|text| tty_nr_of(&text).ok_or_else(|| "解不開".to_string()))
+            {
+                Ok(0) => {}
+                Ok(_) => die("呼叫端的 session 有控制終端，不能留在裡面跑：從終端機直接起宿主、再包 --exec 會走到這裡；\
+                     經監督行程起的宿主沒有控制終端。要手動起請用 setsid 起宿主".to_string()),
+                Err(why) => die(format!(
+                    "讀不到 /proc/self/stat 的 tty_nr（{why}），不知道呼叫端的 session 有沒有控制終端，不放行"
+                )),
+            }
         }
         libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
         if libc::getppid() != caller {
@@ -1048,7 +1076,21 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::candidates;
+    use super::{candidates, tty_nr_of};
+
+    #[test]
+    fn tty_nr_comes_from_the_fifth_field_after_the_name() {
+        assert_eq!(tty_nr_of("42 (a b) c) S 1 2 3 0 -1 4"), Some(0));
+        assert_eq!(tty_nr_of("42 (x) S 1 2 3 34816 -1 4"), Some(34816));
+        // 釘欄位位置：session（前一個）、tpgid（後一個）都帶不同的非零值，行程名帶 `)` 與空白；差一格就讀成別的欄位。
+        assert_eq!(
+            tty_nr_of("42 (we) ird )) S 100 200 300 34817 400 4"),
+            Some(34817)
+        );
+        assert_eq!(tty_nr_of("42 (x) S 1 2 3"), None);
+        assert_eq!(tty_nr_of("42 (x) S 1 2 3 x"), None);
+        assert_eq!(tty_nr_of("garbage"), None);
+    }
 
     #[test]
     fn a_slash_in_argv0_skips_the_path_search() {

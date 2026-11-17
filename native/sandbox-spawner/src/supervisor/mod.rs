@@ -93,6 +93,7 @@ mod composition;
 mod cpu;
 mod memory;
 pub mod process;
+pub mod sweep;
 
 use crate::supervisor_protocol::{
     decode_conversation_report, decode_front_request, decode_host_report,
@@ -2206,7 +2207,7 @@ impl Supervisor {
         let mut args = config.args.clone();
         args.push("--socket".into());
         args.push(socket.into_os_string());
-        match process::spawn(&config.program, &args, false) {
+        match process::spawn_in_session(&config.program, &args) {
             Ok((pid, chan, _)) => {
                 let mut proc = Proc::new(pid, chan);
                 proc.chan.send(&encode_host_command(&HostCommand::Hello {
@@ -2481,11 +2482,29 @@ impl Supervisor {
         // 隔離中的也算：它那一筆 `grant` 與隔離時補送的 `revoke` 可能還排在這邊沒寫出去，收屍前要一起寫進 pipe。
         let identities: Vec<libc::pid_t> = self.identities().collect();
         let host = &mut self.host;
+        let audit = &mut self.audit;
+        let host_pid = host.as_ref().map(|h| h.proc.pid);
         let mut exited = Vec::new();
         process::reap(
             |pid| {
                 if leaders.contains(&pid) {
                     process::signal_group(pid, libc::SIGKILL);
+                }
+                // 宿主自成 session：它底下自己換組的行程（MCP server 與子孫）不在上面那一組裡，收屍之前（殭屍還在，session 號不會被重用）另外掃一次。
+                if host_pid == Some(pid) {
+                    let swept = sweep::sweep(pid, sweep::list_members, |member| {
+                        sweep::kill_member(pid, member)
+                    });
+                    if swept.worth_recording() {
+                        audit.record(&Record::Sweep {
+                            pid,
+                            rounds: swept.rounds,
+                            signalled: &swept.signalled,
+                            left: &swept.left,
+                            fallback: swept.fallback,
+                            error: swept.error.as_deref(),
+                        });
+                    }
                 }
                 // 收屍之前撤掉它的身分：這時 pid 還沒被收，不會被重用。撤銷要在收屍之前真的進 pipe；宿主每一輪先讀乾淨控制通道才處理連線，
                 // 所以 pid 被重用之後才來的連線，一定排在撤銷後面。寫不進去就當場殺掉宿主：不在停機時它照退避重起，新的宿主拿到的表本來就沒有這個 pid。

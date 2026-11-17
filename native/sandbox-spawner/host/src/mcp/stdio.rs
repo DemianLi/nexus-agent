@@ -3,7 +3,9 @@
 //!
 //! - 環境：`env_clear` 之後只放 [`Stdio::env`]（TS 算好的整份），宿主自己的環境一個都不繼承。
 //! - stderr 丟掉（`/dev/null`）：宿主沒有辦法把子行程印的字裡的秘密換掉，也沒有地方好放。
-//! - 行程群組：子行程自成一個 session，也就自成一組（pgid 與 sid 都是它的 pid），收線的訊號送整組，所以 server 啟動的子孫（`npx` 底下的 `node`）跟著收；查不到領頭狀態時只殺領頭，不對 pgid 送訊號。子孫自己再 `setsid` 或換組的收不到。session 長開終端裝置時不帶 `O_NOCTTY` 會取得控制終端，跟 spawner 的 `--exec` 自己 `setsid` 之後一樣。
+//! - 行程群組：子行程自成一組（pgid 是它的 pid），**留在宿主的 session 裡**，不自己開 session。收線的訊號送整組，所以 server 啟動的子孫（`npx` 底下的 `node`）跟著收；查不到領頭狀態時只殺領頭，不對 pgid 送訊號。子孫自己再 `setsid` 或換組的收不到。
+//!   不自成 session 的原因：宿主死了（崩潰、被殺）時沒有人替它跑這裡的收線，監督行程把宿主放成自己 session 的 session 長，宿主結束時掃同一個 session 把底下的行程都收掉；子行程自己開了 session 就不在那裡面了（#2920）。
+//!   子行程不是 session 長，也就不會因為開終端裝置而取得控制終端。
 //! - 收線：transport 關了（stdin 跟著關）之後，領頭 [`STDIN_GRACE`] 內自己結束就收；沒有就對整組 SIGTERM，再等領頭最多 [`TERM_GRACE`]，之後對整組 SIGKILL（領頭已結束也送，收掉剩下的子孫），最後一定把領頭 `wait` 掉（SIGKILL 後最多等 [`KILL_WAIT`]，等不到就放手、由阻塞執行緒自己 `wait` 完）。
 //!   兩段等待都只看領頭：領頭一結束，組裡剩下的子孫沒有收尾的機會，立刻 SIGKILL。子孫只收到訊號，不等它們結束，也不是宿主的子行程。三段加起來是 [`REAP_BUDGET`]，編譯期斷言小於監督者的 `GENERATION_CLOSE_TIMEOUT`。領頭不留殭屍。連線的 future 被丟下（握手或列工具中途停掉）時，[`ChildGuard`] 的 drop 對整組 SIGKILL 並在另一條執行緒 `wait`。
 //! - 領頭不先收屍：[`leader_state`] 用 `waitid(WNOWAIT)` 只看不收，領頭結束後留成殭屍，pid 與 pgid 在 `wait` 之前不會被別的行程拿去用，對整組送訊號才不會打到不相干的行程。前提是宿主行程裡沒有收別人子行程的呼叫：`waitpid(-1)`、`waitid(P_ALL)`，或把 SIGCHLD 設成 `SIG_IGN`／`SA_NOCLDWAIT`。
@@ -88,18 +90,10 @@ pub fn spawn(spec: &Stdio) -> io::Result<Spawned> {
         .stdin(Pipe::piped())
         .stdout(Pipe::piped())
         .stderr(Pipe::null());
-    // 自成一個 session（兼一組，pgid＝sid＝pid）：收線的訊號送整組，server 的子孫一起收。
-    // 不能只開組（`process_group(0)`）：被 spawner 的 `--exec` 包起來的 server，spawner 自己要 `setsid`，組長不是 session 長時回 `EPERM` 而結束（125）；
-    // 已經是 session 長時它走放行的那條路。
-    // SAFETY：`pre_exec` 在 fork 之後、exec 之前跑，只能呼叫 async-signal-safe 的函式；`setsid` 是，不配置記憶體、不拿鎖。
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    // 自成一組（pgid＝pid），session 不動：收線的訊號送整組，server 的子孫一起收。
+    // 不開 session：宿主死掉時監督行程靠「同一個 session」掃出這些行程（見檔頭）。
+    // 被 spawner 的 `--exec` 包起來的 server：spawner 是組長但不是 session 長，`setsid` 回 `EPERM`，它在沒有控制終端時留在這個 session 裡跑（#2920）。
+    command.process_group(0);
     if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
     }
@@ -171,7 +165,7 @@ fn kill_group(pgid: u32, sig: libc::c_int) {
     if pgid <= 1 {
         return;
     }
-    // SAFETY：呼叫端保證 `pgid` 是還沒 `wait` 的領頭的 pid。它自成一個 session 也就自成一組（`spawn` 的 `setsid`），組號就是這個 pid；pid 沒被收屍前不會被重用，`-pgid` 不會指到別組。
+    // SAFETY：呼叫端保證 `pgid` 是還沒 `wait` 的領頭的 pid。它自成一組（`spawn` 的 `process_group(0)`），組號就是這個 pid；pid 沒被收屍前不會被重用，`-pgid` 不會指到別組。
     unsafe { libc::kill(-pgid, sig) };
 }
 

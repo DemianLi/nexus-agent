@@ -1422,6 +1422,129 @@ fn exec_mode_detaches_like_a_daemon_child() {
     assert!(!text.lines().any(|line| line == "9"), "{text}");
 }
 
+/// `/proc/self/stat` 那一行的 session 欄（`)` 之後第 4 個欄位）。
+fn stat_session(text: &str) -> libc::pid_t {
+    text.lines()
+        .next()
+        .unwrap()
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(3)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// 讓 `--exec` 的 spawner 是組長、但不是 session 長，而且 session 是外層的（宿主起 MCP server 的樣子，#2920）：
+/// 外層 `pgexec` 自成 session（`controlling` 時再接上一個 pty 當控制終端），先 `setpgid` 成組長再 exec spawner。
+/// 回 (外層 `pgexec` 的 pid（它是 session 長，spawner 是它 fork 出來的子行程）、spawner 的結束碼、spawner 裡 exec 出來的 `cat /proc/self/stat` 輸出、stderr)。
+fn exec_as_group_leader(controlling: bool) -> (libc::pid_t, Option<i32>, String, String) {
+    let pgexec = Path::new(SPAWNER).parent().unwrap().join("examples/pgexec");
+    let mut cmd = Command::new(pgexec);
+    cmd.args([SPAWNER, "--exec"]);
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    cmd.args(["--", "/bin/sh", "-c", "cat /proc/self/stat"]);
+    let slave = controlling.then(|| {
+        // SAFETY：只開一對 pty；slave 在父行程裡一直開著到測試結束。
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0 && libc::grantpt(master) == 0 && libc::unlockpt(master) == 0);
+            let mut name = [0 as libc::c_char; 128];
+            assert_eq!(libc::ptsname_r(master, name.as_mut_ptr(), name.len()), 0);
+            let slave = libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(slave >= 0);
+            (master, slave)
+        }
+    });
+    let slave_fd = slave.map(|(_, slave)| slave);
+    // SAFETY：pre_exec 裡只有 setsid、dup2、ioctl，都是 async-signal-safe，不配置記憶體。
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some(fd) = slave_fd {
+                libc::dup2(fd, 0);
+                if libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    let child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let outer = child.id() as libc::pid_t;
+    let out = child.wait_with_output().unwrap();
+    if let Some((master, slave)) = slave {
+        // SAFETY：兩個 fd 都是上面開的。
+        unsafe {
+            libc::close(slave);
+            libc::close(master);
+        }
+    }
+    (
+        outer,
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// 呼叫端把它放成組長、沒有控制終端：`--exec` 起得來，留在呼叫端的 session 裡（不自己開新的）。
+#[test]
+fn p1_exec_stays_in_the_callers_session_when_it_is_only_a_group_leader() {
+    let (outer, code, stdout, stderr) = exec_as_group_leader(false);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stat_session(&stdout), outer, "{stdout}");
+}
+
+/// 同一種起法，但呼叫端的 session 有控制終端：拒絕（125），說明原因，沒有 exec。
+#[test]
+fn p2_exec_refuses_a_group_leader_whose_session_has_a_controlling_terminal() {
+    let (_, code, stdout, stderr) = exec_as_group_leader(true);
+    assert_eq!(code, Some(125), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("控制終端"), "{stderr}");
+}
+
+/// 呼叫端已經讓它當 session 長：放行，session 就是它自己。
+#[test]
+fn p3_exec_accepts_a_caller_that_already_made_it_session_leader() {
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    cmd.args(["--", "/bin/sh", "-c", "cat /proc/self/stat"]);
+    // SAFETY：pre_exec 裡只有 setsid。
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id() as libc::pid_t;
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(stat_session(&stdout), pid, "{stdout}");
+}
+
 #[test]
 fn exec_mode_says_so_when_landlock_is_partial() {
     let ws = temp_dir("ws");
