@@ -123,6 +123,24 @@ describe('releaseWriter：停、等閒置、撤出，回來時收尾已兌現', 
     expect(r.probe.stalled).toBe(0);
   }, 60_000);
 
+  it('LLM 標題還在飛（模型端點不回）：不等它逾時，撤出時中止它', async () => {
+    const r = track(rig({ releaseIdleWaitMs: 500 }));
+    let busy = true;
+    r.extras.set('t-title', {
+      attachTitle: () =>
+        Object.assign(
+          async () => {
+            busy = false;
+          },
+          { busy: () => busy },
+        ),
+    });
+    await wake(r, 't-title');
+    await r.handler.releaseWriter('t-title');
+    expect(r.evicted).toContain('t-title');
+    expect(busy).toBe(false);
+  });
+
   it('寫租約在 releaseWriter 回來時已經放掉：另一個 store 拿得到寫租約', async () => {
     await seed('t-lease');
     const store = openJsonlSessionStore({ directory: projectDir });
