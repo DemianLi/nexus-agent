@@ -26,7 +26,14 @@ pub struct Prepared {
     pub envp: Vec<*const libc::c_char>,
     /// 只有測試建置會大於 0：`setsid` 之前先睡這麼久，讓測試穩穩造出「子行程還沒自成一組」的時間窗。
     pub test_delay_us: u32,
+    /// 只有測試建置會不是 0：`PANIC_EARLY`／`PANIC_LATE`，子行程在對應的點故意 panic。
+    pub test_panic: u8,
 }
+
+/// `Prepared::test_panic`：`setsid` 之前 panic（狀態 fd 還是 `p.status`）。
+pub const PANIC_EARLY: u8 = 1;
+/// `Prepared::test_panic`：`close_range` 之後、`chdir` 之前 panic（狀態 fd 已經是 fd 3）。
+pub const PANIC_LATE: u8 = 2;
 
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
@@ -54,6 +61,9 @@ unsafe fn fail(fd: libc::c_int, kind: FailKind, err: i32, detail: &str) -> ! {
 pub unsafe fn run(p: &Prepared) -> ! {
     if p.test_delay_us > 0 {
         libc::usleep(p.test_delay_us);
+    }
+    if p.test_panic == PANIC_EARLY {
+        panic!("測試用的 panic（early）");
     }
     // 自己一個 session：spawner 對整個行程群組送訊號（`kill(-pid)`），也脫離 serve 的控制終端，終端的 Ctrl-C 不會打到工具。
     libc::setsid();
@@ -84,6 +94,9 @@ pub unsafe fn run(p: &Prepared) -> ! {
         if sig != libc::SIGKILL && sig != libc::SIGSTOP {
             libc::signal(sig, libc::SIG_DFL);
         }
+    }
+    if p.test_panic == PANIC_LATE {
+        panic!("測試用的 panic（late）");
     }
     // 先 chdir 再上 Landlock：起點不存在或進不去，要報成起點的問題，不是沙箱不可用（#1945）。
     if libc::chdir(p.cwd.as_ptr()) != 0 {

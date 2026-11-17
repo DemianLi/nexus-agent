@@ -105,6 +105,21 @@ fn test_child_delay_us() -> u32 {
     0
 }
 
+/// 只有測試建置會是 1 或 2：子行程在 `run` 的早（`setsid` 之前）或晚（狀態 fd 搬到 fd 3 之後）故意 panic，測 panic 有沒有被報成 `Failed`。
+#[cfg(feature = "test-hooks")]
+fn test_child_panic() -> u8 {
+    match std::env::var("NEXUS_SPAWNER_TEST_CHILD_PANIC").as_deref() {
+        Ok("early") => child::PANIC_EARLY,
+        Ok("late") => child::PANIC_LATE,
+        _ => 0,
+    }
+}
+
+#[cfg(not(feature = "test-hooks"))]
+fn test_child_panic() -> u8 {
+    0
+}
+
 fn listen(path: &str) -> Result<libc::c_int, String> {
     let cpath = CString::new(path).map_err(|_| "socket 路徑含 NUL".to_string())?;
     // SAFETY：sockaddr_un 先清零再填；路徑長度先檢查過。
@@ -262,6 +277,8 @@ struct Spawner {
     /// 事件寫不出去過：主迴圈看到就收尾。
     lost: bool,
     test_delay_us: u32,
+    /// 只有測試建置會不是 0，用掉一次就歸零：下一個子行程在 `run` 的哪一點 panic。
+    test_panic: u8,
 }
 
 /// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選：有好幾個 `PATH=` 時取第一個，跟工具自己 getenv 看到的一樣；
@@ -531,6 +548,8 @@ impl Spawner {
             argv: null_terminated(&argv),
             envp: null_terminated(&env),
             test_delay_us: self.test_delay_us,
+            // 只對第一個子行程 panic：之後同一個 spawner 還要能起正常的工具。
+            test_panic: std::mem::take(&mut self.test_panic),
         };
         // SAFETY：單執行緒的 fork；子行程只走 child::run，不會回來。
         let pid = unsafe { libc::fork() };
@@ -949,6 +968,7 @@ fn main() {
         uid: unsafe { libc::getuid() },
         lost: false,
         test_delay_us: test_child_delay_us(),
+        test_panic: test_child_panic(),
     };
     let mut input: Vec<u8> = Vec::new();
 

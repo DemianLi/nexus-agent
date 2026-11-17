@@ -1104,6 +1104,90 @@ fn a_signal_sent_before_start_arrives_after_start() {
     );
 }
 
+/// 起一個「第一個子行程會在 `when`（early／late）panic」的 spawner；核心沒有 Landlock 時回 None（`NEXUS_REQUIRE_LANDLOCK=1` 時直接紅）。
+fn start_panicking(when: &str) -> Option<Spawner> {
+    let (s, first) = start_with(&[("NEXUS_SPAWNER_TEST_CHILD_PANIC", when)], None);
+    match first {
+        Event::Ready { .. } => Some(s),
+        Event::Unavailable { .. }
+            if std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref() != Ok("1") =>
+        {
+            eprintln!("跳過：這個核心沒有 Landlock（{first:?}）");
+            None
+        }
+        other => panic!("spawner 沒有準備好：{other:?}"),
+    }
+}
+
+/// 子行程 panic 要報成 `Failed`（`Resource`、說明含 `panic`），不是 `Started` 加 `Exited`。
+fn assert_failed_with_panic(event: &Event) {
+    match event {
+        Event::Failed {
+            id: 1,
+            kind: FailKind::Resource,
+            detail,
+            ..
+        } => assert!(
+            String::from_utf8_lossy(detail).contains("panic"),
+            "說明沒有 panic：{event:?}"
+        ),
+        other => panic!("子行程 panic 沒有被報成 Failed：{other:?}"),
+    }
+}
+
+/// panic 之後同一個 spawner 還能正常起工具；第一個要求（id 1）之後沒有再冒出 `Started`、`Exited`。
+fn assert_spawner_still_works_and_id_1_stays_failed(s: &mut Spawner) {
+    let ws = temp_dir("ws");
+    let (out, exit) = s.run(request(2, &ws, &["/bin/echo", "ok"]));
+    assert_eq!(out.trim(), "ok");
+    assert!(matches!(exit, Event::Exited { id: 2, code: 0, .. }), "{exit:?}");
+    assert!(
+        s.events.iter().all(|e| event_id(e) != Some(1)),
+        "id 1 還有後續事件：{:?}",
+        s.events
+    );
+}
+
+#[test]
+fn a_child_panicking_before_setsid_is_a_failed_start() {
+    let Some(mut s) = start_panicking("early") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    let (_, _, event) = s.launch(request(1, &ws, &["/bin/true"]));
+    assert_failed_with_panic(&event);
+    assert_spawner_still_works_and_id_1_stays_failed(&mut s);
+}
+
+#[test]
+fn a_child_panicking_after_the_status_fd_moved_is_a_failed_start() {
+    let Some(mut s) = start_panicking("late") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    let (_, _, event) = s.launch(request(1, &ws, &["/bin/true"]));
+    assert_failed_with_panic(&event);
+    assert_spawner_still_works_and_id_1_stays_failed(&mut s);
+}
+
+#[test]
+fn a_child_panic_message_does_not_reach_the_tools_stderr() {
+    let Some(mut s) = start_panicking("late") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    s.send(&Request::Spawn(Spawn {
+        pipes: 0b100,
+        ..request(1, &ws, &["/bin/true"])
+    }));
+    let mut stderr = s.connect(1, 2);
+    let event = s.event_for(1);
+    assert_failed_with_panic(&event);
+    let mut text = String::new();
+    stderr.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "", "panic 訊息印進了工具的 stderr");
+}
+
 /// 等 spawner 自己結束，最多 `limit`；回結束碼。
 fn exits_within(child: &mut Child, limit: Duration) -> Option<i32> {
     let deadline = Instant::now() + limit;
