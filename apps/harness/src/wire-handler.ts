@@ -2039,8 +2039,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (state !== undefined) state.lastActiveAt = now();
   }
 
-  /** 見 {@link WireHandlerOptions.idleEvictMs}：卡上列的每一條都要成立。 */
-  function isIdle(threadId: string, state: ThreadState): boolean {
+  /**
+   * 見 {@link WireHandlerOptions.idleEvictMs}：卡上列的每一條都要成立。
+   *
+   * `viewersBlock: false` 給刪除用（`releaseThreadWriter`）：開著下行的人只讀不寫，撤出時 `pump.close()` 讓那幾條正常結束；
+   * 閒置逐出照舊不撤有人在看的。
+   */
+  function isIdle(
+    threadId: string,
+    state: ThreadState,
+    { viewersBlock = true }: { readonly viewersBlock?: boolean } = {},
+  ): boolean {
     const { pump } = state;
     return (
       // `agentRunning` ＝ `running` 加上 `awaitingInput`；拆開寫是為了每一條各有各的測試與突變。
@@ -2049,7 +2058,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       pump.inbox.length === 0 &&
       pump.nextStep.length === 0 &&
       !pump.goalRoundInFlight &&
-      pump.subscriberCount === 0 &&
+      (!viewersBlock || pump.subscriberCount === 0) &&
       (state.background?.quiescent() ?? true) &&
       !state.goalArmed() &&
       !state.titleBusy() &&
@@ -2126,7 +2135,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     state.pump.cancel();
     const waitMs = options.releaseIdleWaitMs ?? RELEASE_IDLE_WAIT_MS;
     const deadline = Date.now() + waitMs;
-    while (!isIdle(threadId, state)) {
+    while (!isIdle(threadId, state, { viewersBlock: false })) {
       if (Date.now() > deadline) {
         throw new Error(`thread "${threadId}" 等不到閒置（${String(waitMs)} 毫秒），不撤`);
       }
@@ -4889,11 +4898,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 這個請求若指名一條 thread，就同步 +1 它的在途請求數（#1484），回「放掉」；不指名（列表、搜尋、全域下行）回 `undefined`。
    * 放掉時同時把最後活動時間推到現在（請求結束也算活動）。
+   *
+   * `thread.delete` 不算：它在請求裡等這條 thread 閒置（`releaseThreadWriter`），算進去就永遠等到自己。
    */
   function holdThread(request: Request): (() => void) | undefined {
-    const threadId = pathThreadId(request);
-    if (threadId === undefined) return undefined;
-    const id = threadId;
+    const route = pathRoute(request);
+    if (route === undefined) return undefined;
+    if (route.kind === 'command' && route.method === 'thread.delete') return undefined;
+    const id = route.threadId;
     httpInFlight.set(id, (httpInFlight.get(id) ?? 0) + 1);
     touchThread(id);
     let released = false;
@@ -5088,14 +5100,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /** 這個請求的路徑指名哪一條 thread；不指名或解不開回 `undefined`。 */
-  function pathThreadId(request: Request): string | undefined {
+  function pathRoute(request: Request): ReturnType<typeof parsePath> {
     try {
       const { pathname } = new URL(request.url);
-      return parsePath(withoutEmbedPrefix(pathname) ?? pathname)?.threadId;
+      return parsePath(withoutEmbedPrefix(pathname) ?? pathname);
     } catch {
       // 壞的百分號編碼：之後會被當 404，沒有 thread 可握。
       return undefined;
     }
+  }
+
+  function pathThreadId(request: Request): string | undefined {
+    return pathRoute(request)?.threadId;
   }
 
   /** 見 {@link WireHandlerOptions.boundThread}：路徑指名的不是綁著的那一條就回拒絕。 */
