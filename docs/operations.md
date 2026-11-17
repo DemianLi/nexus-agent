@@ -372,7 +372,6 @@ curl -sS -m 5 <名單外的內部位址>                                        
 容器的形狀（寫在 patch 檔裡，`insert` 一列 MCP；起法見〈用 systemd 常駐〉。`--dump-config` 不載 plugin，驗不到這一列的欄位，載得進來與否看 serve 起動後的快照）：
 
 <!-- mcp-container-example:begin（apps/harness/src/operations-mcp-container.test.ts 讀這一段，改了要一起過） -->
-
 ```yaml
 - insert:
     - id: mcp-crm
@@ -397,7 +396,6 @@ curl -sS -m 5 <名單外的內部位址>                                        
             - LANG
             - registry.example.internal/mcp-crm:1.0.0
 ```
-
 <!-- mcp-container-example:end -->
 
 - **`-i` 一定要給**：stdio 走的就是容器的標準輸入輸出。**不要加 `-t`**：配了 pty，stdio 就不是乾淨的 pipe。
@@ -457,8 +455,8 @@ connection:
   transport: stdio
   command: podman
   env:
-    CRM_TOKEN: { credential: CRM_API_TOKEN } # 子行程看到的是 CRM_TOKEN=<值>
-  args: [run, --rm, -i, -e, CRM_TOKEN, …] # 容器要 -e 點名才拿得到
+    CRM_TOKEN: { credential: CRM_API_TOKEN }   # 子行程看到的是 CRM_TOKEN=<值>
+  args: [run, --rm, -i, -e, CRM_TOKEN, …]       # 容器要 -e 點名才拿得到
 # HTTP 的寫法：
 #   headers:
 #     Authorization: { credential: CRM_API_TOKEN, prefix: 'Bearer ' }
@@ -735,16 +733,16 @@ serve 上那條對話建不起來，回應與伺服器日誌照上面「對話�
 
 <!-- injection-source-budgets:start -->
 
-| `id`                   | 來源                             | 類別   | 絕對上限（位元組） | 佔窗口比例 |
-| ---------------------- | -------------------------------- | ------ | ------------------ | ---------- |
-| `agent-instructions`   | 工作區的指示檔（`AGENTS.md` 等） | 可延後 | 65,536             | 10%        |
-| `skill-catalog`        | 技能目錄                         | 可延後 | 32,768             | 5%         |
-| `skill-invocation`     | `/名字` 叫用的技能正文           | 可延後 | 65,536             | 10%        |
-| `memory`               | 記憶檔                           | 可延後 | 32,768             | 5%         |
-| `system-prompt-prefix` | system prompt 頭段               | 必帶   | 16,384             | —          |
-| `system-prompt-suffix` | system prompt 尾段               | 必帶   | 16,384             | —          |
-| `plan:policy`          | 計劃模式指引                     | 必帶   | 16,384             | —          |
-| `mcp:servers`          | MCP server 的指示                | 每台   | 32,768             | —          |
+| `id` | 來源 | 類別 | 絕對上限（位元組） | 佔窗口比例 |
+| --- | --- | --- | --- | --- |
+| `agent-instructions` | 工作區的指示檔（`AGENTS.md` 等） | 可延後 | 65,536 | 10% |
+| `skill-catalog` | 技能目錄 | 可延後 | 32,768 | 5% |
+| `skill-invocation` | `/名字` 叫用的技能正文 | 可延後 | 65,536 | 10% |
+| `memory` | 記憶檔 | 可延後 | 32,768 | 5% |
+| `system-prompt-prefix` | system prompt 頭段 | 必帶 | 16,384 | — |
+| `system-prompt-suffix` | system prompt 尾段 | 必帶 | 16,384 | — |
+| `plan:policy` | 計劃模式指引 | 必帶 | 16,384 | — |
+| `mcp:servers` | MCP server 的指示 | 每台 | 32,768 | — |
 
 <!-- injection-source-budgets:end -->
 
@@ -965,9 +963,9 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 - id: embed-login
   name: '#settings/embed-login'
   config:
-    embedders: [] # 出廠沒有嵌入方：沒有換票的路由
-    ticketTtlSeconds: 60 # 票多久沒兌換就作廢，10 到 300
-    cookieMaxAgeSeconds: 900 # 兌換出來的嵌入 cookie 多久失效，60 到 86400
+    embedders: []          # 出廠沒有嵌入方：沒有換票的路由
+    ticketTtlSeconds: 60   # 票多久沒兌換就作廢，10 到 300
+    cookieMaxAgeSeconds: 900   # 兌換出來的嵌入 cookie 多久失效，60 到 86400
 ```
 
 加一個嵌入方，在自己的 `cordis.patch.yml` 整份寫出 `config`（patch 是整份替換）：
@@ -976,7 +974,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 - id: embed-login
   config:
     embedders:
-      - id: crm # 小寫英數與 -，最長 32 字；寫進稽核與預設的憑證檔名
+      - id: crm                                   # 小寫英數與 -，最長 32 字；寫進稽核與預設的憑證檔名
         # credentialFile: /var/lib/nexus-agent/embed-credential-crm   # 絕對路徑；不寫就是 <home>/embed-credential-<id>
     ticketTtlSeconds: 60
     cookieMaxAgeSeconds: 900
@@ -1026,16 +1024,16 @@ Content-Type: application/json
 { "subject": "<對方帳號>", "sessionId": "<對方的登入 session id>" }
 ```
 
-| 回應                                       | 什麼時候                                                                                                                    |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `200 { "ticket", "expiresAt" }`            | 發票。`expiresAt` 是毫秒時間戳                                                                                              |
-| `401 unauthorized`                         | 缺憑證、憑證錯、不是 `Bearer <值>` 的形狀：**一律同一個回應**，看不出是哪一種、也看不出有哪些嵌入方                         |
-| `403 { "error": "identity_rejected" }`     | 這個嵌入方的這個對方帳號不在對應表上（稽核的 `reason` 是 `not_mapped`），或對應表跑著時壞了（`identity_table_invalid`）     |
+| 回應 | 什麼時候 |
+| --- | --- |
+| `200 { "ticket", "expiresAt" }` | 發票。`expiresAt` 是毫秒時間戳 |
+| `401 unauthorized` | 缺憑證、憑證錯、不是 `Bearer <值>` 的形狀：**一律同一個回應**，看不出是哪一種、也看不出有哪些嵌入方 |
+| `403 { "error": "identity_rejected" }` | 這個嵌入方的這個對方帳號不在對應表上（稽核的 `reason` 是 `not_mapped`），或對應表跑著時壞了（`identity_table_invalid`） |
 | `400 { "error": "bad_request", "reason" }` | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好這兩個欄位、欄位空或超過 256 字、本文超過 4096 位元組 |
-| `503 { "error": "capacity" }`              | 還沒兌換、還沒過期的票已有 1024 張                                                                                          |
-| `500`                                      | 稽核紀錄寫不進去：不發票                                                                                                    |
-| `403`（純文字）                            | Host 不是 loopback 也不是 `--trusted-host` 指名的，或 `Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源；同 wire          |
-| `405`                                      | 不是 `POST`                                                                                                                 |
+| `503 { "error": "capacity" }` | 還沒兌換、還沒過期的票已有 1024 張 |
+| `500` | 稽核紀錄寫不進去：不發票 |
+| `403`（純文字） | Host 不是 loopback 也不是 `--trusted-host` 指名的，或 `Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源；同 wire |
+| `405` | 不是 `POST` |
 
 - 憑證決定是哪一個嵌入方，本文裡沒有嵌入方 id。serve 拿請求帶的值跟每一個嵌入方的憑證各比一次（比雜湊，長度固定、不提早結束）。
 - **票只放在記憶體**：只能兌換一次，到期或用過就刪，serve 重啟就全部作廢。續期就是用同一個 `sessionId` 再換一張。
@@ -1052,15 +1050,15 @@ Content-Type: application/json
 { "ticket": "<票>" }
 ```
 
-| 回應                                                                      | 什麼時候                                                                                                                                 |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `200 { "expiresAt", "identityFingerprint", "threadId"? }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳；`identityFingerprint` 見下面「身分指紋」；`threadId` 見下面「回到上一條」              |
-| `401 { "error": "ticket_invalid" }`                                       | 沒有這張票、用過了、serve 重啟過：**一律同一個回應**                                                                                     |
-| `401 { "error": "ticket_expired" }`                                       | 票過了 `ticketTtlSeconds` 才來兌換                                                                                                       |
-| `403 { "error": "identity_rejected" }`                                    | 換票之後對應被撤掉、或對到了別的使用者：兌換時會再對一次                                                                                 |
-| `400 { "error": "bad_request", "reason" }`                                | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好一個 `ticket` 欄位、票不是 1 到 256 字的字串、本文超過 1024 位元組 |
-| `500`                                                                     | 稽核紀錄寫不進去：不設 cookie                                                                                                            |
-| `403`（純文字）、`405`                                                    | 同換票                                                                                                                                   |
+| 回應 | 什麼時候 |
+| --- | --- |
+| `200 { "expiresAt", "identityFingerprint", "threadId"? }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳；`identityFingerprint` 見下面「身分指紋」；`threadId` 見下面「回到上一條」 |
+| `401 { "error": "ticket_invalid" }` | 沒有這張票、用過了、serve 重啟過：**一律同一個回應** |
+| `401 { "error": "ticket_expired" }` | 票過了 `ticketTtlSeconds` 才來兌換 |
+| `403 { "error": "identity_rejected" }` | 換票之後對應被撤掉、或對到了別的使用者：兌換時會再對一次 |
+| `400 { "error": "bad_request", "reason" }` | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好一個 `ticket` 欄位、票不是 1 到 256 字的字串、本文超過 1024 位元組 |
+| `500` | 稽核紀錄寫不進去：不設 cookie |
+| `403`（純文字）、`405` | 同換票 |
 
 - **嵌入 cookie 跟獨立頁面那顆是兩顆**：名字是 `nexus-embed-…`（獨立頁面是 `nexus-auth-…`），簽章用從同一把密鑰導出的另一把，值搬到對方的名字底下也驗不過。屬性同獨立頁面那顆（`HttpOnly`、`SameSite=Strict`、`Path=/`、不設 `Domain`），經代理照樣由 `proxy_cookie_path` 改成 `/nexus/`。
 - **只打得到 `/embed/…`**：帶嵌入 cookie 打獨立頁面（`/`、`/index.html`）、`/threads`、`/threads/mux` 都是 `401`，跟沒帶 cookie 一樣。獨立頁面那顆 cookie 照舊打得到嵌入路由。
@@ -1093,16 +1091,7 @@ Content-Type: application/json
 `<home>/embed-audit.jsonl`，一行一筆、只追加、`0600`。過了服務憑證的每筆寫好（`datasync`）才回應；憑證錯的不等落盤。
 
 ```json
-{
-  "v": 1,
-  "at": "2026-11-06T08:00:00.000Z",
-  "event": "exchange",
-  "outcome": "issued",
-  "embedder": "crm",
-  "subject": "alice",
-  "sessionIdSha256": "…",
-  "userId": "alice"
-}
+{"v":1,"at":"2026-11-06T08:00:00.000Z","event":"exchange","outcome":"issued","embedder":"crm","subject":"alice","sessionIdSha256":"…","userId":"alice"}
 ```
 
 - 換票（`event: "exchange"`）的 `outcome`：`issued` 與 `capacity`（帶 `userId`）、`identity_rejected`、`bad_request`（帶 `reason`）、`capacity`、`unauthenticated`。
@@ -1256,7 +1245,6 @@ server {
   串流真的被延遲時：
   1. 首選：請宿主頁的伺服器在串流的回應上帶 `X-Accel-Buffering: no`。只對那幾條回應生效，serve 自己的 SSE 也是這樣做。
   2. 對方改不了時：只替串流那條路徑另開一個 `location`，在裡面加 `proxy_buffering off`，其餘照 `location /` 抄一份。代價同上，只落在那條路徑。不要對整個 `location /` 關緩衝。
-
 - **長連線不被切斷**：nginx 預設 60 秒收不到上游的資料就切斷連線；對方的 WebSocket 或串流沒有心跳的話，會在閒置 60 秒時斷掉。
 - **本文上限**：照對方系統自己的上限填。
 
@@ -1411,14 +1399,14 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 [#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 步驟 4、6。Release 上每個版本附六個檔：
 
-| 檔                                             | 是什麼                                                                                                                                                                                                                     |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nexus-agent-<版本>-linux-x64.tar.gz`          | 產物本身（`pnpm deploy --prod` 的完整閉包，見〈用 systemd 常駐〉）                                                                                                                                                         |
-| `nexus-agent-<版本>-linux-x64.tar.gz.sha256`   | tarball 的雜湊                                                                                                                                                                                                             |
-| `nexus-agent-<版本>-linux-x64.cdx.json`        | SBOM：閉包裡每一顆套件的 name、version、license，第三方的再加 lockfile 記的 integrity；另列沙箱 spawner 的執行檔、Rust 標準函式庫、工具鏈自帶的 C 函式庫（musl、LLVM libunwind）與連進執行檔的 crate（CycloneDX 1.6 JSON） |
-| `nexus-agent-<版本>-linux-x64.cdx.json.sha256` | SBOM 的雜湊                                                                                                                                                                                                                |
-| `nexus-agent-<版本>-audit.json`                | 發版當下的漏洞掃描結果，見下面〈漏洞掃描〉                                                                                                                                                                                 |
-| `nexus-agent-<版本>-audit.json.sha256`         | 掃描結果的雜湊                                                                                                                                                                                                             |
+| 檔 | 是什麼 |
+| --- | --- |
+| `nexus-agent-<版本>-linux-x64.tar.gz` | 產物本身（`pnpm deploy --prod` 的完整閉包，見〈用 systemd 常駐〉） |
+| `nexus-agent-<版本>-linux-x64.tar.gz.sha256` | tarball 的雜湊 |
+| `nexus-agent-<版本>-linux-x64.cdx.json` | SBOM：閉包裡每一顆套件的 name、version、license，第三方的再加 lockfile 記的 integrity；另列沙箱 spawner 的執行檔、Rust 標準函式庫、工具鏈自帶的 C 函式庫（musl、LLVM libunwind）與連進執行檔的 crate（CycloneDX 1.6 JSON） |
+| `nexus-agent-<版本>-linux-x64.cdx.json.sha256` | SBOM 的雜湊 |
+| `nexus-agent-<版本>-audit.json` | 發版當下的漏洞掃描結果，見下面〈漏洞掃描〉 |
+| `nexus-agent-<版本>-audit.json.sha256` | 掃描結果的雜湊 |
 
 tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文，以及 `licenses/sandbox-spawner/` 底下沙箱 spawner 連進去的程式碼的授權全文）、`native/nexus-sandbox-spawner`（沙箱 spawner 的執行檔，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
 以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這些檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
@@ -1426,7 +1414,6 @@ tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單�
 （`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
 
 <!-- verify-install:start -->
-
 ```bash
 # 1. 兩個雜湊：擋得住下載或搬運途中的損壞
 sha256sum -c nexus-agent-<版本>-linux-x64.tar.gz.sha256 nexus-agent-<版本>-linux-x64.cdx.json.sha256
@@ -1464,7 +1451,6 @@ const listed=new Set([bom.metadata.component,...bom.components].map(key));
 const missing=[...installed].filter((x)=>!listed.has(x)),extra=[...listed].filter((x)=>!installed.has(x));
 if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆")}else{console.log("SBOM 漏了："+missing.join("、")+"\nSBOM 多了："+extra.join("、"));process.exitCode=1}'
 ```
-
 <!-- verify-install:end -->
 
 第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
@@ -1494,14 +1480,14 @@ Release 附的 `nexus-agent-<版本>-audit.json` 有三個鍵：`audit` 是 pnpm
 
 **例外清單**是 `.github/audit-exceptions.json`。列進去等於接受一條風險，要 demian 拍板。每一條六個欄位都要有，少一個掃描就紅：
 
-| 欄位       | 寫什麼                                                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `advisory` | GHSA 編號                                                                                                                                 |
-| `paths`    | 接受的相依路徑，形狀同 audit 輸出的 `findings[].paths`（例如 `apps__harness>deepagents>micromatch>braces`）。同一筆出現在沒列的路徑上就紅 |
-| `reason`   | 為什麼接受，連到拍板的地方                                                                                                                |
-| `expires`  | 到期日 `YYYY-MM-DD`，以 UTC 日期判斷（排程也跑 UTC）。當天仍有效，隔天起紅：台北時間要到隔天 08:00 才算過期                               |
-| `review`   | 到期前要重新評估什麼                                                                                                                      |
-| `removal`  | 什麼條件成立就撤掉                                                                                                                        |
+| 欄位 | 寫什麼 |
+| --- | --- |
+| `advisory` | GHSA 編號 |
+| `paths` | 接受的相依路徑，形狀同 audit 輸出的 `findings[].paths`（例如 `apps__harness>deepagents>micromatch>braces`）。同一筆出現在沒列的路徑上就紅 |
+| `reason` | 為什麼接受，連到拍板的地方 |
+| `expires` | 到期日 `YYYY-MM-DD`，以 UTC 日期判斷（排程也跑 UTC）。當天仍有效，隔天起紅：台北時間要到隔天 08:00 才算過期 |
+| `review` | 到期前要重新評估什麼 |
+| `removal` | 什麼條件成立就撤掉 |
 
 下面三種情況掃描也會紅，要回頭改清單：例外到期了；列了例外的那一筆出了修補版（`patched_versions` 不再是 `<0.0.0`，該升版）；audit 已經不報那一筆了（該撤）。
 
@@ -1521,11 +1507,11 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 
 時間、`[E|W|I|D]`（error／warn／info／debug）、logger 名、訊息本文。多行訊息的續行縮排對齊。
 
-| 等級    | 放什麼                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉）                                                                                                                                                                                                                    |
-| `warn`  | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]`、`serve 收尾逾時`（收尾到了 5 秒上限，見〈會話日誌〉停 `serve` 那一段） |
-| `info`  | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要                                                                                                                                                                                                                                                    |
+| 等級 | 放什麼 |
+| --- | --- |
+| `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉） |
+| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]`、`serve 收尾逾時`（收尾到了 5 秒上限，見〈會話日誌〉停 `serve` 那一段） |
+| `info` | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要 |
 
 **命令的輸出不是日誌**：`--help`、`--version`、`--dump-config`、`--dump-config-schema` 照原樣寫標準輸出，不加前綴、不包 JSON、不看門檻
 （`--dump-config-schema` 的標準輸出只有那份 JSON）。
@@ -1538,11 +1524,11 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 ```yaml
 - id: logger-console
   config:
-    format: json # text（預設）| json
+    format: json          # text（預設）| json
     levels:
-      default: warn # 共用主機只留警告以上
-      invariant: error # 也可以按 logger 名單獨設
-    showTime: '' # 文字格式的時間前綴；journald 底下它自己會加，設空字串就不重複
+      default: warn       # 共用主機只留警告以上
+      invariant: error    # 也可以按 logger 名單獨設
+    showTime: ''          # 文字格式的時間前綴；journald 底下它自己會加，設空字串就不重複
 ```
 
 - **`levels` 的值是等級名稱**（`error`／`warn`／`info`／`debug`），不是數字：dsh 的 Cordis 是自己的 fork，順序是 error 0、info 1、warn 2、debug 3；
@@ -1555,12 +1541,12 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 
 一行一個 JSON 物件（JSON Lines），訊息裡的換行留在字串裡、不會多出一行：
 
-| 欄位                                                                                | 內容                                                                                                                                     |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `ts`                                                                                | ISO 8601，UTC（`2026-10-19T02:00:00.000Z`）                                                                                              |
-| `level`                                                                             | `error`／`warn`／`info`／`debug`                                                                                                         |
-| `logger`                                                                            | logger 名（`serve`、`invariant`，樹上插件是它的名稱）                                                                                    |
-| `msg`                                                                               | 訊息本文（錯誤物件放 `stack`，沒有就放 `message`；物件參數用 `util.inspect` 的形式）                                                     |
+| 欄位 | 內容 |
+| --- | --- |
+| `ts` | ISO 8601，UTC（`2026-10-19T02:00:00.000Z`） |
+| `level` | `error`／`warn`／`info`／`debug` |
+| `logger` | logger 名（`serve`、`invariant`，樹上插件是它的名稱） |
+| `msg` | 訊息本文（錯誤物件放 `stack`，沒有就放 `message`；物件參數用 `util.inspect` 的形式） |
 | `thread_id`、`run_id`、`session_id`、`seq`、`code`、`status`、`provider_request_id` | 只有 `[回合] … 失敗` 那一行帶（見〈從回報追到請求〉）；其他行沒有這幾個鍵。`provider_request_id` 沒有就不出現，超過 200 字元的截斷接 `…` |
 
 欄位名取 OTel Logs 資料模型的慣用語意，但**不引入 OTel SDK、不送出去**：只寫標準輸出，和文字格式同一個出口。
@@ -1580,14 +1566,14 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 2026-10-20 10:00:00 [W] serve [回合] thread "t1" run "9f0c…" 失敗（日誌第 4 筆）：SERVER status=502 request_id=gw-123
 ```
 
-| 這一段                         | 怎麼用                                                                                                                                                                                                                                                                                                       |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `thread "t1"`                  | 會話日誌在 `<harness home>/sessions/<專案目錄>/t1/session.v<N>.jsonl`（`N` 取最大的那個；v0.5.19 以前寫、還沒續接過的是 `<專案目錄>/t1.jsonl`）                                                                                                                                                              |
-| `run "…"`                      | 使用者那一句話在佇列上的編號（`run.start` 回的 `run_id`）。續答核准、不是從佇列來的輪沒有這一段；背景子代理失敗時是子代理自己的 run id，thread 是派它的主對話                                                                                                                                                |
-| `日誌第 N 筆`                  | 那份 `.jsonl` 裡 `seq` 等於 N 的事件，就是這一輪的 `turn/failed`；失敗訊息本文在它的 `data.message`                                                                                                                                                                                                          |
+| 這一段 | 怎麼用 |
+| --- | --- |
+| `thread "t1"` | 會話日誌在 `<harness home>/sessions/<專案目錄>/t1/session.v<N>.jsonl`（`N` 取最大的那個；v0.5.19 以前寫、還沒續接過的是 `<專案目錄>/t1.jsonl`） |
+| `run "…"` | 使用者那一句話在佇列上的編號（`run.start` 回的 `run_id`）。續答核准、不是從佇列來的輪沒有這一段；背景子代理失敗時是子代理自己的 run id，thread 是派它的主對話 |
+| `日誌第 N 筆` | 那份 `.jsonl` 裡 `seq` 等於 N 的事件，就是這一輪的 `turn/failed`；失敗訊息本文在它的 `data.message` |
 | `子代理日誌 "t1/bg-1" 第 N 筆` | **背景子代理**失敗時，N 是子代理**自己那份日誌**的 `seq`（不是 `t1` 那份的），日誌 id 是 `<thread>/<run_id>`。會話目錄在同一個專案目錄底下，目錄名把 `/` 編成 `~002F`：`sessions/<專案目錄>/t1~002Fbg-1/session.v<N>.jsonl`（run id 很長時目錄名會截短、尾巴接一段摘要，用 `ls -d …/t1~002Fbg-1*` 照前綴找） |
-| `SERVER`、`status=502`         | 失敗碼與 HTTP 狀態（沒有狀態就省略）                                                                                                                                                                                                                                                                         |
-| `request_id=gw-123`            | 模型供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的）。拿它去問閘道那一側「哪一次請求」；沒有這幾個標頭就省略                                                                                                                                              |
+| `SERVER`、`status=502` | 失敗碼與 HTTP 狀態（沒有狀態就省略） |
+| `request_id=gw-123` | 模型供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的）。拿它去問閘道那一側「哪一次請求」；沒有這幾個標頭就省略 |
 
 ```bash
 # 在那份會話日誌裡找這一輪的失敗（N 換成「日誌第 N 筆」）：
@@ -1609,11 +1595,11 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
 
 [#1535](https://github.com/DemianLi/nexus-agent/issues/1535)。以前要知道 serve 活不活著，只能看 port 有沒有開、去 `ps`、讀 stdout。現在有三個路徑，**只在本機 loopback 上、只被動抓取、serve 不往任何地方送**：
 
-| 路徑           | 預設   | 要登入嗎                        | 回應                                                                                                                                                                                                                                                        |
-| -------------- | ------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /livez`   | 開     | 不用                            | `200 ok`：handler 跑得到就回，不查任何狀態（回得了，就代表事件圈在轉）。                                                                                                                                                                                    |
-| `GET /readyz`  | 開     | 不用                            | `200 ok`：在聽、收尾還沒開始。`503 storage-full`：寫資料的地方滿了。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗，**之後 listener 再照常在聽一小段時間窗**，這段時間內抓到的是 503，時間窗過了才關 listener，之後是連不上）。 |
-| `GET /metrics` | **關** | `Authorization: Bearer <token>` | Prometheus 文字格式 0.0.4（`text/plain; version=0.0.4`）。                                                                                                                                                                                                  |
+| 路徑 | 預設 | 要登入嗎 | 回應 |
+| --- | --- | --- | --- |
+| `GET /livez` | 開 | 不用 | `200 ok`：handler 跑得到就回，不查任何狀態（回得了，就代表事件圈在轉）。 |
+| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 storage-full`：寫資料的地方滿了。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗，**之後 listener 再照常在聽一小段時間窗**，這段時間內抓到的是 503，時間窗過了才關 listener，之後是連不上）。 |
+| `GET /metrics` | **關** | `Authorization: Bearer <token>` | Prometheus 文字格式 0.0.4（`text/plain; version=0.0.4`）。 |
 
 - **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
 - **探針免登入，本文只有狀態字**（`ok`／`closing`／`storage-full`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
@@ -1684,18 +1670,18 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 
 名單固定，**標籤不含 thread id 或路徑**，基數不隨使用者長。讀不到的來源整個不出現，**不回 0**。
 
-| 指標                                                                                         | 型別    | 說明                                                                                                                                                         |
-| -------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `nexus_threads`                                                                              | gauge   | 行程裡的 thread 數（含建構中的，不含撤到一半的）。                                                                                                           |
-| `nexus_threads_closing`                                                                      | gauge   | 撤到一半、還佔著名額的 thread 數。                                                                                                                           |
-| `nexus_threads_max`                                                                          | gauge   | thread 數上限（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）；`threads + closing` 到這個數就拒收新 thread。                                 |
-| `nexus_storage_full{area}`                                                                   | gauge   | `area` 是 `home` 或 `thread-roots`，這一區寫資料的地方滿了是 1（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）。查法同 `/readyz`，不帶路徑。 |
-| `nexus_http_requests_total{surface,code_class}`                                              | counter | 回完的請求數。`surface` 是 `wire`（`/threads`）、`web`（網頁與其他）、`ops`（這三個路徑）；`code_class` 是 `2xx`…`5xx`。                                     |
-| `nexus_turn_failures_total{code}`                                                            | counter | 失敗收場的回合數（含背景子代理），`code` 是失敗分類的碼，跟伺服器日誌 `[回合]` 那一行同一個。                                                                |
-| `nexus_event_loop_delay_seconds{quantile="0.5\|0.99"}`、`nexus_event_loop_delay_max_seconds` | gauge   | **上一次抓取以來**的事件圈延遲（`perf_hooks.monitorEventLoopDelay`，每次抓取後歸零）。事件圈被同步工作卡住時，`livez` 一樣會逾時，這個數字告訴你卡了多久。   |
-| `process_start_time_seconds`                                                                 | gauge   | 行程啟動的 Unix 時間。                                                                                                                                       |
-| `nexus_memory_rss_bytes`、`nexus_memory_heap_used_bytes`                                     | gauge   | 行程自己的 RSS 與 V8 heap（跟 `memory-gauge` 同一個量具，抓取當下現讀，**不需要**打開 `memory-gauge`）。                                                     |
-| `nexus_cgroup_memory_current_bytes`、`nexus_cgroup_memory_max_bytes`                         | gauge   | Linux cgroup 的用量與上限；沒有 cgroup 或 cgroup 沒設上限時對應的指標不出現。                                                                                |
+| 指標 | 型別 | 說明 |
+| --- | --- | --- |
+| `nexus_threads` | gauge | 行程裡的 thread 數（含建構中的，不含撤到一半的）。 |
+| `nexus_threads_closing` | gauge | 撤到一半、還佔著名額的 thread 數。 |
+| `nexus_threads_max` | gauge | thread 數上限（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）；`threads + closing` 到這個數就拒收新 thread。 |
+| `nexus_storage_full{area}` | gauge | `area` 是 `home` 或 `thread-roots`，這一區寫資料的地方滿了是 1（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）。查法同 `/readyz`，不帶路徑。 |
+| `nexus_http_requests_total{surface,code_class}` | counter | 回完的請求數。`surface` 是 `wire`（`/threads`）、`web`（網頁與其他）、`ops`（這三個路徑）；`code_class` 是 `2xx`…`5xx`。 |
+| `nexus_turn_failures_total{code}` | counter | 失敗收場的回合數（含背景子代理），`code` 是失敗分類的碼，跟伺服器日誌 `[回合]` 那一行同一個。 |
+| `nexus_event_loop_delay_seconds{quantile="0.5\|0.99"}`、`nexus_event_loop_delay_max_seconds` | gauge | **上一次抓取以來**的事件圈延遲（`perf_hooks.monitorEventLoopDelay`，每次抓取後歸零）。事件圈被同步工作卡住時，`livez` 一樣會逾時，這個數字告訴你卡了多久。 |
+| `process_start_time_seconds` | gauge | 行程啟動的 Unix 時間。 |
+| `nexus_memory_rss_bytes`、`nexus_memory_heap_used_bytes` | gauge | 行程自己的 RSS 與 V8 heap（跟 `memory-gauge` 同一個量具，抓取當下現讀，**不需要**打開 `memory-gauge`）。 |
+| `nexus_cgroup_memory_current_bytes`、`nexus_cgroup_memory_max_bytes` | gauge | Linux cgroup 的用量與上限；沒有 cgroup 或 cgroup 沒設上限時對應的指標不出現。 |
 
 - **記憶體門檻警告不在這裡**：那是 `memory-gauge` 的 `warnAtPercent`（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)），只寫日誌。告警規則與門檻是監控那一側的事。
 - **計數是行程內的**，serve 重啟歸零（Prometheus 的 `rate()` 認得 counter 重置）。
@@ -1813,22 +1799,22 @@ nexus-agent serve --process-model per-thread
     等的期間 `signal` 中止就以 `cancelled` 結算，不送出。連上之後閒著時，客戶端不留計時器。
   - 每個呼叫剛好結算一次：成功回宿主給的 `ok`；失敗多半丟 `HostCallError`，看它的 `code`。例外是參數過不了橋（`HostProtocolError`，見下）與 `onChunk` 丟的錯（原樣結算）。宿主回的錯誤碼：
 
-    | `code`                              | 意思                                                                                                   | 呼叫端怎麼做                                                               |
-    | ----------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-    | `unknown_service`／`unknown_method` | 宿主上沒有這個服務或方法                                                                               | 兩邊名字對不上，或宿主沒掛提供它的插件（見下面〈插件清單〉）；原樣重試沒用 |
-    | `bad_payload`                       | 服務不收這份參數                                                                                       | 改參數；原樣重試一樣失敗                                                   |
-    | `busy`                              | 這條連線同時在跑的呼叫已經 64 個                                                                       | 等手上的呼叫結束再送                                                       |
-    | `cancelled`                         | 呼叫被 `signal` 中止；客戶端當場結算，宿主之後回的 `cancelled` 丟掉                                    | 自己取消的不用處理                                                         |
-    | `too_large`                         | 結果或其中一塊編成一框超過 256 KiB（`MAX_FRAME`）                                                      | 服務要改用串流或分段，重試沒用                                             |
-    | `service_error`                     | 服務自己失敗了；或單次的方法推了塊、一步推的塊加起來超過 1 MiB、提供服務的插件在呼叫途中卸載或換了實體 | 看 `message`；能不能重試由那個服務決定                                     |
+    | `code` | 意思 | 呼叫端怎麼做 |
+    | --- | --- | --- |
+    | `unknown_service`／`unknown_method` | 宿主上沒有這個服務或方法 | 兩邊名字對不上，或宿主沒掛提供它的插件（見下面〈插件清單〉）；原樣重試沒用 |
+    | `bad_payload` | 服務不收這份參數 | 改參數；原樣重試一樣失敗 |
+    | `busy` | 這條連線同時在跑的呼叫已經 64 個 | 等手上的呼叫結束再送 |
+    | `cancelled` | 呼叫被 `signal` 中止；客戶端當場結算，宿主之後回的 `cancelled` 丟掉 | 自己取消的不用處理 |
+    | `too_large` | 結果或其中一塊編成一框超過 256 KiB（`MAX_FRAME`） | 服務要改用串流或分段，重試沒用 |
+    | `service_error` | 服務自己失敗了；或單次的方法推了塊、一步推的塊加起來超過 1 MiB、提供服務的插件在呼叫途中卸載或換了實體 | 看 `message`；能不能重試由那個服務決定 |
 
   - 「宿主不在」那一族是客戶端自己結算的，宿主沒回過：
 
-    | `code`             | 意思                                                                      | 呼叫端怎麼做                                               |
-    | ------------------ | ------------------------------------------------------------------------- | ---------------------------------------------------------- |
-    | `host_absent`      | 這個行程沒有宿主（單行程 serve、CLI、serve 起動時的試組），或連線已經關掉 | 永久的，不要重試；走沒有宿主時的做法，或回報這個功能用不了 |
-    | `host_unavailable` | 有宿主，但等到上限還沒連上；呼叫**沒有送出去**                            | 可以重試，重試前宜退避                                     |
-    | `host_lost`        | 呼叫送出去之後連線斷了，**宿主做了沒有不知道**                            | 不會自動重送；冪等的才自己重送，不冪等的先查狀態再決定     |
+    | `code` | 意思 | 呼叫端怎麼做 |
+    | --- | --- | --- |
+    | `host_absent` | 這個行程沒有宿主（單行程 serve、CLI、serve 起動時的試組），或連線已經關掉 | 永久的，不要重試；走沒有宿主時的做法，或回報這個功能用不了 |
+    | `host_unavailable` | 有宿主，但等到上限還沒連上；呼叫**沒有送出去** | 可以重試，重試前宜退避 |
+    | `host_lost` | 呼叫送出去之後連線斷了，**宿主做了沒有不知道** | 不會自動重送；冪等的才自己重送，不冪等的先查狀態再決定 |
 
   - 呼叫編成一框（含服務名與方法名）超過 256 KiB，或參數裡有宿主收不下的值（NaN 或無限大（`JSON.stringify` 會寫成 `null`）、落單的代理對、巢狀超過 32 層（框本身算一層）、不是純物件），呼叫以 `HostProtocolError` 結算，不送出去。
     這要連上之後才檢查，所以沒有宿主或還沒連上時，先拿到的是 `host_absent` 或 `host_unavailable`。
@@ -1858,7 +1844,6 @@ nexus-agent serve --process-model per-thread
   一直有新的 `ready: true` 行、兩行的 `ts_ms` 間隔約 30 秒多、`exit_code` 或 `signal` 每次都一樣，就是這種情況。
   監督行程的標準錯誤同時會一再出現「宿主 30000 ms 後重起」。這時要做的是把宿主的結束碼或訊號回報給維護者，重起 serve 救不了。
   一直重起、但 `ready` 是 `false`、`error` 寫「宿主設定壞了：…」的，不是這種情況，是插件清單壞了：照 `error` 修好檔案就好（見上面〈插件清單〉）。
-
 - **停機順序**：收到 `SIGTERM` 時，監督行程先請前台停收新的請求，等它回「已停」，最多等 5 秒。
   接著依序收對話行程、宿主、前台。停機中再收到一次停止訊號，所有對話行程與宿主當場 `SIGKILL`。
   停機若是監督行程自己開始的（前台或宿主送來的第一框解得開、卻不是同一版的 hello、宿主在 `ready` 之前連續失敗到上限、宿主一次都還沒 `ready` 過插件清單就壞了），操作的人第一次送停止訊號只在標準錯誤記一行、照上面的順序收；再送一次才當場 `SIGKILL`。
@@ -1912,7 +1897,6 @@ sudo systemctl enable --now nexus-agent
 ```
 
 <!-- systemd-unit:begin（apps/harness/src/systemd-unit.test.ts 讀這一段，改了要一起過） -->
-
 ```ini
 [Unit]
 Description=nexus-agent serve
@@ -1958,7 +1942,6 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
-
 <!-- systemd-unit:end -->
 
 - **`TimeoutStopSec` 要大於收尾的最壞值。** 單行程 serve 的收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
@@ -1985,19 +1968,17 @@ WantedBy=multi-user.target
   - **算法：`--max-old-space-size` ＝ ⌊`MemoryMax`（MiB）× 0.7⌋。** 範本的 4G ＝ 4096 MiB，所以是 2867。
     剩下的 30% 給 heap 以外的東西：native 記憶體、page cache、`rg`，以及 MCP 的 stdio 子行程（每條對話 +43.5 MiB 左右，見 #1490）。
   - **為什麼是 70%**（2026-10-23 在 #1490 的環境重跑，同一個假模型端點、一條一條開 thread 到 serve 死；每組一次，1g 的 70% 跑了 3 次）：
-
-    | 容器 | `--max-old-space-size` | 死的原因          | 死前 cgroup | 撐到幾條 thread |
-    | ---- | ---------------------- | ----------------- | ----------- | --------------- |
-    | 1g   | 不給                   | heap（134）       | 66.0%       | 202             |
-    | 1g   | 614（60%）             | heap（134）       | 77.1%       | 256             |
-    | 1g   | 716（70%）             | heap（134），3 次 | 86.5–88.5%  | 304–309         |
-    | 1g   | 768（75%）             | heap（134）       | 95.0%       | 337             |
-    | 4g   | 不給                   | heap（134）       | 58.1%       | 1008            |
-    | 4g   | 2867（70%）            | heap（134）       | 79.9%       | 1439            |
+    | 容器 | `--max-old-space-size` | 死的原因 | 死前 cgroup | 撐到幾條 thread |
+    | --- | --- | --- | --- | --- |
+    | 1g | 不給 | heap（134） | 66.0% | 202 |
+    | 1g | 614（60%） | heap（134） | 77.1% | 256 |
+    | 1g | 716（70%） | heap（134），3 次 | 86.5–88.5% | 304–309 |
+    | 1g | 768（75%） | heap（134） | 95.0% | 337 |
+    | 4g | 不給 | heap（134） | 58.1% | 1008 |
+    | 4g | 2867（70%） | heap（134） | 79.9% | 1439 |
 
     75% 在 1g 死前離 cgroup 上限只剩 52 MiB，heap 以外再多長一點就換成 cgroup OOM kill（SIGKILL，日誌上沒有任何遺言），所以不取；
     70% 在 1g 留 100 MiB 以上。**這組量測沒有 MCP 子行程**：開了 MCP 的部署，heap 以外長得比這張表快，要看自己的 `記憶體用量` 那一行，不夠就把 `MemoryMax` 加大或旗標往下調。
-
   - **跟用量警告（[#1718](https://github.com/DemianLi/nexus-agent/issues/1718)）的關係：** 警告的 heap 分母是 `v8.getHeapStatistics().heap_size_limit`，
     給了旗標之後就是旗標算出來的那個值，**比旗標的數字大一點**（`--max-old-space-size=716` 時印 `728.0 MiB`，2867 時印 `2915.0 MiB`，多出來的是新生代）。
     上表每一組在死之前都先印過至少一行警告（預設的 1g 第 153 條 thread 響 heap，70% 的 1g 在第 202–210 條響 heap、再 1–12 條響 cgroup）。
@@ -2046,26 +2027,26 @@ sudo systemctl stop nexus-agent; systemctl status nexus-agent    # inactive (dea
 home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法是 `/var/lib/nexus-agent`，見〈用 systemd 常駐〉）。
 備份時整個 home 一起打包，不要挑檔；下表是讓你知道裡面有哪些是秘密、哪些換不回來：
 
-| 檔或目錄                           | 是什麼                                            | 備註                                                                                 |
-| ---------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `sessions/`                        | 會話日誌（每條對話一份）                          | 給了 `--session-log <目錄>` 的話在那個目錄，也要一起備份                             |
-| `attachments/`                     | 上傳的檔案與圖                                    | 內容定址，會話日誌只記參照                                                           |
-| `tool-results/`                    | 過大的工具結果原文                                | 有保留期（〈接著上一次跑下去〉）                                                     |
-| `plugin-journal.jsonl`             | 插件清單的變更紀錄                                | 舊版不認得它；`.lock` 是它的鎖檔                                                     |
-| `cordis.patch.yml.migrated-<時間>` | 從舊版遷移時改名留下的原檔                        | 不再讀取                                                                             |
-| `thread-organization.json`         | 側欄的釘選與封存                                  | 會話落盤開著才有                                                                     |
-| `.credentials.yaml`                | 受管憑證（API key）                               | **秘密**                                                                             |
-| `.env`                             | 代理設定等環境變數                                | **秘密**（可能有 key）                                                               |
-| `browser-session.json`             | 瀏覽器登入的簽章密鑰                              | **秘密**                                                                             |
-| `config-hash-key.json`             | 會話日誌 header 設定雜湊的鍵                      | **秘密**                                                                             |
-| `metrics-token`                    | 指標的 bearer token                               | **秘密**；打開指標才有，`tokenFile` 有設就在那個位置、不在 home                      |
-| `embed-credential-<id>`            | 嵌入方 `<id>` 換票用的服務憑證                    | **秘密**；`embed-login` 列了嵌入方才有，`credentialFile` 有設就在那個位置、不在 home |
-| `embed-audit.jsonl`                | 嵌入換票與兌換的稽核紀錄                          | `embed-login` 列了嵌入方才有；只追加                                                 |
-| `embed-identities.json`            | 嵌入方的身分對應表（對方帳號 → nexus 使用者）     | **管理者寫**；`embed-login` 列了嵌入方就要有，serve 不建                             |
-| `invariant-log.jsonl`              | 不變量量測記錄                                    |                                                                                      |
-| `plugin-snapshot.json`             | 已儲存與執行中的清單對照                          | 每次啟動重寫，還原時不必在意                                                         |
-| `host-plugins.json`                | 宿主的插件清單（主機級，見〈宿主 `nexus-host`〉） | **管理者寫**；serve 不建，不在就是沒有插件；改了要等宿主重起才讀到                   |
-| `serve.lock`                       | 「一個 home 一個 serve」的鎖檔                    | 備份可以帶，還原時不必                                                               |
+| 檔或目錄 | 是什麼 | 備註 |
+| --- | --- | --- |
+| `sessions/` | 會話日誌（每條對話一份） | 給了 `--session-log <目錄>` 的話在那個目錄，也要一起備份 |
+| `attachments/` | 上傳的檔案與圖 | 內容定址，會話日誌只記參照 |
+| `tool-results/` | 過大的工具結果原文 | 有保留期（〈接著上一次跑下去〉） |
+| `plugin-journal.jsonl` | 插件清單的變更紀錄 | 舊版不認得它；`.lock` 是它的鎖檔 |
+| `cordis.patch.yml.migrated-<時間>` | 從舊版遷移時改名留下的原檔 | 不再讀取 |
+| `thread-organization.json` | 側欄的釘選與封存 | 會話落盤開著才有 |
+| `.credentials.yaml` | 受管憑證（API key） | **秘密** |
+| `.env` | 代理設定等環境變數 | **秘密**（可能有 key） |
+| `browser-session.json` | 瀏覽器登入的簽章密鑰 | **秘密** |
+| `config-hash-key.json` | 會話日誌 header 設定雜湊的鍵 | **秘密** |
+| `metrics-token` | 指標的 bearer token | **秘密**；打開指標才有，`tokenFile` 有設就在那個位置、不在 home |
+| `embed-credential-<id>` | 嵌入方 `<id>` 換票用的服務憑證 | **秘密**；`embed-login` 列了嵌入方才有，`credentialFile` 有設就在那個位置、不在 home |
+| `embed-audit.jsonl` | 嵌入換票與兌換的稽核紀錄 | `embed-login` 列了嵌入方才有；只追加 |
+| `embed-identities.json` | 嵌入方的身分對應表（對方帳號 → nexus 使用者） | **管理者寫**；`embed-login` 列了嵌入方就要有，serve 不建 |
+| `invariant-log.jsonl` | 不變量量測記錄 | |
+| `plugin-snapshot.json` | 已儲存與執行中的清單對照 | 每次啟動重寫，還原時不必在意 |
+| `host-plugins.json` | 宿主的插件清單（主機級，見〈宿主 `nexus-host`〉） | **管理者寫**；serve 不建，不在就是沒有插件；改了要等宿主重起才讀到 |
+| `serve.lock` | 「一個 home 一個 serve」的鎖檔 | 備份可以帶，還原時不必 |
 
 備份檔裡有秘密，要用跟 home 一樣的權限保管（擁有者是跑 serve 的那個使用者、`0600`），不要放進別人讀得到的地方。
 
@@ -2078,18 +2059,18 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 
 **不論哪一種，動手之前先備份整個檔**：`cp <檔> <檔>.bak-$(date +%s)`。備份跟原檔一樣有秘密的（標「秘密」的那幾份），用同樣的權限保管（`chmod 600`，擁有者是跑 serve 的那個使用者）。
 
-| 檔                              | 什麼時候讀                                                                                                           | 壞了的時候                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 怎麼救（都先備份整個檔）                                                    |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `.credentials.yaml`（秘密）     | 帶 `--live` 的 serve：啟動。沒帶 `--live` 的 serve：有 MCP 列引用憑證時，連那幾列之前讀（見〈MCP server 要的憑證〉） | 帶 `--live`：**起不來**：根不是 mapping、`version` 不是 1、有 `records`、`refs` 裡的鍵不是環境變數形狀或值不是非空字串、重複的鍵、YAML 壞、權限讓別人讀得到。訊息指名檔案，不印值。`version`、`refs` 以外的頂層鍵、整份只有註解，**不算壞**（見〈金鑰放哪裡〉）。跑著的時候才改壞：保留最後一份能用的內容，警告一次。沒帶 `--live`：serve 照樣起來，只有引用憑證的那幾列連不上，伺服器日誌一則警告（寫了 `failOnStartupError: true` 的列整列不掛，什麼時候回來見〈MCP server 要的憑證〉）；讀成功過之後才改壞，同樣續用上一份並警告 | 照訊息修；權限過寬跑 `chmod 600`；要停用一把 key 就刪掉那一行，不要留空字串 |
-| `plugin-journal.jsonl`          | 啟動，之後每條新 thread 重讀一次                                                                                     | **起不來**：中間某行壞了、欄位多或少、`seq` 跳號、`failed` 指錯筆、權限過寬；訊息指名第幾行。最後一行沒寫完會略過。**不讓略過壞行**：略過會把被停用的插件重新掛上、也漏掉稽核紀錄。跑著的時候壞了，只有重讀清單的那條新 thread 建不起來                                                                                                                                                                                                                                                                                             | 〈後台改清單〉的「紀錄壞了怎麼救」三步                                      |
-| 舊的 `cordis.patch.yml`         | 紀錄檔還不在時，當待遷移的那一層讀；紀錄檔已經在就不讀，只警告                                                       | **起不來**：YAML 壞、形狀不合（不是 patch 清單）、權限不合                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 修好 YAML 或權限再啟動；它的內容會在第一次啟動時遷進紀錄檔                  |
-| `browser-session.json`（秘密）  | 啟動                                                                                                                 | **起不來**：版本不對、JSON 壞、密鑰不是 32 bytes 的 base64url、權限過寬                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 要重設：刪掉它再重啟，**所有瀏覽器會話一起失效**                            |
-| `thread-organization.json`      | 會話落盤開著才開它（沒落盤就不開）；開的時候沒有這個檔，就是兩個空集合                                               | **起不來**：版本不對、JSON 壞、欄位型別不對、集合裡有重複、釘選與封存重疊、權限過寬                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 要重設：刪掉它再重啟，**釘選與封存全部清空**                                |
-| `metrics-token`（秘密）         | 打開指標時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`tokenFile` 有設就是那個檔                         | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 要重設：刪掉它再重啟，**監控那一側要換新的 token**（見〈探針與指標〉）      |
-| `embed-credential-<id>`（秘密） | `embed-login` 列了嵌入方時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`credentialFile` 有設就是那個檔    | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url；訊息指名檔案                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 要重設：刪掉它再重啟，**嵌入方的後端要換新的憑證**（見〈嵌入方換票登入〉）  |
-| `embed-identities.json`         | `embed-login` 列了嵌入方時，在綁 port 之前讀；**不建**                                                               | **起不來，不覆寫**：檔不在、權限讓別人讀得到、不是合規的表；訊息指名檔與第幾筆、不印值。跑著的時候才改壞不會停：換票、兌換與嵌入 cookie 一律拒，已開的嵌入版下行切掉，修好自動恢復（〈身分對應表〉）                                                                                                                                                                                                                                                                                                                                | 照〈身分對應表〉寫好、`chmod 600`；權限過寬跑 `chmod 600`                   |
-| `embed-audit.jsonl`             | `embed-login` 列了嵌入方時，在綁 port 之前打開（只追加，不讀內容）；沒有就建（`0600`）                               | **起不來**：權限讓別人讀得到；訊息指名檔案。跑著的時候寫不進去：那一次換票回 500、不發票，那一次兌換回 500、不設 cookie，那一次嵌入版下行開線回 500、不開線（認不出是誰的那一類、下行的收尾與對話被拒只記伺服器日誌，照原本的回應）                                                                                                                                                                                                                                                                                                 | 權限過寬跑 `chmod 600`；內容不讀，壞行不影響啟動                            |
-| `config-hash-key.json`（秘密）  | 會話落盤開著才讀（落盤關掉就不取）；啟動時讀兩處：會話日誌 header 的設定雜湊、對照快照的活著版本                     | **警告，少一格**：兩處各講一次，新寫的會話日誌 header 不記設定雜湊、對照快照不列活著的設定版本；檔不動，之後每次啟動都一樣，直到它修好                                                                                                                                                                                                                                                                                                                                                                                              | 要重設：刪掉它，之後寫的設定雜湊換一套，**跟之前的比不起來**                |
+| 檔 | 什麼時候讀 | 壞了的時候 | 怎麼救（都先備份整個檔） |
+| --- | --- | --- | --- |
+| `.credentials.yaml`（秘密） | 帶 `--live` 的 serve：啟動。沒帶 `--live` 的 serve：有 MCP 列引用憑證時，連那幾列之前讀（見〈MCP server 要的憑證〉） | 帶 `--live`：**起不來**：根不是 mapping、`version` 不是 1、有 `records`、`refs` 裡的鍵不是環境變數形狀或值不是非空字串、重複的鍵、YAML 壞、權限讓別人讀得到。訊息指名檔案，不印值。`version`、`refs` 以外的頂層鍵、整份只有註解，**不算壞**（見〈金鑰放哪裡〉）。跑著的時候才改壞：保留最後一份能用的內容，警告一次。沒帶 `--live`：serve 照樣起來，只有引用憑證的那幾列連不上，伺服器日誌一則警告（寫了 `failOnStartupError: true` 的列整列不掛，什麼時候回來見〈MCP server 要的憑證〉）；讀成功過之後才改壞，同樣續用上一份並警告 | 照訊息修；權限過寬跑 `chmod 600`；要停用一把 key 就刪掉那一行，不要留空字串 |
+| `plugin-journal.jsonl` | 啟動，之後每條新 thread 重讀一次 | **起不來**：中間某行壞了、欄位多或少、`seq` 跳號、`failed` 指錯筆、權限過寬；訊息指名第幾行。最後一行沒寫完會略過。**不讓略過壞行**：略過會把被停用的插件重新掛上、也漏掉稽核紀錄。跑著的時候壞了，只有重讀清單的那條新 thread 建不起來 | 〈後台改清單〉的「紀錄壞了怎麼救」三步 |
+| 舊的 `cordis.patch.yml` | 紀錄檔還不在時，當待遷移的那一層讀；紀錄檔已經在就不讀，只警告 | **起不來**：YAML 壞、形狀不合（不是 patch 清單）、權限不合 | 修好 YAML 或權限再啟動；它的內容會在第一次啟動時遷進紀錄檔 |
+| `browser-session.json`（秘密） | 啟動 | **起不來**：版本不對、JSON 壞、密鑰不是 32 bytes 的 base64url、權限過寬 | 要重設：刪掉它再重啟，**所有瀏覽器會話一起失效** |
+| `thread-organization.json` | 會話落盤開著才開它（沒落盤就不開）；開的時候沒有這個檔，就是兩個空集合 | **起不來**：版本不對、JSON 壞、欄位型別不對、集合裡有重複、釘選與封存重疊、權限過寬 | 要重設：刪掉它再重啟，**釘選與封存全部清空** |
+| `metrics-token`（秘密） | 打開指標時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`tokenFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url | 要重設：刪掉它再重啟，**監控那一側要換新的 token**（見〈探針與指標〉） |
+| `embed-credential-<id>`（秘密） | `embed-login` 列了嵌入方時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`credentialFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url；訊息指名檔案 | 要重設：刪掉它再重啟，**嵌入方的後端要換新的憑證**（見〈嵌入方換票登入〉） |
+| `embed-identities.json` | `embed-login` 列了嵌入方時，在綁 port 之前讀；**不建** | **起不來，不覆寫**：檔不在、權限讓別人讀得到、不是合規的表；訊息指名檔與第幾筆、不印值。跑著的時候才改壞不會停：換票、兌換與嵌入 cookie 一律拒，已開的嵌入版下行切掉，修好自動恢復（〈身分對應表〉） | 照〈身分對應表〉寫好、`chmod 600`；權限過寬跑 `chmod 600` |
+| `embed-audit.jsonl` | `embed-login` 列了嵌入方時，在綁 port 之前打開（只追加，不讀內容）；沒有就建（`0600`） | **起不來**：權限讓別人讀得到；訊息指名檔案。跑著的時候寫不進去：那一次換票回 500、不發票，那一次兌換回 500、不設 cookie，那一次嵌入版下行開線回 500、不開線（認不出是誰的那一類、下行的收尾與對話被拒只記伺服器日誌，照原本的回應） | 權限過寬跑 `chmod 600`；內容不讀，壞行不影響啟動 |
+| `config-hash-key.json`（秘密） | 會話落盤開著才讀（落盤關掉就不取）；啟動時讀兩處：會話日誌 header 的設定雜湊、對照快照的活著版本 | **警告，少一格**：兩處各講一次，新寫的會話日誌 header 不記設定雜湊、對照快照不列活著的設定版本；檔不動，之後每次啟動都一樣，直到它修好 | 要重設：刪掉它，之後寫的設定雜湊換一套，**跟之前的比不起來** |
 
 表裡「起不來」的，serve 不碰檔：不會備份、不會用空內容重建、不會跳過壞的部分。`plugin-snapshot.json` 每次啟動重寫、`invariant-log.jsonl` 只追加，serve 啟動時都不讀它們，壞了不影響啟動；`serve.lock` 是空的鎖檔，不用管。
 `.env` 是設定、不是狀態檔，寫壞了同樣起不來（見〈金鑰放哪裡〉）。`sessions/` 與 `attachments/` 用到才讀，各有自己的處置，見〈會話日誌〉與〈接著上一次跑下去〉。
@@ -2116,7 +2097,6 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 
      **不要用「另起一個 serve」來試**：起得來的那一個就成了寫入者；拿新版來試的話，它會先拿到鎖、接著遷移 home，
      等於在你備份**之前**就把 `cordis.patch.yml` 遷走了。
-
    - v0.5.19：沒有這把鎖，另起一個也不會被擋。看行程與埠：`pgrep -af 'src/(serve|cli)\.ts'` 沒有輸出、
      `ss -ltnp 'sport = :8787'`（給過 `--port` 的換成那個埠）沒有人在聽；自己寫了 systemd 單元的，`systemctl is-active <單元>` 是 `inactive`。
 3. **備份整個 home，連權限一起**。在 `umask 077` 底下打包，檔案一建出來就是 `0600`；先打包再 `chmod` 的話，中間有一段時間別人讀得到：
@@ -2127,7 +2107,6 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 
    v0.5.19 的 home 在起它的那個使用者底下，用那個使用者打包：`(umask 077; tar -cpf ~/nexus-agent-home-<日期>.tar -C ~ .nexus-agent)`
    （設過 `NEXUS_AGENT_HOME` 的換成那個目錄）。給了 `--session-log` 的話，那個目錄也照樣打包一份。
-
 4. **裝新版，舊版留著**：照〈用 systemd 常駐〉解開到新目錄、`ln -sfn` 換掉 `current`。舊版的目錄不要刪，回滾時要用。
    v0.5.19：舊版就是那份 checkout，**留在 v0.5.19 不要動**（不要 `git pull`、不要切到別的 tag），回滾時從它起。
    在 checkout 裡跑一次 `git rev-parse HEAD`，把印出來的 commit 記下來，回滾後拿來比。
@@ -2173,7 +2152,6 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
      再 `tar -xpf ~/nexus-agent-home-<日期>.tar -C ~`。
    - **把 home 搬到了 `/var/lib/nexus-agent`**：原處已經沒有 `~/.nexus-agent`。上面那段的 `sudo mv /var/lib/nexus-agent …` 照做，把新版用過的
      home 移開，但**不要**跑那段的 `tar -C /var/lib`；備份解回原處：`tar -xpf ~/nexus-agent-home-<日期>.tar -C ~`。
-
 4. 起舊版：`ln -sfn` 把 `current` 指回舊版的目錄，`sudo systemctl start nexus-agent`。
    v0.5.19：在那份 checkout 照升級前的方式起（`pnpm --filter @nexus/harness run serve`，同一個 `NEXUS_AGENT_HOME`）。
 5. 核一次：
@@ -2488,7 +2466,6 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   它是 `/permission` 的唯一入口，關掉組裝一樣當場拋）。
 
   重讀時清單讀不起來、或必掛的列掉了，**只有那一條對話開不起來**，錯誤訊息同啟動那一次，伺服器照常，下一條再讀一次。
-
 - **哪些已儲存、還沒生效，看 `$NEXUS_AGENT_HOME/plugin-snapshot.json`**（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）。
   `--dump-config` 只印磁碟上疊出來的那一份；`serve` 另外把「磁碟上現在的」與「啟動時讀進去、試組過的」逐列對照，寫成這個檔：
   啟動時寫一次，之後每條對話組裝時重讀清單、各更新一次（先寫暫存檔再 `rename`，讀的人不會讀到寫一半的；模式 0600）。
@@ -2508,16 +2485,15 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   [`.docs/plugin-reload-classification-2026-10-08.md`](../.docs/plugin-reload-classification-2026-10-08.md)，表在
   `apps/harness/src/plugin-row-classes.ts`。**不開 wire 路由**：還沒有管理員身分，`/threads` 底下每個登入的人都看得到；
   有了之後改走那道閘的只讀路由。
-
 - **還有哪些對話握著舊設定，看每一列的 `live`**（[#1442](https://github.com/DemianLi/nexus-agent/issues/1442)，版本路由的第一刀）。
   改了設定之後，進行中的對話還握著組裝當下那一份，新對話才用新的；`live` 把「這一列的哪一版設定 → 哪些對話在用」列出來。
   **只有至少一條對話綁著那一列時才有這一格**，剛開機、還沒開過任何對話的檔沒有它。一項是 `{ version, current, threads }`：
 
-  | 欄位      | 意思                                                                                                                                                                                        |
-  | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | 欄位 | 意思 |
+  |---|---|
   | `version` | 那一份宣告（列 id、模組名、設定）的帶鍵雜湊，`hmac-sha256:` 加 16 個十六進位字元，鍵同會話日誌 header 的 `configHash`（`config-hash-key.json`）。**不含設定值**；設定改了又改回來是同一版。 |
-  | `current` | 它是不是**寫這份檔當下**清單上那一列的那一版，也就是下一條新對話會拿到的那一版。                                                                                                            |
-  | `threads` | 握著這一版的對話 id（只有主對話；子代理沿用主對話那一份，不另列），已排序。                                                                                                                 |
+  | `current` | 它是不是**寫這份檔當下**清單上那一列的那一版，也就是下一條新對話會拿到的那一版。 |
+  | `threads` | 握著這一版的對話 id（只有主對話；子代理沿用主對話那一份，不另列），已排序。 |
 
   ```bash
   jq -r '.rows[] | select(.id == "<列 id>") | .live[]? | select(.current | not) | .threads[]' "$NEXUS_AGENT_HOME/plugin-snapshot.json"
@@ -2542,7 +2518,6 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
     全部）；那時這個檔仍然列出全部對話，因為讀者只有主機上的人，但要重審。
   - **關掉會話落盤**（`session-persistence` 列停用）的 serve 沒有這一格：版本字串用 `config-hash-key.json` 那把鍵，落盤關掉的啟動不在 home 底下建鍵檔。
   - 這一版交付的是「設定版本」，不是「程式碼版本」：寫入口沒有換模組的動作，同一列在一個 serve 行程裡只會因為宣告（模組名加設定）改了而出現兩版。
-
 - **報了之後起不起得來，照必掛與可少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)，照 dsh）。
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
   其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連
@@ -2634,9 +2609,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
     都要滿足執行中的版本。樹上的函式插件只 peer `@nexus/sdk`／`@nexus/tools`，沒有 `@nexus/core`，一樣被檢查。
   - peer 寫 `workspace:*`、`workspace:^`、`workspace:~`（從 repo 裡的出貨插件複製出去的 `package.json` 就是這樣）視為「跟執行中的版本相同」，放行。
   - 範圍是空字串或不合法的，算不滿足。欄位形狀不對（`engines` 不是物件、`engines.nexus` 或某個 peer 的範圍不是字串、`peerDependencies` 不是表）、`package.json` 讀不了，一樣掉。
-    不滿足時那一列掉了、其餘照樣起來，訊息寫 `套件@版本 需要 <全部不滿足的需求，例如 @nexus/sdk ^2.0.0、@nexus/tools ^2.0.0>，執行中的是 <版本>`，
-    並附上「硬跑可能崩潰或遺失資料」的風險句；不相容時 `package.json` 的 `name`／`version` 要是非空字串，不然也掉。模組的程式碼一行都沒跑。
-    沒宣告（沒有 `package.json`、沒有 `engines.nexus`、沒有任何 `@nexus/*` peer）就放行。**沒有豁免機制**。
+  不滿足時那一列掉了、其餘照樣起來，訊息寫 `套件@版本 需要 <全部不滿足的需求，例如 @nexus/sdk ^2.0.0、@nexus/tools ^2.0.0>，執行中的是 <版本>`，
+  並附上「硬跑可能崩潰或遺失資料」的風險句；不相容時 `package.json` 的 `name`／`version` 要是非空字串，不然也掉。模組的程式碼一行都沒跑。
+  沒宣告（沒有 `package.json`、沒有 `engines.nexus`、沒有任何 `@nexus/*` peer）就放行。**沒有豁免機制**。
   - **這個版本只有人守得住**：改了 registry 的形狀（欄位改名、註冊點簽章換形狀、聯集少一支）要跟著升 core 的 `version`，
     不然範圍檢查會放行一個其實已經不相容的插件。目前沒有機械守著。
   - **前提是所有 `@nexus/*` 成員同一個版號**（Release 的 bump 腳本把同一個版號寫進每一份 manifest）。開發樹裡每一份都是 `0.0.0`，
@@ -2674,35 +2649,35 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
 出貨清單上這幾列（完整名單與順序以 `apps/harness/cordis.yml` 為準，這裡不寫顆數）：
 
-| id                          | 管什麼                                                                                                                                                                                                                                                   | 有 `config` 嗎                       | 關得掉嗎                  |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------- |
-| `repeat-reminder`           | 連續重複同參數呼叫同一個工具時提醒模型                                                                                                                                                                                                                   | 有（四格）                           | 關得掉                    |
-| `tool-result-pruner`        | 摘要之前先剪掉過長工具結果的中段                                                                                                                                                                                                                         | 有（三格）                           | 關得掉                    |
-| `summarization`             | 壓力達標時把舊訊息摘要成一則，原文讀不回來時歷史 offload 到 backend                                                                                                                                                                                      | 有（四格）                           | 關得掉                    |
-| `observation-policy`        | 先讀後改：沒讀過的檔不准改                                                                                                                                                                                                                               | **沒有**                             | 關得掉                    |
-| `model-usage`               | 每一次模型呼叫的 token 帳目記進會話日誌                                                                                                                                                                                                                  | **沒有**                             | 關得掉                    |
-| `session-checkpoint-policy` | 模型請求與工具動手之前（root 與子代理都是），先把會話日誌排空到磁碟                                                                                                                                                                                      | **沒有**                             | 關得掉                    |
-| `approval-gate`             | 核准閘門                                                                                                                                                                                                                                                 | **沒有**                             | **關不掉**                |
-| `session-persistence`       | 會話日誌落盤本身，以及它的批次窗口（毫秒）                                                                                                                                                                                                               | 有（一格）                           | 關得掉（＝不落盤）        |
-| `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                                                                                                                                                 | 有（三格）                           | **關不掉**                |
-| `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                                                                                                                                                  | 有（五格，另有選配的 `modelId`）     | 關得掉（＝只剩退回標題）  |
-| `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                                                                                                                                                       | 有（一格）                           | 關得掉（＝搜尋一律失敗）  |
-| `session-reference`         | 引用別的會話：一則訊息最多引幾條、候選清單上限、每條來源最多留幾個位元組（照模型窗口算）；**出廠 3 條、候選 50、窗口的 10%**，見〈引用別的會話〉                                                                                                         | 有（四格，`maxReferenceBytes` 選配） | **關不掉**                |
-| `thread-capacity`           | serve 行程裡最多同時有幾條 thread，與閒置的 thread 多久之後撤出記憶體；**出廠開著**（500 條、2 小時）                                                                                                                                                    | 有（兩格）                           | **關不掉**                |
-| `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                                                                                                                                                       | 有（兩格）                           | **關不掉**                |
-| `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**                                                                                                                                | 有（五格）                           | **關不掉**                |
-| `attachment-images`         | 圖片轉碼（落盤前規範化）同時最多幾張；**只有 `serve` 載**；**出廠 2**（1 到 8），見〈送出時帶附件〉                                                                                                                                                      | 有（一格）                           | **關不掉**                |
-| `host-tools`                | 嵌入的對話框替宿主頁宣告的工具（`page__<名字>`）：哪幾支不先問人（`approval.exempt`，宿主頁宣告時的名字），與宿主頁幾毫秒沒回就交回逾時（`timeoutMs`）；**只有 `serve` 載**；**出廠空名單、30 秒**，見 `.docs/host-page-tools-2374-design-2026-11-03.md` | 有（兩格）                           | 關得掉（＝空名單、30 秒） |
-| `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                                                                                                                                               | 有（一格）                           | **關不掉**                |
-| `embed-login`               | 嵌入方用服務憑證換一次性登入票、元件拿票兌換嵌入 cookie：有哪些嵌入方、憑證檔在哪、票多久作廢、cookie 多久失效；**只有 `serve` 用**（CLI 也載這一列，不讀）；**出廠沒有嵌入方（沒有這兩條路由）、票 60 秒、cookie 900 秒**，見〈嵌入方換票登入〉         | 有（兩格）                           | 關得掉（＝沒有嵌入方）    |
-| `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                                                                                                                                                       | 有（三格）                           | **關不掉**                |
-| `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                                                                                                                                                       | 有（一格）                           | **關不掉**                |
-| `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理），以及全機的模型請求並行上限（選配，出廠不限）                                                                             | 有                                   | **關不掉**                |
-| `agent-default-model`       | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列）                                                                                                                                                                       | 有（一格）                           | **關不掉**                |
-| `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                                                                                                                                             | 有（一格）                           | **關不掉**                |
-| `turn-timeout`              | `serve` 上一輪的時鐘上限，到點照停止鈕中止；**出廠 30 分鐘**，見〈執行上限〉                                                                                                                                                                             | 有（一格）                           | 關得掉（關掉就是不限）    |
-| `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                                                                                                                                                         | 有（一格）                           | **關不掉**                |
-| `history-source`            | 模型歷史從哪裡來：`log`（出廠）送從會話日誌推出來的，見下面那一段；`state` 送 LangGraph state；`shadow` 送 state，另拿從會話日誌推出來的歷史比一次                                                                                                       | 有（一格）                           | 關得掉（＝`log`）         |
+| id                          | 管什麼                                                                                                                         | 有 `config` 嗎                   | 關得掉嗎                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------ |
+| `repeat-reminder`           | 連續重複同參數呼叫同一個工具時提醒模型                                                                                         | 有（四格）                       | 關得掉                   |
+| `tool-result-pruner`        | 摘要之前先剪掉過長工具結果的中段                                                                                               | 有（三格）                       | 關得掉                   |
+| `summarization`             | 壓力達標時把舊訊息摘要成一則，原文讀不回來時歷史 offload 到 backend                                                                         | 有（四格）                       | 關得掉                   |
+| `observation-policy`        | 先讀後改：沒讀過的檔不准改                                                                                                     | **沒有**                         | 關得掉                   |
+| `model-usage`               | 每一次模型呼叫的 token 帳目記進會話日誌                                                                                        | **沒有**                         | 關得掉                   |
+| `session-checkpoint-policy` | 模型請求與工具動手之前（root 與子代理都是），先把會話日誌排空到磁碟                                                            | **沒有**                         | 關得掉                   |
+| `approval-gate`             | 核准閘門                                                                                                                       | **沒有**                         | **關不掉**               |
+| `session-persistence`       | 會話日誌落盤本身，以及它的批次窗口（毫秒）                                                                                     | 有（一格）                       | 關得掉（＝不落盤）       |
+| `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                       | 有（三格）                       | **關不掉**               |
+| `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
+| `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
+| `session-reference`         | 引用別的會話：一則訊息最多引幾條、候選清單上限、每條來源最多留幾個位元組（照模型窗口算）；**出廠 3 條、候選 50、窗口的 10%**，見〈引用別的會話〉 | 有（四格，`maxReferenceBytes` 選配） | **關不掉**               |
+| `thread-capacity`           | serve 行程裡最多同時有幾條 thread，與閒置的 thread 多久之後撤出記憶體；**出廠開著**（500 條、2 小時）                           | 有（兩格）                       | **關不掉**               |
+| `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
+| `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**           | 有（五格）                       | **關不掉**               |
+| `attachment-images`         | 圖片轉碼（落盤前規範化）同時最多幾張；**只有 `serve` 載**；**出廠 2**（1 到 8），見〈送出時帶附件〉                                | 有（一格）                       | **關不掉**               |
+| `host-tools`                | 嵌入的對話框替宿主頁宣告的工具（`page__<名字>`）：哪幾支不先問人（`approval.exempt`，宿主頁宣告時的名字），與宿主頁幾毫秒沒回就交回逾時（`timeoutMs`）；**只有 `serve` 載**；**出廠空名單、30 秒**，見 `.docs/host-page-tools-2374-design-2026-11-03.md` | 有（兩格）                       | 關得掉（＝空名單、30 秒） |
+| `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
+| `embed-login`               | 嵌入方用服務憑證換一次性登入票、元件拿票兌換嵌入 cookie：有哪些嵌入方、憑證檔在哪、票多久作廢、cookie 多久失效；**只有 `serve` 用**（CLI 也載這一列，不讀）；**出廠沒有嵌入方（沒有這兩條路由）、票 60 秒、cookie 900 秒**，見〈嵌入方換票登入〉 | 有（兩格）                       | 關得掉（＝沒有嵌入方）   |
+| `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
+| `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
+| `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理），以及全機的模型請求並行上限（選配，出廠不限） | 有                       | **關不掉**               |
+| `agent-default-model`       | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列）                                             | 有（一格）                       | **關不掉**               |
+| `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
+| `turn-timeout`              | `serve` 上一輪的時鐘上限，到點照停止鈕中止；**出廠 30 分鐘**，見〈執行上限〉                                                    | 有（一格）                       | 關得掉（關掉就是不限）   |
+| `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
+| `history-source`            | 模型歷史從哪裡來：`log`（出廠）送從會話日誌推出來的，見下面那一段；`state` 送 LangGraph state；`shadow` 送 state，另拿從會話日誌推出來的歷史比一次 | 有（一格）                       | 關得掉（＝`log`） |
 
 **從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
 它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
@@ -2789,13 +2764,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
   ```yaml
   retryPolicy:
-    mode: normal # 寫了 retryPolicy 就必填；只收 normal，always 拒收（見下）
-    maxRetries: 6 # 非負整數，0 關掉；沒有上限
-    retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT] # 預設就是這五個；不能空、不能重複
+    mode: normal                 # 寫了 retryPolicy 就必填；只收 normal，always 拒收（見下）
+    maxRetries: 6                # 非負整數，0 關掉；沒有上限
+    retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]   # 預設就是這五個；不能空、不能重複
     backoff:
-      initialDelayMs: 500 # 大於 0，之後每次加倍；不能大於 maxDelayMs
-      maxDelayMs: 10000 # 單次等待上限，也是 retry-after 肯等的上限
-      jitterRatio: 0.1 # 0 到 1
+      initialDelayMs: 500        # 大於 0，之後每次加倍；不能大於 maxDelayMs
+      maxDelayMs: 10000          # 單次等待上限，也是 retry-after 肯等的上限
+      jitterRatio: 0.1           # 0 到 1
   ```
 
   整個不寫就是上面這組出廠值。**次數取 6（dsh 預設 5）**：不計抖動的累計等待約 25.5 秒，蓋得過 2026-08-28 量到的 16 秒限流窗口——
@@ -2822,7 +2797,6 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   所以是 180 秒 × 7 = 21 分鐘，再加 6 次退避（0.5、1、2、4、8、10 秒，帶 ±10% 抖動，合計約 25.5 秒），大約 21.5 分鐘。
   要讓它更快失敗，調的是 `timeoutMs`（或 `retryPolicy.maxRetries`）；代價是視覺模型的首事件長尾（`meta/llama-3.2-90b-vision-instruct` 逐一實測最長 133 秒）會被撞到，
   `timeoutMs` 低於 133000 就會砍到它。
-
 - **重打時畫面怎麼走**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）：決定重打的**當下**，上一次吐了一半的回覆在畫面上被擦掉（`message-discard`），
   畫面收到 `llm-retry`（第幾次、等多久、失敗碼，用來畫「N 秒後重試」）；日誌留一顆 `assistant/attempt`（不進模型）與 `llm/retry`（帶 `delayMs`）、
   `llm/retry-started`，失敗那次的 `model/end` 帶 `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。
@@ -2993,7 +2967,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 ```yaml
 - id: thread-capacity
   config:
-    idleEvictAfterMs: 1800000 # 閒置 30 分鐘後撤出記憶體；0 是不逐出
+    idleEvictAfterMs: 1800000   # 閒置 30 分鐘後撤出記憶體；0 是不逐出
 ```
 
 - **計時方式**：一條 thread 的「閒置條件」**全部同時成立**才開始算，連續滿 T 才撤；中途任何一條不成立（有人又說話、開了下行、背景子代理又有活…）就歸零重算。
@@ -3029,7 +3003,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   ```yaml
   - id: thread-capacity
     config:
-      sessionLogBudgetMiB: 200 # 固定 200 MiB；0 是不限；不寫是自動算
+      sessionLogBudgetMiB: 200   # 固定 200 MiB；0 是不限；不寫是自動算
   ```
 
 - **兩種佔法**：續接一條 thread 佔它日誌的大小，佔到這條 thread 撤出記憶體（閒置逐出、關機）；只有開著的 thread 佔的加上這一份放不下才拒收，
@@ -3042,18 +3016,19 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **已知上限（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116) 量到的）**：額度量的是「讀不讀得進來」，**不保證打開之後送得出第一句**。下表是容器照範本的 70% 配 heap、假模型、
   單一條大 thread 量到的。**都是合成形狀**：真實日誌的內容比例不同，邊界會移動，只拿來估量級。超過出廠額度的那幾格（1g 的 100 MiB 以上、4g 的 505.7 MiB）是調高 `sessionLogBudgetMiB` 才打得開的樣子，出廠會拒收。
 
-  | 日誌形狀                              | 日誌大小   | 記憶體上限 | 打開（RSS 峰值）       | 第一句（RSS 峰值）                                      | 第一句等多久 |
-  | ------------------------------------- | ---------- | ---------- | ---------------------- | ------------------------------------------------------- | ------------ |
-  | 100 輪，工具結果 32768 字元           | 約 100 MiB | 1g         | 551–570 MiB            | 3/3 完成，842–880 MiB                                   | 5–6 分鐘     |
-  | 同上                                  | 約 100 MiB | 4g         | 1001–1126 MiB          | 3/3 完成，1456–1757 MiB                                 | 5 分鐘       |
-  | 500 輪，工具結果 32768 字元           | 505.7 MiB  | 4g         | 2118–2136 MiB          | **2/2 第一句沒完成**，見下面「隨機 500 MiB」            | 沒有完成     |
-  | 同上，repo 真實文字                   | 約 504 MiB | 4g         | 沒量                   | 3/3 完成，再送一句完成，2677–3002 MiB                   | 2 分鐘       |
-  | 52 輪，工具結果 1024 字元（訊息很多） | 55.9 MiB   | 1g         | 603 MiB                | 1/1 完成，再送一句完成，925 MiB（heap 已用上限的 79%）  | 1 分鐘       |
-  | 100 輪，工具結果 1024 字元            | 107.6 MiB  | 1g         | 額度放行時 778–802 MiB | **5/5 被殺**（最近一次核對旗標：137、`OOMKilled=true`） | 沒有完成     |
-  | 同上                                  | 107.6 MiB  | 4g         | 1966–1988 MiB          | 3/3 完成，2727–2818 MiB                                 | 1 分鐘       |
-  | 230 輪，工具結果 1024 字元            | 247.4 MiB  | 4g         | 1549 MiB               | 1/1 完成，再送一句完成，2811 MiB（heap 已用上限的 70%） | 5 分鐘       |
-  | 300 輪，工具結果 1024 字元            | 322.7 MiB  | 4g         | 2191 MiB               | 1/1 完成，再送一句完成，3289 MiB（heap 已用上限的 90%） | 6 分鐘       |
-  | 400 輪，工具結果 1024 字元            | 430.2 MiB  | 4g         | 沒量                   | **heap 用完，行程死掉**                                 | 沒有完成     |
+  | 日誌形狀 | 日誌大小 | 記憶體上限 | 打開（RSS 峰值） | 第一句（RSS 峰值） | 第一句等多久 |
+  | --- | --- | --- | --- | --- | --- |
+  | 100 輪，工具結果 32768 字元 | 約 100 MiB | 1g | 551–570 MiB | 3/3 完成，842–880 MiB | 5–6 分鐘 |
+  | 同上 | 約 100 MiB | 4g | 1001–1126 MiB | 3/3 完成，1456–1757 MiB | 5 分鐘 |
+  | 500 輪，工具結果 32768 字元 | 505.7 MiB | 4g | 2118–2136 MiB | **2/2 第一句沒完成**，見下面「隨機 500 MiB」 | 沒有完成 |
+  | 同上，repo 真實文字 | 約 504 MiB | 4g | 沒量 | 3/3 完成，再送一句完成，2677–3002 MiB | 2 分鐘 |
+  | 52 輪，工具結果 1024 字元（訊息很多） | 55.9 MiB | 1g | 603 MiB | 1/1 完成，再送一句完成，925 MiB（heap 已用上限的 79%） | 1 分鐘 |
+  | 100 輪，工具結果 1024 字元 | 107.6 MiB | 1g | 額度放行時 778–802 MiB | **5/5 被殺**（最近一次核對旗標：137、`OOMKilled=true`） | 沒有完成 |
+  | 同上 | 107.6 MiB | 4g | 1966–1988 MiB | 3/3 完成，2727–2818 MiB | 1 分鐘 |
+  | 230 輪，工具結果 1024 字元 | 247.4 MiB | 4g | 1549 MiB | 1/1 完成，再送一句完成，2811 MiB（heap 已用上限的 70%） | 5 分鐘 |
+  | 300 輪，工具結果 1024 字元 | 322.7 MiB | 4g | 2191 MiB | 1/1 完成，再送一句完成，3289 MiB（heap 已用上限的 90%） | 6 分鐘 |
+  | 400 輪，工具結果 1024 字元 | 430.2 MiB | 4g | 沒量 | **heap 用完，行程死掉** | 沒有完成 |
+
   - **額度調得比記憶體撐得住的大，第一句會把整個行程帶走**，同一個 `serve` 上的其他 thread 全部斷線：1g 上訊息很多的日誌，91.4 MiB 就沒有活過。出廠額度下這些日誌回 `thread_log_too_large`，行程照常（1g 的 91.4 MiB、4g 的 430.2 MiB 都實測過，同一個 `serve` 上另一條 thread 照常跑完）。
   - **同時開很多條**：額度是合計，照出廠額度，107.6 MiB 的日誌 1g 一條都不收，4g 算起來放行 2 條、第 3 條回 `thread_log_busy`（這個數沒有重量）。拒收時行程照常活著。
   - **500 輪的日誌在 4g 沒有多少餘裕**（出廠額度已不收，這是調高之後的樣子）：核准、按停、背景子代理都走一遍，RSS 峰值 3505–3905 MiB。
@@ -3066,7 +3041,6 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   - **送過一句之後重開可能被拒收**：對話往下走會讓日誌變大（表裡約 100 MiB 的變 115.2 MiB，505.7 MiB 的變 575.8 MiB），額度只看大小，重啟或逐出後再開就超過額度，回「日誌有 N MiB，超過這個行程能收的 M MiB」。
     要繼續用這條對話，先照上面給行程更多記憶體；加不了的話，暫時在 `thread-capacity` 那一列寫 `sessionLogBudgetMiB: 0`、重啟、打開，用完拿掉。設 0 就是拿掉保護，那段時間行程可能被撐死。
   - **撞到之前的提前告知（[#2215](https://github.com/DemianLi/nexus-agent/issues/2215)）**：開著的日誌長過額度時，serve 日誌寫一行 `[會話日誌] 會話 "<id>" 的日誌長到 N MiB，比現在的額度 M MiB 大：…`，同一個行程裡每條 thread 一次，只講不擋，這條對話照常運作。意思是**以現在的額度**，它關掉或被逐出之後重開會被拒收；自動算的額度隨起動基準浮動，重啟後可能不同，所以不代表已經超限。下一步同上：撞到之前給行程更多記憶體，或調高 `sessionLogBudgetMiB`（調得比記憶體撐得住的大，就可能把整個行程撐死）。使用者看不到這行，他們做不了什麼。只比單份日誌對額度，幾條開著的日誌合計超過額度（`busy`）不講。額度設 0（不限）不講。
-
 - **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh 讀會話日誌也是整份讀（`session-persistence-jsonl/src/generation.ts:262-282`、
   `index.ts:814-834`，`f3803c96`），沒有大小上限。比較與取捨見 [#2115](https://github.com/DemianLi/nexus-agent/issues/2115) 的 PR。
 
@@ -3076,8 +3050,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 # ~/.nexus-agent/cordis.patch.yml
 - id: memory-gauge
   config:
-    reportIntervalMs: 60000 # 0＝不啟動；開了是 1000 到 2147483647（計時器上限，約 24.8 天）
-    warnAtPercent: 75 # 用量警告門檻，1 到 99 的整數；取樣開著才檢查（見下面「用量警告」）
+    reportIntervalMs: 60000   # 0＝不啟動；開了是 1000 到 2147483647（計時器上限，約 24.8 天）
+    warnAtPercent: 75         # 用量警告門檻，1 到 99 的整數；取樣開著才檢查（見下面「用量警告」）
 ```
 
 - **打開之後**：serve 起動的披露都印完之後立刻寫一行，之後每隔 `reportIntervalMs` 毫秒一行，例如
@@ -3107,8 +3081,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 ```yaml
 - id: live-model
   config:
-    maxConcurrentRequests: 8 # 整台 serve 同時最多 8 個模型請求
-    maxWaitMs: 60000 # 排隊最多等 60 秒（這是預設值）
+    maxConcurrentRequests: 8   # 整台 serve 同時最多 8 個模型請求
+    maxWaitMs: 60000           # 排隊最多等 60 秒（這是預設值）
 ```
 
 - **數的是整台 serve 同時在跑的模型請求**：對話、換模型選的別顆、背景子代理指定的模型、標題（含標題跟隨主路由的那一顆）、摘要器生摘要的那一次呼叫都算同一份。
@@ -3263,14 +3237,13 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   寫下去之後那一份有列掉了才再組一份現在的當基準，所以是一到兩次；**最壞**是試掛期間紀錄一直被別人追加，2 次試掛 × 6 輪。
   例：一列握手卡住、沒寫 `failOnStartupError`，`plugin disable` 從起到結束實測約 13 秒。
   寫完、輸出交出去之後行程就結束，**不等**試掛丟下、還在握手的子行程。
-
 - **孤兒行程**：那個子行程是靠 stdin 收到 EOF 自己退出的。Linux 上有 spawner 時，stdio MCP 都掛著 `PR_SET_PDEATHSIG`，起它的行程一死就被 SIGKILL（[#2197](https://github.com/DemianLi/nexus-agent/issues/2197)）；底下這幾種沒有這層保護，不理 stdin EOF 的 MCP server 會留下來、不會自己結束，父行程通常變成 1（容器裡有 tini 這類 subreaper 的話是它）：
   - 非 Linux，或找不到 spawner（serve 起動講一行 `[MCP] 這台主機沒有 spawner…`，照舊直接起）；
   - 孫行程：`npx xxx` 這種，收到訊號的只有 `npx` 本身，底下的 server 不會跟著走；
   - `command` 是 setuid／setgid 或帶 file capabilities 的程式：exec 時核心清掉 PDEATHSIG；
   - `command` 開頭看不出是 ELF 或 `#!`（沒有 shebang 的腳本、讀不到檔頭之類）：不包，照舊直接起，直接起才會退回 `/bin/sh`。
-    真的 daemon 化（fork 之後父行程退出）的 server 不受影響，也不會被收：它本來就不綁 serve。
-    找：`ps -axo pid,ppid,etime,command | awk '$2 == 1'`（subreaper 底下改比它的 pid），再對那一列 MCP 設定的 `command`；收：`kill <pid>`（不退再 `kill -9`）。
+  真的 daemon 化（fork 之後父行程退出）的 server 不受影響，也不會被收：它本來就不綁 serve。
+  找：`ps -axo pid,ppid,etime,command | awk '$2 == 1'`（subreaper 底下改比它的 pid），再對那一列 MCP 設定的 `command`；收：`kill <pid>`（不退再 `kill -9`）。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
   `待重啟`（啟動時讀一次的那幾列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
   `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
@@ -3303,11 +3276,11 @@ home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀
 **被拒絕、掛不上、自己停用也進紀錄**（`rejected`、`failed`、`self-disabled`）：這三種筆**只記不折**，清單不因它們改變——同一份紀錄有它們與沒有
 它們，折出來的清單相同。它們是讓稽核看得到「有人想改什麼、被攔下了」、「哪一列掛不上、歸因到紀錄裡的哪一筆」與「哪一個插件自己停用了自己」，不是讓它們有作用。
 
-| `op`            | 誰寫                                                                              | 什麼時候                                                                                                                                                           | 帶什麼                                                                                                                                                  |
-| --------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rejected`      | `plugin` 寫入口（`actor` 是主機帳號）                                             | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住、試掛時有列新掛不上                                                            | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文）                                            |
-| `failed`        | serve（`actor` 是 `{"kind":"serve","effective":"<帳號>"}`）                       | 某一列掛不上，**而那一列在紀錄裡有被接受的改動**；或它依賴的列被關掉、它剛掉在 `requires`（見下面「依賴的列被關掉」）                                              | `id`、`triggerSeq`（**歸因**到的那一筆的 `seq`，見下面「`triggerSeq` 是歸因，不是因果」）、`stage`（`module`／`config`／`apply`／`requires`）、`reason` |
-| `self-disabled` | serve（`actor` 同 `failed`：沿用 `serve`，「是插件自己停的」由 `op` 承載；#1424） | 樹上的函式插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 處理自我停用的那一格）；同一個行程裡同一列同一份宣告只記一次，重啟或宣告（模組名、設定）改了才會再記 | `id`、`name`（模組名）。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌                                                                  |
+| `op` | 誰寫 | 什麼時候 | 帶什麼 |
+|---|---|---|---|
+| `rejected` | `plugin` 寫入口（`actor` 是主機帳號） | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住、試掛時有列新掛不上 | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文） |
+| `failed` | serve（`actor` 是 `{"kind":"serve","effective":"<帳號>"}`） | 某一列掛不上，**而那一列在紀錄裡有被接受的改動**；或它依賴的列被關掉、它剛掉在 `requires`（見下面「依賴的列被關掉」） | `id`、`triggerSeq`（**歸因**到的那一筆的 `seq`，見下面「`triggerSeq` 是歸因，不是因果」）、`stage`（`module`／`config`／`apply`／`requires`）、`reason` |
+| `self-disabled` | serve（`actor` 同 `failed`：沿用 `serve`，「是插件自己停的」由 `op` 承載；#1424） | 樹上的函式插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 處理自我停用的那一格）；同一個行程裡同一列同一份宣告只記一次，重啟或宣告（模組名、設定）改了才會再記 | `id`、`name`（模組名）。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 |
 
 - **`rejected` 不帶要寫入的值**。`reason` 是驗證器原文，可能引到值的一部分；檔案本來就是 `0600`、前後值本來就是明文，
   所以沒有新增暴露面，但**不要把它貼進 issue 或聊天**。CLI 與伺服器日誌只印「記成第幾筆」，不印原因、不印值。
@@ -3585,3 +3558,4 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 - **日誌**：`inbox/spliced` 的那一件、`turn/start`（`kind: 'message'`）、`user/message` 的 `source` 各多選填的 `requestId`（`turn/start` 另有 `runId`）。**格式 48，不標 `ignorable`**——舊 runtime 略過它，重啟之後重送同一個編號就會排第二次，沒有任何東西報錯。沒帶 `request_id` 的送出，日誌與以前位元組相同。
 - **`slash.run` 沒有同批**：dsh 也只有 `session.prompt` 帶 `requestId`，命令沒有；而且命令的回應是執行結果（`command/done` 的文字），不是一個可以原樣回的 `run_id`，要認重送就得另外把結果存下來。命令有自己的擋法（一次只跑一個、`run` 跑著或停在核准點就拒），重送若撞上這些會得到明確的錯誤；**但命令已經跑完、thread 閒著時重送，命令會再執行一次**——這是已知缺口，今天沒有編號可認。
 - **不在這裡**：`input.respond` 重送「已成功但回應丟了」的核准，客戶端分不出是「已經答過」還是「根本沒有這顆」，這是另一個問題（卡 [#1335](https://github.com/DemianLi/nexus-agent/issues/1335) 的「不在這張卡」）。
+
