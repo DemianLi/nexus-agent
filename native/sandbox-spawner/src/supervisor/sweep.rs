@@ -25,9 +25,17 @@ pub struct Member {
     pub session: libc::pid_t,
     /// 開機以來的啟動時間（`stat` 第 22 欄）：同一個 pid 被重用時它會不同。
     pub start: u64,
-    /// 狀態是 `Z`，掃與再核都把它當成不用送訊號、不算剩下的。`Z` 通常是已經死了、等人收屍的行程；但主執行緒已結束、群組裡還有執行緒在跑的行程
-    /// `stat` 也是 `Z`，它沒死，現在掃不到（#2942）。
+    /// 狀態是 `Z`。只代表主執行緒結束了：群組裡還有執行緒在跑時狀態照樣是 `Z`，那個行程沒死，見 [`Member::dead`]。
     pub zombie: bool,
+    /// 群組裡的執行緒數（`stat` 第 20 欄）。真的死了、只剩等人收屍的殭屍是 1。
+    pub threads: u32,
+}
+
+impl Member {
+    /// 死透了、只剩等人收屍：不用送訊號、不算剩下的。`Z` 而且還有執行緒的行程沒死（`SIGKILL` 送得到它、收得掉），不算。
+    pub fn dead(&self) -> bool {
+        self.zombie && self.threads <= 1
+    }
 }
 
 /// 解 `/proc/<pid>/stat` 的一行：`pid (comm) state ppid pgrp session ... starttime ...`。
@@ -48,6 +56,7 @@ pub fn parse_stat(text: impl AsRef<[u8]>) -> Option<Member> {
     Some(Member {
         pid,
         zombie: *fields.first()? == "Z",
+        threads: fields.get(17)?.parse().ok()?,
         session: fields.get(3)?.parse().ok()?,
         start: fields.get(19)?.parse().ok()?,
     })
@@ -163,7 +172,7 @@ pub fn sweep(
         let members = listing
             .members
             .into_iter()
-            .filter(|m| m.session == host && m.pid != host && !m.zombie)
+            .filter(|m| m.session == host && m.pid != host && !m.dead())
             .filter(|m| !seen.contains(&(m.pid, m.start)))
             .collect();
         Ok((members, listing.error))
@@ -230,7 +239,7 @@ pub fn sweep(
 /// 掃到與送之間行程可能死掉、pid 被別人拿去用。
 pub fn still_member(host: libc::pid_t, scanned: &Member, now: Option<&Member>) -> bool {
     now.is_some_and(|now| {
-        now.pid == scanned.pid && now.start == scanned.start && now.session == host && !now.zombie
+        now.pid == scanned.pid && now.start == scanned.start && now.session == host && !now.dead()
     })
 }
 
@@ -342,6 +351,7 @@ mod tests {
             session,
             start: 1,
             zombie: false,
+            threads: 1,
         }
     }
 
@@ -428,6 +438,73 @@ mod tests {
         let result = sweep(50, || ok(vec![dead.clone()]), |_| panic!("不該送"));
         assert_eq!(result, Sweep::default());
         assert!(!result.worth_recording());
+    }
+
+    /// 主執行緒結束、群組裡還有執行緒的行程：`stat` 是 `Z`，卻沒死。
+    fn zombie_with_threads(pid: libc::pid_t, session: libc::pid_t, threads: u32) -> Member {
+        let mut m = member(pid, session);
+        m.zombie = true;
+        m.threads = threads;
+        m
+    }
+
+    /// 欄位位置與門檻：第 20 欄是執行緒數；`Z` 而且只剩 1 條才算死，`Z` 還有 2 條不算，活著的不算。
+    #[test]
+    fn zu1_a_zombie_is_dead_only_when_no_thread_is_left() {
+        let line = |state: &str, threads: u32| {
+            format!(
+                "42 (x) {state} 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 {threads} 18 19 20 21 22"
+            )
+        };
+        let one = parse_stat(line("Z", 1)).unwrap();
+        assert_eq!(one.threads, 1);
+        assert!(one.dead());
+        let two = parse_stat(line("Z", 2)).unwrap();
+        assert_eq!(two.threads, 2);
+        assert!(two.zombie && !two.dead());
+        assert!(!parse_stat(line("S", 1)).unwrap().dead());
+        // 執行緒數那欄讀不出數字是解不開，不是 0。
+        assert!(
+            parse_stat("42 (x) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 x 18 19 20 21 22")
+                .is_none()
+        );
+    }
+
+    /// 掃：`Z` 但還有執行緒的成員要送（送得到、收得掉），不能跟真的殭屍一起被濾掉。
+    #[test]
+    fn zu2_a_zombie_with_live_threads_is_signalled() {
+        let sent = RefCell::new(Vec::new());
+        let result = sweep(
+            50,
+            || ok(vec![zombie_with_threads(7, 50, 2)]),
+            |m| {
+                sent.borrow_mut().push(m.pid);
+                Kill::Sent
+            },
+        );
+        assert_eq!(*sent.borrow(), vec![7]);
+        assert_eq!(result.signalled, vec![7]);
+    }
+
+    /// `left`：這種成員一直送不成，要出現在剩下的裡面；不然稽核看不出它還在。
+    #[test]
+    fn zu3_a_zombie_with_live_threads_that_cannot_be_killed_is_left() {
+        let result = sweep(
+            50,
+            || ok(vec![zombie_with_threads(7, 50, 2)]),
+            |_| Kill::Failed(libc::EPERM),
+        );
+        assert_eq!(result.left, vec![7]);
+        assert!(result.worth_recording());
+    }
+
+    /// 再核：`Z` 而且還有執行緒仍是成員；只剩 1 條的才不是。
+    #[test]
+    fn zu4_still_member_keeps_a_zombie_with_live_threads() {
+        let scanned = zombie_with_threads(7, 50, 2);
+        assert!(still_member(50, &scanned, Some(&scanned)));
+        let dead = zombie_with_threads(7, 50, 1);
+        assert!(!still_member(50, &scanned, Some(&dead)));
     }
 
     /// `Gone` 不算送過：送之前再核一次發現已經離開的，不進 `signalled`，也不再試。
@@ -714,11 +791,30 @@ mod tests {
         assert_eq!(got, Kill::Failed(libc::EMFILE));
     }
 
-    /// 真的 `/proc` 與 `pidfd`：自成 session 的領頭（宿主）底下兩個成員，一個留在領頭那一組、一個自己換了行程群組（`setpgid`，沒換 session）。
-    /// 留在組內的那一個把名字設成非 UTF-8 位元組加 `)`（`prctl(PR_SET_NAME)`），掃得到才算數。
-    /// 兩個都掃得到、送得到、掃完都不在（死了留成領頭的殭屍也算）；領頭不動。結束時領頭一併收掉，不留行程。
-    #[test]
-    fn kills_members_of_a_session_including_one_that_changed_group() {
+    /// 領頭加兩個成員的收尾：測試中途 panic 也要殺乾淨（`Drop` 在 unwind 時照跑）。
+    /// 只動這個測試自己 fork 出來的行程。成員 pid 還沒讀到就 panic 時，殺領頭那一組只收得到留在組內的第一個成員；自己換了組的第二個會留下（窗口只有領頭 fork 完到管線讀完這一小段）。
+    struct Forked {
+        leader: libc::pid_t,
+        members: Vec<libc::pid_t>,
+    }
+
+    impl Drop for Forked {
+        fn drop(&mut self) {
+            // SAFETY：只送訊號、收自己的子行程。
+            unsafe {
+                for pid in &self.members {
+                    libc::kill(*pid, libc::SIGKILL);
+                }
+                libc::kill(-self.leader, libc::SIGKILL);
+                libc::kill(self.leader, libc::SIGKILL);
+                libc::waitpid(self.leader, std::ptr::null_mut(), 0);
+            }
+        }
+    }
+
+    /// fork 出自成 session 的領頭，領頭底下兩個成員：第一個留在領頭那一組（名字設成非 UTF-8 加 `)`）、第二個自己換行程群組。
+    /// 回收尾用的 [`Forked`]（`members` 還空著）與讀成員 pid 的管線讀端。
+    fn fork_leader_with_two_members() -> (Forked, libc::c_int) {
         let mut fds = [0 as libc::c_int; 2];
         // SAFETY：fork 之後子行程只呼叫 async-signal-safe 的函式（setsid、fork、setpgid、write、pause）。
         let leader = unsafe {
@@ -756,16 +852,39 @@ mod tests {
             libc::close(fds[1]);
             leader
         };
+        (
+            Forked {
+                leader,
+                members: Vec::new(),
+            },
+            fds[0],
+        )
+    }
+
+    /// 從管線讀出兩個成員的 pid（領頭 fork 完就寫進來），記進 `forked`。
+    fn read_member_pids(forked: &mut Forked, read_end: libc::c_int) -> [libc::pid_t; 2] {
         let mut pids = [0 as libc::pid_t; 2];
         for pid in &mut pids {
             let mut bytes = [0u8; 4];
             // SAFETY：讀進長度正好的緩衝區。
-            let n = unsafe { libc::read(fds[0], bytes.as_mut_ptr().cast(), bytes.len()) };
+            let n = unsafe { libc::read(read_end, bytes.as_mut_ptr().cast(), bytes.len()) };
             assert_eq!(n, 4);
             *pid = libc::pid_t::from_ne_bytes(bytes);
+            forked.members.push(*pid);
         }
         // SAFETY：關掉自己開的管線。
-        unsafe { libc::close(fds[0]) };
+        unsafe { libc::close(read_end) };
+        pids
+    }
+
+    /// 真的 `/proc` 與 `pidfd`：自成 session 的領頭（宿主）底下兩個成員，一個留在領頭那一組、一個自己換了行程群組（`setpgid`，沒換 session）。
+    /// 留在組內的那一個把名字設成非 UTF-8 位元組加 `)`（`prctl(PR_SET_NAME)`），掃得到才算數。
+    /// 兩個都掃得到、送得到、掃完都不在（死了留成領頭的殭屍也算）；領頭不動。結束時領頭一併收掉，不留行程。
+    #[test]
+    fn kills_members_of_a_session_including_one_that_changed_group() {
+        let (mut forked, read_end) = fork_leader_with_two_members();
+        let leader = forked.leader;
+        let pids = read_member_pids(&mut forked, read_end);
         // 第二個的 setpgid 要等它跑到；等它的組號等於自己的 pid。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
@@ -794,22 +913,15 @@ mod tests {
 
         let result = sweep(leader, list_members, |member| kill_member(leader, member));
 
-        let alive = |pid| read_member(pid).unwrap().is_some_and(|m| !m.zombie);
+        let alive = |pid| read_member(pid).unwrap().is_some_and(|m| !m.dead());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while pids.iter().any(|pid| alive(*pid)) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let leader_alive = alive(leader);
         let survivors: Vec<_> = pids.iter().filter(|pid| alive(**pid)).collect();
-        // 清掉領頭，不留行程：成員已死（領頭的殭屍），領頭 SIGKILL 之後收屍；掃描壞了而成員還活著時也一併送 SIGKILL。
-        // SAFETY：只動這個測試自己 fork 出來的行程。
-        unsafe {
-            for pid in pids {
-                libc::kill(pid, libc::SIGKILL);
-            }
-            libc::kill(leader, libc::SIGKILL);
-            libc::waitpid(leader, std::ptr::null_mut(), 0);
-        }
+        // 斷言之前就收尾：斷言失敗時 `Drop` 也會跑，但要在這裡先量好 `leader_alive` 與 `survivors`。
+        drop(forked);
         for pid in pids {
             assert!(
                 result.signalled.contains(&pid),
@@ -824,6 +936,30 @@ mod tests {
         assert!(survivors.is_empty(), "{survivors:?} 還活著");
     }
 
+    /// 測試中途 panic 也不留行程：領頭與兩個成員都被收掉（領頭讀不到，成員不在或已死）。
+    /// 成員要寫「不在或已死」：領頭死後成員的殭屍交給 pid 1，容器裡的 pid 1 不一定收。
+    #[test]
+    fn zg1_a_panic_midway_leaves_no_process_behind() {
+        let mut seen = None;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (mut forked, read_end) = fork_leader_with_two_members();
+            let pids = read_member_pids(&mut forked, read_end);
+            seen = Some((forked.leader, pids));
+            panic!("故意在收尾之前 panic");
+        }));
+        assert!(outcome.is_err());
+        let (leader, pids) = seen.expect("panic 之前已經記下 pid");
+        assert_eq!(read_member(leader).unwrap(), None, "領頭沒被收掉");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gone_or_dead = |pid| read_member(pid).unwrap().is_none_or(|m| m.dead());
+        while !pids.iter().all(|pid| gone_or_dead(*pid)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for pid in pids {
+            assert!(gone_or_dead(pid), "成員 {pid} 還活著");
+        }
+    }
+
     /// 真的 `/proc`：自己讀得到自己，session 欄與 `getsid` 一致；不存在的 pid 是 `Ok(None)`。
     #[test]
     fn reads_the_real_proc_for_this_process() {
@@ -832,6 +968,15 @@ mod tests {
         assert_eq!(read.pid, me);
         // SAFETY：`getsid(0)` 只回自己的 session。
         assert_eq!(read.session, unsafe { libc::getsid(0) });
+        // 另開一條執行緒握著：不靠 libtest 是不是另開執行緒跑測試，執行緒數一定至少 2；讀錯欄會是別的數字。
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _ = held.recv();
+        });
+        let with_thread = read_member(me).unwrap().unwrap();
+        assert!(with_thread.threads >= 2, "{with_thread:?}");
+        drop(release);
+        holder.join().unwrap();
         let listing = list_members().unwrap();
         assert!(listing.members.iter().any(|m| m.pid == me));
         assert!(listing.error.is_none(), "{:?}", listing.error);
