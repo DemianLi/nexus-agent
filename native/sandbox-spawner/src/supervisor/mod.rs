@@ -67,7 +67,7 @@
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，順序是 ① 送前台 `stop-admission`，等它回答最多 `--admission-timeout-ms`（前台不在、或在等的時候結束了就不等）；
 //! ② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次；前台收完就回 0（停機是 `hello` 對不上或宿主起不來造成的，回 3 或 4）。
-//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL（對話行程與組合行程還沒有死因的記 `shutdown`，在 ① 還沒等完時也一樣）；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），① 等完之後再走拆除梯度。
+//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL。「再一次」指第二輪外部停止訊號：停機若是內部開始的（`hello` 對不上、宿主起不來、宿主設定壞了），第一輪外部訊號只在 stderr 記一行、照原來的順序走，第二輪才殺（#2864）。被殺的（對話行程與組合行程還沒有死因的記 `shutdown`，在 ① 還沒等完時也一樣）；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），① 等完之後再走拆除梯度。
 //!
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
@@ -403,6 +403,8 @@ struct Supervisor {
     admission_until: Option<Instant>,
     /// 停機完成時回的碼。
     exit_code: i32,
+    /// 收過幾輪外部停止訊號（一輪讀到的幾個只算一次）。`shutting_down` 不能拿來數：內部觸發的停機也會把它設成 true（#2864）。
+    stop_rounds: u32,
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
@@ -502,6 +504,7 @@ impl Supervisor {
             host_ever_ready: false,
             admission_until: None,
             exit_code: 0,
+            stop_rounds: 0,
         }
     }
 }
@@ -2119,13 +2122,18 @@ impl Supervisor {
         }
     }
 
-    /// 這一輪讀到停止訊號。
+    /// 這一輪讀到外部停止訊號。第一輪開始停機；第二輪起才當場 SIGKILL。
+    /// 停機若是內部開始的（`hello` 對不上、宿主起不來、宿主設定壞了），第一輪外部訊號只記一行、照原來的梯度走：
+    /// 操作的人只按了一次，不該讓正在拆除的行程少掉梯度。
     fn on_stop_signal(&mut self) {
-        if self.shutting_down {
+        self.stop_rounds += 1;
+        if !self.shutting_down {
+            self.begin_shutdown(0);
+        } else if self.stop_rounds >= 2 {
             say!("停機中又收到停止訊號，所有對話行程與宿主當場 SIGKILL");
             self.kill_children();
         } else {
-            self.begin_shutdown(0);
+            say!("停機已經開始（不是外部停止訊號開始的），再收到一次停止訊號才強制 SIGKILL");
         }
     }
 
