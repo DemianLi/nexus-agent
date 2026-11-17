@@ -1,8 +1,9 @@
 /**
  * `docs/operations.md`〈用 systemd 常駐〉那份單元檔範本（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5）的紅燈。
  *
- * 範本是文件裡的一段文字，沒人跑它就沒人知道它跟程式碼脫鉤了。這裡把它讀出來，釘住五件會靜靜壞掉的事：
- * `TimeoutStopSec` 要比 serve 自己的收尾上限大、`ExecStart` 直接 exec node 且旗標是 serve 真的收的、
+ * 範本是文件裡的一段文字，沒人跑它就沒人知道它跟程式碼脫鉤了。這裡把它讀出來，釘住六件會靜靜壞掉的事：
+ * `TimeoutStopSec` 要比 serve 自己的收尾上限與 per-thread 監督行程的最壞停機都大、`KillMode` 是 `mixed`、
+ * `ExecStart` 直接 exec node 且旗標是 serve 真的收的、
  * home 與工作區不重疊（#1620 會讓 serve 起不來）、key 不寫進單元檔、
  * `MemoryMax` 與 node 的 `--max-old-space-size` 成對（#1767：改了一個沒改另一個，上限就不是量過的那個比例）。
  * 真的交給 systemd 跑的證據在 PR 內文，不在這裡。
@@ -16,7 +17,19 @@ import { describe, expect, it } from 'vitest';
 import { PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { parseServeArgs } from './serve-run.js';
 
-const operationsDoc = join(dirname(fileURLToPath(import.meta.url)), '../../../docs/operations.md');
+const here = dirname(fileURLToPath(import.meta.url));
+const operationsDoc = join(here, '../../../docs/operations.md');
+const supervisorArgs = join(here, '../../../native/sandbox-spawner/src/supervisor/args.rs');
+
+/** 監督行程 `args.rs` 的預設寬限（毫秒）。讀不到就丟錯，不回預設值，免得正規式失效時拿舊數字比過。 */
+function supervisorDefaultMs(name: string): number {
+  const match = new RegExp(
+    `pub const ${name}: Duration = Duration::from_millis\\(([\\d_]+)\\);`,
+    'u',
+  ).exec(readFileSync(supervisorArgs, 'utf8'));
+  if (match?.[1] === undefined) throw new Error(`args.rs 找不到 ${name}`);
+  return Number(match[1].replaceAll('_', ''));
+}
 
 type Unit = Record<string, Record<string, string[]>>;
 
@@ -76,6 +89,21 @@ describe('operations.md 的 systemd 單元檔範本', () => {
     // 否則 systemctl stop 會把一次乾淨的收尾變成被殺（status=9/KILL）。
     expect(Number.isFinite(seconds)).toBe(true);
     expect(seconds * 1000).toBeGreaterThan(PROCESS_SHUTDOWN_TIMEOUT_MS);
+  });
+
+  it('TimeoutStopSec 大於 per-thread 監督行程照預設旗標的最壞停機', () => {
+    // 順序：等前台回「已停准入」→ 對話行程、宿主、前台依序各走一次拆除梯度（EOF 等待＋SIGTERM 等待）。
+    // 這裡是有宿主、不成對（serve 今天起的樣子）的 3 次梯度，最壞 5＋3×(6＋3)＝32 秒。
+    // 成對（組合行程加葉子）會多一次梯度；成對成為預設時要把 3 改成 4。
+    const worstMs =
+      supervisorDefaultMs('DEFAULT_ADMISSION_TIMEOUT') +
+      3 * (supervisorDefaultMs('DEFAULT_EOF_GRACE') + supervisorDefaultMs('DEFAULT_TERM_GRACE'));
+    expect(Number(one(unit, 'Service', 'TimeoutStopSec')) * 1000).toBeGreaterThan(worstMs);
+  });
+
+  it('KillMode 是 mixed：SIGTERM 只給主行程，監督行程照自己的順序收', () => {
+    // 預設的 control-group 會對 cgroup 裡每個行程同時送 SIGTERM，繞過監督行程的停機順序。
+    expect(one(unit, 'Service', 'KillMode')).toBe('mixed');
   });
 
   it('ExecStart 直接 exec node 的絕對路徑跑 lib/serve.js，不經 pnpm、npx 或 shell', () => {

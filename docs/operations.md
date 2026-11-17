@@ -1909,10 +1909,12 @@ MemoryMax=4G
 # systemd 要求絕對路徑；node 不在 /usr/bin 就改成 which node 印出來的那個。
 ExecStart=/usr/bin/node --max-old-space-size=2867 /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
 
-# SIGTERM 是 serve 的一般停止要求（退出碼 0，收尾失敗是 1）。serve 自己的收尾上限是 5 秒，到了就自己結束，
-# 所以這裡留 10 秒：serve 先自己收完，systemd 的 SIGKILL 只是最後一道。
+# SIGTERM 是 serve 的一般停止要求（退出碼 0，收尾失敗是 1）。只送給主行程（KillMode=mixed）：單行程 serve 自己收完、
+# per-thread 的監督行程照它的順序收（先停收新請求、再對話行程、宿主、前台）。要求停止時，TimeoutStopSec 到了或主行程結束，cgroup 裡剩下的行程收到 SIGKILL（systemd.kill 手冊）。
+# 45 秒蓋得住 per-thread 預設旗標的最壞停機（32 秒，見下面說明）；單行程 serve 的收尾上限只有 5 秒，平常不會用到這麼久。
 KillSignal=SIGTERM
-TimeoutStopSec=10
+KillMode=mixed
+TimeoutStopSec=45
 
 # 只在失敗時重啟：systemctl stop 與 SIGTERM 的退出碼 0 不會被拉起來，致命例外（退出碼 1）會。
 # SIGTERM 收尾失敗也是退出碼 1，結果見下面〈收尾失敗之後〉。
@@ -1924,10 +1926,21 @@ WantedBy=multi-user.target
 ```
 <!-- systemd-unit:end -->
 
-- **`TimeoutStopSec` 要大於 serve 的收尾上限。** 收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
+- **`TimeoutStopSec` 要大於收尾的最壞值。** 單行程 serve 的收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
-  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**：退出碼分不出來，要看 journald 裡有沒有 `serve 收尾逾時` 那一行（標準錯誤一行；伺服器日誌的門檻沒調到 `error` 時再一行；[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
-  這兩個數字改其中一個，另一個要跟著改。
+  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**：退出碼分不出來，要看 journald 裡有沒有 `serve 收尾逾時` 那一行（標準錯誤一行；伺服器日誌的門檻沒調到 `error` 時再一行；[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。
+  `--process-model per-thread` 時 serve 會 execve 成監督行程，停機照它自己的順序與寬限（見〈行程模型：`single` 與 `per-thread`〉）：先等前台回「已停准入」（`--admission-timeout-ms`，預設 5 秒），再讓對話行程、宿主、前台依序走拆除梯度（stdin EOF 等 `--eof-grace-ms` 6 秒、SIGTERM 等 `--term-grace-ms` 3 秒，再 SIGKILL）。
+  serve 起監督行程時沒有帶這三個旗標，部署出去一定是預設值。每一段都有一個行程不理 EOF 也不理 SIGTERM 的最壞情況是 **5 ＋ 3 × (6 ＋ 3) ＝ 32 秒**（有宿主、不成對；沒有宿主是 23 秒）；成對（組合行程加葉子）多一次梯度，是 41 秒，serve 今天不會這樣起。
+  這是照碼算的，沒有量，監督行程每段醒來的間隔沒有算進去（量級是毫秒到幾百毫秒）。45 秒蓋得住 32 秒與 41 秒。
+  `apps/harness/src/systemd-unit.test.ts` 讀這一段與 `native/sandbox-spawner/src/supervisor/args.rs` 的三個預設值：`TimeoutStopSec` 不大於單行程的 5 秒、或不大於監督行程的最壞值就紅。
+- **`KillMode=mixed`：`SIGTERM` 只給主行程。** systemd 預設的 `KillMode=control-group` 會把停止訊號送給 cgroup 裡**每一個**行程，前台、對話行程、宿主會和監督行程同時收到 SIGTERM，監督行程的停機順序就被繞過。
+  `mixed` 是 SIGTERM 只給主行程（serve 或監督行程）、SIGKILL 給 cgroup 裡剩下的全部；**要求停止時，手冊列的 SIGKILL 觸發條件是「主行程已結束」或「`TimeoutStopSec` 到了」**，所以主行程照順序收完自己結束，45 秒只是它卡住時的上限。這一點只來自手冊，沒有實跑。
+  依據是 systemd 手冊（`systemd.kill`、`systemd.service`，頁首標 262）：預設值（`control-group`）與 `mixed` 的行為與上面一致；其他 `KillMode` 值這裡沒用到，沒有核。
+  - 單行程 serve：SIGTERM 只給 serve，serve 的收尾（`disposeWith`）會關 MCP 連線池與根（`mcpPool.close()`、`root.dispose()`，見 `apps/harness/src/serve-run.ts`），MCP stdio 子行程是這樣被收掉的，不靠 systemd 直接送訊號給它們；
+    `systemctl stop` 時，收尾逾時（5 秒）serve 強制結束後沒收掉的子行程，靠上面 systemd 的 SIGKILL 收；有包 spawner `--guard` 的 stdio 子行程另靠 `PR_SET_PDEATHSIG` 隨 serve 死（沒包的情況見 `apps/harness/src/mcp-sandbox.ts`）。
+  - `KillSignal` 之後 systemd 一定緊接著送 SIGCONT：`mixed` 下只有主行程收到。harness 的 TypeScript 沒有任何行程註冊 SIGCONT；監督行程只用 signalfd 收 SIGINT、SIGTERM、SIGHUP、SIGCHLD，SIGCONT 落回預設（行程沒被停住就忽略）。
+    監督行程自己送給對話行程的 SIGCONT（壓住 CPU 的行程用的，#2496）是另一回事。
+  - **沒有在真的 systemd 底下跑過。** 手冊 `systemd.service` 只讀到前半，`Restart=` 那一節沒讀；主行程自己結束（不是被要求停止）時 cgroup 裡剩下的行程怎麼處理，手冊沒有明寫，監督行程直接起的行程另帶 `PR_SET_PDEATHSIG`（監督行程被殺，它們跟著死）；更下一層的行程不一定有。
 - **收尾失敗之後**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：serve 以 1 結束，原因印在標準錯誤。照 systemd 的語意（**沒有實跑過**），上面這份 `Restart=on-failure` 的單元：`systemctl stop` 不重啟，單元進 `failed`，
   排除原因後 `systemctl reset-failed nexus-agent` 再啟動；不是 `systemctl stop` 送的 `SIGTERM` 會重啟，連續失敗滿 `StartLimitBurst` 後單元進 `failed`。
 - **記憶體上限：`MemoryMax` 與 `--max-old-space-size` 成對，heap 取 70%**（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
