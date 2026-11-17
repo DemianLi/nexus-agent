@@ -304,10 +304,7 @@ impl Supervisor {
                 });
                 self.count_death(DeathCause::Crash);
                 match thread {
-                    Some(thread) => self.tell_front(&FrontEvent::Down {
-                        thread_id: thread,
-                        cause: DeathCause::Crash,
-                    }),
+                    Some(thread) => self.thread_down(thread, DeathCause::Crash),
                     None => self.warm_failed(Instant::now(), false),
                 }
             }
@@ -695,10 +692,7 @@ impl Supervisor {
         if counted {
             self.count_death(cause);
             match composition.thread {
-                Some(thread) => self.tell_front(&FrontEvent::Down {
-                    thread_id: thread,
-                    cause,
-                }),
+                Some(thread) => self.thread_down(thread, cause),
                 None if cause != DeathCause::Shutdown => {
                     let now = Instant::now();
                     let settled = composition.state == PairState::Ready

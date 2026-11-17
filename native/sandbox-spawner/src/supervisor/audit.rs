@@ -88,6 +88,14 @@ pub enum Record<'a> {
         thread: &'a [u8],
         reason: &'a str,
     },
+    /// 一條 thread 的行程連續失敗，這個窗第一次擋掉它的 `ensure`（[`super::Supervisor::ensure`]）；每個窗只寫一行，不代表被擋的次數。
+    /// 不帶 `exit_code`、`signal`。`failures` 是連續第幾次，`wait_ms` 是這個窗的長度。
+    Backoff {
+        thread: &'a [u8],
+        cause: DeathCause,
+        failures: u32,
+        wait_ms: u64,
+    },
 }
 
 pub fn cause_name(cause: DeathCause) -> &'static str {
@@ -217,6 +225,20 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
             out.push_str("}\n");
             return out;
         }
+        Record::Backoff {
+            thread,
+            cause,
+            failures,
+            wait_ms,
+        } => {
+            out.push_str(",\"event\":\"backoff\",\"thread\":");
+            json_string(&mut out, &String::from_utf8_lossy(thread));
+            out.push_str(&format!(
+                ",\"cause\":\"{}\",\"failures\":{failures},\"wait_ms\":{wait_ms}}}\n",
+                cause_name(*cause)
+            ));
+            return out;
+        }
     };
     out.push_str(&format!(
         ",\"exit_code\":{},\"signal\":{}",
@@ -282,6 +304,20 @@ mod tests {
             "{text}"
         );
         assert!(!audit.torn);
+    }
+
+    #[test]
+    fn backoff_line() {
+        let record = Record::Backoff {
+            thread: b"t\"1",
+            cause: DeathCause::Memory,
+            failures: 3,
+            wait_ms: 2000,
+        };
+        assert_eq!(
+            line(7, &record),
+            "{\"ts_ms\":7,\"event\":\"backoff\",\"thread\":\"t\\\"1\",\"cause\":\"memory\",\"failures\":3,\"wait_ms\":2000}\n"
+        );
     }
 
     #[test]
