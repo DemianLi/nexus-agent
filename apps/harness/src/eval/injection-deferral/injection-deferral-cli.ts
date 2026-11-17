@@ -2,8 +2,8 @@
  * 注入源延後評估的進入點 —— `pnpm --filter @nexus/harness eval:injection-deferral`。
  * [#2929](https://github.com/DemianLi/nexus-agent/issues/2929)。
  *
- * 問的是「指示檔放不下、整份延後成一行指標之後，模型會不會去讀、讀了會不會照做」。同一份超過上限的 `AGENTS.md` 跑兩邊：
- * 出貨的上限（延後）與調高的上限（整份放進請求），規則在檔頭與檔尾各一格。題目與做法見 [`fixture.ts`](./fixture.ts) 與
+ * 問的是「指示檔放不下、整份延後成一行指標之後，模型會不會去讀、讀了會不會照做」。同一份 `AGENTS.md` 跑延後與不延後兩邊，
+ * 大檔四格、小檔兩格，`--only large|small` 只跑其中一種。題目與做法見 [`fixture.ts`](./fixture.ts) 與
  * [`runner.ts`](./runner.ts)。
  *
  * **不進 CI。** 需要 `NVIDIA_API_KEY`，會打真模型。每一次執行 1 到 `DEFERRAL_MAX_REQUESTS` 個請求（看模型叫幾次工具），
@@ -15,19 +15,32 @@
 import { installLaunchProxy } from '../../http-proxy-boot.js';
 import { DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV, loadLiveLaunchEnv } from '../../live-model.js';
 import { parseSamples } from '../cli-args.js';
-import { DEFERRAL_CASES } from './fixture.js';
+import { DEFERRAL_CASES, deferralCaseId } from './fixture.js';
+import type { DeferralCase } from './fixture.js';
 import { DEFERRAL_MAX_REQUESTS, runDeferralCase } from './runner.js';
 import type { DeferralRun } from './runner.js';
 
 const ratio = (runs: readonly DeferralRun[], pick: (run: DeferralRun) => boolean): string =>
   `${runs.filter(pick).length}/${runs.length}`;
 
+/** `--only large|small`：只跑那一種檔的格子；省略即全部。 */
+function parseOnly(argv: readonly string[]): readonly DeferralCase[] {
+  const at = argv.indexOf('--only');
+  if (at < 0) return DEFERRAL_CASES;
+  const file = argv[at + 1];
+  if (file !== 'large' && file !== 'small') {
+    throw new Error(`--only 要 large 或 small，收到 ${file ?? '（空的）'}`);
+  }
+  return DEFERRAL_CASES.filter((testCase) => testCase.file === file);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const samples = parseSamples(argv);
-  const runsPlanned = DEFERRAL_CASES.length * samples;
+  const cases = parseOnly(argv);
+  const runsPlanned = cases.length * samples;
   console.log(
-    `注入源延後評估：${DEFERRAL_CASES.length} 格 × ${samples} 次，共 ${runsPlanned} 到 ${runsPlanned * DEFERRAL_MAX_REQUESTS} 個模型請求` +
+    `注入源延後評估：${cases.length}/${DEFERRAL_CASES.length} 格 × ${samples} 次，共 ${runsPlanned} 到 ${runsPlanned * DEFERRAL_MAX_REQUESTS} 個模型請求` +
       `（每次 1 到 ${DEFERRAL_MAX_REQUESTS} 個；不含重試）。模型 ${DEFAULT_LIVE_MODEL_ID}。`,
   );
   if (argv.includes('--count')) return;
@@ -43,8 +56,8 @@ async function main(): Promise<void> {
   const runs: DeferralRun[] = [];
   let failed = 0;
   for (let sample = 0; sample < samples; sample += 1) {
-    for (const testCase of DEFERRAL_CASES) {
-      const label = `第 ${sample + 1} 次 ${testCase.arm}/${testCase.position}`;
+    for (const testCase of cases) {
+      const label = `第 ${sample + 1} 次 ${deferralCaseId(testCase)}`;
       try {
         const run = await runDeferralCase(testCase, {
           live: true,
@@ -66,13 +79,11 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n格            次數  延後  去讀了  讀到規則  照做  請求（合計）');
-  for (const testCase of DEFERRAL_CASES) {
-    const cell = runs.filter(
-      (run) => run.arm === testCase.arm && run.position === testCase.position,
-    );
+  console.log('\n格                    次數  延後  去讀了  讀到規則  照做  請求（合計）');
+  for (const testCase of cases) {
+    const cell = runs.filter((run) => run.testCase === testCase);
     console.log(
-      `${`${testCase.arm}/${testCase.position}`.padEnd(14)}${String(cell.length).padEnd(6)}` +
+      `${deferralCaseId(testCase).padEnd(22)}${String(cell.length).padEnd(6)}` +
         `${ratio(cell, (run) => run.deferred).padEnd(6)}${ratio(cell, (run) => run.readCalls > 0).padEnd(8)}` +
         `${ratio(cell, (run) => run.ruleRead).padEnd(10)}${ratio(cell, (run) => run.followed).padEnd(6)}` +
         `${cell.reduce((sum, run) => sum + run.requests, 0)}`,

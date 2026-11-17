@@ -20,9 +20,9 @@ import { HARNESS_HOME_ENV } from '../../harness-home.js';
 import { toAgentInvocation } from '../../messages.js';
 import { loadDefaultPlugins } from '../../plugin-config.js';
 import {
-  DEFERRAL_INLINE_MAX_BYTES,
   DEFERRAL_MARKER,
   DEFERRAL_TASK,
+  deferralMaxBytesOverride,
   deferralWorkspaceFiles,
 } from './fixture.js';
 import type { DeferralCase } from './fixture.js';
@@ -43,8 +43,7 @@ export interface DeferralRunOptions {
 
 /** 一次執行看到的事。 */
 export interface DeferralRun {
-  readonly arm: DeferralCase['arm'];
-  readonly position: DeferralCase['position'];
+  readonly testCase: DeferralCase;
   /** 請求裡的指示檔是那一行指標（整份沒放）。 */
   readonly deferred: boolean;
   /** 規則隨指示檔直接放進了請求。 */
@@ -80,14 +79,15 @@ export async function runDeferralCase(
   const home = join(scratch, 'home');
   const workspace = join(scratch, 'ws');
   for (const dir of [home, workspace]) mkdirSync(dir, { mode: 0o700 });
-  if (testCase.arm === 'inline') {
+  const maxBytes = deferralMaxBytesOverride(testCase);
+  if (maxBytes !== undefined) {
     writeFileSync(
       join(home, 'cordis.patch.yml'),
-      `- id: agent-instructions\n  config:\n    maxBytes: ${DEFERRAL_INLINE_MAX_BYTES}\n`,
+      `- id: agent-instructions\n  config:\n    maxBytes: ${maxBytes}\n`,
       { mode: 0o600 },
     );
   }
-  for (const [path, content] of Object.entries(deferralWorkspaceFiles(testCase.position))) {
+  for (const [path, content] of Object.entries(deferralWorkspaceFiles(testCase))) {
     writeFileSync(join(workspace, path), content, 'utf8');
   }
 
@@ -177,8 +177,7 @@ export function observe(
   const spoken = ai.filter((message) => message.text.trim() !== '');
   const finalText = spoken.at(-1)?.text ?? '';
   return {
-    arm: testCase.arm,
-    position: testCase.position,
+    testCase,
     deferred: humans.some((text) => text.includes('not loaded /AGENTS.md')),
     ruleInjected: humans.some((text) => text.includes(DEFERRAL_MARKER)),
     readCalls: reads.length,

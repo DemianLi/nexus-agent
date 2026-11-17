@@ -13,6 +13,9 @@ import {
   DEFERRAL_INLINE_MAX_BYTES,
   DEFERRAL_MARKER,
   DEFERRAL_RULE,
+  DEFERRAL_SMALL_MAX_BYTES,
+  deferralCaseId,
+  deferralMaxBytesOverride,
   DEFERRAL_TASK,
   deferralAgentsMd,
 } from './fixture.js';
@@ -50,20 +53,32 @@ describe('題目', () => {
     expect(deferralAgentsMd('tail').trimEnd().split('\n').at(-4)).toBe(DEFERRAL_RULE);
   });
 
-  it('四格：延後與否 × 規則的位置', () => {
-    expect(DEFERRAL_CASES.map((item) => `${item.arm}/${item.position}`)).toEqual([
-      'inline/head',
-      'inline/tail',
-      'deferred/head',
-      'deferred/tail',
+  it('六格：大檔四格、小檔兩格；各自只有一邊蓋掉上限', () => {
+    expect(
+      DEFERRAL_CASES.map((item) => [deferralCaseId(item), deferralMaxBytesOverride(item)]),
+    ).toEqual([
+      ['large/inline/head', DEFERRAL_INLINE_MAX_BYTES],
+      ['large/inline/tail', DEFERRAL_INLINE_MAX_BYTES],
+      ['large/deferred/head', undefined],
+      ['large/deferred/tail', undefined],
+      ['small/inline/head', undefined],
+      ['small/deferred/head', DEFERRAL_SMALL_MAX_BYTES],
     ]);
+  });
+
+  it('小檔比蓋掉的上限大、比出貨的上限小得多，規則在第四行', () => {
+    const text = deferralAgentsMd('head', 'small');
+    const bytes = Buffer.byteLength(text, 'utf8');
+    expect(bytes).toBeGreaterThan(DEFERRAL_SMALL_MAX_BYTES);
+    expect(bytes).toBeLessThan(4096);
+    expect(text.split('\n')[3]).toBe(DEFERRAL_RULE);
   });
 });
 
 describe('執行器（產品的組裝，替身模型）', () => {
   it('不延後：規則隨指示檔進了請求；模型直接答，照做與否看回覆', async () => {
     const run = await runDeferralCase(
-      { arm: 'inline', position: 'tail' },
+      { file: 'large', arm: 'inline', position: 'tail' },
       scripted([{ content: `AGENTS.md、README.md、data.csv\n核可編號 ${DEFERRAL_MARKER}` }]),
     );
     expect(run).toMatchObject({
@@ -80,7 +95,7 @@ describe('執行器（產品的組裝，替身模型）', () => {
   it('延後：請求裡有題目與指標、沒有規則；模型沒去讀就答，算沒照做', async () => {
     let model: ScriptedChatModel | undefined;
     const run = await runDeferralCase(
-      { arm: 'deferred', position: 'head' },
+      { file: 'large', arm: 'deferred', position: 'head' },
       {
         ...scripted([{ content: 'AGENTS.md、README.md、data.csv' }]),
         onModel: (used) => {
@@ -104,7 +119,7 @@ describe('執行器（產品的組裝，替身模型）', () => {
 
   it('延後、規則在檔頭：讀一次就讀到規則', async () => {
     const run = await runDeferralCase(
-      { arm: 'deferred', position: 'head' },
+      { file: 'large', arm: 'deferred', position: 'head' },
       scripted([readAgentsMd(), { content: `檔名如下。\n核可編號 ${DEFERRAL_MARKER}` }]),
     );
     expect(run).toMatchObject({
@@ -119,15 +134,37 @@ describe('執行器（產品的組裝，替身模型）', () => {
 
   it('延後、規則在檔尾：只讀第一頁讀不到規則', async () => {
     const run = await runDeferralCase(
-      { arm: 'deferred', position: 'tail' },
+      { file: 'large', arm: 'deferred', position: 'tail' },
       scripted([readAgentsMd(), { content: '檔名如下。' }]),
     );
     expect(run).toMatchObject({ deferred: true, readCalls: 1, ruleRead: false, followed: false });
   }, 60000);
 
+  it('小檔延後：請求裡只有指標，讀一次就讀到規則', async () => {
+    const run = await runDeferralCase(
+      { file: 'small', arm: 'deferred', position: 'head' },
+      scripted([readAgentsMd(), { content: `檔名如下。\n核可編號 ${DEFERRAL_MARKER}` }]),
+    );
+    expect(run).toMatchObject({
+      deferred: true,
+      ruleInjected: false,
+      readCalls: 1,
+      ruleRead: true,
+      followed: true,
+    });
+  }, 60000);
+
+  it('小檔不延後：出貨的上限放得下，規則進了請求', async () => {
+    const run = await runDeferralCase(
+      { file: 'small', arm: 'inline', position: 'head' },
+      scripted([{ content: '檔名如下。' }]),
+    );
+    expect(run).toMatchObject({ deferred: false, ruleInjected: true, followed: false });
+  }, 60000);
+
   it(`一直叫工具不收尾：到 ${DEFERRAL_MAX_REQUESTS} 個請求就中止這一次`, async () => {
     const run = await runDeferralCase(
-      { arm: 'deferred', position: 'head' },
+      { file: 'large', arm: 'deferred', position: 'head' },
       scripted(Array.from({ length: DEFERRAL_MAX_REQUESTS + 4 }, () => readAgentsMd())),
     );
     expect(run.capped).toBe(true);
