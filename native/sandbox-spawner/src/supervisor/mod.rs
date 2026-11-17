@@ -3388,7 +3388,7 @@ mod tests {
         assert!(supervisor.conversations[0].drain.is_none());
     }
 
-    /// 閒置時限：組合行程在收時這個葉子沒有到期的時間點。
+    /// 到期的時間點只給還會被逐出的葉子；組合行程在收的這一對整對照收，不照時間逐出。
     #[test]
     fn a_leaf_whose_composition_is_being_collected_has_no_idle_deadline() {
         let supervisor = an_idle_pair("evict-deadline", true);
