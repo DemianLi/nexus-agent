@@ -425,7 +425,7 @@ export interface WireClient {
    * 另外還會回 `thread_not_deleted`（不在已刪除存放區）與 `thread_busy`。
    */
   threadRestore(threadId: string): Promise<CommandOutcome<ThreadRestoreResult>>;
-  /** 列出這個專案格已刪除、還在寬限期內的會話（`GET /deleted-threads`）。`rejected` 是這台 server 沒接已刪除存放區。 */
+  /** 列出這個專案格已刪除、還在寬限期內的會話（`GET /threads/deleted`）。`rejected` 是這台 server 沒接已刪除存放區。 */
   deletedThreads(): Promise<CommandOutcome<DeletedThreadsResult>>;
   /** 改這條 thread 的標題（`thread.rename`）。回受理後的標題與事件 `seq`；標題不合法回 `title_invalid`，標題不變。 */
   threadRename(threadId: string, title: string): Promise<CommandOutcome<ThreadRenameResult>>;
@@ -702,7 +702,7 @@ function readHistory(result: unknown): ThreadHistoryResult {
 /** 已刪除清單的一列驗過才給呼叫端，理由同 {@link readThreadList}。 */
 function readDeletedThreads(result: unknown): DeletedThreadsResult {
   const { items } = result as { items?: unknown };
-  if (!Array.isArray(items)) throw new Error('GET /deleted-threads 的結果裡沒有 items 陣列');
+  if (!Array.isArray(items)) throw new Error('GET /threads/deleted 的結果裡沒有 items 陣列');
   return {
     items: items.map((entry: unknown): DeletedThread => {
       const row = entry as Record<string, unknown> | null;
@@ -712,7 +712,7 @@ function readDeletedThreads(result: unknown): DeletedThreadsResult {
         typeof row.expiresAt !== 'number' ||
         (row.title !== undefined && typeof row.title !== 'string')
       ) {
-        throw new Error('GET /deleted-threads 回了不認得的一列');
+        throw new Error('GET /threads/deleted 回了不認得的一列');
       }
       return Object.freeze({
         threadId: row.threadId,

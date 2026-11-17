@@ -136,14 +136,14 @@ describe('thread 刪除與復原（#2957）', () => {
     });
   });
 
-  it('GET /deleted-threads 是全域路由，回已刪除清單（threadId、title、deletedAt、expiresAt）', async () => {
+  it('GET /threads/deleted 是全域路由，回已刪除清單（threadId、title、deletedAt、expiresAt）', async () => {
     const items = [{ threadId: 'x', title: '舊會話', deletedAt: 1, expiresAt: 2 }];
     const { client, seen } = recording(() =>
       Response.json({ type: 'success', id: null, result: { items } }),
     );
     expect(await client.deletedThreads()).toEqual({ kind: 'ok', result: { items } });
     expect(seen[0]?.method).toBe('GET');
-    expect(seen[0]?.url).toBe('http://agent.test/deleted-threads');
+    expect(seen[0]?.url).toBe('http://agent.test/threads/deleted');
   });
 });
 
