@@ -28,7 +28,7 @@
 //! 只讀的先，同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
 //! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度；逾時之後才到的也照收）；回 `busy` 或
 //! `--drain-timeout-ms` 內沒回答都不收，當它不閒置，等它下次回報閒置。閒置超過 `--idle-ms`（只讀的 `--read-only-idle-ms`）也送 `drain`。
-//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補，每失敗一次加倍到上限（[`args::WARM_BACKOFF_MAX`]，[`Supervisor::warm_failed`]）。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
+//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔退避起點（[`args::backoff_start`]）才再補，每失敗一次加倍到上限（[`args::WARM_BACKOFF_MAX`]，[`Supervisor::warm_failed`]）。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
@@ -372,8 +372,10 @@ struct Supervisor {
     pending: Vec<(Vec<u8>, OpenMode)>,
     /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。只由 [`Supervisor::warm_failed`] 設。現有四處由 `every_place_that_schedules_a_warm_retry_goes_through_warm_failed` 釘；之後新增的寫法直接寫它就繞過退避，沒有測試會紅。
     warm_retry_at: Option<Instant>,
-    /// 下一次預熱失敗要等多久；初值是 `--front-restart-ms`，每失敗一次加倍到 [`args::WARM_BACKOFF_MAX`]。
+    /// 下一次預熱失敗要等多久；初值是 [`args::backoff_start`]，每失敗一次加倍到 [`args::WARM_BACKOFF_MAX`]。
     warm_backoff: Duration,
+    /// 上一次預熱失敗的時間；[`Supervisor::warm_failed`] 用它判斷「離上一次失敗夠久了」。只由 `warm_failed` 寫。
+    warm_failed_at: Option<Instant>,
     /// 每條 thread 最近的連續失敗（[`Supervisor::thread_down`] 在回前台 `down` 之後記；鍵是 thread id）。窗還沒過的 thread 來的 `ensure`，
     /// 在 [`Supervisor::ensure`] 最前面（停機判斷之後）就被回掉，不起行程、不排隊、不拿預熱的、不讓位。**只放 `ensure` 一處靠的是：窗裡的 thread
     /// 沒有新起的行程**（起行程的路是 `ensure` 裡的補葉子、拿預熱、當場起，與排隊之後的 [`Supervisor::serve_pending`]）。排著的 thread 是過了閘才排的，但排了之後它自己的行程死了開出窗，所以 [`Supervisor::thread_down`] 開窗時把它從隊伍拿掉。
@@ -484,7 +486,8 @@ impl Supervisor {
             capacity,
             pending: Vec::new(),
             warm_retry_at: None,
-            warm_backoff: front_restart,
+            warm_backoff: args::backoff_start(front_restart),
+            warm_failed_at: None,
             thread_backoff: HashMap::new(),
             stats_at,
             deaths: [0; DEATH_CAUSES],
@@ -1499,18 +1502,26 @@ impl Supervisor {
 
     /// 預熱池的行程沒綁就死了、或起不來：隔 `warm_backoff` 再補，下一次的等待加倍到 [`args::WARM_BACKOFF_MAX`]
     /// （比 `--front-restart-ms` 小就用後者）。不放棄：預熱池只是加速，停了之後沒有人會把它開回來。
-    /// `--front-restart-ms 0` 時沒有間隔，也不會加倍。
+    /// 起點是 [`args::backoff_start`]，不低於 [`args::BACKOFF_FLOOR`]。
     ///
-    /// 級數只在預熱行程閒放過穩定期才死時回到起始值；預熱行程正常是被指派走、不是死掉，所以預熱行程多半被指派走的系統上，
-    /// 出過事之後級數會留在上限，到監督行程重起為止（那時只是補得慢，`ensure` 照樣當場起）。
+    /// 級數回到起點有兩條路，任一條成立就回去：
+    /// - 距上一次預熱失敗至少 [`args::WARM_STABLE`]：**看的是失敗的時間，不看有沒有行程被指派**。預熱行程正常是被指派走、不是死掉，
+    ///   「被指派就歸零」在 `ensure` 很密時每次都歸零，退避等於沒做；失敗的間隔小於這個時間就照長，`ensure` 多密都不影響。
+    /// - `settled`：這個行程到過 `ready`、而且活過 [`args::WARM_STABLE`]。**這一條幾乎被上面那條包住**：
+    ///   一個行程活過 [`args::WARM_STABLE`]，它就是上一次失敗之後才起的，離上一次失敗也超過這麼久；只有 `--warm` ≥ 2 時，
+    ///   池裡一個老行程閒放很久才死、另一個位子正在連續失敗的那種情況，`settled` 會歸零、時間規則不會。
+    ///   所以 `settled` 只在那種情況有作用。
     ///
-    /// `settled`：這個行程到過 `ready`、而且活過 [`args::WARM_STABLE`]，等待回到 `--front-restart-ms`。**兩個條件缺一個都不行**：
-    /// 只看活多久，`--start-timeout-ms` 設得比 [`args::WARM_STABLE`] 大的部署，永不 `ready` 的行程每次都「活過」而一直歸零；
-    /// 只看到過 `ready`，起來、`ready`、馬上死的行程每次歸零，又回到每個 `--front-restart-ms` 一輪。
+    /// 時間規則看的是兩次失敗的間隔，間隔含重補的行程活到失敗為止的時間：永不 `ready` 的行程會活到 `--start-timeout-ms`（預設 30 秒），
+    /// 等待長到 30 秒那一輪間隔就到 60 秒，級數歸零重來。這時兩次補之間至少隔 30 秒的起動期限，比一直停在上限慢不了多少，不是失效。
     fn warm_failed(&mut self, now: Instant, settled: bool) {
-        if settled {
-            self.warm_backoff = self.args.front_restart;
+        let quiet = self
+            .warm_failed_at
+            .is_some_and(|at| now.saturating_duration_since(at) >= args::WARM_STABLE);
+        if settled || quiet {
+            self.warm_backoff = self.backoff_start();
         }
+        self.warm_failed_at = Some(now);
         let wait = self.warm_backoff;
         self.warm_backoff = (wait * 2).min(args::WARM_BACKOFF_MAX.max(self.args.front_restart));
         say!("預熱池 {} ms 後再補", wait.as_millis());
@@ -1538,17 +1549,17 @@ impl Supervisor {
         }
     }
 
-    /// 第二次連續失敗的窗長，也是之後加倍的起點。
-    fn thread_backoff_start(&self) -> Duration {
-        self.args.front_restart
+    /// 退避的起點，預熱池與每條 thread 共用（理由在 [`args::backoff_start`]）。
+    fn backoff_start(&self) -> Duration {
+        args::backoff_start(self.args.front_restart)
     }
 
     /// 一條 thread 失敗了一次。距這條上一次失敗不到忘記時間才算連續，不然從第一次數；忘記時間是 [`args::THREAD_BACKOFF_FORGET`]
-    /// 與實際上限兩倍的較大者。第一次不等（加窗會把 #2905 修掉的那次延遲加回來）；第二次起等 `--front-restart-ms`，每次加倍到
-    /// [`args::THREAD_BACKOFF_MAX`]（實際上限是兩者較大者）。不放棄。`--front-restart-ms 0` 時沒有間隔，也不會加倍。
+    /// 與實際上限兩倍的較大者。第一次不等（加窗會把 #2905 修掉的那次延遲加回來）；第二次起等 [`args::backoff_start`]，每次加倍到
+    /// [`args::THREAD_BACKOFF_MAX`]（實際上限是兩者較大者）。不放棄。
     /// 順手清掉過期的；表滿了丟最舊的。
     fn note_thread_failure(&mut self, thread: Vec<u8>, cause: DeathCause, now: Instant) {
-        let start = self.thread_backoff_start();
+        let start = self.backoff_start();
         let cap = args::THREAD_BACKOFF_MAX.max(start);
         let forget = args::THREAD_BACKOFF_FORGET.max(cap * 2);
         self.thread_backoff
@@ -1892,10 +1903,22 @@ impl Supervisor {
                 .filter(|c| c.thread.is_none())
                 .count();
         }
+        // 成對時一對算一個位子，組合行程先收屍、葉子還在收的也要算：只數組合行程的話，組合行程一收屍位子就少一個，`fill_warm` 當場多補一對，
+        // 等葉子收屍之後 `warm_failed` 才排等待，那時池子已經是滿的。有 thread 的葉子不算，它不是預熱池的。
         self.compositions
             .iter()
             .filter(|p| p.thread.is_none())
             .count()
+            + self
+                .conversations
+                .iter()
+                .filter(|c| {
+                    c.thread.is_none()
+                        && c.pair.is_some_and(|serial| {
+                            !self.compositions.iter().any(|p| p.serial == serial)
+                        })
+                })
+                .count()
     }
 
     fn warm_count(&self) -> usize {
@@ -3912,6 +3935,15 @@ mod tests {
 
     /// 同 [`with_an_unspawnable`]，另回稽核檔的路徑。
     fn with_an_audited_unspawnable(tag: &str, paired: bool) -> (Supervisor, PathBuf) {
+        with_an_unspawnable_and_flags(tag, paired, &[])
+    }
+
+    /// 同 [`with_an_audited_unspawnable`]，另給額外的旗標（例如 `--front-restart-ms`）：建構時就吃進去，初值才是它算出來的。
+    fn with_an_unspawnable_and_flags(
+        tag: &str,
+        paired: bool,
+        extra: &[&str],
+    ) -> (Supervisor, PathBuf) {
         let dir = temp(tag);
         let mut argv: Vec<OsString> = [
             "--run-dir",
@@ -3931,6 +3963,7 @@ mod tests {
         if paired {
             argv.extend(["--composition", "/nonexistent/composition"].map(OsString::from));
         }
+        argv.extend(extra.iter().map(OsString::from));
         let audit = dir.join("audit.jsonl");
         let supervisor = Supervisor::assemble(
             args::parse(&argv).unwrap(),
@@ -4022,7 +4055,7 @@ mod tests {
         assert!(supervisor.warm_retry_at.is_some());
     }
 
-    /// 沒到過 `ready` 的活再久也不歸零：這是 `--start-timeout-ms` 大過 [`args::WARM_STABLE`] 時永不 `ready` 的行程。
+    /// `settled` 不因沒到過 `ready` 的行程成立（這是 `--start-timeout-ms` 大過 [`args::WARM_STABLE`] 時永不 `ready` 的行程）；這裡沒有上一次失敗，所以時間規則也不成立。
     #[test]
     fn a_warm_process_that_never_got_ready_does_not_reset_the_backoff() {
         let long_ago = Instant::now() - Duration::from_secs(2 * 3600);
@@ -4094,6 +4127,10 @@ mod tests {
         supervisor.on_exit(LEAF, KILLED);
         assert!(supervisor.warm_retry_at.is_none());
         assert_eq!(supervisor.warm_backoff, base);
+        assert!(
+            supervisor.warm_failed_at.is_none(),
+            "不是預熱失敗，不記時間"
+        );
     }
 
     /// 預熱的行程被殺到收屍之間，`fill_warm` 照樣把它算進池子，不會當場補一個繞過等待。
@@ -4143,6 +4180,185 @@ mod tests {
         supervisor.on_exit(COMPOSITION, KILLED);
         assert_eq!(supervisor.warm_backoff, base * 2);
         assert!(supervisor.warm_retry_at.is_some());
+    }
+
+    /// 距上一次預熱失敗至少 [`args::WARM_STABLE`]（剛好也算）：這一次等的是起點，下一次從兩倍接著長。
+    #[test]
+    fn a_warm_failure_long_after_the_last_one_goes_back_to_the_start() {
+        let mut supervisor = with_an_unspawnable("warm-quiet", false);
+        let base = supervisor.args.front_restart;
+        let now = Instant::now();
+        for _ in 0..4 {
+            supervisor.warm_failed(now, false);
+        }
+        let later = now + args::WARM_STABLE;
+        supervisor.warm_failed(later, false);
+        assert_eq!(warm_wait(&supervisor, later), base);
+        supervisor.warm_failed(later, false);
+        assert_eq!(warm_wait(&supervisor, later), base * 2);
+    }
+
+    /// 差一點不到 [`args::WARM_STABLE`]：照長，不歸零。
+    #[test]
+    fn a_warm_failure_just_inside_the_window_keeps_growing() {
+        let mut supervisor = with_an_unspawnable("warm-inside", false);
+        let base = supervisor.args.front_restart;
+        let now = Instant::now();
+        for _ in 0..4 {
+            supervisor.warm_failed(now, false);
+        }
+        let later = now + args::WARM_STABLE - Duration::from_millis(1);
+        supervisor.warm_failed(later, false);
+        assert_eq!(warm_wait(&supervisor, later), base * 16);
+    }
+
+    /// 第一次預熱失敗：等起點，並記下時間。
+    #[test]
+    fn the_first_warm_failure_waits_the_start() {
+        let mut supervisor = with_an_unspawnable("warm-first", false);
+        let base = supervisor.args.front_restart;
+        assert!(supervisor.warm_failed_at.is_none());
+        let now = Instant::now();
+        supervisor.warm_failed(now, false);
+        assert_eq!(warm_wait(&supervisor, now), base);
+        assert_eq!(supervisor.warm_failed_at, Some(now));
+    }
+
+    /// 起不來或一起就死的行程，兩次失敗的間隔就是等待，不超過上限；穩定時間至少是上限的兩倍，這樣級數長到上限之前不會被時間規則歸零。
+    #[test]
+    fn the_quiet_time_is_at_least_twice_the_warm_cap() {
+        assert!(args::WARM_STABLE >= args::WARM_BACKOFF_MAX * 2);
+    }
+
+    /// 旗標 0：起點是 [`args::BACKOFF_FLOOR`]，之後照樣加倍；建構時就是這樣（不是失敗一次之後才變）。
+    #[test]
+    fn a_zero_front_restart_still_backs_off_from_the_floor() {
+        let (mut supervisor, _) =
+            with_an_unspawnable_and_flags("floor-zero", false, &["--front-restart-ms", "0"]);
+        assert_eq!(supervisor.args.front_restart, Duration::ZERO);
+        let floor = args::BACKOFF_FLOOR;
+        let now = Instant::now();
+        for factor in [1u32, 2, 4, 8] {
+            supervisor.warm_failed(now, false);
+            assert_eq!(warm_wait(&supervisor, now), floor * factor);
+        }
+    }
+
+    /// 歸零（`settled`）回到的也是下限，不是旗標本身。
+    #[test]
+    fn a_reset_goes_back_to_the_floor_not_to_zero() {
+        let (mut supervisor, _) =
+            with_an_unspawnable_and_flags("floor-reset", false, &["--front-restart-ms", "0"]);
+        let now = Instant::now();
+        for _ in 0..3 {
+            supervisor.warm_failed(now, false);
+        }
+        supervisor.warm_failed(now, true);
+        assert_eq!(warm_wait(&supervisor, now), args::BACKOFF_FLOOR);
+        supervisor.warm_failed(now + args::WARM_STABLE, false);
+        assert_eq!(
+            warm_wait(&supervisor, now + args::WARM_STABLE),
+            args::BACKOFF_FLOOR,
+            "時間規則的歸零也是下限"
+        );
+    }
+
+    /// 下限不蓋掉比它大的旗標：50 取 100，100 取 100，250 取 250。
+    #[test]
+    fn the_floor_does_not_override_a_larger_flag() {
+        for (flag, start) in [("50", 100u64), ("100", 100), ("250", 250)] {
+            let (mut supervisor, _) = with_an_unspawnable_and_flags(
+                &format!("floor-{flag}"),
+                false,
+                &["--front-restart-ms", flag],
+            );
+            let now = Instant::now();
+            supervisor.warm_failed(now, false);
+            assert_eq!(
+                warm_wait(&supervisor, now),
+                Duration::from_millis(start),
+                "旗標 {flag}"
+            );
+        }
+    }
+
+    /// 每條 thread 那一側：旗標 0，第二次連續失敗的窗是下限，不是 0。
+    #[test]
+    fn a_zero_front_restart_opens_a_window_of_the_floor_for_a_thread() {
+        let (mut supervisor, _) =
+            with_an_unspawnable_and_flags("floor-thread", false, &["--front-restart-ms", "0"]);
+        let now = Instant::now();
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        assert_eq!(window(&supervisor, b"t"), args::BACKOFF_FLOOR);
+        supervisor.note_thread_failure(b"t".to_vec(), DeathCause::Crash, now);
+        assert_eq!(window(&supervisor, b"t"), args::BACKOFF_FLOOR * 2);
+    }
+
+    /// 前台重起的間隔照舊是旗標本身：下限只管退避的起點。旗標 0 時前台起不來，隔 0 就重起，不是隔下限。
+    #[test]
+    fn the_front_restart_interval_is_the_flag_itself() {
+        let (mut supervisor, _) =
+            with_an_unspawnable_and_flags("floor-front", false, &["--front-restart-ms", "0"]);
+        supervisor.args.front = OsString::from("/nonexistent/front");
+        supervisor.front = None;
+        let before = Instant::now();
+        supervisor.start_front();
+        let at = supervisor.front_restart_at.expect("前台起不來，要排重起");
+        assert!(
+            at < before + args::BACKOFF_FLOOR,
+            "旗標是 0，重起的間隔不該被下限墊高"
+        );
+    }
+
+    /// 預熱的一對：葉子在收、組合行程先收屍，這一對仍然佔著預熱池的位子，`fill_warm` 不會當場多補一對；葉子收屍才排等待。
+    #[test]
+    fn a_warm_pair_whose_leaf_is_still_dying_holds_its_slot() {
+        let (mut supervisor, _, _) = with_a_pair("warm-pair-slot", PairState::Ready);
+        supervisor.args.warm = 1;
+        assert_eq!(supervisor.warm_slots(), 1, "一對只算一個位子，不是兩個");
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.compositions.is_empty());
+        assert_eq!(supervisor.warm_slots(), 1, "葉子還在收，位子還被佔著");
+        assert!(
+            supervisor.compositions.is_empty(),
+            "沒有當場多補一對（`fill_warm` 在 `on_exit` 裡跑過了）"
+        );
+        assert!(supervisor.warm_retry_at.is_none());
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.warm_retry_at.is_some(), "葉子收屍才排等待");
+        assert_eq!(supervisor.warm_backoff, supervisor.args.front_restart * 2);
+    }
+
+    /// 有 thread 的一對同樣的順序不佔預熱位子：它不是預熱池的。
+    #[test]
+    fn an_assigned_pairs_leaf_does_not_hold_a_warm_slot() {
+        let (mut supervisor, _, _) = with_a_pair("assigned-pair-slot", PairState::Bound);
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.compositions.is_empty());
+        assert_eq!(supervisor.warm_slots(), 0);
+    }
+
+    /// 只殺組合行程、葉子沒被殺：組合行程這一側記一筆並回 `down`，葉子之後收屍不再記第二次、也不再送。
+    #[test]
+    fn a_composition_dying_alone_counts_once_and_its_leaf_adds_nothing() {
+        let (mut supervisor, _, _) = with_a_pair("tb-7c", PairState::Bound);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        front_events(&mut supervisor);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(entry(&supervisor, b"t").failures, 1);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [down(b"t", DeathCause::Stalled)]
+        );
+        assert!(supervisor.conversations[0].peer, "葉子是被連帶收的");
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(entry(&supervisor, b"t").failures, 1, "葉子收屍不再記");
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.conversations.is_empty());
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
