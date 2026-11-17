@@ -47,7 +47,7 @@
  * @module
  */
 
-/** 這個檔定義的六支 method。 */
+/** 這個檔定義的八支 method（#2957 加了刪除與復原）。 */
 export const THREAD_MANAGEMENT_METHODS = [
   'thread.pin',
   'thread.unpin',
@@ -55,6 +55,8 @@ export const THREAD_MANAGEMENT_METHODS = [
   'thread.unarchive',
   'thread.rename',
   'thread.fork',
+  'thread.delete',
+  'thread.restore',
 ] as const;
 
 export type ThreadManagementMethod = (typeof THREAD_MANAGEMENT_METHODS)[number];
@@ -123,13 +125,27 @@ export interface ThreadForkCommand {
   readonly params: { readonly messageId: string };
 }
 
+export interface ThreadDeleteCommand {
+  readonly id: number;
+  readonly method: 'thread.delete';
+  readonly params: Record<string, never>;
+}
+
+export interface ThreadRestoreCommand {
+  readonly id: number;
+  readonly method: 'thread.restore';
+  readonly params: Record<string, never>;
+}
+
 export type ThreadManagementCommand =
   | ThreadPinCommand
   | ThreadUnpinCommand
   | ThreadArchiveCommand
   | ThreadUnarchiveCommand
   | ThreadRenameCommand
-  | ThreadForkCommand;
+  | ThreadForkCommand
+  | ThreadDeleteCommand
+  | ThreadRestoreCommand;
 
 /** 沒有這條會話（dsh `session/not-found`）。 */
 export type ThreadNotFound = { readonly code: 'thread_not_found' };
@@ -200,3 +216,52 @@ export type ThreadForkError = ThreadNotFound | { readonly code: 'fork_unavailabl
 export type ThreadForkResult =
   | { readonly ok: true; readonly value: { readonly threadId: string } }
   | { readonly ok: false; readonly error: ThreadForkError };
+
+/**
+ * 刪除失敗的原因（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：沒有這條會話；它正在刪或正在復原（另一件還沒做完，
+ * `thread_busy`）；它已經在已刪除存放區（`thread_deleted`）。
+ */
+export type ThreadDeleteError =
+  ThreadNotFound | { readonly code: 'thread_busy' } | { readonly code: 'thread_deleted' };
+
+/** 刪除的結果：刪除後這條會話的寬限期（毫秒時間戳）。 */
+export type ThreadDeleteResult =
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly threadId: string;
+        readonly deletedAt: number;
+        readonly expiresAt: number;
+      };
+    }
+  | { readonly ok: false; readonly error: ThreadDeleteError };
+
+/**
+ * 復原失敗的原因。**寬限期過了**（`restore_expired`）與**原處已有同 id**（`restore_conflict`）分開回，畫面才講得出是哪一種；
+ * 檔案都留著，不覆寫。
+ */
+export type ThreadRestoreError =
+  | { readonly code: 'thread_not_deleted' }
+  | { readonly code: 'thread_busy' }
+  | { readonly code: 'restore_expired' }
+  | { readonly code: 'restore_conflict' };
+
+/** 復原的結果。 */
+export type ThreadRestoreResult =
+  | { readonly ok: true; readonly value: { readonly threadId: string } }
+  | { readonly ok: false; readonly error: ThreadRestoreError };
+
+/**
+ * 已刪除清單的一列（`GET /threads/deleted`，全域，只列這個專案格的）。`expiresAt` 是寬限期到期的毫秒時間戳，過了就不能復原。
+ */
+export interface DeletedThread {
+  readonly threadId: string;
+  readonly title?: string;
+  readonly deletedAt: number;
+  readonly expiresAt: number;
+}
+
+/** `GET /threads/deleted` 的結果。 */
+export interface DeletedThreadsResult {
+  readonly items: readonly DeletedThread[];
+}

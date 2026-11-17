@@ -760,6 +760,8 @@ export const RPC_PARAM_KEYS = {
   'thread.unarchive': [],
   'thread.rename': ['title'],
   'thread.fork': ['messageId'],
+  'thread.delete': [],
+  'thread.restore': [],
 } as const satisfies Record<RpcMethod, readonly string[]>;
 
 /**
@@ -945,6 +947,9 @@ export type SkillListResult = { readonly skills: readonly SkillEntry[] };
  * 標題是從第一句話來的。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
  */
 export const THREADS_PATH = '/threads';
+
+/** 已刪除清單（`GET`，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：全域路由，只列這個專案格的。放在 `/threads` 底下才會分到 wire 那一面（`surfaceOf`），同 `THREAD_SEARCH_PATH`。 */
+export const DELETED_THREADS_PATH = '/threads/deleted';
 
 /**
  * 嵌入的對話框（`<nexus-chat>`）走的路徑前綴（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：疊在 thread 那一族的路徑前面，
