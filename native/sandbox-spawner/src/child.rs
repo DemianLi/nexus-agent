@@ -3,10 +3,12 @@
 //! spawner 是單執行緒，所以這裡配置記憶體（landlock crate 會）是安全的。每一條失敗路徑都把原因寫進狀態 pipe（CLOEXEC；
 //! 搬到 fd 3 之前寫原本的 fd，之後寫 fd 3），格式是 `種類 u8、errno i32 LE、說明`，然後 `_exit(125)`；
 //! exec 成功時 pipe 隨 exec 關掉，spawner 讀到 EOF 就知道起來了。
+//! panic 也走同一條路：`run` 一開始裝的 panic hook 把紀錄寫進當下的狀態 fd。蓋不到的是配置失敗的 abort 與被外部訊號殺掉，那兩種仍是 EOF。
 
 use nexus_sandbox_spawner::landlock;
 use nexus_sandbox_spawner::protocol::FailKind;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 pub const STATUS_FD: libc::c_int = 3;
 
@@ -26,6 +28,37 @@ pub struct Prepared {
     pub envp: Vec<*const libc::c_char>,
     /// 只有測試建置會大於 0：`setsid` 之前先睡這麼久，讓測試穩穩造出「子行程還沒自成一組」的時間窗。
     pub test_delay_us: u32,
+    /// 只有測試建置會不是 0：`PANIC_EARLY`／`PANIC_LATE`，子行程在對應的點故意 panic。
+    pub test_panic: u8,
+}
+
+/// `Prepared::test_panic`：`setsid` 之前 panic（狀態 fd 還是 `p.status`）。
+pub const PANIC_EARLY: u8 = 1;
+/// `Prepared::test_panic`：`close_range` 之後、`chdir` 之前 panic（狀態 fd 已經是 fd 3）。
+pub const PANIC_LATE: u8 = 2;
+
+/// panic hook 要把失敗紀錄寫進的狀態 fd：`run` 開頭設成 `p.status`，狀態 fd 搬到 fd 3 之後換成 `STATUS_FD`。
+/// 寫錯 fd 的後果：搬之前寫 fd 3 是 spawner 的 signalfd（寫不進去），搬之後寫 `p.status` 已被 `close_range` 關掉；
+/// 兩種都是紀錄沒到，父行程讀到 EOF 就把一個沒跑的工具報成 `Started`。
+static STATUS_NOW: AtomicI32 = AtomicI32::new(-1);
+
+/// 子行程裡任何 panic 都走這裡：把 `panic：<檔:行>` 寫成 `Resource` 失敗紀錄，然後 `_exit(125)`。
+/// 不論 unwind 或 abort 的建置，hook 都在兩者之前跑，所以出貨的 release 也有效；預設的 panic 訊息不再印出去，也就不會進工具的 stderr。
+/// 說明只放位置，不放 panic 的訊息文字。
+fn on_panic(info: &std::panic::PanicHookInfo<'_>) {
+    let detail = match info.location() {
+        Some(at) => format!("panic：{}:{}", at.file(), at.line()),
+        None => "panic".to_string(),
+    };
+    // SAFETY：在 fork 出來的子行程裡；`fail` 只寫 fd 然後 `_exit`。
+    unsafe {
+        fail(
+            STATUS_NOW.load(Ordering::Relaxed),
+            FailKind::Resource,
+            0,
+            &detail,
+        )
+    }
 }
 
 fn errno() -> i32 {
@@ -52,8 +85,14 @@ unsafe fn fail(fd: libc::c_int, kind: FailKind, err: i32, detail: &str) -> ! {
 /// # Safety
 /// 只能在 fork 出來的子行程裡呼叫。
 pub unsafe fn run(p: &Prepared) -> ! {
+    // 要在第一個可能 panic 的步驟之前裝好，之後新增的步驟也都放在這之後。只裝在子行程：spawner 本尊的 panic 維持預設。
+    STATUS_NOW.store(p.status, Ordering::Relaxed);
+    std::panic::set_hook(Box::new(on_panic));
     if p.test_delay_us > 0 {
         libc::usleep(p.test_delay_us);
+    }
+    if p.test_panic == PANIC_EARLY {
+        panic!("測試用的 panic（early）");
     }
     // 自己一個 session：spawner 對整個行程群組送訊號（`kill(-pid)`），也脫離 serve 的控制終端，終端的 Ctrl-C 不會打到工具。
     libc::setsid();
@@ -71,6 +110,7 @@ pub unsafe fn run(p: &Prepared) -> ! {
     if p.status != STATUS_FD && libc::dup2(p.status, STATUS_FD) < 0 {
         fail(p.status, FailKind::Resource, errno(), "dup2 status");
     }
+    STATUS_NOW.store(STATUS_FD, Ordering::Relaxed);
     libc::fcntl(STATUS_FD, libc::F_SETFD, libc::FD_CLOEXEC);
     // fd 3 是狀態 pipe（CLOEXEC）；fd 4 以上全部關掉：監聽 socket、signalfd、別的 id 的連線、pidfd 與狀態 pipe 原本的 fd，都不留給工具。
     if libc::syscall(libc::SYS_close_range, 4u32, u32::MAX, 0u32) != 0 {
@@ -84,6 +124,9 @@ pub unsafe fn run(p: &Prepared) -> ! {
         if sig != libc::SIGKILL && sig != libc::SIGSTOP {
             libc::signal(sig, libc::SIG_DFL);
         }
+    }
+    if p.test_panic == PANIC_LATE {
+        panic!("測試用的 panic（late）");
     }
     // 先 chdir 再上 Landlock：起點不存在或進不去，要報成起點的問題，不是沙箱不可用（#1945）。
     if libc::chdir(p.cwd.as_ptr()) != 0 {

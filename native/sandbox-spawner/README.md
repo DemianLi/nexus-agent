@@ -263,7 +263,7 @@ docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARG
 - `--workspace`：根是 spawner 與監督行程的 package，cargo 預設只動它；宿主在 `host/`，要一起編、一起測。兩邊的整合測試會起對方的執行檔（從同一個 target 目錄找），只測一個 package 時對方的執行檔可能還沒編出來。
 
 - `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
-- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下。出貨的建置不帶它。
+- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下、讓第一個子行程故意 panic。出貨的建置不帶它。
 - 受管憑證檔（`host/src/credentials/`）：照 [`docs/credentials-file.md`](../../docs/credentials-file.md) 的契約解析 `.credentials.yaml`，跟 TS 跑同一份 `credentials-vectors.json`；對外 HTTPS 的 TLS 設定在 `host/src/tls.rs`（固定 ring，根憑證只來自設定指定的 PEM 檔），代理政策在 `host/src/proxy.rs`（由 config 交進來，不讀環境變數）。HTTP MCP 的連線、監督者、連線池與插件 `mcp` 在 `host/src/mcp/`，見 [`docs/host-mcp.md`](../../docs/host-mcp.md)；對話行程那一側還沒接上（#2570）。
 - `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock，或 ABI 不到 6 而驗不到訊號 scope 時，整合測試直接紅，不跳過。CI 會設。
 - 出貨的是 musl 版：要對著它測，先 `rustup target add "$(uname -m)-unknown-linux-musl"` 並裝 `musl-tools`（ring 的 C 要用 `musl-gcc` 編，設 `CC_<arch>_unknown_linux_musl=musl-gcc`），再加 `--target "$(uname -m)-unknown-linux-musl"`。CI 兩種都跑：musl 那輪驗出貨的 libc；不帶 target 的那輪，測試用的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試 `clone3`）拿到 ENOSYS 會退回 `clone`。
