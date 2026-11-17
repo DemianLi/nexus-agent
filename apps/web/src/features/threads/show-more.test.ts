@@ -40,7 +40,7 @@ describe('shownCount', () => {
     expect(shownCount(items(80), only(12, 30, 70), undefined)).toBe(30);
   });
 
-  it('按過之後的水位比自動延伸低：取兩者大的', () => {
+  it('按過之後的水位與自動延伸取兩者大的', () => {
     expect(shownCount(items(80), only(40), 30)).toBe(40);
     expect(shownCount(items(80), only(40), 60)).toBe(60);
   });

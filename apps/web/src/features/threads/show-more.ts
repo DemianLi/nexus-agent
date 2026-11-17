@@ -3,16 +3,17 @@
  *
  * - 每組先 {@link SHOW_FIRST} 條，組尾的「顯示更多」每按一次多 {@link SHOW_STEP} 條。
  * - 一定要看得到的列（需要人注意的、目前這條）排在前 {@link AUTO_REVEAL_LIMIT} 條裡時，水位自動延伸到包住它；再後面的靠按。
- * - 水位不記住：清單卸掉（側欄收起）或換了搜尋字就回到起點，由呼叫方決定狀態放哪。
- *
- * 時間組、搜尋結果、已封存都照這一套；釘選區不設上限，不經過這裡。
+ * - 本模組不持有水位；水位放哪、何時回到起點由呼叫方決定（`list.tsx` 的 `LimitedRows`）。
  *
  * @module
  */
 
-export const SHOW_FIRST = 10;
-export const SHOW_STEP = 20;
-export const AUTO_REVEAL_LIMIT = 50;
+/** 每組沒按過「顯示更多」時先畫的條數。 */
+const SHOW_FIRST = 10;
+/** 每按一次「顯示更多」多畫的條數。 */
+const SHOW_STEP = 20;
+/** 自動延伸最遠到組內第幾條；更後面的一定要看得到的列，要靠按才露出來。 */
+const AUTO_REVEAL_LIMIT = 50;
 
 /**
  * 這一組要畫前幾條。
