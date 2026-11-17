@@ -133,7 +133,7 @@ describe('出貨的 cordis.yml', () => {
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
     // 解析、import、而且長得像一顆 plugin，才數得到 60。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(61);
+    expect(fromYaml).toHaveLength(60);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -416,7 +416,6 @@ describe('出貨的 cordis.yml', () => {
       'recursion-limit',
       'turn-timeout',
       'goal-round-cap',
-      'thread-deletion-store',
       'agent-loop',
       'history-source',
     ]);

@@ -11,7 +11,6 @@
  * | 檔 | 出貨的讀取函式 | v1 的處置 |
  * | --- | --- | --- |
  * | `thread-organization.json` | `ThreadOrganization.open` | 讀相容，內容原樣 |
- * | `thread-deletions.json` | `readThreadDeletionState` | 讀相容，內容原樣（沒有進行中的意圖，索引一筆） |
  * | `browser-session.json` | `loadOrCreateBrowserSessionSecret` | 讀相容，不覆寫 |
  * | `config-hash-key.json` | `loadConfigHashKey` | 讀相容，不覆寫 |
  * | `.credentials.yaml` | `createCredentialService().check()` | 讀相容，內容原樣 |
@@ -50,7 +49,6 @@ import {
 import type { JournalRecord } from './plugin-journal.js';
 import { CONFIG_HASH_KEY_FILE, loadConfigHashKey } from './session-header-metadata.js';
 import { THREAD_ORGANIZATION_FILE, ThreadOrganization } from './thread-organization.js';
-import { readThreadDeletionState, THREAD_DELETIONS_FILE } from './thread-deletion.js';
 import { assertOwnerOnlyMode } from './owner-only.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/home-state/v1/', import.meta.url));
@@ -75,7 +73,7 @@ const fixtureText = (name: string): string => readFileSync(join(FIXTURES, name),
 const homeText = (name: string): string => readFileSync(join(home, name), 'utf8');
 
 describe('home 狀態檔 v1 夾具', () => {
-  it('夾具目錄剛好是這六份：多一份或少一份，都要在這裡有對應的讀回斷言', () => {
+  it('夾具目錄剛好是這五份：多一份或少一份，都要在這裡有對應的讀回斷言', () => {
     expect(readdirSync(FIXTURES).sort()).toEqual(
       [
         CREDENTIALS_FILE,
@@ -83,16 +81,8 @@ describe('home 狀態檔 v1 夾具', () => {
         CONFIG_HASH_KEY_FILE,
         PLUGIN_JOURNAL_FILE_NAME,
         THREAD_ORGANIZATION_FILE,
-        THREAD_DELETIONS_FILE,
       ].sort(),
     );
-  });
-
-  it('thread-deletions.json：讀得回來，沒有進行中的意圖，索引是夾具裡那一筆，檔案不動', async () => {
-    const state = await readThreadDeletionState(join(home, THREAD_DELETIONS_FILE));
-    expect(state.intent).toBeNull();
-    expect(state.deleted.map((record) => record.threadId)).toEqual(['thread-deleted-1']);
-    expect(homeText(THREAD_DELETIONS_FILE)).toBe(fixtureText(THREAD_DELETIONS_FILE));
   });
 
   it('thread-organization.json：讀得回來，釘選與封存各是夾具裡寫的那幾筆，檔案不動', async () => {

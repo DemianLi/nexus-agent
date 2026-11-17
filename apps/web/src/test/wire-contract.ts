@@ -21,8 +21,5 @@ export const UNWIRED_WIRE_CONTRACT = {
   subagentList: async () => NOT_SUPPORTED,
   goalPause: async () => NOT_SUPPORTED,
   threadFork: async () => NOT_SUPPORTED,
-  threadDelete: async () => NOT_SUPPORTED,
-  threadRestore: async () => NOT_SUPPORTED,
-  deletedThreads: async () => NOT_SUPPORTED,
   skillList: async () => NOT_SUPPORTED,
 };
