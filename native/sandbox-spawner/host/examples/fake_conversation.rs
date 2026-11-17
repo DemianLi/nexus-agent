@@ -36,6 +36,9 @@
 //! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`idle`（送出之後）、`drain`、`eof`、`sigterm`。
 
+// 這支假行程故意設訊號處置（`ignore-term` 等）；`clippy.toml` 禁 `signal` 是為了擋宿主設 SIGCHLD，這裡不是宿主。
+#![allow(clippy::disallowed_methods)]
+
 #[path = "common/host_client.rs"]
 mod host_client;
 

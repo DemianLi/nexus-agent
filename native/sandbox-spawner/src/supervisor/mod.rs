@@ -2316,6 +2316,10 @@ impl Supervisor {
                         for grant in grants {
                             host.proc.chan.send(&encode_host_command(&grant));
                         }
+                        // 表送完的記號：表是空的也送。宿主收到之前不讀客戶端的連線。
+                        host.proc
+                            .chan
+                            .send(&encode_host_command(&HostCommand::Synced));
                     }
                 }
                 HostReport::Violation {
@@ -2391,7 +2395,7 @@ impl Supervisor {
     }
 
     /// 宿主拒了一條 pid 不在它表上的連線，或一條撤過的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它那一筆 spawn 當下就登記了，
-    /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）；撤過的連線是撤銷之前
+    /// 宿主沒有只會是還沒寫進宿主的 pipe：排在這邊、還沒寫出去（宿主在收到整張表與 `synced` 之前不讀連線，所以不會回這種報告）；撤過的連線是撤銷之前
     /// 就連上的：同一個號碼上一個行程留下的，或 pid 重用得比宿主讀 pipe 快、新行程先連上的。兩種都不是它的錯：不隔離、不寫稽核，只在運作 log 記一行警告，帶 pid 與宿主的連線編號（`conn`，
     /// 宿主自己的 log 也寫這個號）。其餘的（不是我們的 pid、已經隔離的）照違規記，稽核的理由是宿主回給那條連線的。
     fn on_unregistered(&mut self, pid: u32, conn: u32, reason: &[u8]) {
