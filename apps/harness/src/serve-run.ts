@@ -230,6 +230,13 @@ import {
   memoryUsageSource,
 } from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
+import { threadDeletionStorePlugin } from './settings/thread-deletion-store.js';
+import {
+  DELETED_STORE_DIR_NAME,
+  graceMsOfDays,
+  runDeletionStartup,
+  ThreadDeletions,
+} from './thread-deletion.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { embedLoginPlugin } from './settings/embed-login.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
@@ -1124,6 +1131,25 @@ async function startServer(
   const turnClock: TurnClock | undefined = startupEntryMounted(plugins, turnTimeoutPlugin)
     ? { timeoutMs: startupSetting(plugins, turnTimeoutPlugin).timeoutMs }
     : undefined;
+  // 已刪除存放區（#2957）：路徑與寬限天數起動期讀一次。落盤關掉就沒有會話可刪，不接。啟動先恢復意圖，再看路徑有沒有被改過。
+  const deletionStore = startupSetting(plugins, threadDeletionStorePlugin);
+  const deletedDefaultRoot = join(resolveHarnessHome(env), DELETED_STORE_DIR_NAME);
+  if (sessionLogDir !== undefined) {
+    const threadDeletions = new ThreadDeletions({
+      home: resolveHarnessHome(env),
+      sessionsRoot: sessionLogDir,
+      deletedRoot: deletionStore.path ?? deletedDefaultRoot,
+      graceMs: graceMsOfDays(deletionStore.graceDays),
+      now: () => Date.now(),
+    });
+    const startup = await runDeletionStartup(threadDeletions, deletedDefaultRoot);
+    if (startup.recovered !== undefined) {
+      warn(
+        `[已刪除存放區] 啟動時恢復了一件未完成的${startup.recovered.kind === 'delete' ? '刪除' : '復原'}（${startup.recovered.threadId}）`,
+      );
+    }
+    if (startup.warning !== undefined) warn(startup.warning);
+  }
   // 記憶體量具（#1490）：只讀只講，預設關閉（`reportIntervalMs: 0`），開了才在起動尾端起，見 `memory-gauge.ts`。
   const memoryGaugeConfig = startupSetting(plugins, memoryGaugePlugin);
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給

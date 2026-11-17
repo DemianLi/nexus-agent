@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   appendDeletionLog,
+  runDeletionStartup,
   DEFAULT_GRACE_DAYS,
   graceMsOfDays,
   planItems,
@@ -384,23 +385,59 @@ describe('恢復（當機重啟之後）', () => {
 });
 
 describe('改了存放區路徑', () => {
-  it('舊路徑還有東西：回一行警告並附搬移指令；舊路徑清空後不再警告', async () => {
-    const oldRoot = join(root, 'old-store');
-    mkdirSync(join(oldRoot, PROJECT), { recursive: true });
-    writeFileSync(join(oldRoot, PROJECT, 'x'), 'x');
+  it('設定不是預設、而預設路徑底下還有檔：回一行警告並附搬移指令；預設底下清空後不再警告', async () => {
+    const defaultRoot = join(home, 'sessions-deleted');
+    mkdirSync(join(defaultRoot, PROJECT), { recursive: true });
+    writeFileSync(join(defaultRoot, PROJECT, 'x'), 'x');
+    const custom = join(root, 'custom-store');
+    const deletions = new ThreadDeletions(options({ deletedRoot: custom }));
+    const warning = await deletions.checkStoreMoved(defaultRoot);
+    expect(warning).toContain(defaultRoot);
+    expect(warning).toContain(custom);
+    expect(warning).toContain('mv ');
+    rmSync(join(defaultRoot, PROJECT, 'x'));
+    expect(await deletions.checkStoreMoved(defaultRoot)).toBeUndefined();
+  });
+
+  it('設定就是預設：底下有檔也不警告', async () => {
+    const deletions = new ThreadDeletions(options({ deletedRoot: join(home, 'sessions-deleted') }));
+    mkdirSync(join(home, 'sessions-deleted', PROJECT), { recursive: true });
+    writeFileSync(join(home, 'sessions-deleted', PROJECT, 'x'), 'x');
+    expect(await deletions.checkStoreMoved(join(home, 'sessions-deleted'))).toBeUndefined();
+  });
+});
+
+describe('啟動層', () => {
+  it('啟動先恢復意圖，再看路徑：意圖被完成，警告照出', async () => {
+    await seedThread();
     writeFileSync(
       join(home, THREAD_DELETIONS_FILE),
-      JSON.stringify({ version: 1, intent: null, deleted: [], lastStoreRoot: oldRoot }),
+      JSON.stringify({
+        version: 1,
+        deleted: [],
+        intent: {
+          opId: 'startup-1',
+          kind: 'delete',
+          threadId: ROOT_ID,
+          projectKey: PROJECT,
+          actor: OWNER,
+          at: clock,
+          stage: 'releasing',
+        },
+      }),
     );
-    const deletions = new ThreadDeletions(options());
-    const warning = await deletions.checkStoreMoved();
-    expect(warning).toContain(oldRoot);
-    expect(warning).toContain('mv ');
-    expect(warning).toContain(deletedRoot);
-    expect(await deletions.checkStoreMoved()).toBeDefined();
-    rmSync(join(oldRoot, PROJECT, 'x'));
-    expect(await deletions.checkStoreMoved()).toBeUndefined();
-    expect(await deletions.checkStoreMoved()).toBeUndefined();
+    const defaultRoot = join(home, 'sessions-deleted');
+    mkdirSync(join(defaultRoot, 'other'), { recursive: true });
+    writeFileSync(join(defaultRoot, 'other', 'y'), 'y');
+    const result = await runDeletionStartup(
+      new ThreadDeletions(options({ deletedRoot: join(root, 'custom-store') })),
+      defaultRoot,
+    );
+    expect(result.recovered?.opId).toBe('startup-1');
+    expect(existsSync(join(root, 'custom-store', PROJECT, sessionDirectoryName(ROOT_ID)))).toBe(
+      true,
+    );
+    expect(result.warning).toContain('mv ');
   });
 });
 

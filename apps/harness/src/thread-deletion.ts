@@ -12,8 +12,6 @@
  * ## 索引存什麼
  *
  * 只存「專案格名＋thread id」，不存絕對路徑。路徑每次用當下設定的存放區與會話根解析，改了路徑不會讓索引失效。
- * 唯一的例外是 `lastStoreRoot`：它只為了「改了路徑、舊路徑還有東西」的啟動警告，記的是上一次啟動時的存放區位置，
- * 舊路徑清空之後才會跟著更新。
  *
  * ## 搬的順序與冪等
  *
@@ -100,8 +98,6 @@ export interface ThreadDeletionState {
   readonly version: typeof STATE_VERSION;
   readonly intent: DeletionIntent | null;
   readonly deleted: readonly DeletedThreadRecord[];
-  /** 上一次啟動時的存放區位置，只給啟動警告用（見檔頭）。 */
-  readonly lastStoreRoot?: string;
 }
 
 /** 刪除記錄的一行。 */
@@ -305,17 +301,7 @@ export async function readThreadDeletionState(path: string): Promise<ThreadDelet
   const deleted = parsed['deleted'].map((item) => parseRecord(path, item));
   const keys = new Set(deleted.map((record) => keyOf(record.projectKey, record.threadId)));
   if (keys.size !== deleted.length) throw unreadable(path, 'deleted 有重複的 thread');
-  if (parsed['lastStoreRoot'] !== undefined && typeof parsed['lastStoreRoot'] !== 'string') {
-    throw unreadable(path, 'lastStoreRoot 不是字串');
-  }
-  return {
-    version: STATE_VERSION,
-    intent,
-    deleted,
-    ...(typeof parsed['lastStoreRoot'] === 'string' && {
-      lastStoreRoot: parsed['lastStoreRoot'],
-    }),
-  };
+  return { version: STATE_VERSION, intent, deleted };
 }
 
 async function writeState(path: string, state: ThreadDeletionState): Promise<void> {
@@ -697,26 +683,22 @@ export class ThreadDeletions {
   }
 
   /**
-   * 改了存放區的路徑、舊路徑還有東西時回一行警告（附搬移指令）；否則 `undefined`。
-   * 舊路徑清空（或不存在）之後，把 `lastStoreRoot` 更新成現在的路徑，之後不再警告。設定改了不自動搬。
+   * 存放區路徑不是預設、而預設路徑底下還有檔時回一行警告（附搬移指令）；否則 `undefined`。
+   *
+   * 不記上一次的路徑：只比「這次設定的」與「預設的」。代價是兩個非預設路徑之間換來換去時不會警告，
+   * 那個情形要人自己搬（見 `docs/operations.md`）。設定改了不自動搬。
+   *
+   * @param defaultRoot - 出廠預設的存放區（`<home>/sessions-deleted`）。
    */
-  async checkStoreMoved(): Promise<string | undefined> {
-    const state = await this.#read();
+  async checkStoreMoved(defaultRoot: string): Promise<string | undefined> {
     const current = resolve(this.#options.deletedRoot);
-    const previous = state.lastStoreRoot === undefined ? undefined : resolve(state.lastStoreRoot);
-    if (previous === undefined || previous === current) {
-      if (previous === undefined)
-        await writeState(this.#statePath, { ...state, lastStoreRoot: current });
-      return undefined;
-    }
-    const files = await countFiles(previous);
-    if (files === 0) {
-      await writeState(this.#statePath, { ...state, lastStoreRoot: current });
-      return undefined;
-    }
+    const fallback = resolve(defaultRoot);
+    if (current === fallback) return undefined;
+    const files = await countFiles(fallback);
+    if (files === 0) return undefined;
     return (
-      `[已刪除存放區] 存放區路徑已改成 ${current}，舊路徑 ${previous} 還有 ${String(files)} 個檔，` +
-      `寬限期內的會話在新路徑找不到。要搬過去請執行：mv "${previous}"/* "${current}"/`
+      `[已刪除存放區] 存放區路徑設成 ${current}，預設路徑 ${fallback} 底下還有 ${String(files)} 個檔，` +
+      `寬限期內的會話在新路徑找不到。要搬過去請執行：mv "${fallback}"/* "${current}"/`
     );
   }
 
@@ -775,6 +757,22 @@ export class ThreadDeletions {
     });
     return this.#view(record);
   }
+}
+
+/**
+ * 啟動時的刪除層：先恢復（意圖點名的那一件），再看存放區路徑有沒有被改過。回傳要印的警告（沒有就 `undefined`）。
+ * `serve-run.ts` 在組裝期呼叫它；拆成函式是為了讓啟動層能不靠整台 serve 就測。
+ */
+export async function runDeletionStartup(
+  deletions: ThreadDeletions,
+  defaultRoot: string,
+): Promise<{
+  readonly recovered: DeletionIntent | undefined;
+  readonly warning: string | undefined;
+}> {
+  const recovered = await deletions.recover();
+  const warning = await deletions.checkStoreMoved(defaultRoot);
+  return { recovered, warning };
 }
 
 /** 寬限期的毫秒數：天數不是正數就拒絕（不靜默降級）。 */
