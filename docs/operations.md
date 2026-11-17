@@ -796,6 +796,7 @@ jq -rs '
 - **改路徑**：設定改了不會自動搬。啟動時如果舊路徑底下還有檔，會印一行警告，附上搬移指令（`mv "<舊路徑>"/* "<新路徑>"/`）。舊路徑清空之後警告就不再出現。
 - **狀態檔**：`<home>/thread-deletions.json`。`intent` 是正在做的那一件（沒有就是 `null`），`deleted` 是已刪除的索引。索引只存專案格名與 thread id，不存絕對路徑。
 - **刪除記錄**：`<home>/thread-deletions.log.jsonl`，每次刪除或復原附加一行（誰、何時、哪條、原標題）。同一個操作不會寫兩次。
+- **刪掉之後**：刪除時開著這條會話下行的頁籤，那條下行正常結束；之後再開下行或送話，一律回錯誤碼 `thread_deleted`，復原之後才打得開。
 - **怎麼看記錄**：`tail -n 20 ~/.nexus-agent/thread-deletions.log.jsonl | jq .`（有 `NEXUS_AGENT_HOME` 的話換成那個目錄）。
 - **怎麼手動搬**：先確認 serve 已經停掉（home 鎖擋住的是同時寫入）。把 `sessions-deleted/<專案格>/` 裡要復原的項目搬回 `sessions/<專案格>/`，然後從 `thread-deletions.json` 的 `deleted` 裡拿掉那一筆。不要只搬檔案不改索引。
 - **不搬的東西**：`tool-results/`（外溢的工具結果）與 `attachments/`（附件）不搬。分叉會沿著祖先鏈讀外溢檔，祖先被刪之後也還要找得到；它們有自己的保留期。

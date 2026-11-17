@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { SESSION_LOG_FORMAT_VERSION, sessionDirectoryName } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { commandPath, createWireClient } from '@nexus/wire';
+import { THREAD_DELETED, WireRejectedError, commandPath, createWireClient } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
@@ -220,6 +220,24 @@ describe('刪除、復原與已刪除清單：真的 wire 往返', () => {
     const rest: unknown[] = [];
     for await (const event of events) rest.push(event);
     expect(rest).toEqual([]);
+  });
+
+  it('刪掉之後再開這條（重連、送話）：回專用碼 thread_deleted，客戶端分得出是刪了、不是暫時連不上', async () => {
+    await seed('t-live');
+    await seed('t-gone');
+    const { client } = setup();
+    await client.threadDelete('t-gone');
+
+    const refused = await client.openEvents('t-gone').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(WireRejectedError);
+    expect((refused as WireRejectedError).code).toBe(THREAD_DELETED);
+    expect(await client.runStart('t-gone', '還在嗎')).toMatchObject({
+      type: 'error',
+      error: THREAD_DELETED,
+    });
   });
 
   it('同一條 thread 還有別的在途請求（run.start 的本文還沒讀完）：刪除照樣等它，等不到就什麼都不搬', async () => {

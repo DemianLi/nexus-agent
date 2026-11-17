@@ -123,6 +123,7 @@ import {
   THREAD_NOT_OWNED,
   THREAD_IS_SUBAGENT,
   THREAD_LOG_BUSY,
+  THREAD_DELETED,
   THREAD_LOG_TOO_LARGE,
   THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
@@ -1803,14 +1804,7 @@ export class ThreadNotBoundError extends Error {
 }
 
 /**
- * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
- *
- * 只有 `threadFor` 拋、只有 `threadOrError` 接，回 `thread_at_capacity`。**message 是給管理者看的，寫出上限與下一步**
- * （照 dsh 背景工作准入的第 5 點）：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
- * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
- */
-/**
- * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：組裝與觀察都拒，不建任何資源。
+ * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：組裝與觀察都拒，不建任何資源，回 `thread_deleted`。
  * 寬限期內可以復原，那是另一條路，不是這裡的事。
  */
 export class ThreadDeletedError extends Error {
@@ -1848,6 +1842,13 @@ function deletionErrorCode(
   return undefined;
 }
 
+/**
+ * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
+ *
+ * 只有 `threadFor` 拋、只有 `threadOrError` 接，回 `thread_at_capacity`。**message 是給管理者看的，寫出上限與下一步**
+ * （照 dsh 背景工作准入的第 5 點）：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
+ * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
+ */
 export class ThreadCapacityError extends Error {
   constructor(
     /** 拒收那一刻行程裡的 thread 數（含建構中的）。 */
@@ -2603,6 +2604,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     if (error instanceof ThreadNotBoundError) {
       return json(errorResponse(id, THREAD_NOT_BOUND, error.message));
+    }
+    if (error instanceof ThreadDeletedError) {
+      return json(errorResponse(id, THREAD_DELETED, error.message));
     }
     // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
     if (error instanceof SubagentSessionError) {

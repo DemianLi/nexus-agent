@@ -499,6 +499,12 @@ export const THREAD_LOG_TOO_LARGE = 'thread_log_too_large';
 export const THREAD_LOG_BUSY = 'thread_log_busy';
 
 /**
+ * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)），serve 不開它。**重試沒用**：寬限期內用 `thread.restore`
+ * 復原之後才打得開。任何會經 `threadFor` 續接舊 thread 的路都可能回（例如開下行、送話）。`thread.delete` 對已刪除的那一條回的是業務結果裡的同名碼，不是這個錯誤回應。
+ */
+export const THREAD_DELETED = 'thread_deleted';
+
+/**
  * serve 正在收尾（`close()` 已經開始：收到 `SIGTERM`／`SIGINT`，或致命例外；`close()` 一開始就停收新的一輪，**不論有沒有 `/readyz` 時間窗**——
  * `drainMs: 0`、沒人抓過 `/readyz`、致命例外不等時間窗的路徑都一樣，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)），
  * **這一句話沒有送出**：會開新一輪的上行命令一律回這個碼，HTTP 照舊 200：
@@ -533,6 +539,7 @@ export type WireErrorCode =
   | typeof THREAD_ROOT_MISMATCH
   | typeof THREAD_LOG_TOO_LARGE
   | typeof THREAD_LOG_BUSY
+  | typeof THREAD_DELETED
   | typeof SERVER_CLOSING
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;
