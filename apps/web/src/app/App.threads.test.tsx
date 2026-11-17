@@ -558,13 +558,14 @@ describe('以前的會話', () => {
     await waitFor(() => expect(reads).toBe(2));
   });
 
-  describe('釘選、封存、改名（#633）', () => {
+  describe('釘選、封存、改名（#633）、刪除（#2958）', () => {
     /**
-     * 有狀態的假 server：兩個集合與標題都在這裡，五支動作照 dsh 的規則改它、回整份集合，列表每次讀都帶最新的。
+     * 有狀態的假 server：兩個集合、標題與已刪除清單都在這裡；動作改它，釘選與封存回整份集合，列表每次讀都帶最新的（已刪除的不列）。
+     * `deletion: true` 才有刪除、復原與已刪除清單。
      * `rules` 讓個別測試改寫某一支的回應（例如別的分頁同時動了集合）。
      */
     function managed(
-      initial: { pinned?: string[]; archived?: string[] } = {},
+      initial: { pinned?: string[]; archived?: string[]; deletion?: boolean } = {},
       rules: Partial<{
         pin: (id: string, state: { pinned: string[]; archived: string[] }) => string[];
       }> = {},
@@ -573,6 +574,7 @@ describe('以前的會話', () => {
         pinned: [...(initial.pinned ?? [])],
         archived: [...(initial.archived ?? [])],
         titles: new Map<string, string>(),
+        deleted: [] as { threadId: string; title?: string; deletedAt: number; expiresAt: number }[],
       };
       const calls: string[] = [];
       let lists = 0;
@@ -596,11 +598,13 @@ describe('以前的會話', () => {
             kind: 'ok',
             result: {
               ...LISTED,
-              items: LISTED.items.map((item) =>
-                state.titles.has(item.threadId)
-                  ? { ...item, title: state.titles.get(item.threadId)! }
-                  : item,
-              ),
+              items: LISTED.items
+                .filter((item) => !state.deleted.some((gone) => gone.threadId === item.threadId))
+                .map((item) =>
+                  state.titles.has(item.threadId)
+                    ? { ...item, title: state.titles.get(item.threadId)! }
+                    : item,
+                ),
               pinnedThreadIds: [...state.pinned],
               archivedThreadIds: [...state.archived],
             },
@@ -641,6 +645,30 @@ describe('以前的會話', () => {
           state.titles.set(id, title);
           return ok({ title, seq: 9 });
         },
+        ...(initial.deletion === true
+          ? {
+              threadDelete: async (id: string) => {
+                calls.push(`delete ${id}`);
+                const item = LISTED.items.find((entry) => entry.threadId === id);
+                state.deleted.push({
+                  threadId: id,
+                  ...(item?.title === undefined ? {} : { title: item.title }),
+                  deletedAt: Date.now(),
+                  expiresAt: Date.now() + 30 * 86_400_000,
+                });
+                return ok({ threadId: id });
+              },
+              threadRestore: async (id: string) => {
+                calls.push(`restore ${id}`);
+                state.deleted = state.deleted.filter((gone) => gone.threadId !== id);
+                return ok({ threadId: id });
+              },
+              deletedThreads: async () => ({
+                kind: 'ok' as const,
+                result: { items: [...state.deleted] },
+              }),
+            }
+          : {}),
       } as unknown as WireClient;
       return { client, state, calls, sent: fake.sent, lists: () => lists };
     }
@@ -914,6 +942,49 @@ describe('以前的會話', () => {
           .getByText(UNTITLED_THREAD_LABEL)
           .closest('button')?.disabled,
       ).toBe(true);
+    });
+
+    it('刪掉目前這條：跳到新對話；從最近刪除復原，那一列回到清單（#2958）', async () => {
+      setSeq(0);
+      const server = managed({ deletion: true });
+      render(<App client={server.client} />);
+      fireEvent.click(within(await openList()).getByText(UNTITLED_THREAD_LABEL));
+      await waitFor(async () =>
+        expect(
+          within(await openList())
+            .getByText(UNTITLED_THREAD_LABEL)
+            .closest('button')?.disabled,
+        ).toBe(true),
+      );
+      expect(stored()).toBe('目標那條');
+      await menuOf(await openList(), UNTITLED_THREAD_LABEL);
+      choose('刪除');
+      const dialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '刪除' }));
+      // 沒在這條講過話也要走：這條已經不在了。清單上還有一條空白的，拿它來用（#313）。
+      await waitFor(() => expect(stored()).toBe('空白那條'));
+      expect(server.calls).toContain('delete 目標那條');
+      const deleted = await screen.findByTestId('thread-deleted');
+      expect(
+        within(await openList()).queryByText(UNTITLED_THREAD_LABEL, {
+          selector: '[data-testid=thread-title-text]',
+        }),
+      ).toBeNull();
+
+      fireEvent.click(within(deleted).getByRole('button', { name: '最近刪除（1）' }));
+      fireEvent.click(
+        within(screen.getByTestId('thread-deleted')).getByRole('button', { name: /^復原「/u }),
+      );
+      await waitFor(() => expect(screen.queryByTestId('thread-deleted')).toBeNull());
+      await waitFor(async () =>
+        expect(
+          within(await openList()).getByText(UNTITLED_THREAD_LABEL, {
+            selector: '[data-testid=thread-title-text]',
+          }),
+        ).toBeTruthy(),
+      );
+      expect(server.calls).toContain('restore 目標那條');
+      expect(stored()).toBe('空白那條');
     });
 
     it('封存的會話不能釘：server 回 thread_archived，說出原因', async () => {

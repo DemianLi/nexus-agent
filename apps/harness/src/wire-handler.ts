@@ -4269,7 +4269,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /threads/deleted`：這個專案格已刪除、還在寬限期內的會話。**不經 `threadFor`**，同 `handleList`。
+   * `GET /threads/deleted`：這個專案格已刪除的會話，含已過寬限期的（索引不清，`expiresAt` 已過的不能復原）。**不經 `threadFor`**，同 `handleList`。
    */
   async function handleDeletedList(): Promise<Response> {
     const port = options.threadDeletion;
