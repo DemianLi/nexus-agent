@@ -284,6 +284,21 @@ fn count(flag: &str, value: OsString) -> Result<u32, String> {
         .ok_or_else(|| format!("{flag} 要整數，拿到 {value:?}"))
 }
 
+/// `--stall-ms` 超過這個值才不警告（README 寫「要超過 4000」）。
+const STALL_WARN_AT_OR_BELOW: Duration = Duration::from_millis(4000);
+
+/// 啟動時要不要對 `--stall-ms` 警告：值不是 0（`None` 是不判）又不超過 4000 就警告，回要印的那一行。
+/// 對話行程與組合行程的心跳間隔寫死 1 秒、監督行程不知道，值小於約 1 秒時行程一綁定就被判 `stalled`（[#2876](https://github.com/DemianLi/nexus-agent/issues/2876)）。
+/// 只警告不擋：整合測試用小值配 50 毫秒心跳的假對話行程，是合理的用法。文字照 README 寫，不比已知的多。
+pub fn stall_warning(stall: Option<Duration>) -> Option<String> {
+    let stall = stall.filter(|stall| *stall <= STALL_WARN_AT_OR_BELOW)?;
+    Some(format!(
+        "--stall-ms {} 不超過 4000：真的對話行程與組合行程的心跳是 1 秒一次，值小於約 1 秒時行程一綁定就會被判 stalled；\
+         見 native/sandbox-spawner/README.md 的 --stall-ms",
+        stall.as_millis()
+    ))
+}
+
 fn millis(flag: &str, value: OsString) -> Result<Duration, String> {
     value
         .to_str()
@@ -295,6 +310,20 @@ fn millis(flag: &str, value: OsString) -> Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 警告寫出值與 README 的位置。
+    #[test]
+    fn u1_warns_only_for_a_nonzero_stall_at_or_below_4000() {
+        let ms = |n| Some(Duration::from_millis(n));
+        assert_eq!(stall_warning(None), None);
+        assert_eq!(stall_warning(Some(DEFAULT_STALL)), None);
+        assert_eq!(stall_warning(ms(4001)), None);
+        for n in [1, 300, 1000, 3999, 4000] {
+            let line = stall_warning(ms(n)).unwrap_or_else(|| panic!("{n} 該警告"));
+            assert!(line.contains(&format!("--stall-ms {n} ")), "{line}");
+            assert!(line.contains("README.md"), "{line}");
+        }
+    }
 
     fn os(items: &[&str]) -> Vec<OsString> {
         items.iter().map(OsString::from).collect()

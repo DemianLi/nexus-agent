@@ -412,6 +412,9 @@ pub fn run(argv: Vec<OsString>) -> i32 {
             return 2;
         }
     };
+    if let Some(warning) = args::stall_warning(args.stall) {
+        say!("{warning}");
+    }
     match start(args) {
         Ok(mut supervisor) => supervisor.run(),
         Err(err) => {
