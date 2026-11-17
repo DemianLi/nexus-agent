@@ -4467,6 +4467,19 @@ fn finish(mut h: Harness) {
     assert!(h.wait_exit().success());
 }
 
+/// 稽核 `sweep` 那一行的 `"signalled":[…]`，逐個 pid 取出來比，不用整行 `contains`（pid 可能剛好是時間戳或別的欄位的一段）。
+fn signalled_pids(line: &str) -> Vec<i32> {
+    let rest = line
+        .split("\"signalled\":[")
+        .nth(1)
+        .unwrap_or_else(|| panic!("sweep 行沒有 signalled：{line}"));
+    let list = rest.split(']').next().unwrap();
+    list.split(',')
+        .filter(|pid| !pid.is_empty())
+        .map(|pid| pid.parse().unwrap())
+        .collect()
+}
+
 /// 掃描只收宿主 session 裡的行程：已經 `up` 的對話行程（監督行程自己起的，不在宿主的 session）掃完還活著。
 /// 宿主死了不會連帶收對話行程，所以選這一種，不選「`signalled` 等於成員數」（那個數字含宿主重起時新起的 server，不穩）。
 fn assert_sweep_left_the_conversation_alone(conversation_pid: i32, line: &str) {
@@ -4475,7 +4488,7 @@ fn assert_sweep_left_the_conversation_alone(conversation_pid: i32, line: &str) {
         "對話行程 {conversation_pid} 被誤殺：{line}"
     );
     assert!(
-        !line.contains(&conversation_pid.to_string()),
+        !signalled_pids(line).contains(&conversation_pid),
         "sweep 把對話行程列進 signalled：{line}"
     );
 }
@@ -4498,8 +4511,9 @@ fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
         "{leader} {grandchild}"
     );
     let line = sweep_line(&h);
+    let signalled = signalled_pids(&line);
     assert!(
-        line.contains(&format!("{leader}")) && line.contains(&format!("{grandchild}")),
+        signalled.contains(&leader) && signalled.contains(&grandchild),
         "{line}"
     );
     assert!(line.contains("\"left\":[]"), "{line}");
@@ -4704,8 +4718,8 @@ fn l1_a_descendant_that_calls_setsid_is_out_of_reach() {
     // 宿主重起後新一代的 server 也有一個自己 `setsid` 的孫行程：停機前先收掉，不留在測試機上。
     let _ = nth_logged(&h, "spawned", 1);
     assert!(wait_until(|| {
-        grandchild_pid(&file) != grandchild
-            && session_of(grandchild_pid(&file)).is_some_and(|session| session != host)
+        let next = grandchild_pid(&file);
+        next != grandchild && session_of(next) == Some(next)
     }));
     kill(grandchild_pid(&file) as u32, libc::SIGKILL);
     finish(h);
