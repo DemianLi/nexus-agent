@@ -162,6 +162,8 @@ const MINIMAL_PARAMS: Record<RpcMethod, Record<string, unknown>> = {
   'thread.unarchive': {},
   'thread.rename': { title: '新名字' },
   'thread.fork': { messageId: 'm-1' },
+  'thread.delete': {},
+  'thread.restore': {},
 };
 
 describe('wire：params 多一格就拒', () => {
@@ -366,6 +368,8 @@ describe('wire：今天的客戶端照樣過', () => {
     await client.threadUnarchive(thread);
     await client.threadRename(thread, '新名字');
     await client.threadFork(thread, 'm-1');
+    await client.threadDelete(thread);
+    await client.threadRestore(thread);
 
     // 送到的 method 就是表上的全部：漏登一格、或新增 method 忘了補這裡的客戶端呼叫，都會紅。
     expect(new Set(recorded.map((entry) => entry.method))).toEqual(
