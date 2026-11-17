@@ -127,7 +127,7 @@ struct Host {
     out_of_fds: bool,
     /// 監督行程已經送了 [`HostCommand::Synced`]：身分表送完了。起來是 `false`，到齊之前不讀任何客戶端連線（`hello` 留在核心的緩衝區），收到之後不再變回去。
     synced: bool,
-    /// 表還沒到齊、已經有連線等滿 [`HELLO_TIMEOUT`] 被斷，而且記過 log：一段未到齊的期間只記一次。
+    /// 表還沒到齊、已經有連線等滿 [`HELLO_TIMEOUT`] 被斷，而且記過 log：每個宿主行程只記一次。
     unsynced_drop_logged: bool,
     kernel: Kernel,
 }

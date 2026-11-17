@@ -2951,7 +2951,6 @@ fn a_list_that_stays_broken_after_ready_never_counts_toward_the_failure_limit() 
     assert!(h.child.try_wait().unwrap().is_none());
 }
 
-/// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
 /// 假宿主的紀錄切成一段一段：每個 `start <pid>` 開一段，裡面是那個宿主行程收到的身分表指令（`grant …`、`synced`、`revoke …`）。
 fn host_segments(h: &Harness) -> Vec<Vec<String>> {
     let mut segments: Vec<Vec<String>> = Vec::new();
@@ -3034,6 +3033,7 @@ fn a_restarted_host_with_an_empty_table_is_still_synced() {
     assert_eq!(host_segments(&h)[1], vec!["synced"], "{:?}", host_log(&h));
 }
 
+/// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
 #[test]
 fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_everything() {
     let marker = temp_dir("marker").join("crashed");

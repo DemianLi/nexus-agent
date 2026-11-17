@@ -197,7 +197,7 @@ fn silent_for(stream: &mut UnixStream, wait: Duration) -> bool {
     )
 }
 
-/// 身分表到齊（`Synced`）之前宿主不讀連線：`hello` 先到也不回，也不報；表（`grant`）來了還是不回；`Synced` 到了才照今天的路驗，接受。
+/// 身分表到齊（`Synced`）之前宿主不讀連線：`hello` 先到也不回，也不報；表（`grant`）來了還是不回；`Synced` 到了才照一般的規則驗：表上有這個 pid，接受。
 #[test]
 fn a_hello_is_not_answered_until_the_table_is_synced() {
     let dir = temp_dir("synced");
