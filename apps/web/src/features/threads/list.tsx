@@ -375,7 +375,7 @@ function ThreadGroupList({
 }: {
   readonly sections: ThreadSections;
   readonly isBlank: (item: ThreadSummary) => boolean;
-  /** 這一列在前 50 條裡時，不用按「顯示更多」也要畫出來。 */
+  /** 這一列要不要一定看得到；排在組內前 50 條的，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
   readonly mustShow: (item: ThreadSummary) => boolean;
   readonly row: (item: ThreadSummary) => ReactNode;
   readonly archivedOpen: boolean;
@@ -438,7 +438,7 @@ function BucketGroup({
 /**
  * 一組的列，先畫前幾條，組尾「顯示更多（還有 N 條）」（`show-more.ts`）。
  *
- * 按下後焦點移到新露出的第一列，鍵盤與報讀器不用回頭找；那一列是目前這條（按鈕停用）時落在它的「⋯」。
+ * 按下後焦點移到新露出的第一列，鍵盤與報讀器不用回頭找；那一列是目前這條（按鈕停用）時落在它的「⋯」，沒有選單時落在下一列。
  */
 function LimitedRows({
   items,

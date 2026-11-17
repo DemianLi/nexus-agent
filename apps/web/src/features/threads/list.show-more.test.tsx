@@ -17,7 +17,13 @@ const NOW = Date.now();
 const pad = (n: number) => String(n).padStart(2, '0');
 /** 第 n 條（從 1 數），由新到舊。 */
 function thread(n: number): ThreadSummary {
-  return { threadId: `t${n}`, updatedAt: NOW - n, running: false, blank: false, title: `會話 ${pad(n)}` };
+  return {
+    threadId: `t${n}`,
+    updatedAt: NOW - n,
+    running: false,
+    blank: false,
+    title: `會話 ${pad(n)}`,
+  };
 }
 const threads = (count: number) => Array.from({ length: count }, (_, index) => thread(index + 1));
 
