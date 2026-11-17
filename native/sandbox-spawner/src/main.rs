@@ -1082,6 +1082,11 @@ mod tests {
     fn tty_nr_comes_from_the_fifth_field_after_the_name() {
         assert_eq!(tty_nr_of("42 (a b) c) S 1 2 3 0 -1 4"), Some(0));
         assert_eq!(tty_nr_of("42 (x) S 1 2 3 34816 -1 4"), Some(34816));
+        // 釘欄位位置：session（前一個）、tpgid（後一個）都帶不同的非零值，行程名帶 `)` 與空白；差一格就讀成別的欄位。
+        assert_eq!(
+            tty_nr_of("42 (we) ird )) S 100 200 300 34817 400 4"),
+            Some(34817)
+        );
         assert_eq!(tty_nr_of("42 (x) S 1 2 3"), None);
         assert_eq!(tty_nr_of("42 (x) S 1 2 3 x"), None);
         assert_eq!(tty_nr_of("garbage"), None);
