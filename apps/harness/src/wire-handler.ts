@@ -865,7 +865,7 @@ export interface IdleSweepingWireHandler extends WireHandler {
    */
   sweepIdle(): Promise<void>;
   /**
-   * 刪除會話時讓寫入方放手（[#2957]）：停、等閒置、撤出，回來時寫租約已放。見 `releaseThreadWriter`。
+   * 刪除會話時讓寫入方放手（[#2957]）：停、等閒置（開著的下行不擋）、撤出，回來時寫租約已放。見 `releaseThreadWriter`。
    */
   releaseWriter(threadId: string): Promise<void>;
   /**
@@ -2040,7 +2040,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 見 {@link WireHandlerOptions.idleEvictMs}：卡上列的每一條都要成立。
+   * 見 {@link WireHandlerOptions.idleEvictMs}：那裡列的每一條都要成立；`viewersBlock: false` 時「沒有下行掛著」那一條不看。
    *
    * `viewersBlock: false` 給刪除用（`releaseThreadWriter`）：開著下行的人只讀不寫，撤出時 `pump.close()` 讓那幾條正常結束；
    * 閒置逐出照舊不撤有人在看的。
@@ -2116,6 +2116,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 刪除會話時的寫入方放手（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，single 模式）：停掉還在跑的一輪、等到閒置
    * （含背景子代理），再走閒置逐出的那一條撤出記憶體。**回來時寫租約已經放掉**：撤出的 promise 在 `release` 收完之後才兌現。
+   * 開著的下行不擋：撤出時 `pump.close()` 讓它們正常結束（閒置逐出照舊等下行放掉）。
    * 不在記憶體裡就問對話行程，沒有行程就直接回；等不到閒置超過 {@link WireHandlerOptions.releaseIdleWaitMs}（預設 {@link RELEASE_IDLE_WAIT_MS}）就拋，不硬撤。
    */
   async function releaseThreadWriter(threadId: string): Promise<void> {
@@ -4899,7 +4900,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 這個請求若指名一條 thread，就同步 +1 它的在途請求數（#1484），回「放掉」；不指名（列表、搜尋、全域下行）回 `undefined`。
    * 放掉時同時把最後活動時間推到現在（請求結束也算活動）。
    *
-   * `thread.delete` 不算：它在請求裡等這條 thread 閒置（`releaseThreadWriter`），算進去就永遠等到自己。
+   * `thread.delete` 不算：它在請求裡等這條 thread 閒置（`releaseThreadWriter`），算進去就是在等自己，逾時
+   * （{@link WireHandlerOptions.releaseIdleWaitMs}）拋錯、刪不成。
    */
   function holdThread(request: Request): (() => void) | undefined {
     const route = pathRoute(request);
@@ -5099,7 +5101,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     return refused;
   }
 
-  /** 這個請求的路徑指名哪一條 thread；不指名或解不開回 `undefined`。 */
+  /** 解開這個請求的路徑（先拿掉嵌入前綴，見 `parsePath`）；不是 thread 路徑或解不開回 `undefined`。 */
   function pathRoute(request: Request): ReturnType<typeof parsePath> {
     try {
       const { pathname } = new URL(request.url);
