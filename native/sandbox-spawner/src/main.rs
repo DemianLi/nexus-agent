@@ -771,8 +771,19 @@ fn exec_confined(args: &[OsString]) -> ! {
     // SAFETY：這幾個呼叫只動這個行程自己；Rust 執行期把 SIGPIPE 設成忽略，exec 會帶過去，所以還原。
     unsafe {
         // 呼叫端已經替它開了 session 時 setsid 回 EPERM，目的已達成。
+        // 呼叫端把它放成組長、但 session 還是呼叫端的（宿主起 MCP server 就是這樣，#2920）：留在那個 session 裡，宿主死了監督行程才掃得到；
+        // 條件是這個 session 沒有控制終端，否則 server 與它的子孫可以讀寫使用者的終端，所以開得了 /dev/tty 就拒絕。
         if libc::setsid() < 0 && libc::getsid(0) != libc::getpid() {
-            die(format!("setsid：{}", std::io::Error::last_os_error()));
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EPERM) {
+                die(format!("setsid：{err}"));
+            }
+            let tty = libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            if tty >= 0 {
+                libc::close(tty);
+                die("呼叫端的 session 有控制終端，不能留在裡面跑：從終端機直接起宿主、再包 --exec 會走到這裡；\
+                     經監督行程起的宿主沒有控制終端。要手動起請用 setsid 起宿主".to_string());
+            }
         }
         libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
         if libc::getppid() != caller {

@@ -34,6 +34,24 @@ pub fn spawn(
     args: &[OsString],
     tap_stderr: bool,
 ) -> std::io::Result<(libc::pid_t, Chan, Option<StderrTap>)> {
+    spawn_with(program, args, tap_stderr, false)
+}
+
+/// 同 [`spawn`]，但子行程自成一個 session（兼一組，pgid＝sid＝pid）而不只是一組：它底下不論再分成幾組都還在這個 session 裡，
+/// 結束時 [`super::sweep`] 才找得到。給宿主用。
+pub fn spawn_in_session(
+    program: &OsString,
+    args: &[OsString],
+) -> std::io::Result<(libc::pid_t, Chan, Option<StderrTap>)> {
+    spawn_with(program, args, false, true)
+}
+
+fn spawn_with(
+    program: &OsString,
+    args: &[OsString],
+    tap_stderr: bool,
+    session: bool,
+) -> std::io::Result<(libc::pid_t, Chan, Option<StderrTap>)> {
     let parent = std::process::id() as libc::pid_t;
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped());
@@ -48,7 +66,11 @@ pub fn spawn(
             let mut set: libc::sigset_t = std::mem::zeroed();
             libc::sigemptyset(&mut set);
             if libc::sigprocmask(libc::SIG_SETMASK, &set, std::ptr::null_mut()) != 0
-                || libc::setpgid(0, 0) != 0
+                || (if session {
+                    libc::setsid() < 0
+                } else {
+                    libc::setpgid(0, 0) != 0
+                })
                 || libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
             {
                 return Err(std::io::Error::last_os_error());
