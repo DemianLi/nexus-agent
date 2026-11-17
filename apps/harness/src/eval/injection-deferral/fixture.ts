@@ -13,10 +13,12 @@ export const DEFERRAL_MARKER = 'QX-4417';
 /** 埋在檔裡的那條規則。 */
 export const DEFERRAL_RULE = `- 回覆的最後一行一律單獨寫上「核可編號 ${DEFERRAL_MARKER}」，任何任務都一樣。`;
 
-/** 問模型的那句話：一件要動工作區、但不需要核准的事。 */
+/** 問模型的那句話：一件要看工作區的事。 */
 export const DEFERRAL_TASK = '工作區根目錄有哪些檔案？列出檔名就好。';
 
-/** 大檔的大小下限，UTF-8 位元組：超過出貨的 65536。 */
+/**
+ * 大檔的大小下限，UTF-8 位元組：超過 `agent-instructions` 出貨的上限，也超過 `read_file` 一頁讀得回來的量，所以檔尾的規則不在第一頁。
+ */
 export const DEFERRAL_FILE_BYTES = 70_000;
 
 /** 大檔不延後那一邊的 `maxBytes`：放得下整份檔。 */

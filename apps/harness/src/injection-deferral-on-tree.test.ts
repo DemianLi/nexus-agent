@@ -2,7 +2,7 @@
  * 注入源放不下時在產品路徑上的樣子（[#2929](https://github.com/DemianLi/nexus-agent/issues/2929)）：技能目錄、記憶檔的延後，
  * 與必要來源超過上限時的失敗。
  *
- * 用真的 `createCordisRoot`、真的 `loadDefaultPlugins`、真的 `root.boot`，只有模型是照稿回話的替身。各源自己的算法在各自套件的
+ * 用真的 `createCordisRoot`、真的 `loadDefaultPlugins`、真的 `root.boot`，只有模型是照稿回話的替身；記憶插件不在出貨清單上，那一格由測試另外掛。各源自己的算法在各自套件的
  * 單元測試；這裡量的是它們接上出貨清單之後，送給模型的那一份與 `context/measure` 記下的那一筆。
  * agent-instructions 與技能叫用正文的同一件事在 `skill-invocation-on-tree.test.ts`。
  */
@@ -190,7 +190,7 @@ describe('必要來源超過上限：不截斷也不延後，失敗並說出是�
     expect(error?.message).toMatch(/系統提示詞的前段有 \d+ 個 UTF-8 位元組，超過上限 16384/);
   }, 60000);
 
-  it('讀清單：計劃模式的 guidance 超過 16384 位元組，那一列掉了，訊息說超過多少', async () => {
+  it('讀清單：計劃模式的 guidance 超過 16384 位元組，那一列掉了，訊息說出上限', async () => {
     const patch = `- id: plan-mode\n  config:\n    guidance: '${'g'.repeat(16_385)}'\n`;
     const root = createCordisRoot({ channel: entryApprovalChannel(undefined), contained: true });
     roots.push(root);

@@ -3,6 +3,7 @@
  * 真模型那一輪不進 CI，由 `injection-deferral-cli.ts` 跑。
  */
 
+import { injectionLimitFor } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { withScriptedModel } from '../../fixtures.js';
@@ -26,22 +27,24 @@ const scripted = (turns: readonly ScriptedTurn[]) => ({
   plugins: (shipped: Parameters<typeof withScriptedModel>[0]) => withScriptedModel(shipped, turns),
 });
 
-const readAgentsMd = (offset?: number): ScriptedTurn => ({
+const readAgentsMd = (): ScriptedTurn => ({
   content: '',
   toolCalls: [
     {
       name: 'read_file',
-      args: { file_path: '/AGENTS.md', ...(offset !== undefined && { offset }) },
+      args: { file_path: '/AGENTS.md' },
     },
   ],
 });
 
 describe('題目', () => {
-  it('那份檔超過出貨的 65536、放得進不延後那一邊的上限，規則只出現一次', () => {
+  it('那份檔超過出貨的上限、放得進不延後那一邊的上限，規則只出現一次', () => {
+    expect(DEFERRAL_FILE_BYTES).toBeGreaterThan(injectionLimitFor('agent-instructions'));
     for (const position of ['head', 'tail'] as const) {
       const text = deferralAgentsMd(position);
       const bytes = Buffer.byteLength(text, 'utf8');
       expect(bytes).toBeGreaterThan(DEFERRAL_FILE_BYTES);
+      // 留給外框與引言的餘裕。
       expect(bytes).toBeLessThan(DEFERRAL_INLINE_MAX_BYTES - 4096);
       expect(text.split(DEFERRAL_MARKER)).toHaveLength(2);
       expect(deferralAgentsMd(position)).toBe(text);
@@ -162,11 +165,12 @@ describe('執行器（產品的組裝，替身模型）', () => {
     expect(run).toMatchObject({ deferred: false, ruleInjected: true, followed: false });
   }, 60000);
 
-  it(`一直叫工具不收尾：到 ${DEFERRAL_MAX_REQUESTS} 個請求就中止這一次`, async () => {
+  it(`一直叫工具不收尾：超過 ${DEFERRAL_MAX_REQUESTS} 個請求就中止這一次，請求數照數`, async () => {
     const run = await runDeferralCase(
       { file: 'large', arm: 'deferred', position: 'head' },
       scripted(Array.from({ length: DEFERRAL_MAX_REQUESTS + 4 }, () => readAgentsMd())),
     );
     expect(run.capped).toBe(true);
+    expect(run.requests).toBeGreaterThanOrEqual(DEFERRAL_MAX_REQUESTS);
   }, 60000);
 });

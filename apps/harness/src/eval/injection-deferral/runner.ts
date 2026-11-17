@@ -27,7 +27,9 @@ import {
 } from './fixture.js';
 import type { DeferralCase } from './fixture.js';
 
-/** 一次執行最多幾個模型請求；到了就中止這一次。 */
+/**
+ * 一次執行最多幾個模型呼叫，重試的每一次嘗試也算。第 N+1 個呼叫開始時中止這一次；callback 不擋送出，所以那一個可能已經送到端點。
+ */
 export const DEFERRAL_MAX_REQUESTS = 8;
 
 export interface DeferralRunOptions {
@@ -50,13 +52,16 @@ export interface DeferralRun {
   readonly ruleInjected: boolean;
   /** 模型用 `read_file` 讀 `AGENTS.md` 的次數。 */
   readonly readCalls: number;
-  /** 某一次讀回來的內容裡有那條規則。 */
+  /** 某個工具結果裡有那條規則（不限 `read_file`）。 */
   readonly ruleRead: boolean;
   /** 最後的回覆裡有規則要求的那一串。 */
   readonly followed: boolean;
-  /** 模型請求數（有回覆的；不含傳輸重試）。 */
+  /** 有回覆的模型呼叫數，由 callback 數；被中止的那一次也數得到。 */
   readonly requests: number;
-  /** 到了 {@link DEFERRAL_MAX_REQUESTS} 被中止。 */
+  /**
+   * 超過 {@link DEFERRAL_MAX_REQUESTS} 被中止。這時拿不到訊息串，上面看訊息串的那幾格（`deferred` 到 `followed`）都是 `false` 或 0，
+   * 不代表真的沒發生；報表不把這一次算進比例。
+   */
   readonly capped: boolean;
   readonly finalText: string;
 }
@@ -117,11 +122,15 @@ export async function runDeferralCase(
     try {
       const abort = new AbortController();
       let started = 0;
+      let responded = 0;
       const callbacks = [
         {
           handleChatModelStart() {
             started += 1;
             if (started > DEFERRAL_MAX_REQUESTS) abort.abort();
+          },
+          handleLLMEnd() {
+            responded += 1;
           },
         },
       ];
@@ -146,7 +155,7 @@ export async function runDeferralCase(
       }
       rootLog().append('turn/end', {});
       options.onModel?.(built.model);
-      return { ...observe(testCase, messages), capped };
+      return { ...observe(testCase, messages), requests: responded, capped };
     } finally {
       await attachment.detach();
       await built.dispose();
@@ -166,7 +175,7 @@ export async function runDeferralCase(
 export function observe(
   testCase: DeferralCase,
   messages: readonly BaseMessage[],
-): Omit<DeferralRun, 'capped'> {
+): Omit<DeferralRun, 'capped' | 'requests'> {
   const humans = messages.filter((message) => HumanMessage.isInstance(message)).map(textOf);
   const ai = messages.filter((message) => AIMessage.isInstance(message));
   const reads = ai
@@ -185,7 +194,6 @@ export function observe(
       .filter((message) => ToolMessage.isInstance(message))
       .some((message) => textOf(message).includes(DEFERRAL_MARKER)),
     followed: finalText.includes(DEFERRAL_MARKER),
-    requests: ai.length,
     finalText,
   };
 }
