@@ -2,6 +2,8 @@
  * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/dropdown-menu.tsx`，Base UI 的 Menu），
  * 外觀照 SG（#1468 Q8）。只轉出用得到的那幾件：側欄列選單的 Root、Trigger、Content、Item、Separator，加上 vendor 的
  * `ComposerPick`（#1591）用的 RadioGroup、RadioItem、Label——vendor 檔 import 的 `@/components/ui/dropdown-menu` 解析到這一層。
+ * 另外轉出 Base UI 的 `createHandle`（`createDropdownMenuHandle`）與帶 payload 型別的 `DropdownMenuRoot`：一份選單接多顆不在它
+ * 裡面的 Trigger，Trigger 帶的 `payload` 交給 Root 的 children 函式；側欄列選單（`features/threads/row-menu.tsx`）用它。
  * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 25 條）：
  *
  * - `DropdownMenuItem` 與 `DropdownMenuRadioItem` 的觸控高度：vendor 都是 `py-1`（約 28px），規格 §9 要 1024 以下 44px、以上 32px
@@ -11,6 +13,7 @@
  * Content 的 `finalFocus` 決定（不是 `onCloseAutoFocus`）；Trigger 開著時掛 `data-popup-open`（不是 `data-state="open"`）。
  * SG 的選單沒有進出場動畫（vendor 寫 `animate-none!`）。
  */
+import { Menu as MenuPrimitive } from '@base-ui/react/menu';
 import type * as React from 'react';
 
 import { cn } from '@/lib/utils';
@@ -45,3 +48,16 @@ function DropdownMenuRadioItem({
 }
 
 export { DropdownMenuItem, DropdownMenuRadioItem };
+
+/** 連起一份 `DropdownMenuRoot` 與多顆不在它裡面的 `DropdownMenuTrigger`（各自傳 `handle`）。`Payload` 是 Trigger 帶的 `payload` 的型別。 */
+export const createDropdownMenuHandle = MenuPrimitive.createHandle;
+/** {@link createDropdownMenuHandle} 回的那一個。 */
+export type DropdownMenuHandle<Payload> = MenuPrimitive.Handle<Payload>;
+
+/**
+ * 帶 payload 型別的 Root：vendor 的 `DropdownMenu` 收的 props 沒有型別參數，children 函式拿到的 `payload` 是 `unknown`。
+ * 標記與 vendor 的同一個（`data-slot="dropdown-menu"`）。
+ */
+export function DropdownMenuRoot<Payload>(props: MenuPrimitive.Root.Props<Payload>) {
+  return <MenuPrimitive.Root<Payload> data-slot="dropdown-menu" {...props} />;
+}
