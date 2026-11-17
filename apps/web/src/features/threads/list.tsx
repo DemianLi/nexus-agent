@@ -34,6 +34,7 @@ import {
 import type { ThreadDirectory } from '@/features/threads/use-directory';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BUCKET_LABEL, groupThreads } from '@/features/threads/groups';
+import { showMore, shownCount } from '@/features/threads/show-more';
 import {
   highlightMatches,
   mergeThreadSearch,
@@ -78,6 +79,9 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
  * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
  * 自動展開）。沒給就跟以前一樣，什麼都不多畫。規則與開關見 `features/threads/management.ts`。
+ *
+ * **每組先畫幾條**（[#2960](https://github.com/DemianLi/nexus-agent/issues/2960)）：時間組、搜尋結果、已封存每組先 10 條，組尾「顯示更多」，
+ * 規則在 `features/threads/show-more.ts`。釘選區全畫。水位放在組的元件狀態裡：側欄收起時清單卸掉、換了搜尋字整份重掛，都回到起點。
  */
 
 function labelOf(item: ThreadSummary): string {
@@ -207,6 +211,10 @@ export function ThreadList({
     return failure;
   }, []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
+  const mustShow = useCallback(
+    (item: ThreadSummary) => item.threadId === currentThreadId || statusOf(item) !== undefined,
+    [currentThreadId, statusOf],
+  );
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-body">
@@ -266,8 +274,10 @@ export function ThreadList({
               </div>
               {view.items.length > 0 && (
                 <ThreadGroupList
+                  key={needle}
                   sections={sections}
                   isBlank={blankOf}
+                  mustShow={mustShow}
                   row={(item) => {
                     const snippet = view.snippets.get(item.threadId);
                     const id = item.threadId;
@@ -358,12 +368,15 @@ export function ThreadList({
 function ThreadGroupList({
   sections,
   isBlank,
+  mustShow,
   row,
   archivedOpen,
   onArchivedOpenChange,
 }: {
   readonly sections: ThreadSections;
   readonly isBlank: (item: ThreadSummary) => boolean;
+  /** 這一列在前 50 條裡時，不用按「顯示更多」也要畫出來。 */
+  readonly mustShow: (item: ThreadSummary) => boolean;
   readonly row: (item: ThreadSummary) => ReactNode;
   readonly archivedOpen: boolean;
   readonly onArchivedOpenChange: (open: boolean) => void;
@@ -373,13 +386,13 @@ function ThreadGroupList({
     <>
       {sections.pinned.length > 0 && (
         <BucketGroup label="已釘選" testId="thread-pinned">
-          {sections.pinned.map(row)}
+          <SidebarMenu>{sections.pinned.map(row)}</SidebarMenu>
         </BucketGroup>
       )}
       {blank.length > 0 && <SidebarMenu>{blank.map(row)}</SidebarMenu>}
       {groups.map(({ bucket, items: members }) => (
         <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
-          {members.map(row)}
+          <LimitedRows items={members} mustShow={mustShow} row={row} />
         </BucketGroup>
       ))}
       {sections.archived.length > 0 && (
@@ -394,7 +407,7 @@ function ThreadGroupList({
             已封存（{sections.archived.length}）
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <SidebarMenu>{sections.archived.map(row)}</SidebarMenu>
+            <LimitedRows items={sections.archived} mustShow={mustShow} row={row} />
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -417,8 +430,59 @@ function BucketGroup({
       <div id={labelId} className="text-muted-foreground px-2 pb-1 text-ui font-medium">
         {label}
       </div>
-      <SidebarMenu>{children}</SidebarMenu>
+      {children}
     </div>
+  );
+}
+
+/**
+ * 一組的列，先畫前幾條，組尾「顯示更多（還有 N 條）」（`show-more.ts`）。
+ *
+ * 按下後焦點移到新露出的第一列，鍵盤與報讀器不用回頭找；那一列是目前這條（按鈕停用）時落在它的「⋯」。
+ */
+function LimitedRows({
+  items,
+  mustShow,
+  row,
+}: {
+  readonly items: readonly ThreadSummary[];
+  readonly mustShow: (item: ThreadSummary) => boolean;
+  readonly row: (item: ThreadSummary) => ReactNode;
+}) {
+  const [expanded, setExpanded] = useState<number>();
+  const listRef = useRef<HTMLUListElement>(null);
+  const focusFrom = useRef<number | null>(null);
+  const shown = shownCount(items, mustShow, expanded);
+  useEffect(() => {
+    const from = focusFrom.current;
+    if (from === null) return;
+    focusFrom.current = null;
+    for (const item of Array.from(listRef.current?.children ?? []).slice(from)) {
+      const target = item.querySelector<HTMLElement>('button:not(:disabled)');
+      if (target !== null) {
+        target.focus();
+        return;
+      }
+    }
+  }, [shown]);
+  const hidden = items.length - shown;
+  return (
+    <>
+      <SidebarMenu ref={listRef}>{items.slice(0, shown).map(row)}</SidebarMenu>
+      {hidden > 0 && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-muted-foreground h-11 w-full justify-start px-2 text-ui font-normal lg:h-8"
+          onClick={() => {
+            focusFrom.current = shown;
+            setExpanded(showMore(shown));
+          }}
+        >
+          顯示更多（還有 {hidden} 條）
+        </Button>
+      )}
+    </>
   );
 }
 
