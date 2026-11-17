@@ -42,7 +42,7 @@ dsh **沒有跨源的預算表，也沒有「整項延後、留指標」**。它
 
 所以這張不能用「照 dsh」帶過。能沿用的是：各源自己的上限值、通知行的寫法、「各源預算不共用」。
 
-卡上另一個參照 `kiaqyn/hierarchical-attention-memory`（`scripts/hfa_manager.py:2030-2043`）**本機沒有，我沒讀過**；要讀得另外核可下載。我的判斷是不需要：卡上已經把它的規則寫成三句話了。
+卡上另一個參照 `kiaqyn/hierarchical-attention-memory`（SHA `31a8a8c`，`scripts/hfa_manager.py:2030-2043`）2026-11-17 對過原文，與卡上寫的一致：總量超過 `context_token_budget` 時，從排在最後的召回記錄開始整筆移到 `deferred`、原因記「total context budget」，不截斷，直到不超過或記錄移完；仍超過的話，依序丟掉兩段選用的提示與一段提醒，每丟一段重量一次；還是超過就拋錯，訊息要人縮短 summary 或明確調高預算。這個 repo 不進版控，也不在本機 `references/`，讀的是那個 SHA 的單支檔。
 
 ## 別的做法
 
