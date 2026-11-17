@@ -792,7 +792,7 @@ mod tests {
     }
 
     /// 領頭加兩個成員的收尾：測試中途 panic 也要殺乾淨（`Drop` 在 unwind 時照跑）。
-    /// 順序：已知的成員、領頭那一組（成員 pid 還沒讀到就 panic 時靠這一步）、領頭本身，最後收領頭的屍。只動這個測試自己 fork 出來的行程。
+    /// 只動這個測試自己 fork 出來的行程。成員 pid 還沒讀到就 panic 時，殺領頭那一組只收得到留在組內的第一個成員；自己換了組的第二個會留下（窗口只有領頭 fork 完到管線讀完這一小段）。
     struct Forked {
         leader: libc::pid_t,
         members: Vec<libc::pid_t>,
@@ -920,7 +920,7 @@ mod tests {
         }
         let leader_alive = alive(leader);
         let survivors: Vec<_> = pids.iter().filter(|pid| alive(**pid)).collect();
-        // 清掉領頭，不留行程：成員已死（領頭的殭屍），領頭 SIGKILL 之後收屍；掃描壞了而成員還活著時也一併送 SIGKILL。先收尾再斷言。
+        // 斷言之前就收尾：斷言失敗時 `Drop` 也會跑，但要在這裡先量好 `leader_alive` 與 `survivors`。
         drop(forked);
         for pid in pids {
             assert!(
@@ -968,8 +968,15 @@ mod tests {
         assert_eq!(read.pid, me);
         // SAFETY：`getsid(0)` 只回自己的 session。
         assert_eq!(read.session, unsafe { libc::getsid(0) });
-        // 測試行程至少有主執行緒與跑這支測試的那一條：讀錯欄會是別的數字。
-        assert!(read.threads >= 2, "{read:?}");
+        // 另開一條執行緒握著：不靠 libtest 是不是另開執行緒跑測試，執行緒數一定至少 2；讀錯欄會是別的數字。
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _ = held.recv();
+        });
+        let with_thread = read_member(me).unwrap().unwrap();
+        assert!(with_thread.threads >= 2, "{with_thread:?}");
+        drop(release);
+        holder.join().unwrap();
         let listing = list_members().unwrap();
         assert!(listing.members.iter().any(|m| m.pid == me));
         assert!(listing.error.is_none(), "{:?}", listing.error);

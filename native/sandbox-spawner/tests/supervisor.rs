@@ -4558,7 +4558,7 @@ fn s1_a_killed_host_takes_its_mcp_server_and_grandchild_with_it() {
 }
 
 /// 等到成員真的是「主執行緒結束、其他執行緒還在」：`stat` 是 `Z`、執行緒數至少 2。不等的話掃到的是主執行緒還沒結束的普通行程，
-/// 測試會綠，卻沒測到 #2942 要補的洞。
+/// 測試會綠，卻沒測到主執行緒已結束、執行緒還在的成員（#2942）。
 fn wait_until_zombie_with_threads(pid: i32) {
     assert!(
         wait_until(|| sweep::read_member(pid)

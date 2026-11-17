@@ -6,7 +6,7 @@
 //! ```
 //!
 //! 主執行緒用 `exit` 系統呼叫結束（不是 `exit_group`），行程才會留著。不用 `pthread_exit`：Rust 的主執行緒上它會 abort。
-//! `leader` 不收 `member` 的屍，`member` 收不收都不影響它的狀態：只有整個執行緒群組都沒了才會變成真的殭屍。
+//! `leader` 不收 `member` 的屍；收不收都不影響 `member` 的狀態：只有整個執行緒群組都沒了，它才會變成真的殭屍。
 
 use std::time::Duration;
 
@@ -46,7 +46,7 @@ fn leader(file: &str) -> ! {
         std::io::Error::last_os_error()
     );
     let exe = std::env::current_exe().expect("自己的路徑");
-    // 不收 member 的屍：要的就是它留在行程表上。收尾由測試殺整個 session 的那一組。
+    // 不收 member 的屍：要的就是它留在行程表上。收尾由測試殺領頭那一組（member 也在組內）。
     #[allow(clippy::zombie_processes)]
     std::process::Command::new(exe)
         .args(["member", file])
