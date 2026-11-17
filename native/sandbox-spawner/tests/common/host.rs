@@ -73,6 +73,16 @@ impl HostProc {
         HostProc::spawn_with(socket, command)
     }
 
+    /// 同 [`HostProc::start`]，但宿主讀不到任何連線的 pid（A⁰，`NEXUS_HOST_TEST_NO_PEER_PID`，只在 `test-hooks` 的建置裡認）：
+    /// 開關是整個宿主行程的，它的每一條連線都是 A⁰。
+    pub fn start_without_peer_pid(socket: &Path) -> HostProc {
+        let mut command = Command::new(host());
+        command.env("NEXUS_HOST_TEST_NO_PEER_PID", "1");
+        let mut host = HostProc::spawn_with(socket, command);
+        host.handshake();
+        host
+    }
+
     /// 同 [`HostProc::spawn_with_plugins`]，握手、等到 `ready`。
     pub fn start_with_plugins(socket: &Path, plugins: &Path) -> HostProc {
         let mut host = HostProc::spawn_with_plugins(socket, plugins);
