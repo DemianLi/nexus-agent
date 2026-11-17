@@ -94,7 +94,10 @@ it('整張清單只掛一份選單，不是每一列一份', () => {
       <Parent />
     </SidebarProvider>,
   );
-  expect(screen.getAllByRole('button', { name: /的選項$/ })).toHaveLength(COUNT);
+  // 每組只先畫前幾條（#2960），所以比的是畫出來的列數，不是 `COUNT`。
+  const rows = screen.getAllByTestId('thread-title-text').length;
+  expect(rows).toBeGreaterThan(1);
+  expect(screen.getAllByRole('button', { name: /的選項$/ })).toHaveLength(rows);
   expect(counts.roots).toBe(1);
 });
 

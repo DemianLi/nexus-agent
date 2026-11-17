@@ -1,7 +1,7 @@
 //! 真的 spawner、真的核心（#1946）。只在 Linux 跑；核心沒有 Landlock 時整組跳過，
 //! 但設了 `NEXUS_REQUIRE_LANDLOCK=1`（CI）就改成紅，免得跳過看起來跟綠燈一樣。
 //!
-//! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低，啟動前訊號那條用它延後子行程的 setsid）。
+//! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低，啟動前訊號那條用它延後子行程的 setsid，子行程 panic 那幾條用它讓子行程故意 panic）。
 
 mod common;
 
@@ -213,7 +213,7 @@ fn request(id: u32, ws: &Path, argv: &[&str]) -> Spawn {
     }
 }
 
-/// 起一個正常的 spawner；核心沒有 Landlock 時回 None（`NEXUS_REQUIRE_LANDLOCK=1` 時直接紅）。
+/// 起一個正常的 spawner；啟動失敗（`Unavailable`）時回 None（`NEXUS_REQUIRE_LANDLOCK=1` 時直接紅）；核心沒有 Landlock 不算啟動失敗，子行程照常 panic。
 fn start() -> Option<Spawner> {
     let (s, first) = start_with(&[], None);
     match first {
@@ -1101,6 +1101,110 @@ fn a_signal_sent_before_start_arrives_after_start() {
             code: -1,
             signal: libc::SIGTERM
         }
+    );
+}
+
+/// 起一個「第一個子行程會在 `when`（early／late）panic」的 spawner；核心沒有 Landlock 時回 None（`NEXUS_REQUIRE_LANDLOCK=1` 時直接紅）。
+fn start_panicking(when: &str) -> Option<Spawner> {
+    let (s, first) = start_with(&[("NEXUS_SPAWNER_TEST_CHILD_PANIC", when)], None);
+    match first {
+        Event::Ready { .. } => Some(s),
+        Event::Unavailable { .. }
+            if std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref() != Ok("1") =>
+        {
+            eprintln!("跳過：這個核心沒有 Landlock（{first:?}）");
+            None
+        }
+        other => panic!("spawner 沒有準備好：{other:?}"),
+    }
+}
+
+/// 子行程 panic 要報成 `Failed`（`Resource`、說明含 `panic`），不是 `Started` 加 `Exited`。
+fn assert_failed_with_panic(event: &Event) {
+    match event {
+        Event::Failed {
+            id: 1,
+            kind: FailKind::Resource,
+            detail,
+            ..
+        } => assert!(
+            String::from_utf8_lossy(detail).contains("panic"),
+            "說明沒有 panic：{event:?}"
+        ),
+        other => panic!("子行程 panic 沒有被報成 Failed：{other:?}"),
+    }
+}
+
+/// panic 之後同一個 spawner 還能正常起工具；第一個要求（id 1）之後沒有再冒出 `Started`、`Exited`。
+fn assert_spawner_still_works_and_id_1_stays_failed(s: &mut Spawner) {
+    let ws = temp_dir("ws");
+    let (out, exit) = s.run(request(2, &ws, &["/bin/echo", "ok"]));
+    assert_eq!(out.trim(), "ok");
+    assert!(
+        matches!(exit, Event::Exited { id: 2, code: 0, .. }),
+        "{exit:?}"
+    );
+    assert!(
+        s.events.iter().all(|e| event_id(e) != Some(1)),
+        "id 1 還有後續事件：{:?}",
+        s.events
+    );
+}
+
+#[test]
+fn a_child_panicking_before_setsid_is_a_failed_start() {
+    let Some(mut s) = start_panicking("early") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    let (_, _, event) = s.launch(request(1, &ws, &["/bin/true"]));
+    assert_failed_with_panic(&event);
+    assert_spawner_still_works_and_id_1_stays_failed(&mut s);
+}
+
+#[test]
+fn a_child_panicking_after_the_status_fd_moved_is_a_failed_start() {
+    let Some(mut s) = start_panicking("late") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    let (_, _, event) = s.launch(request(1, &ws, &["/bin/true"]));
+    assert_failed_with_panic(&event);
+    assert_spawner_still_works_and_id_1_stays_failed(&mut s);
+}
+
+#[test]
+fn a_child_panic_message_does_not_reach_the_tools_stderr() {
+    let Some(mut s) = start_panicking("late") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    s.send(&Request::Spawn(Spawn {
+        pipes: 0b100,
+        ..request(1, &ws, &["/bin/true"])
+    }));
+    let mut stderr = s.connect(1, 2);
+    let event = s.event_for(1);
+    assert_failed_with_panic(&event);
+    let mut text = String::new();
+    stderr.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "", "panic 訊息印進了工具的 stderr");
+}
+
+/// 沒有 `test-hooks` 的建置（出貨的那種）不讀 `NEXUS_SPAWNER_TEST_CHILD_PANIC`。CI 只用 `--features test-hooks` 跑測試，
+/// 這支只在不帶那個 feature 時編進來：本機 `cargo test --test spawner the_child_panic_switch_is_inert` 才會跑到。
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn the_child_panic_switch_is_inert_without_test_hooks() {
+    let Some(mut s) = start_panicking("late") else {
+        return;
+    };
+    let ws = temp_dir("ws");
+    let (out, exit) = s.run(request(1, &ws, &["/bin/echo", "ok"]));
+    assert_eq!(out.trim(), "ok");
+    assert!(
+        matches!(exit, Event::Exited { id: 1, code: 0, .. }),
+        "{exit:?}"
     );
 }
 

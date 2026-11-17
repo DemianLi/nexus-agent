@@ -416,10 +416,13 @@ describe('釘選、封存、改名（#633）', () => {
     expect(screen.getByText('讀規格')).toBeTruthy();
   });
 
-  it('目前這條不給封存', () => {
-    renderManaged(managed().management, 'a');
+  it('目前這條也能封存（#2958）', async () => {
+    const { management, calls } = managed();
+    renderManaged(management, 'a');
     openMenu('幫我改登入頁');
-    expect(menuItems()).toEqual(['釘選', '重新命名']);
+    expect(menuItems()).toEqual(['釘選', '重新命名', '封存']);
+    fireEvent.click(screen.getByRole('menuitem', { name: '封存' }));
+    await waitFor(() => expect(calls).toEqual(['archive a']));
   });
 
   it('動作失敗：說原因', async () => {

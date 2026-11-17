@@ -31,7 +31,7 @@ import type { ThreadActivityKind } from '@nexus/wire';
  * 只在側欄拿到 `ThreadManagement` 時才畫（`list.tsx`）；規則與開關見 `features/threads/management.ts`。
  *
  * - **選單**：桌面滑過那一列才現身（鍵盤聚焦也算），觸控（1024 以下）常駐。選項依狀態換：釘選／取消釘選、封存／取消封存。
- *   **封存的不能釘**，所以封存的那一列沒有釘選。**目前這條不給封存**：人還在這條裡講話。
+ *   **封存的不能釘**，所以封存的那一列沒有釘選。目前這條也能封存：人留在這條，輸入框上方換成已封存的橫幅（`archived-banner.tsx`）。
  * - **整張清單共用一份選單與確認框**（`ThreadRowMenus`），每一列只有一顆觸發鈕（`ThreadRowMenuTrigger`），按下時帶著那一列的
  *   `RowMenuTarget`。
  * - **改名**：那一列原地換成輸入框，Enter 送出、Esc 放棄、點旁邊算送出（沒改或空的算放棄）。送出失敗（伺服器說了原因）留在輸入框、
@@ -185,7 +185,7 @@ export function ThreadRowMenus({
                 <Pencil aria-hidden />
                 重新命名
               </DropdownMenuItem>
-              {(target.archived || !target.current) && <DropdownMenuSeparator />}
+              <DropdownMenuSeparator />
               {target.archived ? (
                 <DropdownMenuItem
                   onClick={() => report('取消封存', actions.onUnarchive(target.threadId))}
@@ -194,18 +194,16 @@ export function ThreadRowMenus({
                   取消封存
                 </DropdownMenuItem>
               ) : (
-                !target.current && (
-                  <DropdownMenuItem
-                    onClick={() =>
-                      archive(actions, target.threadId, undefined, (activity) =>
-                        setConfirmStop({ target, activity }),
-                      )
-                    }
-                  >
-                    <Archive aria-hidden />
-                    封存
-                  </DropdownMenuItem>
-                )
+                <DropdownMenuItem
+                  onClick={() =>
+                    archive(actions, target.threadId, undefined, (activity) =>
+                      setConfirmStop({ target, activity }),
+                    )
+                  }
+                >
+                  <Archive aria-hidden />
+                  封存
+                </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           )
