@@ -13,7 +13,7 @@
 //! - `--exit-after-spawn[=<碼>]`：spawn 完、送 `ready` 後以 `std::process::exit(<碼>)` 結束，預設 9。不收線、不讓 `ChildGuard::drop` 跑，否則子行程會被宿主自己收掉，掃描就測不到了。
 //! - `--no-ready`：永遠不送 `ready`（配 `--spawn-before-ready`，測宿主 `ready` 之前就被殺）。
 //! - `--spawn-thread=short`：在另一條執行緒上 spawn，那條執行緒起完就結束，主執行緒繼續活；預設在主執行緒的 current-thread runtime 上 spawn。
-//!   `PR_SET_PDEATHSIG` 綁的是起子行程的那條執行緒，短命執行緒上 spawn 的子行程會跟著那條執行緒一起被收（有包 spawner 的 server），所以預設一定在主執行緒上。
+//!   `PR_SET_PDEATHSIG` 綁的是起子行程的那條執行緒，短命執行緒上 spawn 的子行程會跟著那條執行緒一起被收，所以預設一定在主執行緒上。
 //! - `<指令> [參數]...` 放在 `--` 之後，交給 `stdio::spawn`；`--env K=V` 可重複，預設空（`spawn` 會清環境，server 腳本用絕對路徑）。
 //! - 不印 stdout（那是控制通道）。在 `<socket 路徑>.log` 記 `start <pid>`、`spawned <領頭 pid>`、`eof`。孫行程的 pid 由 server 腳本自己寫檔。
 //! - 拿到的 `Spawned` 一直握著、永不 `reap`；讀 stdin 到被殺為止，EOF 也不結束；SIGTERM 不特別處理。

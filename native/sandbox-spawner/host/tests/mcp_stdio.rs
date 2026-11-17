@@ -38,6 +38,11 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"secret=%s plain=%s probe=%s"}],"isError":false}}\n' "$id" "$FAKE_SECRET" "$PLAIN" "${NEXUS_STDIO_TEST_PROBE-unset}";;
   esac
 done
+# 讀到 EOF 不結束：收到 SIGTERM 才留記號、結束。測「收線走 SIGTERM 梯度」用。
+if [ -n "$HANG_ON_EOF" ]; then
+  trap ': > "$TERM_MARK"; exit 0' TERM
+  while :; do sleep 0.05; done
+fi
 "#;
 
 fn pid_file(tag: &str) -> String {
@@ -294,6 +299,29 @@ mod bridge {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// 橋正常關閉：server 讀到 EOF 不結束，要等 `reap` 的 SIGTERM 才結束並留記號。收線走完 SIGTERM 梯度、領頭才收；
+    /// 不是橋的執行緒一結束就被 `PR_SET_PDEATHSIG` 搶先殺（那樣沒有記號）。
+    #[test]
+    fn 橋正常關閉_server_走_sigterm_梯度() {
+        let pid_file = pid_file("bridge-term");
+        let mark = format!("{pid_file}.term");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let config = fake_config_with(&pid_file, &[("HANG_ON_EOF", "1"), ("TERM_MARK", &mark)]);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        open(&bridge, &config).expect("連得上");
+        let pid = read_pid(&pid_file);
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        assert!(
+            Path::new(&mark).exists(),
+            "server 沒收到 SIGTERM：收線沒有走梯度，或被搶先殺了"
+        );
+        assert_reaped(pid);
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
     }
 
     /// 握手還在等 server 回的時候橋關閉：連線的 future 被丟下，子行程要被殺掉並 `wait` 掉。
@@ -696,6 +724,109 @@ mod group {
             assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
         });
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// 起行程的執行緒結束，領頭收到 SIGKILL（`PR_SET_PDEATHSIG`）。server 沒包 spawner、這條路上也沒有別人送訊號，所以領頭死了只能是宿主自己設的這個設定；
+    /// 只殺領頭：孫行程還在（靠監督行程掃 session，不在這裡）。
+    #[test]
+    fn spawn_起行程的執行緒結束_領頭被殺_孫行程還在() {
+        let file = pid_file("pdeathsig");
+        let _ = std::fs::remove_file(&file);
+        let script = format!("{}wait", grandchild_script(&file, "trap '' TERM; "));
+        let spawner = {
+            let file = file.clone();
+            std::thread::spawn(move || {
+                let runtime = reap_runtime();
+                // 管線登記在這個執行環境上，在它還在的時候放掉。
+                let (child, leader) = runtime.block_on(async {
+                    let (stdio::Spawned { child, transport }, leader) =
+                        spawn_for_reap("/bin/sh", &["-c", &script]);
+                    drop(transport);
+                    (child, leader)
+                });
+                // 孫行程要在這條執行緒結束之前就起來，不然領頭可能還沒 fork 就被殺。
+                let grandchild = read_grandchild(&file);
+                (child, leader, grandchild)
+            })
+        };
+        let (child, leader, grandchild) = spawner.join().expect("起行程的執行緒");
+        assert!(
+            wait_gone(leader, Duration::from_secs(3)),
+            "起行程的執行緒結束了，領頭還在"
+        );
+        assert!(!process_gone(grandchild), "孫行程不該跟著死");
+        // 收尾：整組 SIGKILL，孫行程也收掉。
+        drop(child);
+        assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// `reap` 的 SIGTERM 也送給孫行程，不只領頭：領頭與孫行程之後都會被 SIGKILL，所以要靠孫行程自己在收到 SIGTERM 時留記號才看得出來。
+    /// 領頭忽略 SIGTERM，孫行程有整段 [`TERM_GRACE`] 寫記號（領頭一收到就死的話，下一次輪詢就 SIGKILL，記號時有時無）。
+    #[test]
+    fn reap_的_sigterm_也送給孫行程() {
+        let file = pid_file("group-sigterm");
+        let mark = format!("{file}.term");
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_file(&mark);
+        reap_runtime().block_on(async {
+            // 領頭要在孫行程起來「之後」才忽略 SIGTERM：忽略的處置會傳給孫行程，而「起動時就被忽略」的訊號 shell 沒辦法再設 trap。
+            let script = format!(
+                "/bin/sh -c 'echo $$ > {file}; trap \": > {mark}\" TERM; while :; do sleep 0.05; done' & trap '' TERM; wait"
+            );
+            let (stdio::Spawned { child, transport }, _) =
+                spawn_for_reap("/bin/sh", &["-c", &script]);
+            let grandchild = read_grandchild(&file);
+            // 讓孫行程裝好 trap（pid 寫完之後才裝）。
+            std::thread::sleep(Duration::from_millis(300));
+            drop(transport);
+            stdio::reap(child).await;
+            assert!(
+                Path::new(&mark).exists(),
+                "孫行程沒收到 SIGTERM：收線只對領頭送了"
+            );
+            assert!(wait_gone(grandchild, Duration::from_secs(3)), "孫行程還在");
+        });
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_file(&mark);
+    }
+
+    /// 測試行程裡沒有人替別人收屍（`mcp/stdio.rs`「領頭不先收屍」的前提）：SIGCHLD 沒被設成忽略，領頭結束之後一直是殭屍、直到自己 `wait`。
+    /// 只看這個測試行程自己：宿主 `main` 的啟動碼動 SIGCHLD 這裡看不到，那條由 `clippy.toml` 禁 `signal`／`sigaction` 擋。
+    #[test]
+    fn 領頭結束後一直是殭屍_sigchld_沒被忽略() {
+        let ignored = std::fs::read_to_string("/proc/self/status")
+            .expect("讀 /proc/self/status")
+            .lines()
+            .find_map(|line| line.strip_prefix("SigIgn:"))
+            .map(|hex| u64::from_str_radix(hex.trim(), 16).expect("SigIgn 是十六進位"))
+            .expect("有 SigIgn");
+        assert_eq!(
+            ignored & (1 << (libc::SIGCHLD - 1)),
+            0,
+            "SIGCHLD 被設成忽略"
+        );
+        reap_runtime().block_on(async {
+            let (spawned, leader) = spawn_for_reap("/bin/sh", &["-c", "exit 0"]);
+            let zombie = || {
+                std::fs::read_to_string(format!("/proc/{leader}/stat")).is_ok_and(|stat| {
+                    stat.rsplit(')')
+                        .next()
+                        .is_some_and(|rest| rest.trim_start().starts_with('Z'))
+                })
+            };
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !zombie() {
+                assert!(
+                    Instant::now() < deadline,
+                    "領頭沒有變成殭屍（被別人收了？）"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(zombie(), "領頭在沒人 wait 的時候不見了：有人替它收屍");
+            drop(spawned);
+        });
     }
 
     /// 子行程自成一組、留在宿主的 session：領頭是組長，組不是宿主的；session 還是宿主的（不是自己的）。
