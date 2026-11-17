@@ -83,7 +83,7 @@ struct Conn {
     /// 這個宿主行程裡依 accept 的順序編的號，從 1 起；拒絕時的 log 與 `unregistered` 都寫它。
     id: u32,
     chan: Chan,
-    /// `SO_PEERCRED` 的 pid；取不到或 uid 不同是 `None`，它的 `hello` 一律不收。
+    /// `SO_PEERCRED` 的 pid；取不到、uid 不同或 pid 不是正的是 `None`（A⁰），它的 `hello` 一律不收（`unregistered`、pid 0），壞框報 `violation`、pid 0，沒有 pid 可撤。
     pid: Option<u32>,
     opened: Instant,
     hello: bool,
@@ -286,8 +286,12 @@ fn pollfd(fd: libc::c_int, events: libc::c_short) -> libc::pollfd {
     }
 }
 
-/// 連線那一端的 pid：uid 要跟自己相同。
+/// 連線那一端的 pid，能不能當身分照 [`judge_peer`]。`test-hooks` 的建置裡設了 `NEXUS_HOST_TEST_NO_PEER_PID` 就一律讀不到（A⁰）。
 fn peer_pid(fd: libc::c_int) -> Option<u32> {
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os("NEXUS_HOST_TEST_NO_PEER_PID").is_some() {
+        return None;
+    }
     // SAFETY：ucred 是純資料，全零合法。
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>()).ok()?;
@@ -303,10 +307,15 @@ fn peer_pid(fd: libc::c_int) -> Option<u32> {
     };
     // SAFETY：沒有參數。
     let uid = unsafe { libc::getuid() };
-    if rc != 0 || cred.uid != uid {
+    judge_peer(rc, cred.uid, cred.pid, uid)
+}
+
+/// `SO_PEERCRED` 的結果能不能當身分：`getsockopt` 成功、uid 與自己相同、pid 是正的（對端在別的 pid namespace 時核心給 0）。
+fn judge_peer(rc: libc::c_int, peer_uid: u32, peer_pid: libc::pid_t, my_uid: u32) -> Option<u32> {
+    if rc != 0 || peer_uid != my_uid {
         return None;
     }
-    u32::try_from(cred.pid).ok().filter(|&pid| pid > 0)
+    u32::try_from(peer_pid).ok().filter(|&pid| pid > 0)
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -748,5 +757,37 @@ impl Host {
             say!("pid {pid} 隔離到它結束");
         }
         self.revoke(pid);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::judge_peer;
+
+    #[test]
+    fn a_readable_peer_of_the_same_user_is_its_pid() {
+        assert_eq!(judge_peer(0, 1000, 4242, 1000), Some(4242));
+    }
+
+    #[test]
+    fn a_failed_getsockopt_is_unreadable() {
+        assert_eq!(judge_peer(-1, 1000, 4242, 1000), None);
+    }
+
+    #[test]
+    fn another_uid_is_unreadable() {
+        assert_eq!(judge_peer(0, 0, 4242, 1000), None);
+    }
+
+    /// 對端在別的 pid namespace 時核心給 0。
+    #[test]
+    fn pid_0_is_unreadable() {
+        assert_eq!(judge_peer(0, 1000, 0, 1000), None);
+    }
+
+    /// `ucred.pid` 是有號的。
+    #[test]
+    fn a_negative_pid_is_unreadable() {
+        assert_eq!(judge_peer(0, 1000, -1, 1000), None);
     }
 }

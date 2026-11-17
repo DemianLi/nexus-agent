@@ -134,7 +134,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 - **U**：已 accept，但身分表還沒到齊（監督行程還沒送 `synced`）。宿主不讀這種連線，`hello` 留在核心的緩衝區；表到齊之後它變成下面 A⁺、A⁻、A⁰ 的其中一種。
 - **A⁺**：已 accept、還沒送 `hello`，pid 在表上。
 - **A⁻**：同上，pid 不在表上。
-- **A⁰**：同上，`SO_PEERCRED` 讀不到 pid 或 uid 不同。
+- **A⁰**：同上，`SO_PEERCRED` 讀不到 pid、uid 不同或 pid 不是正的（判斷在 `judge_peer`，單元測試 [t28]）。
 - **V**：已驗過身分。
 - **R**：撤過。驗過身分的連線一被撤就斷，所以留在這一格的都還沒送過 `hello`。
 
@@ -148,7 +148,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 | U | 不讀，`hello` 留著，表到齊後照 A 那幾列 [t21][t22] | 同左 | 同左 | — | 先套用 [n9] | 先套用，到齊後照新的驗 [t21] | 連上滿 5 s 就斷（送了 `hello` 也一樣），不回、不報 [t23]；對方先關的連線也等到那時才收 [n9] |
 | A⁺ | 回 `hello`，變 V，不報 [t1] | 回 `rejected token 不對`／`版本不對`，報 `violation`，撤 pid [t2] | 回 `rejected <理由>`，報 `violation`，撤 pid [t3] | — | 變 R，不回 [t5][t6] | 整筆換掉，之後照新的驗 [t11] | 斷，不報 [t15][n4] |
 | A⁻ | 回 `rejected 沒有登記`，報 `unregistered` [t9][t17] | 同左（不看 token 與版本）[t17][t18] | 回 `rejected <理由>`，報 `violation`，撤 pid [t13] | — | 變 R [t12] | 變 A⁺ [t11] | 斷，不報 [t15][t16] |
-| A⁰ | 回 `rejected 沒有登記`，報 `unregistered`，pid 0 [n1] | 同左 [n1] | 回 `rejected <理由>`，報 `violation`，pid 0，沒有 pid 可撤 [n1] | — | 不適用 | 不適用 | 斷，不報 [n1] |
+| A⁰ | 回 `rejected 沒有登記`，報 `unregistered`，pid 0 [t24] | 同左 [t25] | 回 `rejected <理由>`，報 `violation`，pid 0、序號 0，沒有 pid 可撤 [t26][n1] | — | 不適用 | 不適用 | 斷，不報 [t27][n4] |
 | V | — | — | 回 `rejected <理由>`，報 `violation`，撤 pid [t14]；撤銷剛好在路上時見 [n6] | 回 `rejected 重複的 hello`，報 `violation`，撤 pid [t1]；token 與版本不看 [t18]；撤銷剛好在路上時見 [n6] | 斷，不回、不報 [t4] | 照樣連著，不重驗 [t11] | 斷，不報 [t15] |
 | R | 回 `rejected 沒有登記`，報 `unregistered` [t5][t6][t8]，不撤表上那一筆 [t12] | 同左（不看 token 與版本）[t18] | 回 `rejected <理由>`，報 `unregistered`（理由照框），不撤表上那一筆 [t7] | — | 照舊是 R [t15] | 照舊是 R，不照新的驗 [t6][t8] | 斷，不報 [t15] |
 
@@ -184,6 +184,11 @@ nexus-host [--plugins <檔>] --socket <路徑>
 - t21 `a_hello_is_not_answered_until_the_table_is_synced`（U：`hello` 先到不回、不報；`grant` 來了還是不回；`synced` 到才接受）
 - t22 `an_empty_table_is_also_waited_for_and_then_rejects`（空表也要等 `synced`，到了之後 A⁻ 才被回 `沒有登記`）
 - t23 `a_connection_waiting_for_a_table_that_never_comes_is_dropped_silently`（U 逾時：斷，沒回任何框、沒報）
+- t24 `peer_pid_unreadable::a_hello_with_the_right_token_is_not_registered_and_reports_pid_0`（A⁰：宿主用 `NEXUS_HOST_TEST_NO_PEER_PID` 起，登記在表上的測試行程連上去也是「沒有登記」、pid 0）
+- t25 `peer_pid_unreadable::a_hello_with_a_wrong_token_or_version_is_also_not_registered`（A⁰：不看 token 與版本）
+- t26 `peer_pid_unreadable::a_bad_frame_is_a_violation_of_pid_0_with_nothing_to_revoke`（A⁰：`violation` 帶 pid 0、序號 0；沒有 pid 可撤見 n1）
+- t27 `peer_pid_unreadable::a_connection_that_closes_reports_nothing`（A⁰：先用一條連線送 `hello`，確認宿主讀不到 pid；另一條連線什麼都不送就斷，不報）
+- t28 `host::tests`（`host/src/host/mod.rs`，`judge_peer` 的單元測試：`getsockopt` 失敗、uid 不同、pid 0、pid 為負、正常）
 - s1 `a_violation_revokes_the_live_identity_on_the_host`
 - s2 `conversations_reach_the_host_and_violations_are_audited_and_quarantined`
 - s3 `a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_again`（收屍之後數 `revoke`：隔離一次、收屍一次）
@@ -202,10 +207,10 @@ nexus-host [--plugins <檔>] --socket <路徑>
 
 **不測的格與原因**
 
-- n1 A⁰：要另一個 uid 的行程才造得出來；CI 的 `cargo test` 不用 root 跑（`ubuntu-latest`、沒有 container），測試行程換不了 uid，測試也不另用 sudo 或容器開 uid。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
+- n1 A⁰：核心真的回報另一個 uid 或另一個 pid namespace 的對端，要另一個 uid 的行程才造得出來，CI 的 `cargo test` 不用 root 跑（`ubuntu-latest` 與 `ubuntu-24.04-arm`、沒有 container）；測試也不另用 sudo 或容器開 uid，那是核心的行為，不是這裡要證的。測的是拿到 `None` 之後的分支（t24–t27，用 `test-hooks` 的 `NEXUS_HOST_TEST_NO_PEER_PID` 讓宿主讀不到任何連線的 pid；開關是整個宿主行程的，所以對照用的連線另開一個宿主），與什麼情況回 `None`（t28，`judge_peer`）。「壞框沒有 pid 可撤」不另測：開關開了之後後面的連線一樣是 A⁰，看不到表上那一筆有沒有被動；它靠 `violate` 裡 `pid` 是 `Option`、`None` 就 `return` 守著。正式環境裡 0700 的 run-dir 先擋掉一般的另一個 uid（`src/supervisor/mod.rs` 建 run-dir 的那一段），A⁰ 實際只會來自 root 或跨 pid namespace 的部署。
 - n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：就算送了，寫端關了之後補送的 `revoke` 也直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。收屍時也一樣，宿主正在停就不送撤銷（s14 測的是停機時的 `kill_now`，s15 測的是收屍時自己 `kill_now` 之後那條）。
 - n3 開檔數用完：t20 把宿主的軟硬上限壓到 12 與 13（每條連線 2 個 fd，兩個相鄰的上限裡一定有一個走到 EMFILE），確認排著的連線被關掉、宿主 1 秒內用不到 20 個 tick、fd 空出來之後照常收連線。整台主機的 fd 用完、預留的 fd 開不回來的退避沒有測試：要把整台主機的 fd 用完。
-- n4 A⁺、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
+- n4 A⁺、A⁰、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
 - n5 B 的「accept 之後照 A」沒有專門的測試：每條測試的連線都先經過 backlog 才被 accept。新登記只改表、不碰連線，`hello` 驗的是驗那一刻的表（先讀乾淨控制通道），所以登記在 accept 之前或之後到，結果一樣；accept 不讀資料，EOF 照 A 那幾列的 `retain` 處理（讀碼）。
 - n6 已驗過身分的連線送重複的 `hello` 或壞框時，撤銷剛好已經寫進 pipe、宿主還沒讀：宿主先讀乾淨控制通道，這條連線先變成撤過，結果跟 R 那一列的壞框格一樣：回 `rejected`、報 `unregistered`，理由照違規（`重複的 hello` 或框的錯），不撤表上那一筆。窗口只有幾行程式，測試造不穩。
 - n7 前台的格跟對話行程走同一段程式（`role` 換成 `front`），監督行程這邊的測試只用對話行程。
@@ -263,7 +268,7 @@ docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARG
 - `--workspace`：根是 spawner 與監督行程的 package，cargo 預設只動它；宿主在 `host/`，要一起編、一起測。兩邊的整合測試會起對方的執行檔（從同一個 target 目錄找），只測一個 package 時對方的執行檔可能還沒編出來。
 
 - `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
-- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下、讓第一個子行程故意 panic。出貨的建置不帶它。
+- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下、讓第一個子行程故意 panic；宿主那邊的 `NEXUS_HOST_TEST_NO_PEER_PID` 讓它讀不到任何連線的 pid（A⁰）。出貨的建置不帶它。
 - 受管憑證檔（`host/src/credentials/`）：照 [`docs/credentials-file.md`](../../docs/credentials-file.md) 的契約解析 `.credentials.yaml`，跟 TS 跑同一份 `credentials-vectors.json`；對外 HTTPS 的 TLS 設定在 `host/src/tls.rs`（固定 ring，根憑證只來自設定指定的 PEM 檔），代理政策在 `host/src/proxy.rs`（由 config 交進來，不讀環境變數）。HTTP MCP 的連線、監督者、連線池與插件 `mcp` 在 `host/src/mcp/`，見 [`docs/host-mcp.md`](../../docs/host-mcp.md)；對話行程那一側還沒接上（#2570）。
 - `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock，或 ABI 不到 6 而驗不到訊號 scope 時，整合測試直接紅，不跳過。CI 會設。
 - 出貨的是 musl 版：要對著它測，先 `rustup target add "$(uname -m)-unknown-linux-musl"` 並裝 `musl-tools`（ring 的 C 要用 `musl-gcc` 編，設 `CC_<arch>_unknown_linux_musl=musl-gcc`），再加 `--target "$(uname -m)-unknown-linux-musl"`。CI 兩種都跑：musl 那輪驗出貨的 libc；不帶 target 的那輪，測試用的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試 `clone3`）拿到 ENOSYS 會退回 `clone`。

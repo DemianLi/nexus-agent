@@ -626,6 +626,81 @@ fn unregistered_reports_number_each_connection() {
     assert_eq!(ids, [1, 2, 3]);
 }
 
+/// A⁰（README〈連線身分的狀態表〉）：宿主讀不到連線那一端的 pid。要 `--features test-hooks`（`NEXUS_HOST_TEST_NO_PEER_PID`），
+/// CI 兩輪都帶；不帶時這幾支會紅，不會跳過。開關是整個宿主行程的，這個宿主的每一條連線都是 A⁰，所以測試行程雖然登記在表上、
+/// 連的又是自己，也查不到表：讀得到 pid 的對照連線另開一個宿主（上面那些測試）。
+mod peer_pid_unreadable {
+    use super::*;
+
+    /// 測試行程登記在表上、token 對：讀得到 pid 的話 `hello` 會被放行。
+    fn started(tag: &str) -> (PathBuf, HostProc) {
+        let dir = temp_dir(tag);
+        let socket = dir.join("host.sock");
+        let mut host = HostProc::start_without_peer_pid(&socket);
+        host.grant(me(), TOKEN, Role::Conversation, "a");
+        (socket, host)
+    }
+
+    /// 壞框：A⁰ 的 `violation` 帶 pid 0、序號 0（沒 `hello` 的連線用 pid 查表，查不到就是 0），也沒有 pid 可撤。
+    fn assert_a_bad_frame_is_the_next_report(socket: &Path, host: &mut HostProc) {
+        let (mut stream, reply) = exchange(socket, &frame(&[0xff]));
+        let Some(HostMessage::Rejected { reason }) = reply else {
+            panic!("{reply:?}")
+        };
+        assert_eq!(host.report(), Some(violation(0, 0, &reason)));
+        assert!(closed(&mut stream));
+    }
+
+    #[test]
+    fn a_hello_with_the_right_token_is_not_registered_and_reports_pid_0() {
+        let (socket, mut host) = started("a0-hello");
+        let (mut stream, reply) = exchange(&socket, &hello_frame(TOKEN));
+        assert_eq!(reply, rejected("沒有登記"));
+        assert!(closed(&mut stream));
+        assert_eq!(unregistered(host.report()), Some((0, "沒有登記".into())));
+    }
+
+    /// 不看 token 與版本：先看連線的狀態。
+    #[test]
+    fn a_hello_with_a_wrong_token_or_version_is_also_not_registered() {
+        let (socket, mut host) = started("a0-wrong");
+        for bytes in [hello_frame(OTHER), newer_hello_frame(TOKEN)] {
+            assert_eq!(exchange(&socket, &bytes).1, rejected("沒有登記"));
+            assert_eq!(unregistered(host.report()), Some((0, "沒有登記".into())));
+        }
+        assert_a_bad_frame_is_the_next_report(&socket, &mut host);
+    }
+
+    #[test]
+    fn a_bad_frame_is_a_violation_of_pid_0_with_nothing_to_revoke() {
+        let (socket, mut host) = started("a0-bad-frame");
+        assert_a_bad_frame_is_the_next_report(&socket, &mut host);
+        // 沒有 pid 可撤：表上測試行程那一筆（型別守，見 README n1）不在這裡驗；下一條連線照樣是 A⁰。
+        assert_eq!(
+            exchange(&socket, &hello_frame(TOKEN)).1,
+            rejected("沒有登記")
+        );
+        assert_eq!(unregistered(host.report()), Some((0, "沒有登記".into())));
+    }
+
+    /// 先在另一條連線送 `hello`，確認開關生效（開關是整個宿主的）：連線自己斷時，不管讀不讀得到 pid 都不報，單看 EOF 分不出開關有沒有開。
+    #[test]
+    fn a_connection_that_closes_reports_nothing() {
+        let (socket, mut host) = started("a0-eof");
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        stream.write_all(&hello_frame(TOKEN)).unwrap();
+        assert_eq!(read_message(&mut stream), rejected("沒有登記"));
+        assert_eq!(unregistered(host.report()), Some((0, "沒有登記".into())));
+        drop(stream);
+        let silent = UnixStream::connect(&socket).unwrap();
+        drop(silent);
+        assert_a_bad_frame_is_the_next_report(&socket, &mut host);
+    }
+}
+
 /// 同一個 pid 再登記一次（對話行程綁了 thread）：整筆換掉。還沒送 `hello` 的照新的那一筆驗，驗過身分的照樣連著，舊 token 不再算數。
 /// 連上之後才到的登記也算：驗 `hello` 之前先讀乾淨控制通道。
 #[test]
