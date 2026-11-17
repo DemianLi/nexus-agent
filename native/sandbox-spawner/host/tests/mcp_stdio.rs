@@ -774,64 +774,63 @@ mod group {
         });
         let _ = std::fs::remove_file(&file);
     }
+}
 
-    fn vectors() -> Value {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../credentials-vectors.json");
-        serde_json::from_str(&std::fs::read_to_string(path).expect("讀樣本檔"))
-            .expect("樣本檔是 JSON")
-    }
+fn vectors() -> Value {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../credentials-vectors.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("讀樣本檔")).expect("樣本檔是 JSON")
+}
 
-    fn parse_connection(connection: &Value) -> Result<Server, String> {
-        Server::parse(&json!({ "serverName": "a", "connection": connection }))
-    }
+fn parse_connection(connection: &Value) -> Result<Server, String> {
+    Server::parse(&json!({ "serverName": "a", "connection": connection }))
+}
 
-    /// TS 的 `hostStdioConnection` 輸出的那一列，宿主一律收（TS 的 `mcp-host-stdio-row.test.ts` 跑同一份 `stdioRow`）。
-    #[test]
-    fn 樣本_stdio_row_ts_交出的列宿主收得下() {
-        let doc = vectors();
-        let mut seen = 0;
-        for vector in doc["stdioRow"].as_array().expect("stdioRow") {
-            let name = vector["name"].as_str().expect("name");
-            let Some(row) = vector["ts"].get("row") else {
-                assert!(
-                    vector["ts"]["error"].is_string(),
-                    "{name}：要有 row 或 error"
-                );
-                continue;
-            };
-            let server = parse_connection(row).unwrap_or_else(|e| panic!("{name}：{e}"));
-            let Connection::Stdio(stdio) = &server.connection else {
-                panic!("{name}：要是 stdio");
-            };
-            assert_eq!(
-                stdio.credential_env,
-                row["credentialEnv"]
-                    .as_array()
-                    .expect("credentialEnv")
-                    .iter()
-                    .map(|v| v.as_str().expect("字串").to_string())
-                    .collect::<Vec<_>>(),
-                "{name}"
+/// TS 的 `hostStdioConnection` 輸出的那一列，宿主一律收（TS 的 `mcp-host-stdio-row.test.ts` 跑同一份 `stdioRow`）。
+#[test]
+fn 樣本_stdio_row_ts_交出的列宿主收得下() {
+    let doc = vectors();
+    let mut seen = 0;
+    for vector in doc["stdioRow"].as_array().expect("stdioRow") {
+        let name = vector["name"].as_str().expect("name");
+        let Some(row) = vector["ts"].get("row") else {
+            assert!(
+                vector["ts"]["error"].is_string(),
+                "{name}：要有 row 或 error"
             );
-            seen += 1;
-        }
-        assert!(seen >= 5, "有 row 的樣本太少：{seen}");
+            continue;
+        };
+        let server = parse_connection(row).unwrap_or_else(|e| panic!("{name}：{e}"));
+        let Connection::Stdio(stdio) = &server.connection else {
+            panic!("{name}：要是 stdio");
+        };
+        assert_eq!(
+            stdio.credential_env,
+            row["credentialEnv"]
+                .as_array()
+                .expect("credentialEnv")
+                .iter()
+                .map(|v| v.as_str().expect("字串").to_string())
+                .collect::<Vec<_>>(),
+            "{name}"
+        );
+        seen += 1;
     }
+    assert!(seen >= 5, "有 row 的樣本太少：{seen}");
+}
 
-    #[test]
-    fn 樣本_stdio_host_宿主自己的拒絕() {
-        let doc = vectors();
-        for vector in doc["stdioHost"].as_array().expect("stdioHost") {
-            let name = vector["name"].as_str().expect("name");
-            let result = parse_connection(&vector["connection"]);
-            match vector["error"].as_str() {
-                None => {
-                    result.unwrap_or_else(|e| panic!("{name}：{e}"));
-                }
-                Some(want) => {
-                    let err = result.err().unwrap_or_else(|| panic!("{name}：要拒絕"));
-                    assert!(err.contains(want), "{name}：{err} 不含 {want}");
-                }
+#[test]
+fn 樣本_stdio_host_宿主自己的拒絕() {
+    let doc = vectors();
+    for vector in doc["stdioHost"].as_array().expect("stdioHost") {
+        let name = vector["name"].as_str().expect("name");
+        let result = parse_connection(&vector["connection"]);
+        match vector["error"].as_str() {
+            None => {
+                result.unwrap_or_else(|e| panic!("{name}：{e}"));
+            }
+            Some(want) => {
+                let err = result.err().unwrap_or_else(|| panic!("{name}：要拒絕"));
+                assert!(err.contains(want), "{name}：{err} 不含 {want}");
             }
         }
     }
