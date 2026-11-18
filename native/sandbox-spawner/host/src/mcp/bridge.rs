@@ -8,11 +8,13 @@
 //!   #2690）也讓那一代判掉線。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
 //! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。送回對話行程的文字有三條出口，都先遮蔽這一份的秘密（[`super::redact`]）：結果與工具清單在序列化成文字之前走 `outgoing`／`outgoing_tools`，instructions 走 `Shared::redact_text`，錯誤走 `Shared::scrub`。連線診斷在 `connection::connect` 回錯之前就 `scrub` 過。
 //! - [`Command::Shutdown`] 或宿主那一側丟掉 [`Bridge`]：取消還在跑的請求、關池（每一份照監督者的收線期限），最後交一則 [`Outcome::Closed`]。
+//!   丟掉 [`Bridge`] 會等橋收完（最多 [`CLOSE_WAIT`]），宿主才接著結束行程。
 
 use std::collections::HashMap;
 use std::io;
 use std::os::fd::RawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 use rmcp::model::{CancelledNotification, CancelledNotificationParam, ClientRequest};
 use rmcp::service::{PeerRequestOptions, ServiceError};
@@ -21,12 +23,25 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::config::Server;
 use super::connection::{call_meta, describe, Generation, Http, MAX_RESPONSE_BYTES};
-use super::pool::{Log, Pool, Shared};
+use super::pool::{Log, Pool, Shared, POOL_CLOSE_TIMEOUT};
+use super::stdio::REAP_BUDGET;
+use super::supervisor::GENERATION_CLOSE_TIMEOUT;
 use crate::json::Value;
 use crate::wake::{Wake, Waker};
 
 /// rmcp 3.9 整份回應 body 超過上限時錯誤裡的字樣（靠認字分辨）。單則 SSE 事件超限 rmcp 回 `TransportClosed`，不經這裡。
 const TOO_LARGE: &str = "exceeded the maximum size of";
+
+/// 丟掉 [`Bridge`] 時最多等橋收完多久，之後放行、由 `PR_SET_PDEATHSIG` 與監督行程掃 session 兜底。
+///
+/// 比 [`GENERATION_CLOSE_TIMEOUT`]（每一份連線的收線期限，內含 [`REAP_BUDGET`] 的 SIGTERM→SIGKILL 梯度）長，
+/// 所以任何一份在自己的期限內收完或被放棄，宿主都等得到橋回來；比監督行程預設的 `--eof-grace-ms`（6000，在宿主讀到控制通道 EOF 時起算，宿主沒有參數接它）短，
+/// 所以宿主先自己放行，不會被監督行程的 SIGTERM 搶先。對監督行程那一側只寫註解、不斷言（那個值在 `supervisor/`，不在這裡）。
+/// 池整體的 `POOL_CLOSE_TIMEOUT`（6000）比這個長（編譯期斷言）：池收得慢時宿主會先逾時放行。
+pub const CLOSE_WAIT: Duration = Duration::from_millis(5500);
+const _: () = assert!(CLOSE_WAIT.as_millis() > GENERATION_CLOSE_TIMEOUT.as_millis());
+const _: () = assert!(CLOSE_WAIT.as_millis() > REAP_BUDGET.as_millis());
+const _: () = assert!(CLOSE_WAIT.as_millis() < POOL_CLOSE_TIMEOUT.as_millis());
 
 /// 宿主那一側送進橋的事。
 #[derive(Debug)]
@@ -89,11 +104,50 @@ pub const REQUEST_METHODS: [&str; 4] = [
     "resources/read",
 ];
 
-/// 宿主那一側握著的橋。丟掉它等於送 [`Command::Shutdown`]，不等執行緒結束。
+/// 宿主那一側握著的橋。丟掉它等於送 [`Command::Shutdown`]，再等橋收完，最多 [`CLOSE_WAIT`]。
+///
+/// **丟掉會阻塞**：宿主迴圈還在跑的時候不要丟（kernel 有執行期卸載服務的路，今天沒有人呼叫；接上之後，丟掉會讓宿主迴圈停最多 [`CLOSE_WAIT`]）。
+/// 不能在橋自己的執行緒或它的 runtime 裡丟：那會自己等自己，等滿上限。今天只有 `Client` 持有，在宿主主執行緒丟。
 pub struct Bridge {
     commands: mpsc::UnboundedSender<Command>,
     inbox: Arc<Mutex<Vec<Outcome>>>,
     wake: Wake,
+    closed: Arc<Closed>,
+}
+
+/// 橋的執行緒收完的旗標。
+#[derive(Default)]
+struct Closed {
+    done: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Closed {
+    /// 鎖中毒照樣設：這裡可能是在 panic 展開裡被呼叫，不能再 panic。
+    fn set(&self) {
+        *self.done.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.changed.notify_all();
+    }
+
+    /// 等到旗標設起來或過了 `limit`；回傳旗標。`wait_timeout_while` 會處理假醒。
+    fn wait(&self, limit: Duration) -> bool {
+        let done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
+        let (done, _) = self
+            .changed
+            .wait_timeout_while(done, limit, |done| !*done)
+            .unwrap_or_else(PoisonError::into_inner);
+        *done
+    }
+}
+
+/// 橋的執行緒的最外層：它被丟掉（正常離開、提早離開、展開）才設旗標，所以旗標設起來時 runtime 與裡面分離的任務都已經收掉。
+/// 出貨的建置是 `panic = "abort"`，展開那一路只在 dev 與測試建置走得到。
+struct CloseGuard(Arc<Closed>);
+
+impl Drop for CloseGuard {
+    fn drop(&mut self) {
+        self.0.set();
+    }
 }
 
 impl Bridge {
@@ -109,13 +163,16 @@ impl Bridge {
             inbox: Arc::clone(&inbox),
             waker: wake.waker(),
         };
+        let closed: Arc<Closed> = Arc::default();
+        let guard = CloseGuard(Arc::clone(&closed));
         std::thread::Builder::new()
             .name("nexus-host-mcp".into())
-            .spawn(move || runtime.block_on(serve(rx, deliver, http, secrets)))?;
+            .spawn(move || thread_main(guard, runtime, rx, deliver, http, secrets))?;
         Ok(Bridge {
             commands,
             inbox,
             wake,
+            closed,
         })
     }
 
@@ -133,6 +190,11 @@ impl Bridge {
             .unwrap_or_default()
     }
 
+    /// 等橋收完，最多 `limit`；收完了回 `true`，逾時回 `false`。已經收完再呼叫立刻回 `true`。
+    pub fn wait_closed(&self, limit: Duration) -> bool {
+        self.closed.wait(limit)
+    }
+
     /// 喚醒 fd，借出不交出：[`Bridge`] 活著時有效，呼叫方不得 close。
     pub fn wake_fd(&self) -> RawFd {
         self.wake.fd()
@@ -142,6 +204,19 @@ impl Bridge {
 impl Drop for Bridge {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Shutdown);
+        if !self.wait_closed(CLOSE_WAIT) {
+            eprintln!(
+                "nexus-host: mcp 錯誤：橋沒在 {} ms 內收完，不再等",
+                CLOSE_WAIT.as_millis()
+            );
+        }
+        // `Client` 丟掉之後沒人讀收件匣：關池時記的日誌（有幾份沒收完、監督者收不乾淨）在這裡寫出去，格式同 `Client` 印的。
+        for outcome in self.take() {
+            if let Outcome::Log { error, line } = outcome {
+                let level = if error { "錯誤" } else { "資訊" };
+                eprintln!("nexus-host: mcp {level}：{line}");
+            }
+        }
     }
 }
 
@@ -159,6 +234,18 @@ impl Deliver {
         }
         self.waker.wake();
     }
+}
+
+/// 橋的執行緒的主體。參數照宣告的反序丟：`runtime`（連同裡面分離的任務）先收掉，`guard` 最後，旗標才設；正常離開與 panic 展開都一樣。
+fn thread_main(
+    _guard: CloseGuard,
+    runtime: tokio::runtime::Runtime,
+    rx: mpsc::UnboundedReceiver<Command>,
+    deliver: Deliver,
+    http: reqwest::Client,
+    secrets: Vec<String>,
+) {
+    runtime.block_on(serve(rx, deliver, http, secrets));
 }
 
 type Opens = Arc<Mutex<HashMap<u64, (Arc<Shared<Generation>>, bool)>>>;
@@ -394,5 +481,27 @@ async fn request(
             }
             Err(shared.scrub(&text))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 旗標沒設時等到上限回_false() {
+        assert!(!Closed::default().wait(Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn 橋的執行緒_panic_展開時也設旗標() {
+        let closed: Arc<Closed> = Arc::default();
+        let guard = CloseGuard(Arc::clone(&closed));
+        let thread = std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("模擬橋的執行緒 panic");
+        });
+        assert!(thread.join().is_err());
+        assert!(closed.wait(Duration::from_secs(5)), "展開時 guard 沒設旗標");
     }
 }
