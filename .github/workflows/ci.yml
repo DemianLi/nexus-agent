@@ -556,9 +556,10 @@ jobs:
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
-      # 刪除碰到分叉用 per-thread 再跑一次（#2957）：刪除前前台要請對話行程放手寫入方，single 走不到那一段。env 要釘，理由同上一步。
+      # 刪除碰到分叉用 per-thread 再跑一次（#2957）：刪除前前台要請對話行程放手寫入方，single 走不到那一段；祖先被刪之後讀外溢檔的
+      # 祖先鏈是對話行程組裝時算的。env 要釘，理由同上一步。
       - name: per-thread 跑刪除碰到分叉
-        run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion
+        run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
