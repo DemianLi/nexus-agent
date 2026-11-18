@@ -11,7 +11,7 @@
 //!   丟掉 [`Bridge`] 會等橋收完（最多 [`CLOSE_WAIT`]），宿主才接著結束行程。
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
@@ -204,8 +204,10 @@ impl Bridge {
 impl Drop for Bridge {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Shutdown);
+        // stderr 寫失敗（另一頭已經關了）不能讓這裡 panic：這一句與下面印日誌的，都用寫失敗就算了的寫法，結束碼不變。
         if !self.wait_closed(CLOSE_WAIT) {
-            eprintln!(
+            let _ = writeln!(
+                io::stderr(),
                 "nexus-host: mcp 錯誤：橋沒在 {} ms 內收完，不再等",
                 CLOSE_WAIT.as_millis()
             );
@@ -214,7 +216,7 @@ impl Drop for Bridge {
         for outcome in self.take() {
             if let Outcome::Log { error, line } = outcome {
                 let level = if error { "錯誤" } else { "資訊" };
-                eprintln!("nexus-host: mcp {level}：{line}");
+                let _ = writeln!(io::stderr(), "nexus-host: mcp {level}：{line}");
             }
         }
     }
@@ -236,9 +238,10 @@ impl Deliver {
     }
 }
 
-/// 橋的執行緒的主體。參數照宣告的反序丟：`runtime`（連同裡面分離的任務）先收掉，`guard` 最後，旗標才設；正常離開與 panic 展開都一樣。
+/// 橋的執行緒的主體。正常回來時明寫順序：`runtime`（連同裡面分離的任務）先收掉，`guard` 最後，旗標才設。
+/// `serve` panic 展開時走不到這兩句，靠參數照宣告的反序丟（`runtime` 在後、先丟，`guard` 在前、後丟），所以 `guard` 要留在第一個。
 fn thread_main(
-    _guard: CloseGuard,
+    guard: CloseGuard,
     runtime: tokio::runtime::Runtime,
     rx: mpsc::UnboundedReceiver<Command>,
     deliver: Deliver,
@@ -246,6 +249,8 @@ fn thread_main(
     secrets: Vec<String>,
 ) {
     runtime.block_on(serve(rx, deliver, http, secrets));
+    drop(runtime);
+    drop(guard);
 }
 
 type Opens = Arc<Mutex<HashMap<u64, (Arc<Shared<Generation>>, bool)>>>;

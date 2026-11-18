@@ -107,7 +107,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   stdio 的收線梯度（見〈stdio〉）預算 4.5 秒，編譯期斷言小於這 5 秒。預算只算子行程那一段，不含「等 rmcp 服務迴圈結束」；那一段卡住時，5 秒到了錯誤訊息分不出卡在哪一段。
 - 關池（`Pool::close`）與停單份（`Shared::dispose`）外面再套 6 秒（`POOL_CLOSE_TIMEOUT`），各份同時收。逾時只是不再等，任務沒被取消、停止訊號已先送出。
   橋還活著時（`acquire` 的 `failOnStartupError` 路徑停單份），監督者照自己的 5 秒收完；關池時逾時放手的，接著 `serve` 回來、執行環境拆掉，被分離的任務跑不完，子行程由 `ChildGuard` 的 drop 直接 SIGKILL（見〈stdio〉）。
-- 宿主結束前等橋收完：宿主主迴圈結束、`Client` 丟掉 `Bridge` 時，`Drop` 先送 `Shutdown`，再等橋的執行緒收完（旗標在 runtime 與分離的任務都收掉之後才設），最多 `CLOSE_WAIT` 5.5 秒；沒等到就在 stderr 記一行、照原結束碼結束，不改它。5.5 秒比每一份連線的收線期限 `GENERATION_CLOSE_TIMEOUT`（5 秒）與 SIGTERM→SIGKILL 梯度 `REAP_BUDGET`（4.5 秒）長（編譯期斷言），比監督行程預設的 eof grace（6 秒）短；後者只寫在註解，不斷言。`POOL_CLOSE_TIMEOUT`（6 秒）比 5.5 秒長，所以池收得慢時宿主會先逾時放行，由 `PR_SET_PDEATHSIG` 與監督行程的 session 掃描收。等完之後把收件匣裡還沒送出去的日誌（關池時記的「有幾份沒收完」、監督者的收不乾淨）直接寫到 stderr，因為 `Client` 丟掉之後沒有人讀它。
+- 宿主結束前等橋收完：宿主主迴圈結束、`Client` 丟掉 `Bridge` 時，`Drop` 先送 `Shutdown`，再等橋的執行緒收完（旗標在 runtime 與分離的任務都收掉之後才設），最多 `CLOSE_WAIT` 5.5 秒；沒等到就在 stderr 記一行、照原結束碼結束，不改它。5.5 秒比每一份連線的收線期限 `GENERATION_CLOSE_TIMEOUT`（5 秒）與 SIGTERM→SIGKILL 梯度 `REAP_BUDGET`（4.5 秒）長（編譯期斷言），比監督行程預設的 eof grace（6 秒）短；後者只寫在註解，不斷言。`POOL_CLOSE_TIMEOUT`（6 秒）比 5.5 秒長，所以池收得慢時宿主會先逾時放行，由 `PR_SET_PDEATHSIG` 與監督行程的 session 掃描收。runtime 收掉時會等已經開始的 `spawn_blocking`（例如 HTTP 連線的主機名解析），所以連線其實都收完了，也可能白等滿 5.5 秒、記上面那一行（#2987）。等完之後把收件匣裡還沒送出去的日誌（關池時記的「有幾份沒收完」、監督者的收不乾淨）直接寫到 stderr，因為 `Client` 丟掉之後沒有人讀它。
   `Drop` 會阻塞：宿主迴圈還在跑的時候不要丟 `Bridge`。kernel 有執行期卸載服務的路，今天沒有人呼叫；日後接上，丟掉會讓宿主迴圈停最多 5.5 秒。也不能在橋自己的執行緒裡丟（會自己等自己等滿上限），今天只有 `Client` 持有，在宿主主執行緒丟。
   只有 `Pool::close` 記日誌：沒收完的份記一行錯誤，帶出是哪幾份（同一台 server 有兩份連線時 label 會重複）；`Shared::dispose` 回傳有沒有收完，呼叫端自己決定記不記。
 - `failOnStartupError: true` 的那一列第一次就失敗時不在背景重試。
