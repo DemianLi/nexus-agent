@@ -133,6 +133,26 @@ describe('設定', () => {
     }
   });
 
+  it('窗口夠放一段檔頭：截斷，沒放進去的位元組只算被截掉的那一段', async () => {
+    const files = { '/AGENTS.md': 'x'.repeat(2000) };
+    const listener = createAgentInstructionsListener(
+      { ...LIMITS, contextFraction: 0.1 },
+      { fs: () => ({ kind: 'ok', fs: handleOf(fakeBackend(files)), address: { kind: 'root' } }) },
+    );
+    // 2500 × 4 × 0.1 = 1000 個位元組：放得下通知、引言與一段檔頭，放不下整份。
+    const injected = await listener([], { ...INVOCATION, contextWindow: 2500 });
+    const content = String(injected?.[0]?.content);
+    const shown = /truncated \/AGENTS\.md from 2000 to (\d+) bytes/.exec(content)?.[1];
+    expect(shown).toBeDefined();
+    expect(content).toContain('x'.repeat(Number(shown)));
+    expect(content).not.toContain('x'.repeat(Number(shown) + 1));
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(1000);
+    expect(injected?.[0]?.additionalKwargs).toEqual({
+      [AGENT_INSTRUCTIONS_MARKER]: true,
+      [INJECTION_DEFERRED_BYTES_KEY]: 2000 - Number(shown),
+    });
+  });
+
   it('窗口比例要大於 0、不超過 1，不是就讓設定驗證失敗；省略是 0.1', () => {
     for (const contextFraction of [0, -0.1, 1.5, Number.NaN]) {
       const result = agentInstructionsConfigSchema.safeParse({ contextFraction });

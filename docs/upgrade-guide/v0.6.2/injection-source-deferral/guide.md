@@ -1,17 +1,24 @@
 ---
 kind: upgrade-guide
-description: "超過上限的工作區指示檔（`AGENTS.md` 等）從截斷改成整份不放、只留一行指標；指示檔、技能目錄、技能正文、記憶檔的上限在小窗口模型上變小；system prompt 頭尾段與計劃模式指引超過 16,384 位元組時改成起不來。"
+description: "超過上限的工作區指示檔（`AGENTS.md` 等）仍然截斷，截的是整份放不下的檔裡最具體的那一份（可能是較寬層的檔），截不到 256 位元組就整份不放，通知行改了格式並多了讀檔指標、整份放得下的較寬層檔會留下、上限在小窗口模型上變小；技能目錄、技能正文、記憶檔放不下時改成整項不放、留一行指標；system prompt 頭尾段與計劃模式指引超過 16,384 位元組時改成起不來。"
 ---
 
-# 注入來源超過上限時改成延後或失敗
+# 注入來源超過上限時各自截斷、延後或失敗
 
 ## 變更
 
 對話與工具結果以外、會把文字放進模型請求的來源，現在各自照一張預算表執行上限（表與每個來源的行為見 [`docs/operations.md`](../../../operations.md) 的〈各注入源的用量〉）。
 
 - **工作區指示檔（`agent-instructions`）。**
-  - 舊行為：合起來超過 `maxBytes`（預設 65,536 位元組）時，較寬層的檔被略過，**最具體的那一份截斷後放進去**，並換一段較短的開場白。
-  - 新行為：不截斷。放不下的檔**整份不放**（包含最具體的那一份），那一則訊息裡留一行 `Workspace instruction budget N bytes: not loaded <路徑> (<大小> bytes); read each with read_file before acting on this workspace.`，模型要自己用 `read_file` 讀。
+  - 舊行為：整則訊息超過 `maxBytes`（預設 65,536 位元組）時，從最寬層開始整份略過，直到剩下的整份放得下；連最具體的那一份單獨都放不下時，只截斷那一份、其餘全部略過（較寬的小檔放得下也一樣略過）；先用完整的開場白，截到只剩標題（0 位元組內文）也放不下外框、通知、完整開場白與空標題時，才換一段較短的開場白（`Workspace instructions were omitted or truncated to fit the configured byte budget.`）。通知行是 `Workspace instruction budget N bytes: omitted <路徑>, …; truncated <路徑> from A to B bytes`，沒有被略過的檔的大小，也沒有怎麼讀。
+  - 新行為：超過時仍然截斷，截的是整份放不下的檔裡最具體的那一份（可能是較寬層的檔，不一定是最具體層的檔）；截不到 256 位元組就整份不放。差別有四處。
+    - 先從最具體的往寬的挑，整份放得下的都留下；剩下整份放不下的檔，取其中最具體的那一份截成放得下的最長檔頭，其餘整份不放。以前較寬層一律先被略過。
+    - 截下來不到 256 位元組就不截，這一份改成整份不放、只留通知（以前會一路截到只剩標題）。
+    - 開場白一律是完整的那一段，不再換短的（對應舊行為裡外框、通知、完整開場白與空標題加起來超過預算的那種情形；現在這種預算下改成整份不放、只留通知）。
+    - 通知行改成三種，一行寫清楚哪一份被截、哪幾份沒放、其餘用 `read_file` 讀（路徑是讀檔用的路徑）：
+      - 只截斷：`Workspace instruction budget N bytes: truncated <路徑> from A to B bytes; read the rest of <路徑> with read_file before acting on this workspace.`
+      - 只整份沒放：`Workspace instruction budget N bytes: not loaded <路徑> (<大小> bytes), …; read each with read_file before acting on this workspace.`
+      - 兩者都有：`Workspace instruction budget N bytes: truncated <路徑> from A to B bytes, not loaded <路徑> (<大小> bytes), …; read the rest of <路徑> and each unloaded file with read_file before acting on this workspace.`
   - 上限也變了：`min(maxBytes, floor(模型窗口 × 4 × contextFraction))`，`contextFraction` 是新的設定鍵，預設 0.1。窗口 32,768 的模型上是 13,107 位元組，以前是 65,536。
 - **`/名字` 叫用的技能正文（`skill-invocation`）。**
   - 舊行為：沒有上限，整份放進去。
@@ -30,7 +37,7 @@ description: "超過上限的工作區指示檔（`AGENTS.md` 等）從截斷改
 
 受影響的：
 
-- 工作區指示檔合計超過上限的部署：模型以前看得到截斷後的前半份，現在只看得到一行指標。
+- 工作區指示檔合計超過上限的部署：模型看到的仍是截斷後的檔頭（整份放不下的檔裡最具體的那一份；截不到 256 位元組就整份不放），但較寬層放得下的檔現在會留下，通知行的字串變了（解析舊通知字串的下游要改）；小窗口模型上上限也比以前小。
 - 用小窗口模型（窗口在 163,840 token 以下）而指示檔、技能正文超過窗口一成的部署。
 - system prompt 頭尾段或計劃模式指引超過 16,384 位元組的部署：升級後起不來。
 - 自己寫的插件 import 了 `COMPACT_AGENT_INSTRUCTIONS_INTRO`。
@@ -40,5 +47,5 @@ description: "超過上限的工作區指示檔（`AGENTS.md` 等）從截斷改
 1. 量你的指示檔：在工作區跑 `wc -c AGENTS.md`（以及子目錄裡的指示檔）。合計在 65,536 位元組以下、而且不超過你的模型窗口 × 0.4 位元組的，不用動。
 2. 超過的，擇一：把指示檔縮短或拆到模型會照需要去讀的檔案；或在 `agent-instructions` 那一列調高 `maxBytes`、`contextFraction`（`pnpm --filter @nexus/harness run plugin -- config set agent-instructions --file -`）。
 3. 量 system prompt 頭尾段（`system-prompt` 那一列的 `personaPrefix`、`personaSuffix` 與其他插件登記在頭尾的段）與 `plan-mode` 的 `guidance`：各自超過 16,384 位元組的要縮短，這兩項沒有可調的上限。
-4. 自己的插件裡搜尋 `COMPACT_AGENT_INSTRUCTIONS_INTRO`：刪掉那個 import；要認「這一則有檔沒放進去」，改看訊息文字裡的 `not loaded`，或訊息 `additional_kwargs` 的 `nexus_injection_deferred_bytes`。
-5. 確認改好：開一條新的 thread 說一句話，在會話日誌裡找最後一筆 `context/measure`，看 `sources`：沒有任何一列帶 `deferredBytes`，就是全部都放進去了；有的話，那一列的 `id` 就是還放不下的來源。
+4. 自己的插件裡搜尋 `COMPACT_AGENT_INSTRUCTIONS_INTRO`：刪掉那個 import；要認「這一則有檔沒放完」（被截或整份沒放），改看訊息文字裡的 `Workspace instruction budget`，或訊息 `additional_kwargs` 的 `nexus_injection_deferred_bytes`。
+5. 確認改好：開一條新的 thread 說一句話，在會話日誌裡找最後一筆 `context/measure`，看 `sources`：沒有任何一列帶 `deferredBytes`，就是全部都放進去了；有的話，那一列的 `id` 就是還放不下的來源。指示檔那一列的 `deferredBytes` 是沒放進去的位元組：被截的算被截掉的那一段，整份沒放的算整份。

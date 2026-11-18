@@ -93,9 +93,15 @@ describe('算法：插件照預設值算出來的上限 ＝ injectionLimitFor', 
       configurable: {},
       ...(contextWindow !== undefined && { contextWindow }),
     });
-    expect(injections?.[0]?.content).toContain(
-      `Workspace instruction budget ${injectionLimitFor('agent-instructions', contextWindow)} bytes: not loaded /AGENTS.md (70000 bytes)`,
+    const limit = injectionLimitFor('agent-instructions', contextWindow);
+    const content = String(injections?.[0]?.content);
+    expect(content).toContain(`Workspace instruction budget ${limit} bytes: `);
+    // 預算大到截得出檔頭就截，小到截不出（窗口 1000，上限 400）就整份不放。
+    expect(content).toMatch(
+      /truncated \/AGENTS\.md from 70000 to \d+ bytes|not loaded \/AGENTS\.md \(70000 bytes\)/,
     );
+    // 整則訊息（含通知與外框）不超過算出來的上限。
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(limit);
   });
 
   it.each(WINDOWS)('skill-invocation，窗口 %s', async (contextWindow) => {
