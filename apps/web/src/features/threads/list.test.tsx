@@ -29,6 +29,8 @@ const DIRECTORY: ThreadDirectory = {
   refresh: () => undefined,
   placeholders: [],
   addPlaceholder: () => undefined,
+  pushedSets: {},
+  removals: 0,
 };
 
 function searcher() {

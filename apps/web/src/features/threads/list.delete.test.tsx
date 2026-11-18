@@ -30,6 +30,8 @@ function directory(
     refresh: () => undefined,
     placeholders: [],
     addPlaceholder: () => undefined,
+    pushedSets: {},
+    removals: 0,
   };
 }
 

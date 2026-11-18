@@ -12,12 +12,14 @@ import { join } from 'node:path';
 import { SESSION_LOG_FORMAT_VERSION, sessionDirectoryName } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { THREAD_DELETED, WireRejectedError, commandPath, createWireClient } from '@nexus/wire';
+import type { ThreadFeedFrame } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadDeletions, threadDeletionPortFor } from './thread-deletion.js';
+import { ThreadFeed } from './thread-feed.js';
 import { createWireHandler } from './wire-handler.js';
 
 const CWD = '/work/wire-delete';
@@ -68,7 +70,12 @@ function listedOnDisk(titles: Record<string, string>) {
 }
 
 function setup(
-  options: { graceMs?: number; withDeletion?: boolean; releaseIdleWaitMs?: number } = {},
+  options: {
+    graceMs?: number;
+    withDeletion?: boolean;
+    releaseIdleWaitMs?: number;
+    threadFeed?: ThreadFeed;
+  } = {},
 ) {
   const titles = { 't-live': '還在的', 't-gone': '要刪的' };
   const clock = { now: 1_000_000 };
@@ -83,6 +90,7 @@ function setup(
   });
   holder.wire = createWireHandler({
     auth: TEST_BROWSER_AUTH,
+    ...(options.threadFeed === undefined ? {} : { threadFeed: options.threadFeed }),
     ...(options.releaseIdleWaitMs === undefined
       ? {}
       : { releaseIdleWaitMs: options.releaseIdleWaitMs }),
@@ -154,6 +162,26 @@ describe('刪除、復原與已刪除清單：真的 wire 往返', () => {
     });
     expect(ids(await client.listThreads())).toEqual(['t-gone', 't-live']);
     expect(await client.deletedThreads()).toEqual({ kind: 'ok', result: { items: [] } });
+  }, 30_000);
+
+  it('刪成功才在全域下行推一顆 removed；重複刪、復原都不推（#2990）', async () => {
+    await seed('t-gone');
+    const threadFeed = new ThreadFeed();
+    const { client } = setup({ threadFeed });
+    const controller = new AbortController();
+    const frames: ThreadFeedFrame[] = [];
+    const stream = threadFeed.subscribe(controller.signal);
+    const reading = (async () => {
+      for await (const frame of stream) frames.push(frame);
+    })();
+
+    expect(await client.threadDelete('t-gone')).toMatchObject({ result: { ok: true } });
+    expect(await client.threadDelete('t-gone')).toMatchObject({ result: { ok: false } });
+    expect(await client.threadRestore('t-gone')).toMatchObject({ result: { ok: true } });
+    controller.abort();
+    await reading;
+
+    expect(frames).toEqual([{ type: 'removed', threadId: 't-gone' }]);
   }, 30_000);
 
   it('重複刪、沒有的復原，業務失敗在 result 裡；原處有同 id 是 restore_conflict，寬限期過了是 restore_expired', async () => {

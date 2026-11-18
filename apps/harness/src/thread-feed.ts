@@ -11,6 +11,7 @@
  * - 狀態不補送：起點是列表，同 dsh 的 `reconcileStatus`。
  * - **接上一條 thread 時廣播一顆 `added`**（#2988）：新開的會話不等列表就進得了側欄。新開的與撤出記憶體後再打開的都發；
  *   開線時不補送。
+ * - **刪除與釘選、封存集合由處理那支指令的一方交進來廣播**（{@link ThreadFeed.announce}，#2990），開線時同樣不補送。
  *
  * **每條線的佇列有位元組上限**（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）：對方不收的線積壓超過上限就收掉這一條，
  * 其他線不受影響。dsh 對應的 `RemoteEventQueue` 沒有這一層，偏離 B／C 的登記與理由見 `bounded-event-queue.ts`。
@@ -18,7 +19,12 @@
  * @module
  */
 
-import type { ThreadFeedFrame } from '@nexus/wire';
+import type {
+  ThreadArchivedFrame,
+  ThreadFeedFrame,
+  ThreadPinnedFrame,
+  ThreadRemovedFrame,
+} from '@nexus/wire';
 
 import {
   BoundedQueue,
@@ -83,6 +89,13 @@ export class ThreadFeed {
       unwatch();
       if (this.#pumps.get(threadId) === pump) this.#pumps.delete(threadId);
     };
+  }
+
+  /**
+   * 廣播一顆跟 pump 無關的：寫成功之後的刪除，或變了之後的整份釘選、封存集合。照收到的送，不去重：寫成功、有沒有變由呼叫端判斷。
+   */
+  announce(frame: ThreadRemovedFrame | ThreadArchivedFrame | ThreadPinnedFrame): void {
+    this.#broadcast(frame);
   }
 
   /**
@@ -168,7 +181,7 @@ export class ThreadFeed {
   /** 一顆 frame 的下行副本被深度截斷：記一行，只寫 frame 的 type 與 thread id，不寫內容。 */
   #warnTruncated(frame: ThreadFeedFrame, where: string): void {
     this.#warn?.(
-      `[下行] 全域下行有一顆 ${frame.type} frame（thread ${frame.threadId}）巢狀超過 ${String(DOWNLINK_MAX_DEPTH)} 層，${where}的副本已截斷`,
+      `[下行] 全域下行有一顆 ${frame.type} frame（thread ${'threadId' in frame ? frame.threadId : '-'}）巢狀超過 ${String(DOWNLINK_MAX_DEPTH)} 層，${where}的副本已截斷`,
     );
   }
 

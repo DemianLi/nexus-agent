@@ -42,20 +42,34 @@ function deferred<V>() {
   return { promise, resolve };
 }
 
+/** 一次重畫給 directory 的：列表，加上全域下行推來的集合與刪除數（#2990）。 */
+interface Props {
+  readonly listing: Listing;
+  readonly pushedSets?: ThreadDirectory['pushedSets'];
+  readonly removals?: number;
+}
+const NOTHING_PUSHED: ThreadDirectory['pushedSets'] = {};
+
 function setup(client: Partial<Record<keyof WireClient, unknown>>, first: Listing) {
   const refresh = vi.fn();
-  const directory = (listing: Listing): ThreadDirectory => ({
+  const directory = ({
+    listing,
+    pushedSets = NOTHING_PUSHED,
+    removals = 0,
+  }: Props): ThreadDirectory => ({
     listing,
     refresh,
     statusOf: () => 'idle' as never,
     blankOf: (item) => item.blank,
     placeholders: [],
     addPlaceholder: () => {},
+    pushedSets,
+    removals,
   });
   const hook = renderHook(
-    ({ listing }: { listing: Listing }) =>
-      useThreadManagement(client as unknown as WireClient, directory(listing), useAcceptedTitles()),
-    { initialProps: { listing: first } },
+    (props: Props) =>
+      useThreadManagement(client as unknown as WireClient, directory(props), useAcceptedTitles()),
+    { initialProps: { listing: first } as Props },
   );
   return { hook, refresh };
 }
@@ -515,5 +529,32 @@ describe('刪除與最近刪除（#2958）', () => {
       );
     });
     expect(deletedThreads).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('全域下行推來的（#2990）', () => {
+  it('推來的集合蓋過列表上的；誰後到聽誰：自己的回應與推來的互相蓋', async () => {
+    const client = { threadPin: vi.fn(async () => ok({ pinnedThreadIds: ['自己釘的'] })) };
+    const listing = okListing(listed(['a'], ['c']));
+    const { hook } = setup(client, listing);
+    hook.rerender({ listing, pushedSets: { pinned: ['b'], archived: ['c', 'd'] } });
+    expect(hook.result.current?.pinnedIds).toEqual(['b']);
+    expect([...hook.result.current!.archivedIds]).toEqual(['c', 'd']);
+
+    await act(async () => {
+      await hook.result.current!.onPin('自己釘的');
+    });
+    expect(hook.result.current?.pinnedIds).toEqual(['自己釘的']);
+    hook.rerender({ listing, pushedSets: { pinned: ['別的分頁釘的'], archived: ['c', 'd'] } });
+    expect(hook.result.current?.pinnedIds).toEqual(['別的分頁釘的']);
+  });
+
+  it('推來一顆刪除就重讀已刪除清單', async () => {
+    const deletedThreads = vi.fn(async () => ({ kind: 'ok' as const, result: { items: [] } }));
+    const listing = okListing(listed([], []));
+    const { hook } = setup({ deletedThreads }, listing);
+    await waitFor(() => expect(deletedThreads).toHaveBeenCalledTimes(1));
+    hook.rerender({ listing, removals: 1 });
+    await waitFor(() => expect(deletedThreads).toHaveBeenCalledTimes(2));
   });
 });
