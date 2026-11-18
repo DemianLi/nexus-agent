@@ -46,7 +46,7 @@ fn 設定_預設與拒絕() {
     );
     reject(
         json!({ "connection": { "transport": "http", "url": "https://h/", "headers": { "A": { "credential": "c" } } } }),
-        "是憑證引用：宿主還不支援",
+        "要是 TS 代入之後的字串",
     );
     reject(
         json!({ "connection": { "transport": "http", "url": "https://h/", "headers": { "A": "line\nbreak-secret" } } }),
@@ -175,6 +175,7 @@ fn debug_不印秘密() {
             "transport": "http",
             "url": "https://h/x?k=q-77",
             "headers": { "Authorization": "Bearer hdr-88" },
+            "credentialHeaders": { "Authorization": "" },
         },
     }))
     .expect("設定");
@@ -319,6 +320,7 @@ mod pool {
                 "transport": "http",
                 "url": "https://mcp.nexus.test/mcp",
                 "headers": { "Authorization": "Bearer s3cret-token" },
+                "credentialHeaders": { "Authorization": "Bearer " },
             },
         });
         for (k, v) in extra.as_object().expect("物件") {
@@ -416,7 +418,7 @@ mod pool {
         assert_eq!(*one.shared.listed().expect("有清單"), ["a"]);
         // 同一份設定、鍵的順序不同，還是同一份連線。
         let reordered: serde_json::Value = serde_json::from_str(
-            r#"{"connection":{"headers":{"Authorization":"Bearer s3cret-token"},"url":"https://mcp.nexus.test/mcp","transport":"http"},"serverName":"fake"}"#,
+            r#"{"connection":{"credentialHeaders":{"Authorization":"Bearer "},"headers":{"Authorization":"Bearer s3cret-token"},"url":"https://mcp.nexus.test/mcp","transport":"http"},"serverName":"fake"}"#,
         )
         .expect("JSON");
         let reordered = Server::parse(&reordered).expect("設定");
@@ -550,6 +552,7 @@ mod http {
                 "transport": "http",
                 "url": format!("https://localhost:{port}/mcp"),
                 "headers": { "Authorization": "Bearer s3cret-token" },
+                "credentialHeaders": { "Authorization": "Bearer " },
             },
         });
         for (k, v) in extra.as_object().expect("物件") {
@@ -754,7 +757,8 @@ mod http {
             "connection": {
                 "transport": "http",
                 "url": format!("https://127.0.0.1:{port}/mcp?token=q-77"),
-                "headers": { "X-Key": "hdr-41a" },
+                "headers": { "X-Key": "hdr-41a-fake" },
+                "credentialHeaders": { "X-Key": "" },
             },
         });
         let s = Server::parse(&config).expect("設定");
@@ -766,7 +770,7 @@ mod http {
             "Failed to connect to streamable HTTP server \"gone, url: https://127.0.0.1:{port}/mcp\" in auto mode: "
         );
         assert!(err.starts_with(&prefix), "{err}");
-        for secret in ["q-77", "hdr-41a"] {
+        for secret in ["q-77", "hdr-41a-fake"] {
             assert!(!err.contains(secret), "{err}");
         }
     }
@@ -779,7 +783,8 @@ mod http {
             "connection": {
                 "transport": "http",
                 "url": format!("https://localhost:{port}/mcp?token=q-77"),
-                "headers": { "X-Key": "hdr-41a" },
+                "headers": { "X-Key": "hdr-41a-fake" },
+                "credentialHeaders": { "X-Key": "" },
             },
         }))
         .expect("設定");
@@ -792,7 +797,7 @@ mod http {
             "{err}"
         );
         assert!(err.contains("[redacted]"), "反射回來的秘密要換掉：{err}");
-        for secret in ["q-77", "hdr-41a"] {
+        for secret in ["q-77", "hdr-41a-fake"] {
             assert!(!err.contains(secret), "{err}");
         }
     }
@@ -899,14 +904,15 @@ mod http {
             "connection": {
                 "transport": "http",
                 "url": format!("https://localhost:{port}/mcp?token=q-77"),
-                "headers": { "X-Key": "hdr-41a" },
+                "headers": { "X-Key": "hdr-41a-fake" },
+                "credentialHeaders": { "X-Key": "" },
             },
             "failOnStartupError": true,
         }))
         .expect("設定");
         let err = pool.acquire(&s, true).await.err().expect("要失敗");
         assert!(err.starts_with("Failed to connect"), "{err}");
-        for secret in ["q-77", "hdr-41a"] {
+        for secret in ["q-77", "hdr-41a-fake"] {
             assert!(!err.contains(secret), "{err}");
         }
         tokio::time::timeout(Duration::from_secs(5), pool.close())
@@ -1375,7 +1381,8 @@ mod http {
                 "connection": {
                     "transport": "http",
                     "url": format!("https://localhost:{}/mcp?token=q-77", tls.port),
-                    "headers": { "X-Key": "hdr-41a" },
+                    "headers": { "X-Key": "hdr-41a-fake" },
+                    "credentialHeaders": { "X-Key": "" },
                 },
             }))
             .expect("設定");
@@ -1389,9 +1396,146 @@ mod http {
             call(&bridge, 1, 1, "reflect");
             let err = done(&bridge, 1).expect_err("403");
             assert!(err.contains("[redacted]"), "反射回來的秘密要換掉：{err}");
-            for secret in ["q-77", "hdr-41a"] {
+            for secret in ["q-77", "hdr-41a-fake"] {
                 assert!(!err.contains(secret), "{err}");
             }
         }
+    }
+}
+
+/// `credentialHeaders`（header 名 → prefix）的規則。拒絕的訊息只講欄位與名字，不帶值。
+mod credential_headers {
+    use nexus_host::mcp::config::Server;
+    use serde_json::{json, Value};
+
+    fn config(headers: Value, credential_headers: Option<Value>) -> Value {
+        let mut connection =
+            json!({ "transport": "http", "url": "https://h/x", "headers": headers });
+        if let Some(listed) = credential_headers {
+            connection["credentialHeaders"] = listed;
+        }
+        json!({ "serverName": "a", "connection": connection })
+    }
+
+    #[track_caller]
+    fn reject(headers: Value, credential_headers: Option<Value>, expect: &str) {
+        let err = Server::parse(&config(headers, credential_headers)).expect_err("要拒絕");
+        assert!(err.contains(expect), "{err} 不含 {expect}");
+        assert!(!err.contains("FAKE"), "錯誤不帶 header 值：{err}");
+    }
+
+    #[test]
+    fn headers_不是空的時候_欄位一定要在() {
+        reject(
+            json!({ "X-Key": "FAKE-key-000001" }),
+            None,
+            "connection.credentialHeaders 要在",
+        );
+        Server::parse(&config(
+            json!({ "X-Key": "FAKE-key-000001" }),
+            Some(json!({})),
+        ))
+        .expect("明寫 {} 收：沒有憑證");
+        let no_headers = json!({
+            "serverName": "a",
+            "connection": { "transport": "http", "url": "https://h/x" },
+        });
+        Server::parse(&no_headers).expect("沒有 headers 就不必有這個欄位");
+    }
+
+    #[test]
+    fn 授權用的_header_一定要列() {
+        for name in ["Authorization", "authorization", "Proxy-Authorization"] {
+            reject(
+                json!({ (name): "Bearer FAKE-token-0001" }),
+                Some(json!({})),
+                "授權用的 header",
+            );
+        }
+        Server::parse(&config(
+            json!({ "Authorization": "Bearer FAKE-token-0001" }),
+            Some(json!({ "authorization": "Bearer " })),
+        ))
+        .expect("列了（鍵不分大小寫）就收");
+    }
+
+    #[test]
+    fn 鍵與值的檢查() {
+        let headers = || json!({ "X-Key": "pre-FAKE-key-000001" });
+        reject(
+            headers(),
+            Some(json!({ "X-Other": "" })),
+            "不在 connection.headers 裡",
+        );
+        reject(headers(), Some(json!({ "X-Key": "nope-" })), "prefix 開頭");
+        reject(headers(), Some(json!({ "X-Key": 7 })), "要是字串");
+        reject(headers(), Some(json!(["X-Key"])), "要是物件");
+        reject(
+            headers(),
+            Some(json!({ "bad name": "" })),
+            "不是合法的 header 名",
+        );
+        reject(
+            json!({ "X-Key": "pre-FAKE" }),
+            Some(json!({ "X-Key": "pre-" })),
+            "connection.headers.X-Key（憑證）",
+        );
+        reject(
+            json!({ "X-Key": "pre-" }),
+            Some(json!({ "X-Key": "pre-" })),
+            "connection.headers.X-Key（憑證）",
+        );
+        reject(
+            json!({ "X-Key": "pre- FAKE-key-000001 " }),
+            Some(json!({ "X-Key": "pre-" })),
+            "頭尾有空白",
+        );
+        reject(
+            headers(),
+            Some(json!({ "X-Key": "pre-", "x-key": "pre-" })),
+            "同一個 header 名",
+        );
+        reject(
+            json!({ "X-Key": "pre-FAKE-key-000001", "x-key": "pre-FAKE-key-000002" }),
+            Some(json!({ "X-Key": "pre-" })),
+            "不只一個鍵",
+        );
+        Server::parse(&config(headers(), Some(json!({ "X-Key": "pre-" })))).expect("合法");
+    }
+
+    #[test]
+    fn 池的鍵_空的與沒給同一把_prefix_與憑證鍵各換一把() {
+        let key = |headers: Value, listed: Option<Value>| {
+            Server::parse(&config(headers, listed))
+                .expect("設定")
+                .pool_key(true)
+        };
+        assert_eq!(
+            key(json!({}), None),
+            key(json!({}), Some(json!({}))),
+            "headers 是空的時候，沒給與 {{}} 是同一把"
+        );
+        let headers = || json!({ "A-Key": "pre-FAKE-key-000001", "B-Key": "pre-FAKE-key-000002" });
+        let both = key(headers(), Some(json!({ "A-Key": "pre-", "B-Key": "pre-" })));
+        assert_eq!(
+            both,
+            key(headers(), Some(json!({ "b-key": "pre-", "a-key": "pre-" }))),
+            "鍵的順序與大小寫不計"
+        );
+        assert_ne!(
+            both,
+            key(headers(), Some(json!({ "A-Key": "pre-" }))),
+            "憑證鍵不同是另一把"
+        );
+        assert_ne!(
+            key(headers(), Some(json!({ "A-Key": "pre-" }))),
+            key(headers(), Some(json!({ "A-Key": "" }))),
+            "prefix 不同是另一把"
+        );
+        assert_ne!(
+            key(headers(), Some(json!({}))),
+            both,
+            "沒標憑證與標了是另一把"
+        );
     }
 }

@@ -507,7 +507,9 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     const page = await openDemo([{ content: '不會用到。' }], undefined, async (standalone) => {
       await expect.poll(() => standalone.getByText('在下面打字，或把檔案拖進來。').count()).toBe(1);
       await expect
-        .poll(() => standalone.getByRole('status').first().textContent(), { timeout: 30_000 })
+        .poll(() => standalone.getByRole('main').getByRole('status').first().textContent(), {
+          timeout: 30_000,
+        })
         .toBe('就緒');
       await shot(standalone, 'empty-standalone');
     });
@@ -807,8 +809,10 @@ async function stopAtApproval(surface: Surface): Promise<void> {
   await expect
     .poll(() => scope.getByRole('button', { name: '複製回覆' }).count(), { timeout: 30_000 })
     .toBe(1);
+  // 獨立頁面的側欄有會話時，搜尋結果那一格也是 status，DOM 上排在狀態列前面：`.first()` 會抓到它，所以限在 main 裡找。
+  const statusScope = surface.embedded ? scope : surface.page.getByRole('main');
   await expect
-    .poll(() => scope.getByRole('status').first().textContent(), { timeout: 30_000 })
+    .poll(() => statusScope.getByRole('status').first().textContent(), { timeout: 30_000 })
     .toBe('就緒');
   await say('幫我登記阿明');
   await expect
