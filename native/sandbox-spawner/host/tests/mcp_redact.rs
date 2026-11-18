@@ -167,10 +167,15 @@ fn 工具清單_工具的_name_不遮_其餘照遮() {
     );
 }
 
-fn header_server(headers: Value) -> Server {
+fn header_server(headers: Value, credential_headers: Value) -> Server {
     Server::parse(&json!({
         "serverName": "fake",
-        "connection": { "transport": "http", "url": "https://h/x", "headers": headers },
+        "connection": {
+            "transport": "http",
+            "url": "https://h/x",
+            "headers": headers,
+            "credentialHeaders": credential_headers,
+        },
     }))
     .expect("設定")
 }
@@ -178,7 +183,12 @@ fn header_server(headers: Value) -> Server {
 #[test]
 fn authorization_另收_scheme_後面的_token() {
     for name in ["Authorization", "Proxy-Authorization"] {
-        let secrets = header_server(json!({ (name): "Bearer tok-FAKE-0001-xyz" })).secrets();
+        // 沒寫 prefix：憑證值本身是 `Bearer …`，server 常只回顯 token，所以 scheme 後面那一段另收。
+        let secrets = header_server(
+            json!({ (name): "Bearer tok-FAKE-0001-xyz" }),
+            json!({ (name): "" }),
+        )
+        .secrets();
         assert!(
             secrets.contains(&"Bearer tok-FAKE-0001-xyz".to_string()),
             "{secrets:?}"
@@ -188,7 +198,11 @@ fn authorization_另收_scheme_後面的_token() {
             "{secrets:?}"
         );
     }
-    let other = header_server(json!({ "X-Auth": "Bearer tok-FAKE-0002-xyz" })).secrets();
+    let other = header_server(
+        json!({ "X-Auth": "Bearer tok-FAKE-0002-xyz" }),
+        json!({ "X-Auth": "" }),
+    )
+    .secrets();
     assert_eq!(
         other,
         ["Bearer tok-FAKE-0002-xyz"],
@@ -197,27 +211,59 @@ fn authorization_另收_scheme_後面的_token() {
 }
 
 #[test]
-fn 協定層的_header_不收_其餘照收() {
-    let secrets = header_server(json!({
-        "Accept": "application/json, text/event-stream",
-        "content-TYPE": "application/json",
-        "User-Agent": "FAKE-agent/1.0",
-        "Accept-Language": "en-US,en;q=0.9",
-        "MCP-Protocol-Version": "2025-11-25",
-        "X-Tenant": "acme-corp-prod",
-    }))
+fn 有_prefix_的憑證_整個值與_prefix_之後那段都收() {
+    let secrets = header_server(
+        json!({ "X-Api": "Token-tok-FAKE-0005-xyz" }),
+        json!({ "X-Api": "Token-" }),
+    )
     .secrets();
-    assert_eq!(secrets, ["acme-corp-prod"]);
+    let mut secrets = secrets;
+    secrets.sort();
+    assert_eq!(
+        secrets,
+        ["Token-tok-FAKE-0005-xyz", "tok-FAKE-0005-xyz"],
+        "只收整個 header 值（server 原樣回顯）與 prefix 之後那段（憑證單獨出現）"
+    );
 }
 
 #[test]
-fn 非_ascii_的_header_值不丟() {
-    let secrets = header_server(json!({ "X-Name": "密碼-FAKE-0003" })).secrets();
-    assert!(
-        secrets.contains(&"密碼-FAKE-0003".to_string()),
-        "{secrets:?}"
-    );
-    let latin = header_server(json!({ "X-Name": "caf\u{e9}-FAKE-0004" })).secrets();
+fn 沒標成憑證的_header_是字面值_不收() {
+    let secrets = header_server(
+        json!({
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "FAKE-agent/1.0",
+            "X-Tenant": "acme-corp-prod",
+            "X-Key": "FAKE-key-000001",
+        }),
+        json!({ "X-Key": "" }),
+    )
+    .secrets();
+    assert_eq!(secrets, ["FAKE-key-000001"]);
+    let none = header_server(json!({ "X-Tenant": "acme-corp-prod" }), json!({})).secrets();
+    assert!(none.is_empty(), "{none:?}");
+}
+
+#[test]
+fn 非_ascii_的憑證_header_值不丟() {
+    // U+00FF 之後的字元放不進憑證 header（`check_value` 拒）；字面值 header 不過 `check_value`，也不收。
+    let literal = header_server(json!({ "X-Name": "密碼-FAKE-0003" }), json!({})).secrets();
+    assert!(literal.is_empty(), "{literal:?}");
+    let err = Server::parse(&json!({
+        "serverName": "fake",
+        "connection": {
+            "transport": "http",
+            "url": "https://h/x",
+            "headers": { "X-Name": "密碼-FAKE-0003" },
+            "credentialHeaders": { "X-Name": "" },
+        },
+    }))
+    .expect_err("憑證值放不進 header");
+    assert!(err.contains("connection.headers.X-Name"), "{err}");
+    let latin = header_server(
+        json!({ "X-Name": "caf\u{e9}-FAKE-0004" }),
+        json!({ "X-Name": "" }),
+    )
+    .secrets();
     assert!(
         latin.contains(&"caf\u{e9}-FAKE-0004".to_string()),
         "{latin:?}"
@@ -225,6 +271,16 @@ fn 非_ascii_的_header_值不丟() {
     assert!(
         latin.contains(&"caf\u{c3}\u{a9}-FAKE-0004".to_string()),
         "線上送的位元組當 Latin-1 的樣子也收：{latin:?}"
+    );
+    let prefixed = header_server(
+        json!({ "X-Name": "Key-caf\u{e9}-FAKE-0006" }),
+        json!({ "X-Name": "Key-" }),
+    )
+    .secrets();
+    assert!(
+        prefixed.contains(&"caf\u{e9}-FAKE-0006".to_string())
+            && prefixed.contains(&"caf\u{c3}\u{a9}-FAKE-0006".to_string()),
+        "prefix 之後那段兩種形式都收：{prefixed:?}"
     );
 }
 
@@ -253,7 +309,7 @@ mod bridge {
         TlsServer::start(handler(fake, log)).port
     }
 
-    fn server(port: u16, headers: Value) -> Box<Server> {
+    fn server(port: u16, headers: Value, credential_headers: Value) -> Box<Server> {
         Box::new(
             Server::parse(&json!({
                 "serverName": "fake",
@@ -261,6 +317,7 @@ mod bridge {
                     "transport": "http",
                     "url": format!("https://localhost:{port}/mcp"),
                     "headers": headers,
+                    "credentialHeaders": credential_headers,
                 },
             }))
             .expect("設定"),
@@ -287,10 +344,25 @@ mod bridge {
         }
     }
 
+    /// 有 `Authorization` 就標成憑證（prefix `Bearer `），其餘 header 都是字面值。
     fn open(bridge: &Bridge, port: u16, headers: Value) -> nexus_host::mcp::bridge::Opened {
+        let credential_headers = if headers.get("Authorization").is_some() {
+            json!({ "Authorization": "Bearer " })
+        } else {
+            json!({})
+        };
+        open_with(bridge, port, headers, credential_headers)
+    }
+
+    fn open_with(
+        bridge: &Bridge,
+        port: u16,
+        headers: Value,
+        credential_headers: Value,
+    ) -> nexus_host::mcp::bridge::Opened {
         bridge.send(Command::Open {
             open: 1,
-            server: server(port, headers),
+            server: server(port, headers, credential_headers),
             elicitation: false,
         });
         match wait_for(bridge, |o| matches!(o, Outcome::Opened { .. })) {
@@ -327,6 +399,26 @@ mod bridge {
         assert_eq!(result["content"][0]["text"], r#""echo":{"x":"[redacted]"}"#);
     }
 
+    /// `credentialHeaders` 標的才遮：憑證單獨出現（沒有 prefix）也遮，沒標的字面值 header 原樣留在成功結果裡。
+    #[test]
+    fn 只遮標成憑證的_header_字面值留著() {
+        let port = start(FakeMcp::with_tools(true, &["echo"]));
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        open(
+            &bridge,
+            port,
+            json!({ "Authorization": TOKEN, "X-Tenant": "acme-corp-prod" }),
+        );
+        let text = echo(
+            &bridge,
+            12,
+            json!({ "tenant": "acme-corp-prod", "alone": "s3cret-token" }),
+        )
+        .expect("呼叫成功");
+        assert!(!text.contains("s3cret-token"), "憑證單獨出現也遮：{text}");
+        assert!(text.contains("acme-corp-prod"), "字面值不遮：{text}");
+    }
+
     #[test]
     fn 編碼過的憑證值也被遮掉() {
         let port = start(FakeMcp::with_tools(true, &["echo"]));
@@ -349,17 +441,6 @@ mod bridge {
         open(&bridge, port, json!({}));
         let text = echo(&bridge, 12, json!({ "x": "proxy-pass-FAKE-01" })).expect("呼叫成功");
         assert!(!text.contains("proxy-pass-FAKE-01"), "{text}");
-    }
-
-    /// 短的字面值（這裡是 header 的 `ab`）不會把成功結果改壞。
-    #[test]
-    fn 短的字面值不動成功結果() {
-        let port = start(FakeMcp::with_tools(true, &["echo"]));
-        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
-        open(&bridge, port, json!({ "X-Mode": "ab" }));
-        let text = echo(&bridge, 13, json!({ "x": "ab" })).expect("呼叫成功");
-        let result: Value = serde_json::from_str(&text).expect("JSON");
-        assert_eq!(result["content"][0]["text"], r#""echo":{"x":"ab"}"#);
     }
 
     fn custom(fake: FakeMcp) -> u16 {
@@ -427,15 +508,16 @@ mod bridge {
         assert_eq!(result["content"][0]["text"], r#""echo":{"x":"[redacted]"}"#);
     }
 
-    /// 協定層的 header 值不遮，自訂 header 的值照遮。
+    /// 沒標成憑證的 header 值不遮，標了的照遮。
     #[test]
-    fn 協定層_header_的值不遮_自訂的照遮() {
+    fn 沒標的_header_值不遮_標了的照遮() {
         let port = start(FakeMcp::with_tools(true, &["echo"]));
         let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
-        open(
+        open_with(
             &bridge,
             port,
             json!({ "Accept-Language": "en-US,en;q=0.9", "X-Tenant": "acme-corp-prod" }),
+            json!({ "X-Tenant": "" }),
         );
         let text = echo(
             &bridge,
@@ -450,12 +532,17 @@ mod bridge {
         );
     }
 
-    /// 名稱含 header 字面值的工具：清單裡 `name` 原樣、描述遮掉，照這個名字還叫得動。
+    /// 名稱含憑證值的工具：清單裡 `name` 原樣、描述遮掉，照這個名字還叫得動。
     #[test]
-    fn 名稱含字面值的工具_列出後叫得動() {
+    fn 名稱含憑證值的工具_列出後叫得動() {
         let port = start(FakeMcp::with_tools(true, &["acme-corp-prod-lookup"]));
         let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
-        let listed = open(&bridge, port, json!({ "X-Tenant": "acme-corp-prod" }));
+        let listed = open_with(
+            &bridge,
+            port,
+            json!({ "X-Tenant": "acme-corp-prod" }),
+            json!({ "X-Tenant": "" }),
+        );
         let tools: Value = serde_json::from_str(&listed.tools).expect("JSON");
         assert_eq!(tools[0]["name"], "acme-corp-prod-lookup");
         assert_eq!(tools[0]["description"], "tool [redacted]-lookup");
