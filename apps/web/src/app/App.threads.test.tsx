@@ -1832,11 +1832,9 @@ describe('@ 引用別的會話', () => {
  * 清單讀不出來的退路由「記住這條 thread」那組驗：那裡的假 client 一律回 rejected，「新對話」照樣換一條新的。
  */
 describe('新對話重用空白會話', () => {
-  // 「上一條」講過話、已經落盤：它不在清單上的話，App 會為了把它列出來多讀一次清單，讀幾次的斷言就不準了。
   const LISTED: ThreadListResult = {
     unreadable: 0,
     items: [
-      { threadId: '上一條', updatedAt: 4_000, running: false, blank: false, title: '上一條的標題' },
       {
         threadId: '講過話的那條',
         updatedAt: 3_000,
@@ -1907,7 +1905,7 @@ describe('新對話重用空白會話', () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    const spoken: ThreadListResult = { unreadable: 0, items: LISTED.items.slice(0, 2) };
+    const spoken: ThreadListResult = { unreadable: 0, items: LISTED.items.slice(0, 1) };
     render(<App client={gated(fake, spoken).client} />);
     await sayOnce();
 
@@ -2245,91 +2243,6 @@ describe('會話標題（#655）', () => {
     });
     await waitFor(() => expect(threadRows(list)).toHaveLength(1));
     expect(threadRows(list)[0]!.textContent).toContain('修好登入頁的錯誤');
-  });
-
-  it('側欄的清單比這條落盤先回來：送出第一句、推來標題之後，目前這一列照樣列出來', async () => {
-    // 第一份清單裡沒有目前這條（server 剛起、組裝比冷讀清單慢）；之後的每一份都有它。
-    setSeq(0);
-    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '剛開的' }));
-    const fake = fakeClient([]);
-    let calls = 0;
-    const listThreads: WireClient['listThreads'] = async () => {
-      calls += 1;
-      return {
-        kind: 'ok',
-        result: {
-          unreadable: 0,
-          items: [
-            ...(calls === 1
-              ? []
-              : [{ threadId: '剛開的', updatedAt: 3_000, running: false, blank: false }]),
-            {
-              threadId: '別條',
-              updatedAt: 1_000,
-              running: false,
-              blank: false,
-              title: '別條的標題',
-            },
-          ],
-        },
-      };
-    };
-    render(<App client={{ ...fake.client, listThreads }} />);
-
-    const list = await screen.findByRole('group', { name: '以前的會話' });
-    await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /別條的標題/ })).toBeTruthy(),
-    );
-    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '幫我修登入' } });
-    fireEvent.click(screen.getByRole('button', { name: '送出' }));
-    await waitFor(() => expect(screen.getByText('幫我修登入')).toBeTruthy());
-    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('幫我修登入')]);
-    await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
-
-    await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
-        '目前這條',
-      ),
-    );
-  });
-
-  it('重抓回來還是沒有目前這條：只多抓一次，不一直抓', async () => {
-    setSeq(0);
-    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '剛開的' }));
-    const fake = fakeClient([]);
-    let calls = 0;
-    const listThreads: WireClient['listThreads'] = async () => {
-      calls += 1;
-      return {
-        kind: 'ok',
-        result: {
-          unreadable: 0,
-          items: [
-            {
-              threadId: '別條',
-              updatedAt: 1_000,
-              running: false,
-              blank: false,
-              title: '別條的標題',
-            },
-          ],
-        },
-      };
-    };
-    render(<App client={{ ...fake.client, listThreads }} />);
-
-    const list = await screen.findByRole('group', { name: '以前的會話' });
-    await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /別條的標題/ })).toBeTruthy(),
-    );
-    const before = calls;
-    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '幫我修登入' } });
-    fireEvent.click(screen.getByRole('button', { name: '送出' }));
-    await waitFor(() => expect(screen.getByText('幫我修登入')).toBeTruthy());
-    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('幫我修登入')]);
-    await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(calls).toBe(before + 1);
   });
 
   it('接回一條有標題的：從歷史就讀得到', async () => {

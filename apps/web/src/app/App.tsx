@@ -448,15 +448,6 @@ function ConversationView({
   useEffect(() => {
     if (deletedElsewhere) refreshDirectory();
   }, [deletedElsewhere, refreshDirectory]);
-  // 這條講過話了、清單上卻沒有它：先回來的那份清單比它落盤早，線沒重接、側欄沒重開就不會再抓，側欄會一直漏列它。
-  // 重抓一次；重抓回來還是沒有，`missingHere` 不變，不會一直抓。
-  const missingHere =
-    directory.listing.kind === 'ok' &&
-    (conversation.state.entries.length > 0 || Boolean(conversation.state.title)) &&
-    !directory.listing.result.items.some((item) => item.threadId === threadId);
-  useEffect(() => {
-    if (missingHere) refreshDirectory();
-  }, [missingHere, refreshDirectory]);
   const sessionLinks = useMemo(() => {
     const listed =
       directory.listing.kind === 'ok'
