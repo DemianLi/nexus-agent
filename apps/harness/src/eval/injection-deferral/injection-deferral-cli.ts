@@ -1,10 +1,12 @@
 /**
- * 注入源延後評估的進入點 —— `pnpm --filter @nexus/harness eval:injection-deferral`。
+ * 注入源預算評估的進入點 —— `pnpm --filter @nexus/harness eval:injection-deferral`。
  * [#2929](https://github.com/DemianLi/nexus-agent/issues/2929)。
  *
- * 問的是「指示檔放不下、整份延後成一行指標之後，模型會不會去讀、讀了會不會照做」。同一份 `AGENTS.md` 跑延後與不延後兩邊，
- * 大檔四格、小檔兩格，`--only large|small` 只跑其中一種。題目與做法見 [`fixture.ts`](./fixture.ts) 與
- * [`runner.ts`](./runner.ts)。
+ * 問的是「指示檔放不下、`agent-instructions` 把它截到預算上限並通知其餘用 `read_file` 讀之後，模型看得到多少、會不會去讀其餘的、
+ * 讀了會不會照做」。同一份 `AGENTS.md` 跑放不下與放得下兩邊：大檔四格（規則在檔頭或檔尾），小檔三格（放得下一格，放不下兩格，
+ * 規則在檔頭或檔尾），`--only large|small` 只跑其中一種。報表的「規則已在請求」是模型第一個請求就看得到規則的比例，
+ * 「去讀了」是模型自己去讀的比例；兩欄分開，才看得出照做是因為看到了還是因為讀了。題目見 [`fixture.ts`](./fixture.ts)，
+ * 判定見 [`runner.ts`](./runner.ts)。
  *
  * **不進 CI。** 需要 `NVIDIA_API_KEY`，會打真模型。每一次執行 1 到 `DEFERRAL_MAX_REQUESTS + 1` 個請求（看模型叫幾次工具；
  * 重試的每一次嘗試也算，超過上限的那一個可能已經送出）。`--samples N` 每格跑幾次（省略即 1），`--count` 只印下限與上限、不跑，
@@ -41,7 +43,7 @@ async function main(): Promise<void> {
   const cases = parseOnly(argv);
   const runsPlanned = cases.length * samples;
   console.log(
-    `注入源延後評估：${cases.length}/${DEFERRAL_CASES.length} 格 × ${samples} 次，共 ${runsPlanned} 到 ${runsPlanned * (DEFERRAL_MAX_REQUESTS + 1)} 個模型請求` +
+    `注入源預算評估：${cases.length}/${DEFERRAL_CASES.length} 格 × ${samples} 次，共 ${runsPlanned} 到 ${runsPlanned * (DEFERRAL_MAX_REQUESTS + 1)} 個模型請求` +
       `（每次 1 到 ${DEFERRAL_MAX_REQUESTS + 1} 個，重試也算）。模型 ${DEFAULT_LIVE_MODEL_ID}。`,
   );
   if (argv.includes('--count')) return;
@@ -72,7 +74,7 @@ async function main(): Promise<void> {
         runs.push(run);
         console.log(
           `  · ${label} 延後 ${run.deferred ? '是' : '否'} 讀 AGENTS.md ${run.readCalls} 次 ` +
-            `讀到規則 ${run.ruleRead ? '是' : '否'} 照做 ${run.followed ? '是' : '否'} 請求 ${run.requests} 個` +
+            `規則已在請求 ${run.ruleInjected ? '是' : '否'} 讀到規則 ${run.ruleRead ? '是' : '否'} 照做 ${run.followed ? '是' : '否'} 請求 ${run.requests} 個` +
             (run.capped ? '（到上限中止）' : ''),
         );
         if (argv.includes('--answers')) console.log(`    ${JSON.stringify(run.finalText)}`);
@@ -83,7 +85,9 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n格                    次數  延後  去讀了  讀到規則  照做  請求（合計）');
+  console.log(
+    '\n格                    次數  延後  去讀了  規則已在請求  讀到規則  照做  請求（合計）',
+  );
   for (const testCase of cases) {
     const all = runs.filter((run) => run.testCase === testCase);
     // 被中止的那幾次拿不到訊息串，不算進比例；請求數照算。
@@ -91,7 +95,7 @@ async function main(): Promise<void> {
     console.log(
       `${deferralCaseId(testCase).padEnd(22)}${String(cell.length).padEnd(6)}` +
         `${ratio(cell, (run) => run.deferred).padEnd(6)}${ratio(cell, (run) => run.readCalls > 0).padEnd(8)}` +
-        `${ratio(cell, (run) => run.ruleRead).padEnd(10)}${ratio(cell, (run) => run.followed).padEnd(6)}` +
+        `${ratio(cell, (run) => run.ruleInjected).padEnd(14)}${ratio(cell, (run) => run.ruleRead).padEnd(10)}${ratio(cell, (run) => run.followed).padEnd(6)}` +
         `${all.reduce((sum, run) => sum + run.requests, 0)}` +
         (all.length > cell.length
           ? `（另有 ${all.length - cell.length} 次到上限中止，不在比例裡）`

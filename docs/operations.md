@@ -693,7 +693,7 @@ serve 上那條對話建不起來，回應與伺服器日誌照上面「對話�
 
 ```json
 "sources": [
-  { "id": "agent-instructions", "bytes": 188, "limit": 13107, "deferredBytes": 48210 },
+  { "id": "agent-instructions", "bytes": 13107, "limit": 13107, "deferredBytes": 35574 },
   { "id": "sandbox:policy", "bytes": 512 },
   { "id": "skill-catalog", "bytes": 1893, "limit": 6553 }
 ]
@@ -708,9 +708,15 @@ serve 上那條對話建不起來，回應與伺服器日誌照上面「對話�
 
 **超過上限時怎麼辦，看來源的類別**（下表的「類別」欄）：
 
-- **可延後**的四個來源不截斷：放不下的那一項整項不放，原地留一行英文指標，寫明哪一項、多大、上限多少、用哪個讀檔工具讀。
-  - `agent-instructions`：從最具體的那一層指示檔往外，一份一份放；放了會超過的那一份整份不放（包含最具體的那一份），後面較小的照樣試。
-    指標是 `Workspace instruction budget 13107 bytes: not loaded /AGENTS.md (48210 bytes); read each with read_file before acting on this workspace.`
+- **可延後**的四個來源，放不下的那一項原地留一行英文指標，寫明哪一項、多大、上限多少、用哪個讀檔工具讀；除了 `agent-instructions`，指標之外內容整項不放。
+  - `agent-instructions`（[#2934](https://github.com/DemianLi/nexus-agent/issues/2934)）：先從最具體的那一層指示檔往外，整份放得下的照放；
+    還有放不下的，取其中最具體的那一份，截成剩下的預算放得下的最長檔頭（不切碎字元，至少 256 位元組，截不到就整份不放），其餘整份不放。
+    通知行在最前面，寫明哪一份被截、從幾位元組截到幾位元組、哪幾份整份沒放、各多大，以及其餘用 `read_file` 讀。三種情形：
+    - `Workspace instruction budget 13107 bytes: truncated /AGENTS.md from 48210 to 12636 bytes; read the rest of /AGENTS.md with read_file before acting on this workspace.`
+    - `Workspace instruction budget 400 bytes: not loaded /AGENTS.md (48210 bytes); read each with read_file before acting on this workspace.`（截不出 256 位元組以上的檔頭時）
+    - `Workspace instruction budget 3276 bytes: truncated /CLAUDE.md from 3000 to 2749 bytes, not loaded /AGENTS.md (3000 bytes); read the rest of /CLAUDE.md and each unloaded file with read_file before acting on this workspace.`
+    - 預算連外框加通知都放不下時（例如 160 位元組），送出的是沒有外框的那一行；那一行本身超過 `maxBytes` 時，照位元組截到 `maxBytes`、不切碎字元。
+    - `deferredBytes` 是沒放進去的位元組：被截的算被截掉的那一段，整份沒放的算整份。
   - `skill-catalog`：整段放不下時，從清單尾端往前留（清單照每個名字第一次出現的先後排，後登記的來源才有的技能在尾端），留不下的條目整條不列，清單最後一行是
     ``- (12 more skills not listed: skills section budget 6553 bytes. List `/skills/` with ls and read a SKILL.md with read_file.)``
   - `skill-invocation`：那一份技能的正文整份不放，換成 `Skill "report" is 91200 bytes, over the 65536-byte budget: read /skills/report/SKILL.md with read_file and follow it.`
