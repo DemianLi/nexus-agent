@@ -217,13 +217,12 @@ fn 有_prefix_的憑證_整個值與_prefix_之後那段都收() {
         json!({ "X-Api": "Token-" }),
     )
     .secrets();
-    assert!(
-        secrets.contains(&"Token-tok-FAKE-0005-xyz".to_string()),
-        "server 原樣回顯整個 header 值：{secrets:?}"
-    );
-    assert!(
-        secrets.contains(&"tok-FAKE-0005-xyz".to_string()),
-        "憑證單獨出現在回應裡：{secrets:?}"
+    let mut secrets = secrets;
+    secrets.sort();
+    assert_eq!(
+        secrets,
+        ["Token-tok-FAKE-0005-xyz", "tok-FAKE-0005-xyz"],
+        "只收整個 header 值（server 原樣回顯）與 prefix 之後那段（憑證單獨出現）"
     );
 }
 

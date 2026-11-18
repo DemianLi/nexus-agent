@@ -1417,6 +1417,7 @@ mod credential_headers {
         json!({ "serverName": "a", "connection": connection })
     }
 
+    #[track_caller]
     fn reject(headers: Value, credential_headers: Option<Value>, expect: &str) {
         let err = Server::parse(&config(headers, credential_headers)).expect_err("要拒絕");
         assert!(err.contains(expect), "{err} 不含 {expect}");
@@ -1475,7 +1476,12 @@ mod credential_headers {
             "不是合法的 header 名",
         );
         reject(
-            json!({ "X-Key": "pre-ab" }),
+            json!({ "X-Key": "pre-FAKE" }),
+            Some(json!({ "X-Key": "pre-" })),
+            "connection.headers.X-Key（憑證）",
+        );
+        reject(
+            json!({ "X-Key": "pre-" }),
             Some(json!({ "X-Key": "pre-" })),
             "connection.headers.X-Key（憑證）",
         );

@@ -19,7 +19,8 @@ pub struct Redactor {
     everywhere: Vec<String>,
     /// 不到 [`MIN_VALUE_CODE_POINTS`] 的值的各形式：只遮錯誤與診斷。
     ///
-    /// 憑證值短於門檻會在值檢查被拒，所以這些只可能是設定裡寫死的字面值（網址 query 的片段）。
+    /// 憑證 header 的值短於門檻會在值檢查被拒，但 prefix 為空的 `Authorization: "Bearer ab"` 過得了檢查，scheme 後面的 `ab` 會落在這一級；
+    /// 另外就是設定裡寫死的字面值（網址 query 的片段）。
     /// 它們出現在 server 的成功結果裡是正常的內容（`limit=10` 的 `10`），遮了會把答案改壞；出現在連線錯誤裡則是 reqwest 印出來的網址，要遮。
     errors_only: Vec<String>,
 }
