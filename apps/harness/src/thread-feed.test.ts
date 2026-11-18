@@ -101,6 +101,8 @@ function brief(activity: PumpActivity | ThreadFeedFrame): string {
       return `${thread}requested ${interruptIdOf(activity.event)}`;
     case 'input-withdrawn':
       return `${thread}withdrawn ${activity.interruptId}`;
+    case 'added':
+      return `${thread}added`;
   }
 }
 
@@ -232,6 +234,27 @@ describe('集線器', () => {
     const after: ThreadFeedFrame[] = [];
     for await (const frame of feed.subscribe()) after.push(frame);
     expect(after).toEqual([]);
+  });
+
+  it('接上一條 thread：每一條線都收到一顆 added，帶接上的時間；之後才開的線不補送（#2988）', async () => {
+    const feed = new ThreadFeed({ now: () => 42 });
+    const first = drain(feed.subscribe());
+    const second = drain(feed.subscribe());
+    const source = { threadId: '新', pendings: [], watch: () => () => undefined };
+    feed.attach(source);
+    const added: ThreadFeedFrame = { type: 'added', threadId: '新', updatedAt: 42 };
+    await first.until((frames) => frames.length > 0);
+    await second.until((frames) => frames.length > 0);
+    expect(first.frames).toEqual([added]);
+    expect(second.frames).toEqual([added]);
+
+    const late = new AbortController();
+    const after = drain(feed.subscribe(late.signal));
+    late.abort();
+    await after.done;
+    expect(after.frames).toEqual([]);
+    feed.close();
+    await Promise.all([first.done, second.done]);
   });
 });
 
@@ -373,8 +396,10 @@ describe('走真的線', () => {
       if (requested?.type !== 'input-requested') throw new Error('那一題沒來');
       const id = interruptIdOf(requested.event);
       expect(feed.frames.map(brief)).toEqual([
+        'plain added',
         'plain running',
         'plain idle',
+        'parked added',
         'parked running',
         `parked requested ${id}`,
         `parked withdrawn ${id}`,

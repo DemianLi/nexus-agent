@@ -8,6 +8,7 @@ import {
   pendingKindOf,
   reduceThreadStatus,
   rowStatus,
+  unlistedRows,
   withPlaceholders,
 } from '@/features/threads/status';
 import type { ThreadStatusAction, ThreadStatusState } from '@/features/threads/status';
@@ -352,5 +353,44 @@ describe('分叉的佔位（#1581）', () => {
   it('同一條放兩次只有一列；重接只清紀錄，不清佔位', () => {
     const state = run('來源', placeholder, placeholder, { type: 'connected' });
     expect(state.placeholders).toEqual([child]);
+  });
+});
+
+/** 全域下行推來的新增（#2988）。 */
+describe('推來的新增（#2988）', () => {
+  const added: ThreadStatusAction = feed({ type: 'added', threadId: '新', updatedAt: 7 });
+  const requested: ThreadStatusAction = { type: 'list-requested' };
+  const rows = (state: ThreadStatusState, ...items: ThreadSummary[]) =>
+    withPlaceholders(items, unlistedRows(state));
+  const fresh: ThreadSummary = { threadId: '新', updatedAt: 7, running: false, blank: true };
+
+  it('沒有刷新在途：馬上放在最前面，標空白；講過話之前側欄照空白處理', () => {
+    const state = run('別條', listed(item('別條')), added);
+    expect(rows(state, item('別條'))).toEqual([fresh, item('別條')]);
+    expect(effectiveBlank(state, fresh)).toBe(true);
+  });
+
+  it('刷新在途時推來：晚到的舊清單沒有它，這一列照樣在', () => {
+    const state = run('新', requested, added, listed(item('別條')));
+    expect(rows(state, item('別條')).map((row) => row.threadId)).toEqual(['新', '別條']);
+  });
+
+  it('推來之後才送的清單也沒有它（server 還沒落盤）：這一列照樣在', () => {
+    const state = run('新', added, requested, listed(item('別條')));
+    expect(rows(state, item('別條')).map((row) => row.threadId)).toEqual(['新', '別條']);
+  });
+
+  it('清單有它之後收掉，只剩清單那一列；清單上已有的不被推來的蓋掉', () => {
+    const fromServer: ThreadSummary = { ...item('新'), title: '標題', updatedAt: 9 };
+    const state = run('新', added, listed(fromServer));
+    expect(unlistedRows(state)).toEqual([]);
+    const again = run('新', listed(fromServer), added);
+    expect(rows(again, fromServer)).toEqual([fromServer]);
+  });
+
+  it('同一條推兩次只有一列；重接不清它；說在跑之後不算空白', () => {
+    const state = run('別條', added, added, { type: 'connected' }, status('新', true));
+    expect(unlistedRows(state)).toEqual([fresh]);
+    expect(effectiveBlank(state, fresh)).toBe(false);
   });
 });

@@ -1101,8 +1101,11 @@ export type ThreadSearchResponse =
  *
  * **回答不走這條線**：照舊走那條 thread 自己的 `input.respond`。
  *
- * **client 要跳過不認得的 `type`**：這條線之後還要帶會話增減與活動時間（dsh 的 `api-session/added`／`removed`／
- * `activity`，#632 拍板這一版不做），舊的 client 收到新種類不能當掉。
+ * - **新增**：一條 thread 接上這台 server 的這條線時一顆 {@link ThreadAddedFrame}（#2988）。
+ *   新開的會話不必等下一份列表就進得了側欄。**接上時不補送**：已經接著的那些由列表給。
+ *
+ * **client 要跳過不認得的 `type`**：這條線之後還要帶會話刪除與活動時間（還沒做），舊的 client 收到新種類
+ * 不能當掉。
  *
  * **偏離**：dsh 的 frame 是 Cordis 的 `emit`／`waterfall`，路徑是 gateway 的；我們沒有那一層，frame 與路徑是這裡定的。
  * dsh 的撤回只送給收過那一顆的 client，我們送給每一條——多收一顆認不得的撤回，client 照規則跳過。
@@ -1136,9 +1139,20 @@ export interface ThreadInputWithdrawnFrame {
   readonly interruptId: string;
 }
 
+/**
+ * 一條 thread 接上了這台 server（新開的，或撤出記憶體之後再打開的）。只帶 id 與接上的時間：新開的那條還沒有標題、還是空白，
+ * 摘要的其餘幾格等列表給。**檔不一定已經在盤上**：檔在第一次寫事件時才建出來，比這一顆晚，所以緊接著讀的列表可能還沒有它。
+ */
+export interface ThreadAddedFrame {
+  readonly type: 'added';
+  readonly threadId: string;
+  /** Unix epoch 毫秒，server 的時鐘。 */
+  readonly updatedAt: number;
+}
+
 /** {@link THREAD_FEED_PATH} 上的一顆。 */
 export type ThreadFeedFrame =
-  ThreadStatusFrame | ThreadInputRequestedFrame | ThreadInputWithdrawnFrame;
+  ThreadStatusFrame | ThreadInputRequestedFrame | ThreadInputWithdrawnFrame | ThreadAddedFrame;
 
 /**
  * 一顆下行的事件，信封哪裡不對：回第一個不對的欄位路徑與原因，都對就回 `undefined`。{@link assertWireEvent} 與 {@link isWireEvent}
@@ -1244,6 +1258,8 @@ export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
     }
     case 'input-withdrawn':
       return typeof frame['interruptId'] === 'string';
+    case 'added':
+      return typeof frame['updatedAt'] === 'number' && Number.isFinite(frame['updatedAt']);
     default:
       return false;
   }

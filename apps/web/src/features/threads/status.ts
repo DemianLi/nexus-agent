@@ -24,9 +24,11 @@ import { isPlanReview } from '@/features/plan';
  * - **分叉的佔位**（#1581 刀 2，dsh `manager.ts:556-576` 的 `fork` 與 `:828-860` 的 `applyMutation`）：分叉一成功就放一列進清單，
  *   不等下一次刷新。它是變更紀錄的一筆：有刷新在途就記下來，回應到了照樣重放，晚到的舊清單蓋不掉它；沒有在途的話，下一份
  *   清單就是 server 講的話，佔位跟著清掉（子 thread 在 server 回分叉之前就落了盤，那一份清單裡有它）。清單上已經有那一列時，
- *   只補 `parentThreadId`，`blank` 只降不升。**佔位算講過（`engaged`）**：照 dsh 它是 `blank: true`，等 Host 的摘要校正；我們沒有
- *   session-added 推送，標著空白的話人一切走，那一列在下一次刷新之前就被側欄藏起來。分叉一定切在收了的一輪之後，子 thread
- *   不會是空的（偏離 dsh，理由 1：基座沒有那條推送）。
+ *   只補 `parentThreadId`，`blank` 只降不升。**佔位算講過（`engaged`）**：它不帶摘要，標著空白的話人一切走，那一列在下一次刷新之前就被側欄藏起來。
+ *   分叉一定切在收了的一輪之後，子 thread 不會是空的。
+ * - **推來的新增**（#2988）：全域下行說一條 thread 接上了，清單上沒有就放一列在最前面，標空白，
+ *   不算講過——它講過話之後由狀態框或清單降成不空白。跟佔位一樣記進變更紀錄、晚到的舊清單蓋不掉；**不一樣的是清單沒有它也留著**，
+ *   清單有它時才收掉：落盤比這一顆晚，緊接著送出的清單也可能還沒有它（見 `@nexus/wire` 的 `ThreadAddedFrame`）。
  * - **有效空白**（#1600 `N1363`，dsh `manager.ts:95`、`:284-298` 的 `engagedSessions`）：清單上的 `blank` 是磁碟上
  *   還沒有 `turn/start`。全域下行或清單說在跑過的那條就不算空白，**跑完也不鬆開**（照 dsh：跑完之後、下一次刷新之前
  *   快照還說空白），清單上沒有那條時才拿掉。
@@ -61,6 +63,8 @@ export interface ThreadStatusState {
   readonly mutations: readonly ListMutation[] | undefined;
   /** 分叉的佔位，最新的在前；畫的時候由 {@link withPlaceholders} 合進清單。 */
   readonly placeholders: readonly ThreadSummary[];
+  /** 推來的新增；清單回來有它就收掉。最新的在前。 */
+  readonly added: readonly ThreadSummary[];
 }
 
 export type ThreadStatusAction =
@@ -85,6 +89,7 @@ export function initialThreadStatus(current: string): ThreadStatusState {
     engaged: new Set(),
     mutations: undefined,
     placeholders: [],
+    added: [],
   };
 }
 
@@ -140,6 +145,16 @@ function applyFrame(state: ThreadStatusState, frame: ThreadFeedFrame): ThreadSta
       else pending.set(frame.threadId, rest);
       return { ...state, pending };
     }
+    case 'added': {
+      if (state.added.some((row) => row.threadId === frame.threadId)) return state;
+      const row: ThreadSummary = {
+        threadId: frame.threadId,
+        updatedAt: frame.updatedAt,
+        running: false,
+        blank: true,
+      };
+      return { ...state, added: [row, ...state.added] };
+    }
   }
 }
 
@@ -163,7 +178,8 @@ function applyListing(
   const running = new Map([...next.running].filter(([id]) => present.has(id)));
   const unread = new Set([...next.unread].filter((id) => present.has(id) && id !== next.current));
   const engaged = new Set([...next.engaged].filter((id) => present.has(id)));
-  return { ...next, running, unread, engaged, baselined: true };
+  const added = next.added.filter((row) => !present.has(row.threadId));
+  return { ...next, running, unread, engaged, added, baselined: true };
 }
 
 function applyPlaceholder(state: ThreadStatusState, summary: ThreadSummary): ThreadStatusState {
@@ -244,9 +260,16 @@ export function effectiveBlank(state: ThreadStatusState, item: ThreadSummary): b
   return item.blank && !state.engaged.has(item.threadId);
 }
 
+/** 清單之外要合進去的列：分叉的佔位，加上推來的新增裡沒有佔位的那些。交給 {@link withPlaceholders}。 */
+export function unlistedRows(state: ThreadStatusState): readonly ThreadSummary[] {
+  if (state.added.length === 0) return state.placeholders;
+  const forked = new Set(state.placeholders.map((row) => row.threadId));
+  return [...state.placeholders, ...state.added.filter((row) => !forked.has(row.threadId))];
+}
+
 /**
- * 清單合上分叉的佔位（dsh `applyMutation` 的 `placeholder` 那一支）：清單上沒有的放最前面；已經有的只補 `parentThreadId`，
- * `blank` 只降不升，其餘照清單。沒有佔位時原樣回傳同一份。
+ * 清單合上分叉的佔位與推來的新增：清單上沒有的放最前面；已經有的只補 `parentThreadId`，`blank` 只降不升，其餘照清單。
+ * 沒有佔位與新增時原樣回傳同一份清單。
  */
 export function withPlaceholders(
   items: readonly ThreadSummary[],

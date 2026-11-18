@@ -130,6 +130,8 @@ class RemoteThread implements FeedSource {
         this.#tell({ type: 'input-requested', event: frame.event });
         continue;
       }
+      // 前台接上這條時自己廣播過了（`ThreadFeed.attach`）；不跳過的話，落到下面會被當成一次撤回。
+      if (frame.type === 'added') continue;
       this.#pending.delete(frame.interruptId);
       this.#tell({ type: 'input-withdrawn', interruptId: frame.interruptId });
     }
