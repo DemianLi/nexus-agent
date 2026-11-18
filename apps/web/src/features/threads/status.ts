@@ -29,6 +29,9 @@ import { isPlanReview } from '@/features/plan';
  * - **推來的新增**（#2988）：全域下行說一條 thread 接上了，清單上沒有就放一列在最前面，標空白，
  *   不算講過——它講過話之後由狀態框或清單降成不空白。跟佔位一樣記進變更紀錄、晚到的舊清單蓋不掉；**不一樣的是清單沒有它也留著**，
  *   清單有它時才收掉：落盤比這一顆晚，緊接著送出的清單也可能還沒有它（見 `@nexus/wire` 的 `ThreadAddedFrame`）。
+ * - **推來的刪除與集合**（#2990）：刪除數一次（`removals`），由呼叫端拿去重讀已刪除清單，推來的新增裡有它就拿掉；
+ *   清單回來重放時不再數。釘選、封存集合推來的是整份（`pushed`），**以它為準直到下一份清單**：清單回來先清掉，
+ *   在途期間推來的由重放放回去，所以比它早送出、晚回來的清單蓋不掉它。重接不清：重接之後馬上重抓清單。
  * - **有效空白**（#1600 `N1363`，dsh `manager.ts:95`、`:284-298` 的 `engagedSessions`）：清單上的 `blank` 是磁碟上
  *   還沒有 `turn/start`。全域下行或清單說在跑過的那條就不算空白，**跑完也不鬆開**（照 dsh：跑完之後、下一次刷新之前
  *   快照還說空白），清單上沒有那條時才拿掉。
@@ -65,6 +68,10 @@ export interface ThreadStatusState {
   readonly placeholders: readonly ThreadSummary[];
   /** 推來的新增；清單回來有它就收掉。最新的在前。 */
   readonly added: readonly ThreadSummary[];
+  /** 推來的整份釘選、封存集合；清單回來就清掉。 */
+  readonly pushed: { readonly pinned?: readonly string[]; readonly archived?: readonly string[] };
+  /** 推來過幾顆刪除。 */
+  readonly removals: number;
 }
 
 export type ThreadStatusAction =
@@ -90,6 +97,8 @@ export function initialThreadStatus(current: string): ThreadStatusState {
     mutations: undefined,
     placeholders: [],
     added: [],
+    pushed: {},
+    removals: 0,
   };
 }
 
@@ -155,6 +164,14 @@ function applyFrame(state: ThreadStatusState, frame: ThreadFeedFrame): ThreadSta
       };
       return { ...state, added: [row, ...state.added] };
     }
+    case 'removed':
+      return state.added.some((row) => row.threadId === frame.threadId)
+        ? { ...state, added: state.added.filter((row) => row.threadId !== frame.threadId) }
+        : state;
+    case 'pinned':
+      return { ...state, pushed: { ...state.pushed, pinned: frame.pinnedThreadIds } };
+    case 'archived':
+      return { ...state, pushed: { ...state.pushed, archived: frame.archivedThreadIds } };
   }
 }
 
@@ -179,7 +196,7 @@ function applyListing(
   const unread = new Set([...next.unread].filter((id) => present.has(id) && id !== next.current));
   const engaged = new Set([...next.engaged].filter((id) => present.has(id)));
   const added = next.added.filter((row) => !present.has(row.threadId));
-  return { ...next, running, unread, engaged, added, baselined: true };
+  return { ...next, running, unread, engaged, added, pushed: {}, baselined: true };
 }
 
 function applyPlaceholder(state: ThreadStatusState, summary: ThreadSummary): ThreadStatusState {
@@ -216,7 +233,9 @@ export function reduceThreadStatus(
         ...(state.mutations === undefined ? {} : { mutations: [] }),
       };
     case 'frame': {
-      const next = applyFrame(state, action.frame);
+      const applied = applyFrame(state, action.frame);
+      const next =
+        action.frame.type === 'removed' ? { ...applied, removals: applied.removals + 1 } : applied;
       return state.mutations === undefined
         ? next
         : { ...next, mutations: [...state.mutations, { kind: 'frame', frame: action.frame }] };

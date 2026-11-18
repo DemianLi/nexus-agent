@@ -147,6 +147,20 @@ describe('FrontFeed', () => {
     expect(frames).toEqual([added('t1'), { type: 'status', threadId: 't1', running: true }]);
   });
 
+  it('對話行程那條線上的刪除與釘選、封存集合不轉：那些由前台自己答、自己廣播（#2990）', async () => {
+    const upstream = await conversation('t1');
+    const { feed, line } = frontFeed();
+    const frames = listen(line);
+    feed.up('t1', upstream.socket);
+    await expect.poll(() => upstream.lines()).toBe(1);
+    upstream.push({ type: 'removed', threadId: 't1' });
+    upstream.push({ type: 'archived', archivedThreadIds: ['t1'] });
+    upstream.push({ type: 'pinned', pinnedThreadIds: [] });
+    upstream.push({ type: 'status', threadId: 't1', running: true });
+    await expect.poll(() => frames.some(({ type }) => type === 'status')).toBe(true);
+    expect(frames).toEqual([added('t1'), { type: 'status', threadId: 't1', running: true }]);
+  });
+
   it('同一個 socket 重複 up 不重接', async () => {
     const upstream = await conversation('t1');
     const { feed } = frontFeed();

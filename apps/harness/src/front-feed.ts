@@ -118,7 +118,8 @@ class RemoteThread implements FeedSource {
     let statusSeen = false;
     void this.#snapshot(() => statusSeen);
     for await (const frame of decodeSseData(response.body)) {
-      if (!isThreadFeedFrame(frame) || frame.threadId !== this.threadId) continue;
+      if (!isThreadFeedFrame(frame)) continue;
+      if (!('threadId' in frame) || frame.threadId !== this.threadId) continue;
       if (frame.type === 'status') {
         statusSeen = true;
         this.#setRunning(frame.running);
@@ -130,8 +131,8 @@ class RemoteThread implements FeedSource {
         this.#tell({ type: 'input-requested', event: frame.event });
         continue;
       }
-      // 前台接上這條時自己廣播過了（`ThreadFeed.attach`）；不跳過的話，落到下面會被當成一次撤回。
-      if (frame.type === 'added') continue;
+      // `added` 前台接上這條時自己廣播過（`ThreadFeed.attach`）；刪除與釘選、封存由前台自己答、自己廣播（#2990）。
+      if (frame.type !== 'input-withdrawn') continue;
       this.#pending.delete(frame.interruptId);
       this.#tell({ type: 'input-withdrawn', interruptId: frame.interruptId });
     }

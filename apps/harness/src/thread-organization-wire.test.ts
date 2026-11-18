@@ -18,6 +18,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry, SessionLog, SessionRegistry } from '@nexus/core';
 import { createWireClient, SUBAGENT_CLOSED } from '@nexus/wire';
+import type { ThreadFeedFrame } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -29,6 +30,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { composeAttachSessions } from './session-attach.js';
 import { THREAD_ORGANIZATION_FILE, ThreadOrganization } from './thread-organization.js';
+import { ThreadFeed } from './thread-feed.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
@@ -141,6 +143,44 @@ describe('沒有 agent 的 thread：形狀與錯誤碼', () => {
       result: { ok: true, value: { pinnedThreadIds: ['b'] } },
     });
     expect(await client.threadUnpin('從沒出現過')).toMatchObject({ result: { ok: true } });
+  });
+
+  it('集合變了才在全域下行推整份：封存順手取消釘選時兩顆都推；沒變、失敗的不推（#2990）', async () => {
+    const threadOrganization = await ThreadOrganization.open(dir);
+    const threadFeed = new ThreadFeed();
+    const { client } = rig({
+      createAgent: stubAgent,
+      threadOrganization,
+      threadFeed,
+      storedThreadKnown: async (id) => id !== 'ghost',
+    });
+    const controller = new AbortController();
+    const frames: ThreadFeedFrame[] = [];
+    const stream = threadFeed.subscribe(controller.signal);
+    const reading = (async () => {
+      for await (const frame of stream) frames.push(frame);
+    })();
+
+    await client.threadPin('a');
+    await client.threadPin('a');
+    await client.threadPin('b');
+    await client.threadArchive('a');
+    await client.threadArchive('a');
+    await client.threadPin('ghost');
+    await client.threadUnarchive('a');
+    await client.threadUnarchive('a');
+    await client.threadUnpin('b');
+    controller.abort();
+    await reading;
+
+    expect(frames).toEqual([
+      { type: 'pinned', pinnedThreadIds: ['a'] },
+      { type: 'pinned', pinnedThreadIds: ['b', 'a'] },
+      { type: 'archived', archivedThreadIds: ['a'] },
+      { type: 'pinned', pinnedThreadIds: ['b'] },
+      { type: 'archived', archivedThreadIds: [] },
+      { type: 'pinned', pinnedThreadIds: [] },
+    ]);
   });
 
   it('沒有這條會話：釘選、封存都是 thread_not_found（業務失敗，不是協定錯誤），而且集合不動', async () => {

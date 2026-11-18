@@ -23,6 +23,9 @@ const KNOWN: readonly ThreadFeedFrame[] = [
   { type: 'input-requested', threadId: 't', event: REQUEST },
   { type: 'input-withdrawn', threadId: 't', interruptId: 'i1' },
   { type: 'added', threadId: 't', updatedAt: 1_000 },
+  { type: 'removed', threadId: 't' },
+  { type: 'archived', archivedThreadIds: ['a', 'b'] },
+  { type: 'pinned', pinnedThreadIds: [] },
 ];
 
 function sse(frames: readonly unknown[]): ReadableStream<Uint8Array> {
@@ -47,11 +50,18 @@ describe('全域下行的 frame', () => {
     expect(await collect(decodeSseData(sse(KNOWN)))).toEqual(KNOWN);
   });
 
-  it('認得四種；不認得的種類、缺欄位、方法不對的都不認', () => {
+  it('認得七種；不認得的種類、缺欄位、方法不對的都不認', () => {
     for (const frame of KNOWN) expect(isThreadFeedFrame(frame)).toBe(true);
     for (const frame of [
       null,
       'status',
+      { type: 'removed' },
+      { type: 'removed', threadId: 1 },
+      { type: 'archived' },
+      { type: 'archived', archivedThreadIds: 'a' },
+      { type: 'archived', archivedThreadIds: ['a', 1] },
+      { type: 'pinned', pinnedThreadIds: null },
+      { type: 'pinned', pinnedThreadIds: [null] },
       { type: 'added', threadId: 't' },
       { type: 'added', threadId: 't', updatedAt: '1000' },
       { type: 'added', threadId: 't', updatedAt: Number.NaN },
