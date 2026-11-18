@@ -73,7 +73,7 @@ function frontFeed(connected = true) {
   const forwarder = new FrontForwarder();
   const warnings: string[] = [];
   const feed = new FrontFeed({ forwarder, warn: (message) => warnings.push(message) });
-  const line = new ThreadFeed();
+  const line = new ThreadFeed({ now: () => 0 });
   if (connected) feed.connect(line);
   cleanups.push(() => {
     feed.close();
@@ -95,6 +95,9 @@ function listen(feed: ThreadFeed) {
   return frames;
 }
 
+/** 前台接上那條 thread 時自己廣播的那一顆（#2988）。 */
+const added = (threadId: string): ThreadFeedFrame => ({ type: 'added', threadId, updatedAt: 0 });
+
 describe('FrontFeed', () => {
   it('對話行程那條線上的每一顆照原樣轉給前台的線；還掛著的題由前台補送給後開的線', async () => {
     const upstream = await conversation('t1');
@@ -107,8 +110,9 @@ describe('FrontFeed', () => {
     upstream.push({ type: 'input-requested', threadId: 't1', event: question('i1') });
     upstream.push({ type: 'input-requested', threadId: 't1', event: question('i2') });
     upstream.push({ type: 'input-withdrawn', threadId: 't1', interruptId: 'i1' });
-    await expect.poll(() => early.length).toBe(4);
+    await expect.poll(() => early.length).toBe(5);
     expect(early.map(({ type }) => type)).toEqual([
+      'added',
       'status',
       'input-requested',
       'input-requested',
@@ -128,7 +132,19 @@ describe('FrontFeed', () => {
     expect(feed.running('t1')).toBeUndefined();
     feed.up('t1', upstream.socket);
     await expect.poll(() => feed.running('t1')).toBe(true);
-    expect(frames).toEqual([{ type: 'status', threadId: 't1', running: true }]);
+    expect(frames).toEqual([added('t1'), { type: 'status', threadId: 't1', running: true }]);
+  });
+
+  it('前台接上時廣播一顆 added；對話行程那條線上的 added 不轉，也不當成撤回（#2988）', async () => {
+    const upstream = await conversation('t1');
+    const { feed, line } = frontFeed();
+    const frames = listen(line);
+    feed.up('t1', upstream.socket);
+    await expect.poll(() => upstream.lines()).toBe(1);
+    upstream.push({ type: 'added', threadId: 't1', updatedAt: 99 });
+    upstream.push({ type: 'status', threadId: 't1', running: true });
+    await expect.poll(() => frames.some(({ type }) => type === 'status')).toBe(true);
+    expect(frames).toEqual([added('t1'), { type: 'status', threadId: 't1', running: true }]);
   });
 
   it('同一個 socket 重複 up 不重接', async () => {
@@ -150,11 +166,11 @@ describe('FrontFeed', () => {
     await expect.poll(() => upstream.lines()).toBe(1);
     upstream.push({ type: 'status', threadId: 't1', running: true });
     upstream.push({ type: 'input-requested', threadId: 't1', event: question('i1') });
-    await expect.poll(() => frames.length).toBe(2);
+    await expect.poll(() => frames.length).toBe(3);
 
     feed.down('t1');
-    await expect.poll(() => frames.length).toBe(4);
-    expect(frames.slice(2)).toEqual([
+    await expect.poll(() => frames.length).toBe(5);
+    expect(frames.slice(3)).toEqual([
       { type: 'input-withdrawn', threadId: 't1', interruptId: 'i1' },
       { type: 'status', threadId: 't1', running: false },
     ]);
@@ -169,13 +185,13 @@ describe('FrontFeed', () => {
     feed.up('t1', upstream.socket);
     await expect.poll(() => upstream.lines()).toBe(1);
     upstream.push({ type: 'input-requested', threadId: 't1', event: question('i1') });
-    await expect.poll(() => frames.length).toBe(1);
+    await expect.poll(() => frames.length).toBe(2);
 
     upstream.seed.push({ type: 'input-requested', threadId: 't1', event: question('i1') });
     upstream.cut();
     await expect.poll(() => upstream.opened(), { timeout: 3_000 }).toBe(2);
-    await expect.poll(() => frames.length).toBe(3);
-    expect(frames.slice(1).map(({ type }) => type)).toEqual(['input-withdrawn', 'input-requested']);
+    await expect.poll(() => frames.length).toBe(4);
+    expect(frames.slice(2).map(({ type }) => type)).toEqual(['input-withdrawn', 'input-requested']);
     expect(warnings).toHaveLength(1);
   });
 
@@ -188,7 +204,7 @@ describe('FrontFeed', () => {
     upstream.push({ type: 'input-requested', threadId: 'other', event: question('i1') });
     upstream.push({ type: 'status', threadId: 't1', running: true });
     await expect.poll(() => frames.some(({ type }) => type === 'status')).toBe(true);
-    expect(frames).toEqual([{ type: 'status', threadId: 't1', running: true }]);
+    expect(frames).toEqual([added('t1'), { type: 'status', threadId: 't1', running: true }]);
   });
 
   it('接上前台的線之前的 up 先記著：接上時才開對話行程那條線；之前走掉的不接', async () => {
@@ -205,7 +221,9 @@ describe('FrontFeed', () => {
     feed.connect(line);
     await expect.poll(() => upstream.lines()).toBe(1);
     upstream.push({ type: 'status', threadId: 't1', running: true });
-    await expect.poll(() => frames).toEqual([{ type: 'status', threadId: 't1', running: true }]);
+    await expect
+      .poll(() => frames)
+      .toEqual([added('t1'), { type: 'status', threadId: 't1', running: true }]);
     expect(gone.opened()).toBe(0);
   });
 });

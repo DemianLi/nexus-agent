@@ -66,6 +66,7 @@ export type {
   ThreadSearchResponse,
   ThreadSearchResult,
   ThreadInputWithdrawnFrame,
+  ThreadAddedFrame,
   ThreadStatusFrame,
   ThreadSummary,
   UplinkMethod,

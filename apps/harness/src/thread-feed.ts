@@ -9,6 +9,8 @@
  * - **一條線接上的當下補送所有 thread 還掛著的 `input.requested`**，同 dsh 的 `pendingRemoteEvents`（`:500`）。
  *   快照與註冊在同一段同步程式裡，中間沒有空檔讓一題兩邊都沒有或兩邊都有。
  * - 狀態不補送：起點是列表，同 dsh 的 `reconcileStatus`。
+ * - **接上一條 thread 時廣播一顆 `added`**（#2988）：新開的會話不等列表就進得了側欄。新開的與撤出記憶體後再打開的都發；
+ *   開線時不補送。
  *
  * **每條線的佇列有位元組上限**（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）：對方不收的線積壓超過上限就收掉這一條，
  * 其他線不受影響。dsh 對應的 `RemoteEventQueue` 沒有這一層，偏離 B／C 的登記與理由見 `bounded-event-queue.ts`。
@@ -37,6 +39,8 @@ export interface ThreadFeedOptions {
   readonly maxQueuedBytes?: number;
   /** 收掉一條線時往哪裡講（一行，不含 thread 內容）。省略就不講。 */
   readonly warn?: (message: string) => void;
+  /** `added` 的時間；預設 `Date.now`。 */
+  readonly now?: () => number;
 }
 
 /**
@@ -52,6 +56,7 @@ export interface FeedSource {
 export class ThreadFeed {
   readonly #maxQueuedBytes: number;
   readonly #warn: ((message: string) => void) | undefined;
+  readonly #now: () => number;
   readonly #pumps = new Map<string, FeedSource>();
   readonly #subscribers = new Set<FeedSubscriber>();
   #closed = false;
@@ -59,10 +64,11 @@ export class ThreadFeed {
   constructor(options: ThreadFeedOptions = {}) {
     this.#maxQueuedBytes = options.maxQueuedBytes ?? DEFAULT_DOWNLINK_MAX_BYTES;
     this.#warn = options.warn;
+    this.#now = options.now ?? Date.now;
   }
 
   /**
-   * 接上一條 thread。**要在它講出任何一件之前接**（本行程的 pump：收下任何一件之前；前台轉來的：`start()` 之前）：之前講的狀態與中斷這裡聽不到。
+   * 接上一條 thread，並向每一條線廣播一顆 `added`。**要在它講出任何一件之前接**（本行程的 pump：收下任何一件之前；前台轉來的：`start()` 之前）：之前講的狀態與中斷這裡聽不到。
    *
    * @returns 拆掉。
    */
@@ -72,6 +78,7 @@ export class ThreadFeed {
     const unwatch = pump.watch((activity: PumpActivity) => {
       this.#broadcast({ ...activity, threadId } as ThreadFeedFrame);
     });
+    this.#broadcast({ type: 'added', threadId, updatedAt: this.#now() });
     return () => {
       unwatch();
       if (this.#pumps.get(threadId) === pump) this.#pumps.delete(threadId);

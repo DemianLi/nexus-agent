@@ -23,6 +23,7 @@ import {
   WireRejectedError,
 } from '@nexus/wire';
 import {
+  act,
   cleanup,
   configure,
   fireEvent,
@@ -2330,6 +2331,69 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(calls).toBe(before + 1);
+  });
+
+  it('清單在途時全域下行推來目前這條（#2988）：清單回來沒有它也照樣列出，不必多抓', async () => {
+    setSeq(0);
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '剛開的' }));
+    const fake = fakeClient([]);
+    let calls = 0;
+    const answers: ((outcome: ThreadListOutcome) => void)[] = [];
+    const listThreads: WireClient['listThreads'] = () => {
+      calls += 1;
+      return new Promise((resolve) => answers.push(resolve));
+    };
+    let push: ((frame: ThreadFeedFrame) => void) | undefined;
+    const openThreadFeed: WireClient['openThreadFeed'] = async () => {
+      const queue: ThreadFeedFrame[] = [];
+      let wake: (() => void) | undefined;
+      push = (frame) => {
+        queue.push(frame);
+        wake?.();
+      };
+      return (async function* stream() {
+        for (;;) {
+          while (queue.length > 0) yield queue.shift()!;
+          await new Promise<void>((resolve) => (wake = resolve));
+        }
+      })();
+    };
+    render(<App client={{ ...fake.client, listThreads, openThreadFeed }} />);
+
+    await waitFor(() => expect(push).toBeDefined());
+    await waitFor(() => expect(calls).toBeGreaterThan(0));
+    push!({ type: 'added', threadId: '剛開的', updatedAt: 3_000 });
+    const without: ThreadListOutcome = {
+      kind: 'ok',
+      result: {
+        unreadable: 0,
+        items: [
+          { threadId: '別條', updatedAt: 1_000, running: false, blank: false, title: '別條的標題' },
+        ],
+      },
+    };
+    await act(async () => {
+      for (const answer of answers.splice(0)) answer(without);
+    });
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: /別條的標題/ })).toBeTruthy(),
+    );
+    const before = calls;
+
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '幫我修登入' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('幫我修登入')).toBeTruthy());
+    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('幫我修登入')]);
+    await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
+
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
+        '目前這條',
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(calls).toBe(before);
   });
 
   it('接回一條有標題的：從歷史就讀得到', async () => {

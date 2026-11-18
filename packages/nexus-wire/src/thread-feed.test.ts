@@ -22,6 +22,7 @@ const KNOWN: readonly ThreadFeedFrame[] = [
   { type: 'status', threadId: 't', running: true },
   { type: 'input-requested', threadId: 't', event: REQUEST },
   { type: 'input-withdrawn', threadId: 't', interruptId: 'i1' },
+  { type: 'added', threadId: 't', updatedAt: 1_000 },
 ];
 
 function sse(frames: readonly unknown[]): ReadableStream<Uint8Array> {
@@ -46,12 +47,15 @@ describe('全域下行的 frame', () => {
     expect(await collect(decodeSseData(sse(KNOWN)))).toEqual(KNOWN);
   });
 
-  it('認得三種；不認得的種類、缺欄位、方法不對的都不認', () => {
+  it('認得四種；不認得的種類、缺欄位、方法不對的都不認', () => {
     for (const frame of KNOWN) expect(isThreadFeedFrame(frame)).toBe(true);
     for (const frame of [
       null,
       'status',
       { type: 'added', threadId: 't' },
+      { type: 'added', threadId: 't', updatedAt: '1000' },
+      { type: 'added', threadId: 't', updatedAt: Number.NaN },
+      { type: 'added', updatedAt: 1_000 },
       { type: 'status', running: true },
       { type: 'status', threadId: 't', running: 'yes' },
       { type: 'input-requested', threadId: 't', event: { ...REQUEST, method: 'lifecycle' } },
