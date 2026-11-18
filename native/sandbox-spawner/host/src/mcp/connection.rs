@@ -188,7 +188,7 @@ pub async fn connect(
     secrets: &[String],
 ) -> Result<Generation, String> {
     match &server.connection {
-        Connection::Http { url, headers } => {
+        Connection::Http { url, headers, .. } => {
             connect_http(server, url, headers, http, secrets).await
         }
         Connection::Stdio(spec) => {
