@@ -39,6 +39,7 @@ import {
   DEFAULT_MAX_SOURCE_BYTES,
   INSTRUCTION_FILE_CANDIDATES,
   isAgentInstructionsMessage,
+  renderAgentInstructions,
 } from './index.js';
 
 /** 出廠的兩個上限。 */
@@ -92,6 +93,38 @@ function baselineMessage(): HumanMessage {
     additional_kwargs: { [AGENT_INSTRUCTIONS_MARKER]: true },
   });
 }
+
+describe('渲染可以換', () => {
+  const lookups = {
+    fs: () => ({
+      kind: 'ok' as const,
+      fs: handleOf(fakeBackend({ '/AGENTS.md': 'rules' })),
+      address: { kind: 'root' as const },
+    }),
+  };
+
+  it('給了 render：listener 注入它回的文字，並把讀到的檔與預算交給它', async () => {
+    const seen: { paths: string[]; maxBytes: number }[] = [];
+    const listener = createAgentInstructionsListener(LIMITS, lookups, (files, maxBytes) => {
+      seen.push({ paths: files.map((file) => file.displayPath), maxBytes });
+      return { text: '自訂的一則', deferred: [] };
+    });
+    const injections = await listener([], INVOCATION);
+    expect(injections?.map((injection) => injection.content)).toEqual(['自訂的一則']);
+    expect(seen).toEqual([{ paths: ['AGENTS.md'], maxBytes: DEFAULT_MAX_BYTES }]);
+  });
+
+  it('render 回 undefined：不注入', async () => {
+    const listener = createAgentInstructionsListener(LIMITS, lookups, () => undefined);
+    expect(await listener([], INVOCATION)).toBeUndefined();
+  });
+
+  it('不給 render：與出貨的渲染逐字相同', async () => {
+    const shipped = createAgentInstructionsListener(LIMITS, lookups);
+    const explicit = createAgentInstructionsListener(LIMITS, lookups, renderAgentInstructions);
+    expect(await explicit([], INVOCATION)).toEqual(await shipped([], INVOCATION));
+  });
+});
 
 describe('設定', () => {
   it('合法的覆寫會生效——上限換小之後，同一份檔整份延後、留一行指標，內容一個字都不放（#2777）', async () => {

@@ -26,6 +26,7 @@ import {
   deferralWorkspaceFiles,
 } from './fixture.js';
 import type { DeferralCase } from './fixture.js';
+import { deferralVariant, withInstructionVariant } from './variants.js';
 
 /**
  * 一次執行最多幾個模型呼叫，重試的每一次嘗試也算。第 N+1 個呼叫開始時中止這一次；callback 不擋送出，所以那一個可能已經送到端點。
@@ -46,9 +47,9 @@ export interface DeferralRunOptions {
 /** 一次執行看到的事。 */
 export interface DeferralRun {
   readonly testCase: DeferralCase;
-  /** 請求裡的指示檔是那一行指標（整份沒放）。 */
+  /** 第一個請求裡看得到這種做法留下的痕跡（指標、摘錄通知或截斷通知）：指示檔沒整份放進去。 */
   readonly deferred: boolean;
-  /** 規則隨指示檔直接放進了請求。 */
+  /** 規則在第一個請求裡（任何角色的訊息、含系統訊息）：模型不必讀檔就看得到它。 */
   readonly ruleInjected: boolean;
   /** 模型用 `read_file` 讀 `AGENTS.md` 的次數。 */
   readonly readCalls: number;
@@ -59,11 +60,23 @@ export interface DeferralRun {
   /** 有回覆的模型呼叫數，由 callback 數；被中止的那一次也數得到。 */
   readonly requests: number;
   /**
-   * 超過 {@link DEFERRAL_MAX_REQUESTS} 被中止。這時拿不到訊息串，上面看訊息串的那幾格（`deferred` 到 `followed`）都是 `false` 或 0，
-   * 不代表真的沒發生；報表不把這一次算進比例。
+   * 超過 {@link DEFERRAL_MAX_REQUESTS} 被中止。這時拿不到訊息串，看訊息串的那幾格（`readCalls`、`ruleRead`、`followed`）都是 `false` 或 0，
+   * 不代表真的沒發生（`deferred` 與 `ruleInjected` 看第一個請求，照樣有值）；報表不把這一次算進比例。
    */
   readonly capped: boolean;
   readonly finalText: string;
+}
+
+/** 這一格要掛的清單：呼叫端換過的那份，再把指示那一列換成這一格的做法（沒寫做法就不換）。 */
+function planPlugins(
+  testCase: DeferralCase,
+  loaded: readonly PluginEntry[],
+  options: DeferralRunOptions,
+): readonly PluginEntry[] {
+  const base = options.plugins?.(loaded) ?? loaded;
+  return testCase.variant === undefined
+    ? base
+    : withInstructionVariant(base, deferralVariant(testCase.variant));
 }
 
 const textOf = (message: BaseMessage): string => message.text;
@@ -110,7 +123,7 @@ export async function runDeferralCase(
         sandbox: 'workspace-write' as const,
         ...(options.credentials !== undefined && { credentials: options.credentials }),
       },
-      { plugins: [...(options.plugins?.(loaded.plugins) ?? loaded.plugins)] },
+      { plugins: [...planPlugins(testCase, loaded.plugins, options)] },
     );
     const sessions = new SessionRegistry('deferral');
     const attachment = built.attachSessions(sessions);
@@ -123,9 +136,11 @@ export async function runDeferralCase(
       const abort = new AbortController();
       let started = 0;
       let responded = 0;
+      let firstRequest: readonly string[] | undefined;
       const callbacks = [
         {
-          handleChatModelStart() {
+          handleChatModelStart(_llm: unknown, batches: readonly (readonly BaseMessage[])[]) {
+            firstRequest ??= (batches[0] ?? []).map(textOf);
             started += 1;
             if (started > DEFERRAL_MAX_REQUESTS) abort.abort();
           },
@@ -155,7 +170,7 @@ export async function runDeferralCase(
       }
       rootLog().append('turn/end', {});
       options.onModel?.(built.model);
-      return { ...observe(testCase, messages), requests: responded, capped };
+      return { ...observe(testCase, messages, firstRequest), requests: responded, capped };
     } finally {
       await attachment.detach();
       await built.dispose();
@@ -167,16 +182,23 @@ export async function runDeferralCase(
 }
 
 /**
- * 從跑完的訊息串讀出這一次看到的事。
+ * 從跑完的訊息串與第一個模型請求讀出這一次看到的事。
+ *
+ * `deferred` 與 `ruleInjected` 看第一個請求（含系統訊息）：指標可能在系統提示、規則可能在摘錄或工具結果裡，只看使用者訊息會誤判。
+ * 沒有第一個請求（不該發生）時退回看最終訊息串裡的使用者訊息。
  *
  * @param testCase - 這一格。
  * @param messages - 最終的訊息串；被中止時是空的。
+ * @param firstRequest - 第一個模型請求裡每則訊息的文字。
  */
 export function observe(
   testCase: DeferralCase,
   messages: readonly BaseMessage[],
+  firstRequest?: readonly string[],
 ): Omit<DeferralRun, 'capped' | 'requests'> {
   const humans = messages.filter((message) => HumanMessage.isInstance(message)).map(textOf);
+  const seen = firstRequest ?? humans;
+  const marker = deferralVariant(testCase.variant ?? 'current').marker;
   const ai = messages.filter((message) => AIMessage.isInstance(message));
   const reads = ai
     .flatMap((message) => message.tool_calls ?? [])
@@ -187,8 +209,8 @@ export function observe(
   const finalText = spoken.at(-1)?.text ?? '';
   return {
     testCase,
-    deferred: humans.some((text) => text.includes('not loaded /AGENTS.md')),
-    ruleInjected: humans.some((text) => text.includes(DEFERRAL_MARKER)),
+    deferred: seen.some((text) => text.includes(marker)),
+    ruleInjected: seen.some((text) => text.includes(DEFERRAL_MARKER)),
     readCalls: reads.length,
     ruleRead: messages
       .filter((message) => ToolMessage.isInstance(message))

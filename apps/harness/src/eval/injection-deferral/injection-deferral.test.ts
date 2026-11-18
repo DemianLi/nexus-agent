@@ -19,6 +19,7 @@ import {
   deferralMaxBytesOverride,
   DEFERRAL_TASK,
   deferralAgentsMd,
+  deferralCasesFor,
 } from './fixture.js';
 import { DEFERRAL_MAX_REQUESTS, runDeferralCase } from './runner.js';
 
@@ -75,6 +76,41 @@ describe('題目', () => {
     expect(bytes).toBeGreaterThan(DEFERRAL_SMALL_MAX_BYTES);
     expect(bytes).toBeLessThan(4096);
     expect(text.split('\n')[3]).toBe(DEFERRAL_RULE);
+  });
+});
+
+describe('做法的格表', () => {
+  it('current：不延後的對照三格加延後四格；其餘做法只有延後四格；格名帶做法', () => {
+    expect(deferralCasesFor(['current']).map(deferralCaseId)).toEqual([
+      'current:large/inline/head',
+      'current:large/inline/tail',
+      'current:small/inline/head',
+      'current:large/deferred/head',
+      'current:large/deferred/tail',
+      'current:small/deferred/head',
+      'current:small/deferred/tail',
+    ]);
+    expect(deferralCasesFor(['truncate']).map(deferralCaseId)).toEqual([
+      'truncate:large/deferred/head',
+      'truncate:large/deferred/tail',
+      'truncate:small/deferred/head',
+      'truncate:small/deferred/tail',
+    ]);
+    expect(
+      deferralCasesFor(['current', 'pointer-strong', 'system-prompt', 'head-excerpt', 'truncate']),
+    ).toHaveLength(23);
+  });
+
+  it('小檔延後、規則在檔尾：檔比蓋掉的上限大，規則在倒數第四行、不在前 1024 位元組', () => {
+    const text = deferralAgentsMd('tail', 'small');
+    expect(Buffer.byteLength(text, 'utf8')).toBeGreaterThan(DEFERRAL_SMALL_MAX_BYTES);
+    expect(text.trimEnd().split('\n').at(-4)).toBe(DEFERRAL_RULE);
+    expect(
+      Buffer.from(text, 'utf8').subarray(0, DEFERRAL_SMALL_MAX_BYTES).toString('utf8'),
+    ).not.toContain(DEFERRAL_MARKER);
+    expect(deferralMaxBytesOverride({ file: 'small', arm: 'deferred', position: 'tail' })).toBe(
+      DEFERRAL_SMALL_MAX_BYTES,
+    );
   });
 });
 

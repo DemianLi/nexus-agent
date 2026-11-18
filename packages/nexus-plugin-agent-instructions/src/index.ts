@@ -136,9 +136,10 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 
 import { renderAgentInstructions } from './render.js';
-import type { InstructionFile } from './render.js';
+import type { InstructionFile, RenderedAgentInstructions } from './render.js';
 
-export { AGENT_INSTRUCTIONS_INTRO } from './render.js';
+export { AGENT_INSTRUCTIONS_INTRO, renderAgentInstructions } from './render.js';
+export type { DeferredInstruction, InstructionFile, RenderedAgentInstructions } from './render.js';
 
 /**
  * middleware 的名字，也是 listener 登記時給宿主的名字（宿主用它當 middleware 名與日誌 `source.plugin`）。撞名是 fold 那側的判準，
@@ -331,6 +332,15 @@ export interface AgentInstructionsLookups {
 }
 
 /**
+ * 把來源檔渲染成那一則基線的函式：預設是 {@link renderAgentInstructions}。回 `undefined` 就不注入。
+ * 給 listener 的第三個參數，讓評估能在不碰出貨渲染的前提下換一種呈現。
+ */
+export type AgentInstructionsRender = (
+  files: readonly InstructionFile[],
+  maxBytes: number,
+) => RenderedAgentInstructions | undefined;
+
+/**
  * 建 listener：**模型看得到一則才算有**（serve 的第二輪、`--resume`、子代理第二次被委派都走到這裡），沒有就讀工作區根、渲染，回一則。
  *
  * 判準看的是宿主交來的第一個參數——摘要器會組給模型的那一串，不是 `state.messages`：摘要之後舊基線還在 state 裡、但落在切點
@@ -340,11 +350,13 @@ export interface AgentInstructionsLookups {
  *
  * @param limits - 渲染預算與單檔上限，見 {@link AgentInstructionsLimits}。
  * @param lookups - 查找，見 {@link AgentInstructionsLookups}。
+ * @param render - 渲染，見 {@link AgentInstructionsRender}；省略即出貨的 {@link renderAgentInstructions}。
  * @returns 登記給 `agentLoop.preStep` 的 listener。
  */
 export function createAgentInstructionsListener(
   limits: AgentInstructionsLimits,
   lookups: AgentInstructionsLookups,
+  render: AgentInstructionsRender = renderAgentInstructions,
 ): PreStepListener {
   return async (visible, invocation): Promise<readonly PreStepInjection[] | undefined> => {
     if (visible.some(isAgentInstructionsMessage)) return undefined;
@@ -354,7 +366,7 @@ export function createAgentInstructionsListener(
     // 有共用區前綴的 thread（新 thread，#1775）讀共用區；沒有的（舊 thread、沒有圍堵）讀 `/`。
     const directory = found.fs.sharedWorkspacePrefix() ?? '';
     const files = await discover(backend, directory, limits.maxSourceBytes, invocation.signal);
-    const rendered = renderAgentInstructions(files, renderBudget(limits, invocation.contextWindow));
+    const rendered = render(files, renderBudget(limits, invocation.contextWindow));
     if (rendered === undefined) return undefined;
     const deferredBytes = rendered.deferred.reduce((sum, file) => sum + file.bytes, 0);
     return [

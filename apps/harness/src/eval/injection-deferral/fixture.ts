@@ -7,6 +7,8 @@
  * 不延後時模型也未必照做，小檔那兩格才分得出「延後」本身的影響。
  */
 
+import type { DeferralVariantId } from './variants.js';
+
 /** 規則要模型在回覆裡寫出來的那一串；填充的文字裡沒有它。 */
 export const DEFERRAL_MARKER = 'QX-4417';
 
@@ -39,6 +41,11 @@ export interface DeferralCase {
   readonly file: DeferralFile;
   readonly arm: DeferralArm;
   readonly position: DeferralPosition;
+  /**
+   * 沒放進去的那一份怎麼呈現。省略是出貨的 `agent-instructions` 原樣；寫了（含 `current`）就把那一列換成帶這種做法的插件，
+   * 見 `variants.ts`。
+   */
+  readonly variant?: DeferralVariantId;
 }
 
 /**
@@ -55,8 +62,31 @@ export const DEFERRAL_CASES: readonly DeferralCase[] = [
 ];
 
 /** 報表與 `--only` 用的名字。 */
-export const deferralCaseId = (testCase: DeferralCase): string =>
-  `${testCase.file}/${testCase.arm}/${testCase.position}`;
+export const deferralCaseId = (testCase: DeferralCase): string => {
+  const cell = `${testCase.file}/${testCase.arm}/${testCase.position}`;
+  return testCase.variant === undefined ? cell : `${testCase.variant}:${cell}`;
+};
+
+/** 延後那一邊的四格：做法之間比的是模型對這四格怎麼反應。 */
+const DEFERRED_CELLS: readonly DeferralCase[] = [
+  { file: 'large', arm: 'deferred', position: 'head' },
+  { file: 'large', arm: 'deferred', position: 'tail' },
+  { file: 'small', arm: 'deferred', position: 'head' },
+  { file: 'small', arm: 'deferred', position: 'tail' },
+];
+
+/**
+ * 帶 `--variant` 時的格子。`current` 另帶不延後那一邊的對照三格（對照與做法無關，只配它）；其餘做法只有延後那四格。
+ * 順序照傳進來的。
+ */
+export function deferralCasesFor(variants: readonly DeferralVariantId[]): readonly DeferralCase[] {
+  return variants.flatMap((variant) => {
+    const deferred = DEFERRED_CELLS.map((cell) => ({ ...cell, variant }));
+    if (variant !== 'current') return deferred;
+    const controls = DEFERRAL_CASES.filter((cell) => cell.arm === 'inline');
+    return [...controls.map((cell) => ({ ...cell, variant })), ...deferred];
+  });
+}
 
 /**
  * 這一格要蓋掉的 `agent-instructions.maxBytes`；`undefined` 是用出貨值。兩種檔各有一邊要調：大檔調高才放得下，小檔調低才會延後。
