@@ -72,7 +72,7 @@ const textOf = (message: BaseMessage): string => message.text;
 /**
  * 跑一格。
  *
- * @param testCase - 延後與否、規則的位置。
+ * @param testCase - 放不下與否、規則的位置。
  * @param options - 模型從哪來。
  * @returns 這一次看到的事。
  */
@@ -176,7 +176,7 @@ export async function runDeferralCase(
  *
  * @param testCase - 這一格。
  * @param messages - 最終的訊息串；被中止時是空的。
- * @param firstRequest - 第一個模型請求裡每則訊息的文字。
+ * @param firstRequest - 第一個模型請求裡每則訊息的文字；一個請求都沒送出時是空的，`deferred` 與 `ruleInjected` 都是 false。
  */
 export function observe(
   testCase: DeferralCase,

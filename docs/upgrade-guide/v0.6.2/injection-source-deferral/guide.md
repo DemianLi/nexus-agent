@@ -10,7 +10,7 @@ description: "超過上限的工作區指示檔（`AGENTS.md` 等）仍然截斷
 對話與工具結果以外、會把文字放進模型請求的來源，現在各自照一張預算表執行上限（表與每個來源的行為見 [`docs/operations.md`](../../../operations.md) 的〈各注入源的用量〉）。
 
 - **工作區指示檔（`agent-instructions`）。**
-  - 舊行為：整則訊息超過 `maxBytes`（預設 65,536 位元組）時，從最寬層開始整份略過，直到剩下的整份放得下；一份都放不下時，只截斷最具體的那一份、其餘全部略過；先用完整的開場白，截到只剩標題（0 位元組內文）也放不下外框、通知、完整開場白與空標題時，才換一段較短的開場白（`Workspace instructions were omitted or truncated to fit the configured byte budget.`）。通知行是 `Workspace instruction budget N bytes: omitted <路徑>, …; truncated <路徑> from A to B bytes`，沒有被略過的檔的大小，也沒有怎麼讀。
+  - 舊行為：整則訊息超過 `maxBytes`（預設 65,536 位元組）時，從最寬層開始整份略過，直到剩下的整份放得下；連最具體的那一份單獨都放不下時，只截斷那一份、其餘全部略過（較寬的小檔放得下也一樣略過）；先用完整的開場白，截到只剩標題（0 位元組內文）也放不下外框、通知、完整開場白與空標題時，才換一段較短的開場白（`Workspace instructions were omitted or truncated to fit the configured byte budget.`）。通知行是 `Workspace instruction budget N bytes: omitted <路徑>, …; truncated <路徑> from A to B bytes`，沒有被略過的檔的大小，也沒有怎麼讀。
   - 新行為：超過時仍然截斷，截的是整份放不下的檔裡最具體的那一份（可能是較寬層的檔，不一定是最具體層的檔）；截不到 256 位元組就整份不放。差別有四處。
     - 先從最具體的往寬的挑，整份放得下的都留下；剩下整份放不下的檔，取其中最具體的那一份截成放得下的最長檔頭，其餘整份不放。以前較寬層一律先被略過。
     - 截下來不到 256 位元組就不截，這一份改成整份不放、只留通知（以前會一路截到只剩標題）。
