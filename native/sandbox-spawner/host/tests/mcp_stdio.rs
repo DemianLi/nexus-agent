@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::fixture;
-use nexus_host::mcp::bridge::{Bridge, Command, Outcome};
+use nexus_host::mcp::bridge::{Bridge, Command, Outcome, CLOSE_WAIT};
 use nexus_host::mcp::config::{Connection, Server};
 use nexus_host::mcp::stdio::{self, REAP_BUDGET, STDIN_GRACE, TERM_GRACE};
 use nexus_host::proxy::ProxyPolicy;
@@ -322,6 +322,83 @@ mod bridge {
         assert_reaped(pid);
         let _ = std::fs::remove_file(&pid_file);
         let _ = std::fs::remove_file(&mark);
+    }
+
+    /// 宿主丟掉橋（不先送 `Shutdown`）：`drop` 要等到收線走完才回來。斷言下在 `drop` 回來的那一刻、不輪詢：
+    /// 橋的執行緒在 `drop` 不等的時候照樣會把 server 收掉，只是晚一點，輪詢的話這支分不出來。
+    /// server 讀到 EOF 不會自己結束，因此收線會走到 SIGTERM；記號證明它收到的是 SIGTERM。
+    #[test]
+    fn 丟掉橋_回來時_server_已收到_sigterm_並收掉() {
+        let pid_file = pid_file("drop-waits");
+        let mark = format!("{pid_file}.term");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let config = fake_config_with(&pid_file, &[("HANG_ON_EOF", "1"), ("TERM_MARK", &mark)]);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        open(&bridge, &config).expect("連得上");
+        let pid = read_pid(&pid_file);
+        drop(bridge);
+        assert!(
+            Path::new(&mark).exists(),
+            "drop 回來時 server 還沒收到 SIGTERM：沒等收線，或被搶先殺了"
+        );
+        assert!(gone(pid), "drop 回來時子行程 {pid} 還沒被收掉");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+    }
+
+    /// `wait_closed` 看 `limit`：收線還在跑（server 要走完 stdin 寬限才會被收）時，短的上限逾時回 `false`、不等到收完。
+    #[test]
+    fn wait_closed_逾時回_false_收完後回_true() {
+        let pid_file = pid_file("wait-closed");
+        let mark = format!("{pid_file}.term");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let config = fake_config_with(&pid_file, &[("HANG_ON_EOF", "1"), ("TERM_MARK", &mark)]);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        open(&bridge, &config).expect("連得上");
+        bridge.send(Command::Shutdown);
+        let started = Instant::now();
+        assert!(
+            !bridge.wait_closed(Duration::from_millis(100)),
+            "收線才開始"
+        );
+        assert!(
+            started.elapsed() < STDIN_GRACE,
+            "逾時沒照 limit 回：等了 {:?}",
+            started.elapsed()
+        );
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        assert!(
+            bridge.wait_closed(Duration::from_secs(5)),
+            "收完之後旗標要設起來"
+        );
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+    }
+
+    /// 已經 `Shutdown` 又收到 `Closed` 之後丟掉橋：旗標早就設了，`drop` 不多等。
+    /// 上限取 `CLOSE_WAIT` 的一半：旗標沒設的話（橋的執行緒沒設旗標）要等滿 `CLOSE_WAIT`。
+    #[test]
+    fn 收完之後丟掉橋_不多等() {
+        let pid_file = pid_file("drop-after-closed");
+        let _ = std::fs::remove_file(&pid_file);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        open(&bridge, &fake_config(&pid_file)).expect("連得上");
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        assert!(
+            bridge.wait_closed(Duration::from_secs(5)),
+            "收完之後旗標要設起來"
+        );
+        let started = Instant::now();
+        drop(bridge);
+        assert!(
+            started.elapsed() < CLOSE_WAIT / 2,
+            "已經收完的橋 drop 等了 {:?}",
+            started.elapsed()
+        );
+        let _ = std::fs::remove_file(&pid_file);
     }
 
     /// 握手還在等 server 回的時候橋關閉：連線的 future 被丟下，子行程要被殺掉並 `wait` 掉。

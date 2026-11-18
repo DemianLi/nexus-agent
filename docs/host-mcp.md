@@ -107,6 +107,8 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   stdio 的收線梯度（見〈stdio〉）預算 4.5 秒，編譯期斷言小於這 5 秒。預算只算子行程那一段，不含「等 rmcp 服務迴圈結束」；那一段卡住時，5 秒到了錯誤訊息分不出卡在哪一段。
 - 關池（`Pool::close`）與停單份（`Shared::dispose`）外面再套 6 秒（`POOL_CLOSE_TIMEOUT`），各份同時收。逾時只是不再等，任務沒被取消、停止訊號已先送出。
   橋還活著時（`acquire` 的 `failOnStartupError` 路徑停單份），監督者照自己的 5 秒收完；關池時逾時放手的，接著 `serve` 回來、執行環境拆掉，被分離的任務跑不完，子行程由 `ChildGuard` 的 drop 直接 SIGKILL（見〈stdio〉）。
+- 宿主結束前等橋收完：宿主主迴圈結束、`Client` 丟掉 `Bridge` 時，`Drop` 先送 `Shutdown`，再等橋的執行緒收完（旗標在 runtime 與分離的任務都收掉之後才設），最多 `CLOSE_WAIT` 5.5 秒；沒等到就在 stderr 記一行、照原結束碼結束，不改它。5.5 秒比每一份連線的收線期限 `GENERATION_CLOSE_TIMEOUT`（5 秒）與 SIGTERM→SIGKILL 梯度 `REAP_BUDGET`（4.5 秒）長（編譯期斷言），比監督行程預設的 eof grace（6 秒）短；後者只寫在註解，不斷言。`POOL_CLOSE_TIMEOUT`（6 秒）比 5.5 秒長，所以池收得慢時宿主會先逾時放行，由 `PR_SET_PDEATHSIG` 與監督行程的 session 掃描收。runtime 收掉時會等已經開始的 `spawn_blocking`（例如 HTTP 連線的主機名解析），所以連線其實都收完了，也可能白等滿 5.5 秒、記上面那一行（#2987）。等完之後把收件匣裡還沒送出去的日誌（關池時記的「有幾份沒收完」、監督者的收不乾淨）直接寫到 stderr，因為 `Client` 丟掉之後沒有人讀它。
+  `Drop` 會阻塞：宿主迴圈還在跑的時候不要丟 `Bridge`。kernel 有執行期卸載服務的路，今天沒有人呼叫；日後接上，丟掉會讓宿主迴圈停最多 5.5 秒。也不能在橋自己的執行緒裡丟（會自己等自己等滿上限），今天只有 `Client` 持有，在宿主主執行緒丟。
   只有 `Pool::close` 記日誌：沒收完的份記一行錯誤，帶出是哪幾份（同一台 server 有兩份連線時 label 會重複）；`Shared::dispose` 回傳有沒有收完，呼叫端自己決定記不記。
 - `failOnStartupError: true` 的那一列第一次就失敗時不在背景重試。
 - 進度與放棄寫進日誌（`reconnecting in <n>ms (attempt <i>/<max>)`、`giving up after <max> consecutive failed reconnect attempts` 等，同 TS）。
@@ -166,9 +168,9 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   - 兩段等待都只看領頭：領頭一結束（例如讀到 EOF 就退出），組裡剩下的子孫立刻 SIGKILL，不給寬限：沒有人能再跟它們溝通，等也沒用。代價是這條路上的子孫沒有收尾的機會。
   - 宿主自己不追子孫自己再 `setsid` 的（換了 session 的收不到，也不用 cgroup：多人共用的主機不保證有權限），這種有測試釘住；只換行程群組、沒換 session 的，宿主正常收線時追不到，但宿主死掉時監督行程掃同 session 的行程會收到。
   - 領頭用 `waitid(WNOWAIT)` 判斷是否結束、不先收屍，pid 與 pgid 在自己 `wait` 之前不會被別的行程拿去用，對整組送訊號不會打到不相干的行程。前提是宿主行程裡沒有收別人子行程的呼叫（`waitpid(-1)`、`waitid(P_ALL)`、忽略 SIGCHLD）。機器守這個前提：`host/clippy.toml` 對 `nexus-host` 整個 package（含測試與 examples）禁 `libc::wait*` 與 `libc::signal`／`sigaction`，例外的呼叫點加 `#[allow]` 並寫理由（今天是 `leader_state` 的 `waitid`、組合行程的 SIGTERM handler、`tests/composition.rs` 對自己子行程的 `waitpid`，以及 `fake_conversation` 整支的 crate 層級例外，它不是宿主）。另有一支測試看測試行程自己的 SIGCHLD 沒被忽略、領頭結束後一直是殭屍。兩者都擋不到：經相依呼叫的收屍（例如 spawner 的 `supervisor::process::reap` 用 `waitid(P_ALL)`）、起宿主的行程把 SIGCHLD 設成忽略後 exec 繼承下來的處置。
-  - 宿主死了（崩潰、被殺、讀到 EOF 直接結束）時沒有人替它跑上面的收線：監督行程起宿主時讓它自成 session，宿主結束、還沒收屍時掃 `/proc` 找 session 等於宿主 pid 的行程，各送 SIGKILL（用 `pidfd`，送之前再核一次還是這個 session 的；上限 8 輪，到上限記稽核 `event:"sweep"`）。宿主死時領頭由 `PR_SET_PDEATHSIG` 與這次掃描兩邊搶：領頭可能在掃之前就已死，稽核的 `signalled` 不一定有領頭。要走到這條，子行程不能自己開 session，所以宿主起子行程只開組、不 `setsid`。監督行程被殺時沒有人掃，領頭靠 `PR_SET_PDEATHSIG` 隨之死，子孫不一定收得到；自己再 `setsid` 的子孫也收不到。
+  - 宿主死了（崩潰、被殺，或讀到 EOF 後橋 5.5 秒內沒收完、放行結束）時沒有人替它跑上面的收線：監督行程起宿主時讓它自成 session，宿主結束、還沒收屍時掃 `/proc` 找 session 等於宿主 pid 的行程，各送 SIGKILL（用 `pidfd`，送之前再核一次還是這個 session 的；上限 8 輪，到上限記稽核 `event:"sweep"`）。宿主死時領頭由 `PR_SET_PDEATHSIG` 與這次掃描兩邊搶：領頭可能在掃之前就已死，稽核的 `signalled` 不一定有領頭。要走到這條，子行程不能自己開 session，所以宿主起子行程只開組、不 `setsid`。監督行程被殺時沒有人掃，領頭靠 `PR_SET_PDEATHSIG` 隨之死，子孫不一定收得到；自己再 `setsid` 的子孫也收不到。
   - `PR_SET_PDEATHSIG`（SIGKILL）宿主起每個 stdio server 時都設，包不包 spawner 一樣（spawner 的 `--exec`、`--guard` 設的也是 SIGKILL，同一個行程只有一個設定，互不衝突）。設在 exec 之前，設好再核一次父行程還是宿主；包了 spawner 的 server 因此在宿主 exec 到 spawner 自己設之間也沒有空窗。
-  - 它綁的是**起行程的那條執行緒**，不是宿主行程：產品碼只有橋的執行緒（`nexus-host-mcp`）起 stdio server，這條執行緒在 `Pool::close` 收完線、送出 `Closed` 之後才結束，所以橋自己收線時不會被它搶先殺；宿主行程結束時有序收線本來就不會跑完（`Bridge` 的 drop 只送 `Shutdown`、不等它），領頭在宿主結束的那一刻就被殺。要讓宿主等收線跑完再結束是另一件事。
+  - 它綁的是**起行程的那條執行緒**，不是宿主行程：產品碼只有橋的執行緒（`nexus-host-mcp`）起 stdio server，這條執行緒在 `Pool::close` 收完線、送出 `Closed` 之後才結束，所以橋自己收線時不會被它搶先殺；宿主讀到 EOF 正常結束時，`Bridge` 的 drop 會等橋收完（最多 5.5 秒）再讓宿主結束，所以這條路上收線梯度跑得完；等不到（池收得慢、`POOL_CLOSE_TIMEOUT` 6 秒比它長）才由宿主結束後的 `PR_SET_PDEATHSIG` 殺領頭、掃描收子孫。
   - 界線：只殺領頭，子孫靠監督行程掃 session，沒有監督行程（直接起宿主、測試）就留著；領頭是 set-user-ID、set-group-ID 或帶 capability 的執行檔時，exec 會清掉這個設定；自己 daemonize（fork 之後原行程退出）的，留下來的不是宿主的直接子行程，不受保護。
   - `panic = "abort"` 只在 release：出貨的宿主在橋的執行緒上 panic 是整個宿主結束；dev 與測試建置是 unwind，只有那條執行緒結束，領頭同樣被殺。
   - 子行程不在宿主那一組裡：終端機的 Ctrl-C、監督行程對宿主那一組送的訊號都打不到它；橋在宿主結束前跑完 `close`、連線的 guard 被 drop，起它的橋執行緒結束時（`PR_SET_PDEATHSIG` 殺領頭），或宿主結束時監督行程掃同 session 的行程時才會收。
