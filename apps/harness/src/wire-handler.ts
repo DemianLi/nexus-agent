@@ -123,6 +123,7 @@ import {
   THREAD_NOT_OWNED,
   THREAD_IS_SUBAGENT,
   THREAD_LOG_BUSY,
+  THREAD_DELETED,
   THREAD_LOG_TOO_LARGE,
   THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
@@ -865,7 +866,7 @@ export interface IdleSweepingWireHandler extends WireHandler {
    */
   sweepIdle(): Promise<void>;
   /**
-   * 刪除會話時讓寫入方放手（[#2957]）：停、等閒置、撤出，回來時寫租約已放。見 `releaseThreadWriter`。
+   * 刪除會話時讓寫入方放手（[#2957]）：停、等閒置（開著的下行不擋）、撤出，回來時寫租約已放。見 `releaseThreadWriter`。
    */
   releaseWriter(threadId: string): Promise<void>;
   /**
@@ -1803,14 +1804,7 @@ export class ThreadNotBoundError extends Error {
 }
 
 /**
- * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
- *
- * 只有 `threadFor` 拋、只有 `threadOrError` 接，回 `thread_at_capacity`。**message 是給管理者看的，寫出上限與下一步**
- * （照 dsh 背景工作准入的第 5 點）：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
- * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
- */
-/**
- * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：組裝與觀察都拒，不建任何資源。
+ * 這條會話正在刪除或已刪除（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：`threadFor` 在組裝之前拋它，不建任何資源；`threadFailure` 把它回成 `thread_deleted`。
  * 寬限期內可以復原，那是另一條路，不是這裡的事。
  */
 export class ThreadDeletedError extends Error {
@@ -1838,7 +1832,7 @@ function deletionErrorCode(
   if (method === 'thread.delete') {
     if (code === 'not_found') return 'thread_not_found';
     if (code === 'busy') return 'thread_busy';
-    if (code === 'already_deleted') return 'thread_deleted';
+    if (code === 'already_deleted') return THREAD_DELETED;
     return undefined;
   }
   if (code === 'not_deleted' || code === 'not_found') return 'thread_not_deleted';
@@ -1848,6 +1842,13 @@ function deletionErrorCode(
   return undefined;
 }
 
+/**
+ * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
+ *
+ * 只有 `threadFor` 拋；上線時經 `threadFailure` 回 `thread_at_capacity`（`open` 直接叫 `threadFor`，失敗由它的呼叫端接）。
+ * **message 是給管理者看的，寫出上限與下一步**：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
+ * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
+ */
 export class ThreadCapacityError extends Error {
   constructor(
     /** 拒收那一刻行程裡的 thread 數（含建構中的）。 */
@@ -2039,8 +2040,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (state !== undefined) state.lastActiveAt = now();
   }
 
-  /** 見 {@link WireHandlerOptions.idleEvictMs}：卡上列的每一條都要成立。 */
-  function isIdle(threadId: string, state: ThreadState): boolean {
+  /**
+   * 見 {@link WireHandlerOptions.idleEvictMs}：那裡列的每一條都要成立；`releasing: true` 時「沒有下行掛著」與「沒有 LLM 標題在產生」兩條不看。
+   *
+   * `releasing: true` 給刪除用（`releaseThreadWriter`）：開著下行的人只讀不寫，撤出時 `pump.close()` 讓那幾條正常結束；
+   * 在飛的標題由撤出時的拆掉中止，結果寫不進去，不等它自己逾時。閒置逐出照舊不撤有人在看的、也不中止標題。
+   */
+  function isIdle(
+    threadId: string,
+    state: ThreadState,
+    { releasing = false }: { readonly releasing?: boolean } = {},
+  ): boolean {
     const { pump } = state;
     return (
       // `agentRunning` ＝ `running` 加上 `awaitingInput`；拆開寫是為了每一條各有各的測試與突變。
@@ -2049,10 +2059,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       pump.inbox.length === 0 &&
       pump.nextStep.length === 0 &&
       !pump.goalRoundInFlight &&
-      pump.subscriberCount === 0 &&
+      (releasing || pump.subscriberCount === 0) &&
       (state.background?.quiescent() ?? true) &&
       !state.goalArmed() &&
-      !state.titleBusy() &&
+      (releasing || !state.titleBusy()) &&
       !state.slashInFlight &&
       state.promptRequestsInFlight.size === 0 &&
       (httpInFlight.get(threadId) ?? 0) === 0
@@ -2107,6 +2117,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 刪除會話時的寫入方放手（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)，single 模式）：停掉還在跑的一輪、等到閒置
    * （含背景子代理），再走閒置逐出的那一條撤出記憶體。**回來時寫租約已經放掉**：撤出的 promise 在 `release` 收完之後才兌現。
+   * 開著的下行與在飛的標題不擋，撤出時一併收掉（閒置逐出照舊等它們）。
    * 不在記憶體裡就問對話行程，沒有行程就直接回；等不到閒置超過 {@link WireHandlerOptions.releaseIdleWaitMs}（預設 {@link RELEASE_IDLE_WAIT_MS}）就拋，不硬撤。
    */
   async function releaseThreadWriter(threadId: string): Promise<void> {
@@ -2126,7 +2137,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     state.pump.cancel();
     const waitMs = options.releaseIdleWaitMs ?? RELEASE_IDLE_WAIT_MS;
     const deadline = Date.now() + waitMs;
-    while (!isIdle(threadId, state)) {
+    while (!isIdle(threadId, state, { releasing: true })) {
       if (Date.now() > deadline) {
         throw new Error(`thread "${threadId}" 等不到閒置（${String(waitMs)} 毫秒），不撤`);
       }
@@ -2545,7 +2556,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）；
    * 還有**寫租約被別的寫入者握著**（{@link SessionAlreadyOwnedError}，[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：回 `thread_writer_held`；
    * 以及**日誌超過這個行程的額度**（{@link SessionLogTooLargeError}，[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）：單份太大回 `thread_log_too_large`，額度被佔滿回 `thread_log_busy`；
-   * 還有**日誌記的可寫根這台接不上**（{@link ResumeWorkspaceConflictError}，[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：回 `thread_root_mismatch`，訊息不帶主機路徑。
+   * 還有**日誌記的可寫根這台接不上**（{@link ResumeWorkspaceConflictError}，[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：回 `thread_root_mismatch`，訊息不帶主機路徑；
+   * 還有**這條會話正在刪除或已刪除**（{@link ThreadDeletedError}，[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）：回 `thread_deleted`，什麼時候打得開見 `THREAD_DELETED`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -2593,6 +2605,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     if (error instanceof ThreadNotBoundError) {
       return json(errorResponse(id, THREAD_NOT_BOUND, error.message));
+    }
+    if (error instanceof ThreadDeletedError) {
+      return json(errorResponse(id, THREAD_DELETED, error.message));
     }
     // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
     if (error instanceof SubagentSessionError) {
@@ -4254,7 +4269,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /deleted-threads`：這個專案格已刪除、還在寬限期內的會話。**不經 `threadFor`**，同 `handleList`。
+   * `GET /threads/deleted`：這個專案格已刪除的會話，含已過寬限期的（索引不清，`expiresAt` 已過的不能復原）。**不經 `threadFor`**，同 `handleList`。
    */
   async function handleDeletedList(): Promise<Response> {
     const port = options.threadDeletion;
@@ -4889,11 +4904,15 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 這個請求若指名一條 thread，就同步 +1 它的在途請求數（#1484），回「放掉」；不指名（列表、搜尋、全域下行）回 `undefined`。
    * 放掉時同時把最後活動時間推到現在（請求結束也算活動）。
+   *
+   * `thread.delete` 不算：它在請求裡等這條 thread 閒置（`releaseThreadWriter`），算進去就是在等自己，逾時
+   * （{@link WireHandlerOptions.releaseIdleWaitMs}）拋錯、刪不成。
    */
   function holdThread(request: Request): (() => void) | undefined {
-    const threadId = pathThreadId(request);
-    if (threadId === undefined) return undefined;
-    const id = threadId;
+    const route = pathRoute(request);
+    if (route === undefined) return undefined;
+    if (route.kind === 'command' && route.method === 'thread.delete') return undefined;
+    const id = route.threadId;
     httpInFlight.set(id, (httpInFlight.get(id) ?? 0) + 1);
     touchThread(id);
     let released = false;
@@ -5087,15 +5106,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     return refused;
   }
 
-  /** 這個請求的路徑指名哪一條 thread；不指名或解不開回 `undefined`。 */
-  function pathThreadId(request: Request): string | undefined {
+  /** 解開這個請求的路徑（先拿掉嵌入前綴，見 `parsePath`）；不是 thread 路徑或解不開回 `undefined`。 */
+  function pathRoute(request: Request): ReturnType<typeof parsePath> {
     try {
       const { pathname } = new URL(request.url);
-      return parsePath(withoutEmbedPrefix(pathname) ?? pathname)?.threadId;
+      return parsePath(withoutEmbedPrefix(pathname) ?? pathname);
     } catch {
       // 壞的百分號編碼：之後會被當 404，沒有 thread 可握。
       return undefined;
     }
+  }
+
+  function pathThreadId(request: Request): string | undefined {
+    return pathRoute(request)?.threadId;
   }
 
   /** 見 {@link WireHandlerOptions.boundThread}：路徑指名的不是綁著的那一條就回拒絕。 */

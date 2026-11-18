@@ -558,13 +558,14 @@ describe('以前的會話', () => {
     await waitFor(() => expect(reads).toBe(2));
   });
 
-  describe('釘選、封存、改名（#633）', () => {
+  describe('釘選、封存、改名（#633）、刪除（#2958）', () => {
     /**
-     * 有狀態的假 server：兩個集合與標題都在這裡，五支動作照 dsh 的規則改它、回整份集合，列表每次讀都帶最新的。
+     * 有狀態的假 server：兩個集合、標題與已刪除清單都在這裡；動作改它，釘選與封存回整份集合，列表每次讀都帶最新的（已刪除的不列）。
+     * `deletion: true` 才有刪除、復原與已刪除清單。
      * `rules` 讓個別測試改寫某一支的回應（例如別的分頁同時動了集合）。
      */
     function managed(
-      initial: { pinned?: string[]; archived?: string[] } = {},
+      initial: { pinned?: string[]; archived?: string[]; deletion?: boolean } = {},
       rules: Partial<{
         pin: (id: string, state: { pinned: string[]; archived: string[] }) => string[];
       }> = {},
@@ -573,6 +574,7 @@ describe('以前的會話', () => {
         pinned: [...(initial.pinned ?? [])],
         archived: [...(initial.archived ?? [])],
         titles: new Map<string, string>(),
+        deleted: [] as { threadId: string; title?: string; deletedAt: number; expiresAt: number }[],
       };
       const calls: string[] = [];
       let lists = 0;
@@ -596,11 +598,13 @@ describe('以前的會話', () => {
             kind: 'ok',
             result: {
               ...LISTED,
-              items: LISTED.items.map((item) =>
-                state.titles.has(item.threadId)
-                  ? { ...item, title: state.titles.get(item.threadId)! }
-                  : item,
-              ),
+              items: LISTED.items
+                .filter((item) => !state.deleted.some((gone) => gone.threadId === item.threadId))
+                .map((item) =>
+                  state.titles.has(item.threadId)
+                    ? { ...item, title: state.titles.get(item.threadId)! }
+                    : item,
+                ),
               pinnedThreadIds: [...state.pinned],
               archivedThreadIds: [...state.archived],
             },
@@ -641,6 +645,30 @@ describe('以前的會話', () => {
           state.titles.set(id, title);
           return ok({ title, seq: 9 });
         },
+        ...(initial.deletion === true
+          ? {
+              threadDelete: async (id: string) => {
+                calls.push(`delete ${id}`);
+                const item = LISTED.items.find((entry) => entry.threadId === id);
+                state.deleted.push({
+                  threadId: id,
+                  ...(item?.title === undefined ? {} : { title: item.title }),
+                  deletedAt: Date.now(),
+                  expiresAt: Date.now() + 30 * 86_400_000,
+                });
+                return ok({ threadId: id });
+              },
+              threadRestore: async (id: string) => {
+                calls.push(`restore ${id}`);
+                state.deleted = state.deleted.filter((gone) => gone.threadId !== id);
+                return ok({ threadId: id });
+              },
+              deletedThreads: async () => ({
+                kind: 'ok' as const,
+                result: { items: [...state.deleted] },
+              }),
+            }
+          : {}),
       } as unknown as WireClient;
       return { client, state, calls, sent: fake.sent, lists: () => lists };
     }
@@ -914,6 +942,49 @@ describe('以前的會話', () => {
           .getByText(UNTITLED_THREAD_LABEL)
           .closest('button')?.disabled,
       ).toBe(true);
+    });
+
+    it('刪掉目前這條：跳到新對話；從最近刪除復原，那一列回到清單（#2958）', async () => {
+      setSeq(0);
+      const server = managed({ deletion: true });
+      render(<App client={server.client} />);
+      fireEvent.click(within(await openList()).getByText(UNTITLED_THREAD_LABEL));
+      await waitFor(async () =>
+        expect(
+          within(await openList())
+            .getByText(UNTITLED_THREAD_LABEL)
+            .closest('button')?.disabled,
+        ).toBe(true),
+      );
+      expect(stored()).toBe('目標那條');
+      await menuOf(await openList(), UNTITLED_THREAD_LABEL);
+      choose('刪除');
+      const dialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '刪除' }));
+      // 沒在這條講過話也要走：這條已經不在了。清單上還有一條空白的，拿它來用（#313）。
+      await waitFor(() => expect(stored()).toBe('空白那條'));
+      expect(server.calls).toContain('delete 目標那條');
+      const deleted = await screen.findByTestId('thread-deleted');
+      expect(
+        within(await openList()).queryByText(UNTITLED_THREAD_LABEL, {
+          selector: '[data-testid=thread-title-text]',
+        }),
+      ).toBeNull();
+
+      fireEvent.click(within(deleted).getByRole('button', { name: '最近刪除（1）' }));
+      fireEvent.click(
+        within(screen.getByTestId('thread-deleted')).getByRole('button', { name: /^復原「/u }),
+      );
+      await waitFor(() => expect(screen.queryByTestId('thread-deleted')).toBeNull());
+      await waitFor(async () =>
+        expect(
+          within(await openList()).getByText(UNTITLED_THREAD_LABEL, {
+            selector: '[data-testid=thread-title-text]',
+          }),
+        ).toBeTruthy(),
+      );
+      expect(server.calls).toContain('restore 目標那條');
+      expect(stored()).toBe('空白那條');
     });
 
     it('封存的會話不能釘：server 回 thread_archived，說出原因', async () => {
@@ -1761,9 +1832,11 @@ describe('@ 引用別的會話', () => {
  * 清單讀不出來的退路由「記住這條 thread」那組驗：那裡的假 client 一律回 rejected，「新對話」照樣換一條新的。
  */
 describe('新對話重用空白會話', () => {
+  // 「上一條」講過話、已經落盤：它不在清單上的話，App 會為了把它列出來多讀一次清單，讀幾次的斷言就不準了。
   const LISTED: ThreadListResult = {
     unreadable: 0,
     items: [
+      { threadId: '上一條', updatedAt: 4_000, running: false, blank: false, title: '上一條的標題' },
       {
         threadId: '講過話的那條',
         updatedAt: 3_000,
@@ -1834,7 +1907,7 @@ describe('新對話重用空白會話', () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    const spoken: ThreadListResult = { unreadable: 0, items: LISTED.items.slice(0, 1) };
+    const spoken: ThreadListResult = { unreadable: 0, items: LISTED.items.slice(0, 2) };
     render(<App client={gated(fake, spoken).client} />);
     await sayOnce();
 
@@ -2172,6 +2245,91 @@ describe('會話標題（#655）', () => {
     });
     await waitFor(() => expect(threadRows(list)).toHaveLength(1));
     expect(threadRows(list)[0]!.textContent).toContain('修好登入頁的錯誤');
+  });
+
+  it('側欄的清單比這條落盤先回來：送出第一句、推來標題之後，目前這一列照樣列出來', async () => {
+    // 第一份清單裡沒有目前這條（server 剛起、組裝比冷讀清單慢）；之後的每一份都有它。
+    setSeq(0);
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '剛開的' }));
+    const fake = fakeClient([]);
+    let calls = 0;
+    const listThreads: WireClient['listThreads'] = async () => {
+      calls += 1;
+      return {
+        kind: 'ok',
+        result: {
+          unreadable: 0,
+          items: [
+            ...(calls === 1
+              ? []
+              : [{ threadId: '剛開的', updatedAt: 3_000, running: false, blank: false }]),
+            {
+              threadId: '別條',
+              updatedAt: 1_000,
+              running: false,
+              blank: false,
+              title: '別條的標題',
+            },
+          ],
+        },
+      };
+    };
+    render(<App client={{ ...fake.client, listThreads }} />);
+
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: /別條的標題/ })).toBeTruthy(),
+    );
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '幫我修登入' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('幫我修登入')).toBeTruthy());
+    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('幫我修登入')]);
+    await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
+
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
+        '目前這條',
+      ),
+    );
+  });
+
+  it('重抓回來還是沒有目前這條：只多抓一次，不一直抓', async () => {
+    setSeq(0);
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '剛開的' }));
+    const fake = fakeClient([]);
+    let calls = 0;
+    const listThreads: WireClient['listThreads'] = async () => {
+      calls += 1;
+      return {
+        kind: 'ok',
+        result: {
+          unreadable: 0,
+          items: [
+            {
+              threadId: '別條',
+              updatedAt: 1_000,
+              running: false,
+              blank: false,
+              title: '別條的標題',
+            },
+          ],
+        },
+      };
+    };
+    render(<App client={{ ...fake.client, listThreads }} />);
+
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: /別條的標題/ })).toBeTruthy(),
+    );
+    const before = calls;
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '幫我修登入' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('幫我修登入')).toBeTruthy());
+    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('幫我修登入')]);
+    await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(calls).toBe(before + 1);
   });
 
   it('接回一條有標題的：從歷史就讀得到', async () => {

@@ -76,6 +76,7 @@ import { ThemeToggle } from '@/app/theme-toggle';
 import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { useConversation } from '@/shared/connection/use-conversation';
+import { THREAD_DELETED_TEXT } from '@/shared/connection/refusal-text';
 import { SM_BREAKPOINT, useMinWidth } from '@/shared/lib/use-min-width';
 import { useThemePreference } from '@/shared/lib/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/shared/connection/agent';
@@ -188,7 +189,38 @@ export function App({ client }: { client?: WireClient } = {}) {
   // 側欄什麼都不多畫。
   // server 受理過的標題：側欄改名與分叉的改名共用一份（#1581），所以提到 App，再交給會話管理。
   const acceptedTitles = useAcceptedTitles();
-  const threadManagement = useThreadManagement(wire, directory, acceptedTitles);
+  const baseManagement = useThreadManagement(wire, directory, acceptedTitles);
+  const currentThread = useRef(choice.threadId);
+  useEffect(() => {
+    currentThread.current = choice.threadId;
+  }, [choice.threadId]);
+  const leaveDeleted = useRef<(threadId: string) => void>(() => undefined);
+  /**
+   * 刪掉的是目前這條（#2958）：去「新對話」。不看這個分頁講過話沒有——這條已經不在了，留在原地只會對著搬走的檔案。
+   * 刪除送出之後人自己換到別條的話不拉回來（後按的贏，同 `newConversation`）。
+   */
+  const threadManagement = useMemo(() => {
+    const deletion = baseManagement?.deletion;
+    if (baseManagement === undefined || deletion === undefined) return baseManagement;
+    return {
+      ...baseManagement,
+      deletion: {
+        ...deletion,
+        onDelete: async (threadId: string) => {
+          const ticket = navigation.current;
+          const failure = await deletion.onDelete(threadId);
+          if (
+            failure === undefined &&
+            threadId === currentThread.current &&
+            navigation.current === ticket
+          ) {
+            leaveDeleted.current(threadId);
+          }
+          return failure;
+        },
+      },
+    };
+  }, [baseManagement]);
   // 換 thread 有三條路（「新對話」、從清單點一條、分叉），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
@@ -208,10 +240,14 @@ export function App({ client }: { client?: WireClient } = {}) {
    */
   const newConversation = (engaged: boolean): void => {
     if (!engaged || connecting.current) return;
+    goToNewConversation(choice.threadId);
+  };
+
+  /** 「新對話」的後半：讀清單、挑一條空白的或開新的。`current` 是要離開的那一條，不會被挑中。 */
+  const goToNewConversation = (current: string): void => {
     connecting.current = true;
     navigation.current += 1;
     const ticket = navigation.current;
-    const current = choice.threadId;
     void readThreadListing(wire)
       .then((listing) => {
         if (navigation.current !== ticket) return;
@@ -225,6 +261,10 @@ export function App({ client }: { client?: WireClient } = {}) {
         connecting.current = false;
       });
   };
+
+  useEffect(() => {
+    leaveDeleted.current = goToNewConversation;
+  });
 
   // 分叉（#1581）送出去到回應之前：所有分支鈕都按不了。ref 擋同一個 tick 裡的第二下，state 讓按鈕畫成按不了。
   const forkingNow = useRef(false);
@@ -402,6 +442,21 @@ function ConversationView({
     stall: connectionStall(conversation),
     renderEntry: renderSubagentEntry,
   });
+  // 這條在別處被刪了：重抓列表，側欄的那一列跟著消失，「最近刪除」跟著列表重讀，拒絕文字指的復原入口才在。
+  const { refresh: refreshDirectory } = directory;
+  const deletedElsewhere = conversation.refusal === THREAD_DELETED_TEXT;
+  useEffect(() => {
+    if (deletedElsewhere) refreshDirectory();
+  }, [deletedElsewhere, refreshDirectory]);
+  // 這條講過話了、清單上卻沒有它：先回來的那份清單比它落盤早，線沒重接、側欄沒重開就不會再抓，側欄會一直漏列它。
+  // 重抓一次；重抓回來還是沒有，`missingHere` 不變，不會一直抓。
+  const missingHere =
+    directory.listing.kind === 'ok' &&
+    (conversation.state.entries.length > 0 || Boolean(conversation.state.title)) &&
+    !directory.listing.result.items.some((item) => item.threadId === threadId);
+  useEffect(() => {
+    if (missingHere) refreshDirectory();
+  }, [missingHere, refreshDirectory]);
   const sessionLinks = useMemo(() => {
     const listed =
       directory.listing.kind === 'ok'

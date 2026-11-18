@@ -56,7 +56,7 @@ import type { WirePrincipal } from './wire-principal.js';
 /** 狀態檔在 harness home 底下的名字。 */
 export const THREAD_DELETIONS_FILE = 'thread-deletions.json';
 /** 刪除記錄（附加式）在 harness home 底下的名字。 */
-export const THREAD_DELETIONS_LOG_FILE = 'thread-deletions.log.jsonl';
+export const THREAD_DELETIONS_LOG_FILE = 'thread-deletions.log.jsonl'; // session-file-exempt: 刪除與復原的稽核記錄，不是會話日誌。
 /** 已刪除存放區在 harness home 底下的預設名字。 */
 export const DELETED_STORE_DIR_NAME = 'sessions-deleted';
 /** 寬限天數的預設值。 */

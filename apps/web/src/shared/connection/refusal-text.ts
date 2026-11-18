@@ -15,6 +15,7 @@
 import {
   SERVER_CLOSING,
   THREAD_AT_CAPACITY,
+  THREAD_DELETED,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
   THREAD_LOG_BUSY,
@@ -68,6 +69,10 @@ export const THREAD_WRITER_HELD_TEXT =
 export const THREAD_ROOT_MISMATCH_TEXT =
   '這條對話是在別的環境開的，這裡打不開。對話沒有壞，要回原本的環境才打得開，請聯絡管理者。';
 
+/** 這條會話被刪掉了（#2957、#2958），多半是在別的頁籤刪的。指向側欄的「最近刪除」；不提寬限天數，天數在那一區顯示。 */
+export const THREAD_DELETED_TEXT =
+  '這條對話已經刪除了，打不開。寬限期內可以從側欄的「最近刪除」復原，或按「新對話」開一條新的。';
+
 /** serve 正在收尾、不收新的一輪（#1787、#1995）。講的是話或命令都適用，所以不說「這句話」。 */
 export const SERVER_CLOSING_TEXT = '伺服器正在重新啟動，這次沒有送出。請稍後再送一次。';
 
@@ -110,6 +115,11 @@ const REFUSALS: ReadonlyMap<string, Row> = new Map<string, Row>([
     THREAD_ROOT_MISMATCH,
     // 換這台怎麼試結果都一樣。
     { text: THREAD_ROOT_MISMATCH_TEXT, permanent: true, during: ANYTIME },
+  ],
+  [
+    THREAD_DELETED,
+    // 已刪除的，復原之前重試幾次都一樣。刪除進行中也回這個碼（最後沒做成的話其實打得開），少見，一樣當永久。
+    { text: THREAD_DELETED_TEXT, permanent: true, during: ANYTIME },
   ],
   [
     SERVER_CLOSING,
