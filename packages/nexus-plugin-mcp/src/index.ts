@@ -44,8 +44,14 @@ export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
 export { FIRST_CONNECT_WAIT_MS, MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
 export type { Acquired, McpConnectionPoolOptions, SharedConnection } from './pool.js';
-export { CREDENTIAL_REF_PATTERN, MCP_CREDENTIALS_SERVICE } from './credentials.js';
-export type { McpCredentialUse, McpCredentials } from './credentials.js';
+export {
+  AUTHORIZATION_HEADER_NAMES,
+  CREDENTIAL_REF_PATTERN,
+  hostHeaders,
+  MCP_CREDENTIALS_SERVICE,
+  redactorFor,
+} from './credentials.js';
+export type { HostHeaders, McpCredentialUse, McpCredentials } from './credentials.js';
 
 /** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
 export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;

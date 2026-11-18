@@ -8,7 +8,7 @@ import { createHostServicesPlugin } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startHttpFixture, startModernHttpEchoingCallErrors } from './http-fixtures.js';
-import { redactorFor } from './credentials.js';
+import { hostHeaders, redactorFor, resolveCredentials } from './credentials.js';
 import { MCP_CREDENTIALS_SERVICE, mcpConfigSchema } from './index.js';
 import type { McpCredentials } from './index.js';
 import { loadPlugins, mcpEntry } from './load-with-adapter.js';
@@ -246,5 +246,70 @@ describe('收集：header 代入後的整個值與 Authorization 的 scheme 後�
       new Map(),
     );
     expect(redactor.empty).toBe(true);
+  });
+});
+
+describe('D359：直接寫成字串的 Authorization／Proxy-Authorization 自動當憑證', () => {
+  const TOKEN = 'xyz-FAKE-token-0001';
+  const configOf = (headers: Record<string, string>) =>
+    mcpConfigSchema.parse({
+      serverName: 'srv',
+      connection: { transport: 'http', url: 'http://127.0.0.1:1/mcp', headers },
+    });
+
+  it('字串寫的 Authorization：整個值與 scheme 後面那一段都遮；別的字面值不遮', () => {
+    const redactor = redactorFor(
+      configOf({ Authorization: `Bearer ${TOKEN}`, 'X-Tenant': 'acme-corp-prod' }),
+      new Map(),
+    );
+    expect(redactor.scrubText(`echo Bearer ${TOKEN}`)).toBe('echo [redacted]');
+    expect(redactor.scrubText(`echo ${TOKEN}`)).toBe('echo [redacted]');
+    expect(redactor.scrubText('tenant acme-corp-prod')).toBe('tenant acme-corp-prod');
+  });
+
+  it('Proxy-Authorization 與大小寫不分', () => {
+    const redactor = redactorFor(configOf({ 'proxy-AUTHORIZATION': `Basic ${TOKEN}` }), new Map());
+    expect(redactor.scrubText(`echo ${TOKEN}`)).toBe('echo [redacted]');
+  });
+
+  it('遮蔽器收的是修過頭尾的值：尾端換行的值，server 回顯修過的整個值也遮得到', () => {
+    const redactor = redactorFor(configOf({ Authorization: `Bearer ${TOKEN}\n` }), new Map());
+    expect(redactor.scrubText(`echo Bearer ${TOKEN}`)).toBe('echo [redacted]');
+  });
+
+  it('整個值修完不到 8 個字元：整列連不上，訊息有欄位與名字、不含值', () => {
+    expect(() => resolveCredentials(configOf({ Authorization: 'Basic x' }), undefined)).toThrow(
+      /srv.*connection\.headers\.Authorization/u,
+    );
+    try {
+      resolveCredentials(configOf({ Authorization: 'Basic x' }), undefined);
+    } catch (error) {
+      expect((error as Error).message).not.toContain('Basic x');
+    }
+  });
+
+  it('正好 8 個字元（Bearer x）收下；x 只在錯誤與診斷遮，成功結果不遮（同宿主）', () => {
+    const config = configOf({ Authorization: 'Bearer x' });
+    expect(() => resolveCredentials(config, undefined)).not.toThrow();
+    const redactor = redactorFor(config, new Map());
+    expect(redactor.redactText('result x ok')).toBe('result x ok');
+    expect(redactor.scrubText('result x ok')).toBe('result [redacted] ok');
+  });
+
+  it('hostHeaders：字面值修整個值；憑證引用只修憑證、prefix 原樣', () => {
+    const out = hostHeaders(
+      {
+        Authorization: `  Bearer ${TOKEN}\n`,
+        'X-Tenant': ' acme\n',
+        'X-Key': { credential: 'K', prefix: ' pre ' },
+      },
+      new Map([['K', `  ${TOKEN}\n`]]),
+    );
+    expect(out.headers).toEqual({
+      Authorization: `Bearer ${TOKEN}`,
+      'X-Tenant': 'acme',
+      'X-Key': ` pre ${TOKEN}`,
+    });
+    expect(out.credentialHeaders).toEqual({ Authorization: '', 'X-Key': ' pre ' });
   });
 });

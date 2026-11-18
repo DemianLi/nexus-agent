@@ -134,8 +134,9 @@ fn boolean(fields: &Map<String, Value>, name: &str, default: bool) -> Result<boo
     })
 }
 
-/// 需要列進 `credentialHeaders` 的 header：值沒有不是憑證的用法。
-const AUTHORIZATION_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
+/// 需要列進 `credentialHeaders` 的 header：值沒有不是憑證的用法。與 TS 的 `AUTHORIZATION_HEADER_NAMES`（`packages/nexus-plugin-mcp/src/credentials.ts`）同一份，
+/// 兩邊各有一支測試對 `credentials-vectors.json` 的 `credentialHeaderNames`。
+pub const AUTHORIZATION_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
 
 /// HTTP 那一支：`url`、`headers`、`credentialHeaders`。回解好的連線，與池的鍵裡 `connection` 那一段。
 ///
@@ -340,7 +341,8 @@ fn parse_stdio(
     }
     let mut credential_env: Vec<String> = Vec::new();
     match connection.get("credentialEnv") {
-        None => {}
+        // 沒有憑證就給 `[]`。漏送會變成起不來，不是憑證靜靜沒被遮；它抓不到的是「送了 `[]` 但其實有憑證」。
+        None => return Err("stdio 的 connection.credentialEnv 要在（沒有憑證就給 []）".into()),
         Some(Value::Array(items)) => {
             for item in items {
                 let Some(name) = item.as_str() else {

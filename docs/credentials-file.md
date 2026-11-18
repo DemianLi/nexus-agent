@@ -23,7 +23,10 @@
 | `mcpValue[]` | MCP 憑證值的檢查（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。`use` 是 `env` 或 `header`，`value` 是原值；`accept` 為真時修剪後的值要等於 `trimmed`，為假時拒絕原因要是 `reason`（`empty`、`too-short`、`nul`、`header-chars`），有 `secret` 的，拒絕訊息裡不能出現它。TS 與 Rust 都跑。 |
 | `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主與 TS 都跑同一組：TS 的遮蔽器是 `packages/nexus-plugin-mcp/src/redact.ts`，執行端在同目錄的 `redact.test.ts`（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。 |
 | `stdioRow[]` | TS 的 `hostStdioConnection`（`apps/harness/src/mcp-host-stdio-row.ts`）輸出的 stdio 那一列（#2570 D2b-2）。`input` 是它的輸入（`credentialEnv` 的每個值是憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。 |
-| `stdioHost[]` | 只給 Rust：`connection` 直接交 `Server::parse`，`error` 是 `null`（要收）或訊息要含的字。釘宿主自己的拒絕（相對路徑、credentialEnv 不在 env、憑證值沒修剪或太短）。 |
+| `stdioHost[]` | 只給 Rust：`connection` 直接交 `Server::parse`，`error` 是 `null`（要收）或訊息要含的字。釘宿主自己的拒絕（相對路徑、沒有 credentialEnv、credentialEnv 不在 env、憑證值沒修剪或太短）。 |
+| `httpRow[]` | TS 的 `hostHttpConnection`（`apps/harness/src/mcp-host-http-row.ts`）輸出的 HTTP 那一列（#2570）。`input` 是 `url`、設定的 `headers`（字串或 `{ credential, prefix? }`）與 `credentials`（名字 → 憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。`echoes[]` 是回顯：`scope`（`result` 或 `error`）、`text`、`expect`；TS 用 `redactorFor`（`redactText`／`scrubText`）、Rust 用 `Server::secrets()` 建的 `Redactor` 各遮一次，輸出都要等於同一個 `expect`，所以對話行程自己連與經宿主連，對同一份設定遮出來的字相同。守的是名單與切法一致，不是兩個實作完全等價（網址 query 的短值、成功結果與錯誤出口的差別各自的預期寫在 `echoes` 的 `scope`）。 |
+| `httpHost[]` | 只給 Rust：同 `stdioHost[]`，釘宿主 HTTP 的拒絕（`headers` 不空卻沒給 `credentialHeaders`、`authorization`／`proxy-authorization` 沒列、header 值不合法）。 |
+| `credentialHeaderNames` | 字串陣列：宿主要求列進 `credentialHeaders` 的 header 名（小寫）。TS 的 `AUTHORIZATION_HEADER_NAMES` 與 Rust 的 `AUTHORIZATION_HEADERS` 各有一支測試與它相等；加名字先改這一行，另一邊馬上紅。 |
 
 樣本裡的值都是假的；長得像 key 的都帶 `FAKE`。
 
@@ -198,6 +201,8 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 
 - **收集**：入口只有一個，宿主的 `Redactor::new(values)`（`host/src/mcp/redact.rs`）：呼叫端把這一份連線手上的值交進去。今天交進去的是：
   - HTTP header：`connection.credentialHeaders` 標的那幾個（header 名 → prefix），整個值與 prefix 之後的憑證本身；沒標的 header 是字面值，不進遮蔽器。
+    **哪幾個算憑證（D359）：** 憑證引用，加上直接寫成字串的 `Authorization`／`Proxy-Authorization`（自動列，prefix `""`，整個值）。判斷只寫在 `@nexus/plugin-mcp` 的 `hostHeaders`，`redactorFor`（TS 外掛自己連線）與 harness 送宿主的列（`hostHttpConnection`）都從那裡拿，宿主那份只當防線（這兩個名字在 `headers` 而沒列就拒）。
+    字面值修整個值的頭尾空白（JS 的 `trim`）、憑證引用只修憑證（prefix 原樣）：送宿主的列（`hostHttpConnection`）照這個修了再送，遮蔽器也收修過的；TS 外掛自己連線時送出的值不改，由 `fetch` 去掉頭尾的 HTTP 空白。直接寫成字串的授權 header 整個值修完不到 8 個字元，兩條路都整列拒絕（`Bearer x` 正好 8，收下，其中的 `x` 只在錯誤與診斷遮）；字面值的其他 header（例如 `X-Tenant`）不列、不遮。
     值取原始位元組：能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串。`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）；
   - 網址的 query：整串、每個值的原樣與解碼後，全部收；TS 的 `redactorFor` 同樣收，**唯一不同：不到 8 個 code point 的值不收**，整串、原樣、解碼後各個形式各自算（所以非 ASCII 的短值，百分號編碼後的原樣若有 8 個以上字元就收）。理由是 TS 的斷線判斷讀遮過的訊息，`v=2` 的 `2` 會切斷 `MCP error -32000`；整段 `?…` 的比對仍遮逐字回顯；
   - 代理的帳密；
@@ -226,7 +231,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 - **沒收的形式**：截斷（只回顯值的前半）、部分編碼（`encodeURI`、Python `quote` 的預設只編一部分字元）、值本身被轉大小寫（宿主與 TS 都漏）；base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼；`<` 這類別家編碼器多跳脫的寫法（`\u003c`）；百分號或 `\u` 後的十六進位大小寫混用；
   一個值被拆在兩個字串裡（例如分兩個 content 區塊）；JSON 的數字（`{"pin": 12345678}` 不遮，值檢查不限數字）。值被 server 轉成這些形式再回顯就遮不到。
 
-測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_stdio.rs`（stdio 只收 `credentialEnv`、字面值照舊、子行程的環境只有交來的那份）；`host/tests/mcp_redact.rs`（含經真的橋的：成功結果、編碼形式、代理帳密、只回顯 token、協定層 header 不遮、名稱含字面值的工具仍叫得動、instructions、`isError`、resources）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
+測試：樣本 `mcpValue[]`、`redact[]`、`httpRow[]`、`httpHost[]`、`credentialHeaderNames`；`host/tests/mcp_stdio.rs`（stdio 只收 `credentialEnv`、字面值照舊、子行程的環境只有交來的那份）；`host/tests/mcp_redact.rs`（含經真的橋的：成功結果、編碼形式、代理帳密、只回顯 token、協定層 header 不遮、名稱含字面值的工具仍叫得動、instructions、`isError`、resources）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
 
 ## 重讀
 

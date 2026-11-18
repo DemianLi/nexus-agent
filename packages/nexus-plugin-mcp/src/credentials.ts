@@ -82,7 +82,10 @@ export function resolveCredentials(
   service: McpCredentials | undefined,
 ): ResolvedCredentials {
   const references = referencesOf(config);
-  if (references.length === 0) return NONE;
+  if (references.length === 0) {
+    assertLiteralAuthorizationUsable(config, NONE);
+    return NONE;
+  }
   const values = new Map<string, string>();
   // 同一列的引用都是同一種 `use`（看 transport），所以照名字去重不會漏掉另一種檢查。
   for (const { field, name, use } of references) {
@@ -98,7 +101,24 @@ export function resolveCredentials(
     if (value === undefined) throw new Error(`${where} 沒有值`);
     values.set(name, value);
   }
+  assertLiteralAuthorizationUsable(config, values);
   return values;
+}
+
+/** 這一列直接寫成字串的 `Authorization`／`Proxy-Authorization` 太短，整列連不上（D359，理由見 {@link hostHeaders}）。 */
+function assertLiteralAuthorizationUsable(
+  config: McpConfig,
+  credentials: ResolvedCredentials,
+): void {
+  const { connection } = config;
+  if (connection.transport === 'stdio') return;
+  try {
+    hostHeaders(connection.headers ?? {}, credentials);
+  } catch (error) {
+    throw new Error(
+      `MCP 伺服器 "${config.serverName}" 的 ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /** 指紋的金鑰：行程內隨機、不落盤，池鍵裡的指紋因此換不回值。 */
@@ -156,26 +176,86 @@ function queryValuesOf(url: string): string[] {
 }
 
 /**
- * 這一份連線手上要遮的值（#2669）：每一把解析出來的憑證；header 代入後的整個值（`prefix` 接憑證，連 prefix 一起遮成一段，與 Rust 宿主收整個
- * header 值一致）；`Authorization`、`Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token），切法同宿主：第一個空白之後、修掉頭尾空白。
+ * 授權用的 header（小寫）：不分大小寫比對，設定裡直接寫成字串也當憑證（D359）。Rust 宿主的 `AUTHORIZATION_HEADERS`（`host/src/mcp/config.rs`）要與它同一份，
+ * 兩邊各有一支測試對 `credentials-vectors.json` 的 `credentialHeaderNames`；加名字先改這裡與那一行。
+ */
+export const AUTHORIZATION_HEADER_NAMES = ['authorization', 'proxy-authorization'] as const;
+
+const isAuthorizationHeader = (name: string): boolean =>
+  (AUTHORIZATION_HEADER_NAMES as readonly string[]).includes(name.toLowerCase());
+
+/** 一個 header 的整個值修過頭尾之後至少幾個 code point，直接寫的授權 header 才收；同憑證值的門檻（宿主 `MIN_VALUE_CODE_POINTS`）。 */
+const MIN_LITERAL_AUTHORIZATION_CODE_POINTS = 8;
+
+/** {@link hostHeaders} 的輸出：宿主 HTTP 列的 `headers` 與 `credentialHeaders`。 */
+export interface HostHeaders {
+  /** 代入之後的成品。字面值修過整個值的頭尾；憑證引用是 prefix 接上修過頭尾的憑證。 */
+  readonly headers: Readonly<Record<string, string>>;
+  /** 哪幾個 header 是憑證：名字 → prefix（沒有就 `''`）。 */
+  readonly credentialHeaders: Readonly<Record<string, string>>;
+}
+
+/**
+ * 設定的 `headers` 哪幾個是憑證，與代入之後各自的值（D359）。宿主的 HTTP 列（`credentialHeaders`）與
+ * {@link redactorFor} 都從這裡拿，所以兩條路對「什麼算憑證」只有這一份判斷。
  *
- * header 與 env 只收**憑證引用**解出來的東西：設定裡直接寫的字串值不是憑證，不進來（宿主那邊分不出來才一律收，見 `docs/credentials-file.md`）。
- * HTTP 網址的 query 值一律收（{@link queryValuesOf}）：token 就寫在網址裡，沒有引用。
+ * - 憑證引用：算憑證，值是 `prefix` 接上修過頭尾（`String.prototype.trim`，同宿主 `check_value`）的憑證。
+ * - 直接寫成字串的 `Authorization`／`Proxy-Authorization`：自動當憑證（prefix `''`，整個值）。其他字串 header 是字面值，不列。
+ * - 字面值修整個值的頭尾，憑證引用只修憑證。宿主要求 prefix 之後那段與修過的相同、header 值裡不能有頭尾換行，所以這裡先修。
+ *
+ * @throws 直接寫的授權 header 整個值修完不到 {@link MIN_LITERAL_AUTHORIZATION_CODE_POINTS} 個 code point（含空的），或引用的憑證不在 `credentials` 裡（沒有先解析）；訊息只有欄位與名字，不含值。
+ */
+export function hostHeaders(
+  headers: Readonly<Record<string, string | { credential: string; prefix?: string | undefined }>>,
+  credentials: ResolvedCredentials,
+): HostHeaders {
+  const out: Record<string, string> = {};
+  const credentialHeaders: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      out[name] = trimmed;
+      if (!isAuthorizationHeader(name)) continue;
+      if ([...trimmed].length < MIN_LITERAL_AUTHORIZATION_CODE_POINTS) {
+        throw new Error(
+          `connection.headers.${name} 直接寫成字串的授權 header，整個值修掉頭尾空白之後不到 ${MIN_LITERAL_AUTHORIZATION_CODE_POINTS} 個字元；請換成較長的值，或改用憑證引用`,
+        );
+      }
+      credentialHeaders[name] = '';
+      continue;
+    }
+    const resolved = credentials.get(value.credential);
+    if (resolved === undefined) throw new Error(`憑證 "${value.credential}" 沒有先解析`);
+    const prefix = value.prefix ?? '';
+    out[name] = `${prefix}${resolved.trim()}`;
+    credentialHeaders[name] = prefix;
+  }
+  return { headers: out, credentialHeaders };
+}
+
+/**
+ * 這一份連線手上要遮的值（#2669）：每一把解析出來的憑證；{@link hostHeaders} 列為憑證的 header 的整個值（`prefix` 接憑證，連 prefix 一起遮成一段，
+ * 與 Rust 宿主收整個 header 值一致）與 prefix 之後的憑證本身；`Authorization`、`Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token），
+ * 切法同宿主：第一個空白之後、修掉頭尾空白。header 收修過頭尾的值（server 回顯的多半是修過的，`fetch` 只去掉 HTTP 空白），也收憑證服務給的原樣憑證值。
+ *
+ * header 與 env 只收**憑證**：憑證引用解出來的，與直接寫成字串的 `Authorization`／`Proxy-Authorization`（D359）；其他字面值不進來。
+ * HTTP 網址的 query 值收（不到 8 個 code point 的不收，見 {@link queryValuesOf}）：token 就寫在網址裡，沒有引用。
  * 一份連線的值在建立時就定了（值換了，池鍵的指紋換、開的是另一份連線，各帶自己的遮蔽器），所以同一份連線的重連沿用同一組值。
+ *
+ * @throws 呼叫方要先跑過 {@link resolveCredentials}：它先擋掉直接寫的授權 header 太短與未解析的憑證引用，這裡才不會拋（同 {@link hostHeaders}）。
  */
 export function redactorFor(config: McpConfig, credentials: ResolvedCredentials): Redactor {
   const values = new Set<string>(credentials.values());
   const { connection } = config;
   if (connection.transport !== 'stdio') {
     for (const value of queryValuesOf(connection.url)) values.add(value);
-    for (const [name, value] of Object.entries(connection.headers ?? {})) {
-      if (typeof value === 'string') continue;
-      const resolved = credentials.get(value.credential);
-      if (resolved === undefined) continue;
-      const composed = `${value.prefix ?? ''}${resolved}`;
-      values.add(composed);
-      if (/^(?:proxy-)?authorization$/iu.test(name)) {
-        const afterScheme = /^\S*\s+([\s\S]*)$/u.exec(composed)?.[1]?.trim();
+    const { headers, credentialHeaders } = hostHeaders(connection.headers ?? {}, credentials);
+    for (const [name, prefix] of Object.entries(credentialHeaders)) {
+      const whole = headers[name] ?? '';
+      values.add(whole);
+      values.add(whole.slice(prefix.length));
+      if (isAuthorizationHeader(name)) {
+        const afterScheme = /^\S*\s+([\s\S]*)$/u.exec(whole)?.[1]?.trim();
         if (afterScheme !== undefined && afterScheme !== '') values.add(afterScheme);
       }
     }
