@@ -156,7 +156,7 @@ export const AGENT_INSTRUCTIONS_MIDDLEWARE_NAME = 'AgentInstructionsMiddleware';
 export const AGENT_INSTRUCTIONS_MARKER = 'nexus.agentInstructions';
 
 /**
- * 這一則注入有多少原文位元組放不下、沒放進去（被截掉的那一段與整份沒放的檔都算），記在 `additional_kwargs` 的這一格（正整數；沒有延後就不放），`context/measure` 的
+ * 這一則注入有多少原文位元組放不下、沒放進去（被截掉的那一段與整份沒放的檔都算），記在 `additional_kwargs` 的這一格（正整數；全部放完就不放），`context/measure` 的
  * `sources[].deferredBytes` 從它讀（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core` 的
  * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
  */

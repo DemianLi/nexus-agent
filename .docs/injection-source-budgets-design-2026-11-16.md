@@ -14,7 +14,7 @@
 
 | 來源 | 接在哪 | 現有上限 | 超過時 | 另一條讀全的路 |
 |---|---|---|---|---|
-| agent-instructions（`AGENTS.md` 等） | 尾端的一則機器訊息，每條 thread 一次 | 65,536 位元組（`packages/nexus-plugin-agent-instructions/src/index.ts:175`，核過）；單檔 1 MiB | 整份放得下的先放（最具體的先），剩下最具體的那份截到預算放得下的最長檔頭，其餘整份不放，通知行在最前面（`render.ts` 的 `renderAgentInstructions`） | `read_file` |
+| agent-instructions（`AGENTS.md` 等） | 尾端的一則機器訊息，每條 thread 一次 | 65,536 位元組（`packages/nexus-plugin-agent-instructions/src/index.ts:182` 的 `DEFAULT_MAX_BYTES`，核過）；單檔 1 MiB | 整份放得下的先放（最具體的先），剩下最具體的那份截到預算放得下的最長檔頭，其餘整份不放，通知行在最前面（`render.ts` 的 `renderAgentInstructions`） | `read_file` |
 | skills 目錄 | system prompt | 每則描述 1,024 字元（`packages/nexus-core/src/skill-catalog.ts:121`，核過）；**總量與則數沒有上限** | 描述截斷 | `read_file` 讀 `SKILL.md` |
 | `/名字` 技能叫用的正文 | 尾端的一則機器訊息，叫用那一輪 | 單檔 10 MiB，**沒有進請求的上限** | — | `read_file` |
 | 記憶檔（不在出廠清單） | system prompt 最後一塊 | **沒有** | — | 讀記憶檔 |
@@ -89,7 +89,7 @@ dsh **沒有跨源的預算表，也沒有「整項延後、留指標」**。它
 指標一行，寫三件事：哪一項、多大、怎麼讀。下面是草案；實際的順序與指標原文以〈B2 實際落地的樣子〉與 `docs/operations.md` 為準。
 
 - agent-instructions：整份放得下的先放，剩下最具體的那份截成放得下的最長檔頭，其餘整份不放；通知行三種寫法見 `docs/operations.md`〈各注入源的用量〉。
-  `Workspace instruction budget 13107 bytes: truncated /AGENTS.md from 48210 to 12590 bytes; read the rest of /AGENTS.md with read_file before acting on this workspace.`
+  `Workspace instruction budget 13107 bytes: truncated /AGENTS.md from 48210 to 12636 bytes; read the rest of /AGENTS.md with read_file before acting on this workspace.`
 - skills 目錄：照現有順序逐則放，放不下的不列。
   `12 more skills not listed (budget 6553 bytes): list /skills with ls and read a SKILL.md with read_file.`
 - 技能叫用的正文：`Skill "report" is 91200 bytes, over the 65536-byte budget: read /skills/report/SKILL.md with read_file.`
@@ -134,21 +134,23 @@ skills 每則描述的 1,024 字元截斷不動：那是目錄的摘要欄，正
 
 - #2929：真模型（nemotron-3.5-lightning-30b-a3b）13 次延後，**0 次**去讀 `AGENTS.md`。
 - #2934：小檔（2,177 位元組，預算 1,024）六種做法（現況、加強指標、搬進 system prompt、檔頭摘錄 512 位元組、dsh 式截斷、宿主替模型先讀一頁）
-  各 5 次，「去讀了」**全是 0/5**，共 65 次、129 個請求、0 次執行失敗（留言：https://github.com/DemianLi/nexus-agent/issues/2934#issuecomment-6966716707）。
+  共 13 格（現況 3 格、其餘五種各 2 格），每格 5 次，「去讀了」**全是 0**（截斷那格規則在檔尾的一格是 0/4，有 1 次到上限中止），共 65 次、129 個請求、0 次執行失敗；
+  其中宿主先讀那 10 次，每次都印出一筆 `tool-result-without-call` 違規，但沒有讓執行失敗（留言：https://github.com/DemianLi/nexus-agent/issues/2934#issuecomment-6966716707）。
   規則在檔頭那一格，檔頭摘錄、截斷、宿主先讀三種做法都讓規則在第一個請求裡（「規則已在請求」5/5）；現況、加強指標、搬進 system prompt 是 0/5。
-  規則在檔尾那一格，檔頭摘錄與截斷是 0（截到的檔頭沒有它；截斷那格有 1 次到上限中止，分母 4），宿主先讀是 5/5（小檔一頁讀完）。
-- 這輪量測有一個限制：「照做」在每一格都是 0，包括不延後的對照（規則已在請求，仍沒有寫那一行）。題目只問「列出檔名」，模型沒有把
-  「每次最後一行寫核可編號」當成要遵守的事。所以這輪排不出哪個做法讓模型更照做；能下結論的只有「靠指標叫模型自己讀，不可靠」。
+  規則在檔尾那一格，檔頭摘錄與截斷是 0（截到的檔頭沒有它；截斷那格有 1 次到上限中止，去讀了的分母是 4），宿主先讀是 5/5（小檔一頁讀完）。
+- 這輪量測有一個限制：「照做」在每一格都是 0，包括不延後的對照（規則已在請求，仍沒有寫那一行）。題目只問「列出檔名」，推測是模型沒有把
+  「每次最後一行寫核可編號」當成要遵守的事（這是推測，沒有另外驗證）。所以這輪排不出哪個做法讓模型更照做；能下結論的只有「靠指標叫模型自己讀，不可靠」。
 
-結論：不能靠模型自己去讀。截斷讓檔頭一定在請求裡，不需要模型做任何決定；通知行告訴它被截了、其餘在哪。
+結論：不能靠模型自己去讀。截得到 256 位元組以上時，截斷讓檔頭一定在請求裡，不需要模型做任何決定；通知行告訴它被截了、其餘在哪。
 
 ### 對照 dsh（`8bd0733`，`packages/context/agent-instructions/src/render.ts`）
 
 **dsh 怎麼做、為什麼。** `renderInstructionContext`（`:363-420`）整份放得下就整份放（`:372-375`）；放不下時從最寬的檔開始整份丟，找第一個放得下的後綴（`:377-384`）；
 連最具體的一份單獨都放不下，才把那一份二分截到放得下的最長檔頭（`truncateToFit`，`:333-357`；`truncateUtf8` 不切碎字元，`:84-94`），其餘全丟（`:386-405`）。
 再放不下依序退成較短的開場白（`COMPACT_AGENT_INSTRUCTIONS_INTRO`，`:392`）、只有標題加通知（`:407-418`）、只有通知（`:419-420`）。
+入口是 `renderInstructionChains`（`:440`）：使用者全域鏈與專案鏈各有自己的 `maxBytes`；nexus 沒有使用者全域鏈，只有一條。
 通知是一行（`markerText`，`:303-313`）：`omitted <路徑>, …; truncated <路徑> from A to B bytes`，沒有被丟的檔的大小，也沒有怎麼讀。
-理由是「最具體的指示最該留」；代價是模型拿到半份檔，通知不說去哪讀。
+dsh 的 `README.md`（`packages/context/agent-instructions/README.md:74`）寫它 keeps the most specific files first；代價是模型拿到半份檔，通知不說去哪讀。
 
 **別的做法，同一組標準**（正確性、失敗與恢復、效能、維護成本、產品需求、基座做不做得到）：
 
@@ -163,15 +165,17 @@ skills 每則描述的 1,024 字元截斷不動：那是目錄的摘要欄，正
 **選哪個、好在哪。** 選最後一個。跟 dsh 一樣的是：放得下就整份、截最具體、二分取最大值、不切碎字元、通知放最前面。不一樣的兩處：
 
 1. **通知多了讀檔指標與大小。** dsh 的 `omitted a, b; truncated x from A to B bytes` 沒有大小與讀法；我們寫 `read the rest of <路徑> with read_file`，被丟的每一份寫大小與路徑。理由是整份延後那條路量出來的教訓：模型不會憑空知道去讀。代價是通知比 dsh 的多約八十位元組（只有截斷的那一種）。這個差別值得：省下的位元組換不到模型自己去讀。
-2. **多檔時先整份放得下的、再截最具體放不下的那一份。** dsh 是連最具體的一份單獨都放不下才截，截的時候其餘全丟，哪怕較窄的小檔放得下。我們保留放得下的整份（最具體的先），只動放不下的那一份，所以一份很大的寬檔不會把較窄的小檔擠掉，反過來較寬的大檔也會留一段檔頭。
+2. **多檔時先整份放得下的、再截最具體放不下的那一份。** dsh 只有在連最具體的一份單獨都放不下時才截，截的時候其餘全丟，哪怕較寬的小檔放得下（檔組 [寬小, 窄大]：dsh 截窄大、丟寬小）；較寬的大檔放不下、較窄的小檔放得下時，dsh 整份丟掉寬大（檔組 [寬大, 窄小]）。我們保留放得下的整份（最具體的先），只動放不下的那一份：[寬小, 窄大] 時較窄的大檔不會把較寬的小檔擠掉，[寬大, 窄小] 時較寬的大檔仍留一段檔頭，[小, 大, 小] 的兩個小檔都整份留下。
    代價：被截的可能是較寬的檔，較窄的整份放；兩者的取捨沒有量過，是我們訂的。
 
-沒有照 dsh 做的：較短的開場白（`:392`）與只有標題的退路（`:407-418`）。通知本來就要兩三百位元組，省下幾十位元組的開場白換不到多少檔頭，退路多一層就多一份要釘的模型可見字串；放不下時退成只有通知（與 dsh `:419-420` 同形）。
+沒有照 dsh 做的：較短的開場白（`:392`）與只有標題的退路（`:407-418`）。通知行量過約 130 到 240 位元組（整份沒放 134、只截斷 151、兩者都有且路徑長 242），外框、開場白與標題另有固定約 300 位元組，省下幾十位元組的開場白換不到多少檔頭，退路多一層就多一份要釘的模型可見字串；放不下時退成只有通知（與 dsh `:419-420` 同形）。
 
 ### 沒量過的
 
 - 截斷之後模型的照做率：見上，這輪的題目排不出來。
 - 256 位元組的下限、截斷點落在一行中間對模型的影響：沒有量。
+- 實際送出的通知字串沒有在真模型上量過：量到的 `truncate` 那一格用的是 dsh 式的通知，沒有讀檔指標。
+- 量測用的候選做法的程式碼不在 develop 上；要重現得靠 #2934 的留言與這張 PR 的提交歷史。
 
 ## 不做的
 
@@ -196,7 +200,7 @@ B1 先合，可以先在真實會話上看到各源實際多大，再回頭校 B
 跟上面草案不同或當時沒定的，以這一段為準；送出的指標原文見 `docs/operations.md`〈各注入源的用量〉。
 
 - **上限怎麼交到插件手上**：`@nexus/agent-loop` 契約 1.4.0，`agent/pre-step` 的 listener 多收一格選填的 `contextWindow`（這條 thread 下一步會走的模型的窗口）。宿主從 `model-selection` 那一列問（`model-selection-host.ts` 的 `nextContextWindowOf`），每次呼叫問一次。插件照抄預設值與算法，`apps/harness/src/injection-budget-pins.test.ts` 把它們跟 core 的表釘成相等。
-- **agent-instructions 的順序**：從最具體的那一層往外放（草案寫的是由寬到窄）。最具體的那一份最該留，所以先放它；整份放不下的那幾份，再取其中最具體的截成放得下的最長檔頭（〈agent-instructions 改成截斷〉），後面較小的照樣試著整份放。
+- **agent-instructions 的順序**：從最具體的那一層往外試（草案寫的是由寬到窄）。放不下的先跳過，其餘照樣試著整份放；全部試過之後，取沒能整份放的那幾份裡最具體的，截成放得下的最長檔頭（〈agent-instructions 改成截斷〉）。
 - **skills 目錄**：整段放不下時從清單尾端往前留（草案寫的是照現有順序逐則放）。清單照每個名字第一次出現的先後排，後登記的來源才有的技能在尾端。
 - **記憶檔攔得到**：渲染在我們自己的 `memory-middleware.ts`，不在基座裡；照登記的先後一份一份放。
 - **system prompt 上兩段的窗口**：`FoldedAgentParams.contextWindowOf`（取自 `FoldOptions.modelLimits`），用的是那一次請求實際走的模型。

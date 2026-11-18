@@ -5,8 +5,8 @@
  *
  * **預算超出時截到放得下**（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)、[#2934](https://github.com/DemianLi/nexus-agent/issues/2934)）：
  * 整份放得下的照放；剩下放不下的檔，最具體的那一份截成放得下的最長檔頭，其餘整份不放。通知行放在最前面，寫出哪一份被截、
- * 從幾位元組截到幾位元組、哪幾份整份沒放、各多大，以及其餘用 `read_file` 讀。只留一行指標的做法，真模型沒有一次去讀（#2929、#2934）；
- * 模型看得到檔頭，才知道有指示、也知道該去讀。取捨見 `.docs/injection-source-budgets-design-2026-11-16.md`。
+ * 從幾位元組截到幾位元組、哪幾份整份沒放、各多大，以及其餘用 `read_file` 讀。
+ * 放不下時至少讓檔頭進到請求裡，不靠模型照指標自己去讀：真模型不會去讀（#2929、#2934 量過）。取捨見 `.docs/injection-source-budgets-design-2026-11-16.md`。
  *
  * 沒有抄過來的三段，都是這裡不做的（見 `index.ts` 檔頭；刷新與巢狀發現的
  * [#389](https://github.com/DemianLi/nexus-agent/issues/389) 已以 not planned 關閉）：
@@ -21,7 +21,7 @@
 const SYSTEM_REMINDER_OPEN = '<system-reminder>';
 const SYSTEM_REMINDER_CLOSE = '</system-reminder>';
 
-/** 基線的引言。dsh `render.ts:12-14` 逐字。 */
+/** 基線的引言。dsh `render.ts:18-20`（`8bd0733`）逐字。 */
 export const AGENT_INSTRUCTIONS_INTRO =
   'The following workspace instructions may be relevant to your work. ' +
   'Use them as guidance when applicable. More specific instructions take precedence over broader ones. ' +
@@ -35,8 +35,8 @@ export const AGENT_INSTRUCTIONS_BUDGET_NOTICE = 'Workspace instruction budget';
 /**
  * 截斷後至少要留的位元組數；留不到就不截，退回整份不放、只留通知。
  *
- * 通知行本身就要兩三百位元組，檔頭只剩一兩行時，模型看到的是一個標題或半條規則，既不能照做、也容易被當成整份檔的內容；
- * 整份不放加一行指標至少不會讓人誤會。256 是約三五條規則的量，是這裡訂的，沒有量過。
+ * 通知行約 130 到 240 位元組（看路徑與有幾種情形），加上外框、引言與檔頭固定約 300 位元組，檔頭只剩一兩行時，模型看到的是一個標題或
+ * 半條規則，既不能照做、也容易被當成整份檔的內容；整份不放加一行指標至少不會讓人誤會。256 是約三五條規則的量，是這裡訂的，沒有量過。
  */
 export const MIN_TRUNCATED_BYTES = 256;
 
@@ -44,7 +44,7 @@ export const MIN_TRUNCATED_BYTES = 256;
 export interface InstructionFile {
   /** 寫進 `Instructions from:` 的路徑。 */
   readonly displayPath: string;
-  /** 模型用讀檔工具讀這一份時要給的路徑；延後時寫進通知行。不給就用 `displayPath`。 */
+  /** 模型用讀檔工具讀這一份時要給的路徑；這一份被截或整份沒放時寫進通知行。不給就用 `displayPath`。 */
   readonly readPath?: string;
   readonly content: string;
 }
@@ -70,7 +70,7 @@ function byteLength(value: string): number {
  * 取一段位元組的前 `maxBytes` 個，**不切碎一個字元**。
  *
  * 切點落在延續位元組（`0b10xxxxxx`）上時要退回那個字元的首位元組再切掉它——中文一個字三個位元組，
- * 不退的話結尾會是半個字。dsh `render.ts:69-79` 同一份寫法。
+ * 不退的話結尾會是半個字。退位迴圈同 dsh `render.ts:90-92`（`8bd0733`）。
  */
 function utf8Prefix(bytes: Buffer, maxBytes: number): string {
   if (bytes.length <= maxBytes) return bytes.toString('utf8');
@@ -81,7 +81,7 @@ function utf8Prefix(bytes: Buffer, maxBytes: number): string {
 
 /**
  * 內容裡字面的 `</system-reminder>` 要跳脫，否則一份工作區指令就能把外框關掉，
- * 後面的東西看起來就不再是系統提醒了。dsh `render.ts:81-83` 同一個替換字串。
+ * 後面的東西看起來就不再是系統提醒了。dsh `render.ts:96-98`（`8bd0733`）同一個替換字串。
  */
 function escapeInstructionFrameBody(body: string): string {
   return body.replaceAll(SYSTEM_REMINDER_CLOSE, '<\\/system-reminder>');

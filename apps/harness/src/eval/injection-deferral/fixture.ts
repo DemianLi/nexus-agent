@@ -44,7 +44,7 @@ export interface DeferralCase {
 
 /**
  * 七格。大檔四格：放得下與否 × 規則在檔頭或檔尾。小檔三格：放得下一格（規則在檔頭），放不下兩格（規則在檔頭或檔尾）；小檔上規則只是
- * 二十幾條裡的一條，放得下那一格是放不下兩格的對照，檔尾那一格是規則落在截掉的那一段、要自己去讀才讀得到。
+ * 三十一條（三十條填充加這一條）裡的一條，放得下那一格是放不下兩格的對照，檔尾那一格是規則落在截掉的那一段、要自己去讀才讀得到。
  */
 export const DEFERRAL_CASES: readonly DeferralCase[] = [
   { file: 'large', arm: 'inline', position: 'head' },
@@ -61,7 +61,7 @@ export const deferralCaseId = (testCase: DeferralCase): string =>
   `${testCase.file}/${testCase.arm}/${testCase.position}`;
 
 /**
- * 這一格要蓋掉的 `agent-instructions.maxBytes`；`undefined` 是用出貨值。兩種檔各有一邊要調：大檔調高才放得下，小檔調低才會延後。
+ * 這一格要蓋掉的 `agent-instructions.maxBytes`；`undefined` 是用出貨值。兩種檔各有一邊要調：大檔調高才放得下，小檔調低才放不下、被截。
  */
 export function deferralMaxBytesOverride(testCase: DeferralCase): number | undefined {
   if (testCase.file === 'large' && testCase.arm === 'inline') return DEFERRAL_INLINE_MAX_BYTES;

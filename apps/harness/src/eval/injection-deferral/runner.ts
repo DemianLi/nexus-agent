@@ -9,7 +9,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
@@ -49,7 +49,7 @@ export interface DeferralRun {
   readonly testCase: DeferralCase;
   /** 第一個請求裡有預算通知行（{@link AGENT_INSTRUCTIONS_BUDGET_NOTICE}）：指示檔有放不下的，被截或整份沒放。 */
   readonly deferred: boolean;
-  /** 規則在第一個請求裡（任何角色的訊息、含系統訊息）：截斷之後它還在放進去的那一段裡，模型不必自己讀檔就看得到。 */
+  /** 規則在第一個請求裡（任何角色，含系統訊息）：放得下時隨整份檔，被截時在截留的檔頭裡；模型不必自己讀檔就看得到。 */
   readonly ruleInjected: boolean;
   /** 模型用 `read_file` 讀 `AGENTS.md` 的次數。 */
   readonly readCalls: number;
@@ -158,7 +158,7 @@ export async function runDeferralCase(
       }
       rootLog().append('turn/end', {});
       options.onModel?.(built.model);
-      return { ...observe(testCase, messages, firstRequest), requests: responded, capped };
+      return { ...observe(testCase, messages, firstRequest ?? []), requests: responded, capped };
     } finally {
       await attachment.detach();
       await built.dispose();
@@ -173,7 +173,6 @@ export async function runDeferralCase(
  * 從跑完的訊息串與第一個模型請求讀出這一次看到的事。
  *
  * `deferred` 與 `ruleInjected` 看第一個請求（含系統訊息），不看最終訊息串：最終訊息串裡還有模型自己讀回來的內容，分不出規則是一開始就在、還是讀了才有。
- * 沒有第一個請求（不該發生）時退回看最終訊息串裡的使用者訊息。
  *
  * @param testCase - 這一格。
  * @param messages - 最終的訊息串；被中止時是空的。
@@ -182,10 +181,8 @@ export async function runDeferralCase(
 export function observe(
   testCase: DeferralCase,
   messages: readonly BaseMessage[],
-  firstRequest?: readonly string[],
+  firstRequest: readonly string[],
 ): Omit<DeferralRun, 'capped' | 'requests'> {
-  const humans = messages.filter((message) => HumanMessage.isInstance(message)).map(textOf);
-  const seen = firstRequest ?? humans;
   const ai = messages.filter((message) => AIMessage.isInstance(message));
   const reads = ai
     .flatMap((message) => message.tool_calls ?? [])
@@ -196,8 +193,8 @@ export function observe(
   const finalText = spoken.at(-1)?.text ?? '';
   return {
     testCase,
-    deferred: seen.some((text) => text.includes(AGENT_INSTRUCTIONS_BUDGET_NOTICE)),
-    ruleInjected: seen.some((text) => text.includes(DEFERRAL_MARKER)),
+    deferred: firstRequest.some((text) => text.includes(AGENT_INSTRUCTIONS_BUDGET_NOTICE)),
+    ruleInjected: firstRequest.some((text) => text.includes(DEFERRAL_MARKER)),
     readCalls: reads.length,
     ruleRead: messages
       .filter((message) => ToolMessage.isInstance(message))

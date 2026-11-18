@@ -701,7 +701,7 @@ describe('各注入源的用量（#2777）', () => {
         deferredBytes: 70_000 - Number(shown),
       },
     ]);
-    // 沒放完的源只有這一個有這一格。
+    // 全部放進去的源沒有這一格；這裡只有 agent-instructions 沒放完。
     expect(sources.filter((source) => 'deferredBytes' in source)).toHaveLength(1);
     await thread.close();
   }, 60000);
