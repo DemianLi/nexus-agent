@@ -634,6 +634,18 @@ class SandboxSpawner(unittest.TestCase):
             '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
         )
 
+    def test_runs_fork_deletion_under_per_thread(self) -> None:
+        """刪除碰到分叉在 per-thread 下再跑一次（#2957）：env 沒設時照 single 跑、照樣綠，所以 env 要釘。"""
+        step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑刪除碰到分叉')
+        self.assertEqual(
+            step['run'], 'pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion'
+        )
+        self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
+        self.assertEqual(
+            step['env']['NEXUS_SUPERVISOR_BIN'],
+            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+        )
+
     def test_per_thread_thread_search_filter_matches_one_test(self) -> None:
         """`-t` 篩不到任何一支時 vitest 4 回 exit 0（全部 skipped），測試改名後這一步會靜靜變綠：名字要恰好對到一支 it。"""
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
