@@ -1103,9 +1103,11 @@ export type ThreadSearchResponse =
  *
  * - **新增**：一條 thread 接上這台 server 的這條線時一顆 {@link ThreadAddedFrame}（#2988）。
  *   新開的會話不必等下一份列表就進得了側欄。**接上時不補送**：已經接著的那些由列表給。
+ * - **刪除**：`thread.delete` 寫成功之後一顆 {@link ThreadRemovedFrame}（#2990）。撤出記憶體不算，會話還在列表上。
+ * - **釘選與封存**：集合變了才各送一顆整份的 {@link ThreadArchivedFrame}、{@link ThreadPinnedFrame}（#2990），
+ *   封存順手取消釘選時兩顆都送。**接上時不補送**：起點是列表帶的兩個集合。
  *
- * **client 要跳過不認得的 `type`**：這條線之後還要帶會話刪除與活動時間（還沒做），舊的 client 收到新種類
- * 不能當掉。
+ * **client 要跳過不認得的 `type`**：這條線之後還要帶活動時間（還沒做），舊的 client 收到新種類不能當掉。
  *
  * **偏離**：dsh 的 frame 是 Cordis 的 `emit`／`waterfall`，路徑是 gateway 的；我們沒有那一層，frame 與路徑是這裡定的。
  * dsh 的撤回只送給收過那一顆的 client，我們送給每一條——多收一顆認不得的撤回，client 照規則跳過。
@@ -1150,9 +1152,37 @@ export interface ThreadAddedFrame {
   readonly updatedAt: number;
 }
 
+/** 一條 thread 被刪了（移進已刪除存放區）：它進了 `GET /threads/deleted`，列表上不再有它。 */
+export interface ThreadRemovedFrame {
+  readonly type: 'removed';
+  readonly threadId: string;
+}
+
+/** 封存之後的整份封存集合，形狀同 `thread.archive` 回應的 `archivedThreadIds`。 */
+export interface ThreadArchivedFrame {
+  readonly type: 'archived';
+  readonly archivedThreadIds: readonly string[];
+}
+
+/** 釘選之後的整份釘選集合，形狀同 `thread.pin` 回應的 `pinnedThreadIds`。 */
+export interface ThreadPinnedFrame {
+  readonly type: 'pinned';
+  readonly pinnedThreadIds: readonly string[];
+}
+
 /** {@link THREAD_FEED_PATH} 上的一顆。 */
 export type ThreadFeedFrame =
-  ThreadStatusFrame | ThreadInputRequestedFrame | ThreadInputWithdrawnFrame | ThreadAddedFrame;
+  | ThreadStatusFrame
+  | ThreadInputRequestedFrame
+  | ThreadInputWithdrawnFrame
+  | ThreadAddedFrame
+  | ThreadRemovedFrame
+  | ThreadArchivedFrame
+  | ThreadPinnedFrame;
+
+function isStringList(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
 
 /**
  * 一顆下行的事件，信封哪裡不對：回第一個不對的欄位路徑與原因，都對就回 `undefined`。{@link assertWireEvent} 與 {@link isWireEvent}
@@ -1248,8 +1278,12 @@ export function isWireEvent(value: unknown): value is Event {
 export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
   if (typeof value !== 'object' || value === null) return false;
   const frame = value as Record<string, unknown>;
+  if (frame['type'] === 'archived') return isStringList(frame['archivedThreadIds']);
+  if (frame['type'] === 'pinned') return isStringList(frame['pinnedThreadIds']);
   if (typeof frame['threadId'] !== 'string') return false;
   switch (frame['type']) {
+    case 'removed':
+      return true;
     case 'status':
       return typeof frame['running'] === 'boolean';
     case 'input-requested': {

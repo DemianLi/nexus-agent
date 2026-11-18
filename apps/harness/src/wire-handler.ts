@@ -1821,6 +1821,11 @@ export class ThreadDeletedError extends Error {
 /** 刪除時等寫入方閒置的上限（毫秒）；超過就拋，不硬撤。 */
 const RELEASE_IDLE_WAIT_MS = 30_000;
 
+/** 兩份 id 清單一樣：順序也算（釘選的順序是最近釘的在前）。 */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
 /**
  * `ThreadDeletionError` 的代碼翻成協定碼（[#2957](https://github.com/DemianLi/nexus-agent/issues/2957)）。寬限期過了與原處已有同 id 是
  * 兩碼，畫面分得出來。翻不到的（讀不動、寫不進）回 `undefined`，由呼叫端當成 `unknown_error`。
@@ -1996,6 +2001,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         : { maxQueuedBytes: options.downlinkMaxBytes }),
       warn: (message) => options.warn?.(message),
     });
+  /**
+   * 全域下行上一次推過的釘選、封存集合（#2990）：每次整理之後拿現在的跟它比，不同才推整份。起點是建 handler 時的集合，
+   * client 的起點是列表帶的那兩個。比的是當下的集合，不是那一次變更的結果，所以並行的變更不會推出舊的那份。
+   */
+  const announcedSets = {
+    pinned: [...(options.threadOrganization?.pinnedThreadIds ?? [])],
+    archived: [...(options.threadOrganization?.archivedThreadIds ?? [])],
+  };
   /**
    * 上傳收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：thread → 收據 id → 存好的檔案參照。
    * **收據只在收下它的那條 thread 有效**（查表以 thread 為鍵，拿別條 thread 的收據查不到），行程重開就失效——沒送出去的上傳不續命。
@@ -3992,6 +4005,21 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           ),
         ),
       );
+    } finally {
+      announceOrganization(organization);
+    }
+  }
+
+  function announceOrganization(organization: ThreadOrganization): void {
+    const archived = [...organization.archivedThreadIds];
+    if (!sameIds(announcedSets.archived, archived)) {
+      announcedSets.archived = archived;
+      feed.announce({ type: 'archived', archivedThreadIds: archived });
+    }
+    const pinned = [...organization.pinnedThreadIds];
+    if (!sameIds(announcedSets.pinned, pinned)) {
+      announcedSets.pinned = pinned;
+      feed.announce({ type: 'pinned', pinnedThreadIds: pinned });
     }
   }
 
@@ -4228,6 +4256,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           actor,
           ...(title !== undefined && { title }),
         });
+        feed.announce({ type: 'removed', threadId });
         return json(
           successResponse(id, {
             ok: true,

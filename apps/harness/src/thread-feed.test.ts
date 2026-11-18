@@ -103,6 +103,12 @@ function brief(activity: PumpActivity | ThreadFeedFrame): string {
       return `${thread}withdrawn ${activity.interruptId}`;
     case 'added':
       return `${thread}added`;
+    case 'removed':
+      return `${thread}removed`;
+    case 'archived':
+      return `archived ${activity.archivedThreadIds.join(',')}`;
+    case 'pinned':
+      return `pinned ${activity.pinnedThreadIds.join(',')}`;
   }
 }
 
