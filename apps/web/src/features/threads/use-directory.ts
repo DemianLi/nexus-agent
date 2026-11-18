@@ -9,7 +9,7 @@ import {
   rowStatus,
   unlistedRows,
 } from '@/features/threads/status';
-import type { RowStatus } from '@/features/threads/status';
+import type { RowStatus, ThreadStatusState } from '@/features/threads/status';
 
 /**
  * 以前的會話那份清單，加上每一列的即時狀態（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）。
@@ -19,7 +19,7 @@ import type { RowStatus } from '@/features/threads/status';
  *
  * - **全域下行**（`WireClient.openThreadFeed`）：一個分頁一條。斷了照 `shared/connection/reconnect.ts` 的退避重接，不放棄。
  * - **列表**：全域下行**每次接上**（含第一次）重抓一次，當「在跑」的起點——那條線不補送狀態（`THREAD_FEED_PATH`）。
- *   側欄打開時也重抓（`refresh`，#302 的理由：清單會變，會話刪除不走那條線；新增走那條線，見 `features/threads/status.ts`）。**平常只有這兩個時機**：線開不起來又沒打開
+ *   側欄打開時也重抓（`refresh`，#302 的理由：清單會變，復原與改名不走那條線；新增、刪除與釘選、封存走那條線，見 `features/threads/status.ts`）。**平常只有這兩個時機**：線開不起來又沒打開
  *   側欄，就一次都不抓。另外在動作之後由呼叫端叫 `refresh`：側欄的封存、刪除、復原成功之後，打開的這條被拒說已刪除時，以及打開的這條講過話、清單上卻沒有它時（`app/App.tsx`）。晚送出的那一次回來之後，早送出、晚回來的那一份丟掉。送出前記 `list-requested`，途中的
  *   frame 在回應到了之後重放（#1600，見 `features/threads/status.ts`）。
  *
@@ -47,6 +47,10 @@ export interface ThreadDirectory {
   readonly placeholders: readonly ThreadSummary[];
   /** 分叉成功：把子 thread 先放進清單，不等下一次刷新（規則見 `features/threads/status.ts`）。 */
   readonly addPlaceholder: (summary: ThreadSummary) => void;
+  /** 全域下行推來的整份釘選、封存集合（#2990），下一份清單回來之前以它為準；沒推過的那一個不在。 */
+  readonly pushedSets: ThreadStatusState['pushed'];
+  /** 全域下行推來過幾顆刪除（#2990）：變了就重讀已刪除清單。 */
+  readonly removals: number;
 }
 
 export function useThreadDirectory(client: WireClient, currentThreadId: string): ThreadDirectory {
@@ -130,5 +134,7 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
     refresh,
     placeholders: unlistedRows(status),
     addPlaceholder,
+    pushedSets: status.pushed,
+    removals: status.removals,
   };
 }

@@ -17,11 +17,16 @@ import type {
   ThreadManagement,
 } from '@/features/threads/management';
 
-/** 這份列表之後、下一份列表之前，動作回應裡的整份集合。 */
+/**
+ * 這份列表之後、下一份列表之前，動作回應裡的整份集合。`…Over` 是寫下它時推來的那一份（#2990）：之後又推來新的一份，
+ * 推來的比較新，這一份就不算。
+ */
 interface Overlay {
   readonly base: ThreadListResult | undefined;
   readonly pinned?: readonly string[];
   readonly archived?: readonly string[];
+  readonly pinnedOver?: readonly string[];
+  readonly archivedOver?: readonly string[];
 }
 
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
@@ -116,9 +121,9 @@ export async function forkThread(
 
 /**
  * 已刪除清單（#2958）：`undefined` 是還沒讀到，`null` 是被拒（沒接已刪除存放區，或 server 讀不動索引）或讀不到，兩種都當成沒有刪除這件事。
- * 掛上時、`listed` 每換一次（列表來了新的一份，或從有變成讀失敗）、以及刪除與復原之後讀：別的頁籤刪掉或復原的，跟著列表一起追上；讀不到的那一次也在下一份列表時再試。
+ * 掛上時、`listed` 每換一次（列表來了新的一份，或從有變成讀失敗）、全域下行每推來一顆刪除（`removals`，#2990）、以及刪除與復原之後讀：別的頁籤刪掉或復原的，跟著列表一起追上；讀不到的那一次也在下一份列表時再試。
  */
-function useDeletedThreads(client: WireClient, listed: unknown) {
+function useDeletedThreads(client: WireClient, listed: unknown, removals: number) {
   const [deleted, setDeleted] = useState<readonly DeletedThread[] | null | undefined>(undefined);
   const ticket = useRef(0);
   const reload = useCallback(() => {
@@ -137,7 +142,7 @@ function useDeletedThreads(client: WireClient, listed: unknown) {
   }, [client]);
   useEffect(() => {
     reload();
-  }, [reload, listed]);
+  }, [reload, listed, removals]);
   return { deleted, reload };
 }
 
@@ -145,8 +150,8 @@ function useDeletedThreads(client: WireClient, listed: unknown) {
  * 側欄的釘選、封存、改名（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）與刪除（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)）。回 `undefined` 就是這一檔沒有這個功能：
  * 列表沒帶釘選與封存兩個集合（還沒實作的 server）、還在讀、或讀失敗，側欄什麼都不多畫。刪除另看已刪除清單（`deletion`）。規則見 `features/threads/management.ts`。
  *
- * **集合一律以 server 為準**：畫面上的集合是最近一份列表帶的；動作成功就拿回應裡的整份取代（蓋在列表上，直到下一份列表
- * 來為止），**本機不推**。封存之後 server 可能順手取消釘選，回應只帶封存集合，所以封存成功之後重抓一次列表；刪除、復原成功之後也重抓，那一列才會消失或回來。改名不重抓，見 `onRename`。
+ * **集合一律以 server 為準**：畫面上的集合是最近一份列表帶的；動作成功就拿回應裡的整份取代，全域下行推來的整份也是
+ * （#2990，誰後到聽誰），都蓋在列表上，直到下一份列表來為止，**本機不推**。封存之後 server 可能順手取消釘選，回應只帶封存集合，所以封存成功之後重抓一次列表；刪除、復原成功之後也重抓，那一列才會消失或回來。改名不重抓，見 `onRename`。
  * 同一個集合上連續的動作，回得慢的舊回應不蓋掉新的。
  */
 export function useThreadManagement(
@@ -154,12 +159,14 @@ export function useThreadManagement(
   directory: ThreadDirectory,
   accepted: AcceptedTitles,
 ): ThreadManagement | undefined {
-  const { listing, refresh } = directory;
+  const { listing, refresh, pushedSets, removals } = directory;
   const base = listing.kind === 'ok' ? listing.result : undefined;
   const sets = readSets(base);
   const baseRef = useRef(base);
+  const pushedRef = useRef(pushedSets);
   useLayoutEffect(() => {
     baseRef.current = base;
+    pushedRef.current = pushedSets;
   });
   const [overlay, setOverlay] = useState<Overlay>({ base: undefined });
   // 新一份列表來了，蓋在上面的就作廢：列表是 server 剛講的話。
@@ -182,7 +189,11 @@ export function useThreadManagement(
       const result = await settle(call);
       if ('message' in result) return result.message;
       if (mine === tickets.current.pinned) {
-        patch((previous) => ({ ...previous, pinned: result.value.pinnedThreadIds }));
+        patch((previous) => ({
+          ...previous,
+          pinned: result.value.pinnedThreadIds,
+          pinnedOver: pushedRef.current.pinned,
+        }));
       }
       return undefined;
     },
@@ -199,7 +210,11 @@ export function useThreadManagement(
           : result.message;
       }
       if (mine === tickets.current.archived) {
-        patch((previous) => ({ ...previous, archived: result.value.archivedThreadIds }));
+        patch((previous) => ({
+          ...previous,
+          archived: result.value.archivedThreadIds,
+          archivedOver: pushedRef.current.archived,
+        }));
       }
       return undefined;
     },
@@ -250,7 +265,7 @@ export function useThreadManagement(
     [client, accept],
   );
 
-  const { deleted, reload: reloadDeleted } = useDeletedThreads(client, base);
+  const { deleted, reload: reloadDeleted } = useDeletedThreads(client, base, removals);
   const onDelete = useCallback(
     async (threadId: string) => {
       const result = await settle(() => client.threadDelete(threadId));
@@ -278,8 +293,14 @@ export function useThreadManagement(
     [deleted, onDelete, onRestore],
   );
 
-  const pinned = current?.pinned ?? sets?.pinned;
-  const archived = current?.archived ?? sets?.archived;
+  const pinned =
+    current?.pinned !== undefined && current.pinnedOver === pushedSets.pinned
+      ? current.pinned
+      : (pushedSets.pinned ?? current?.pinned ?? sets?.pinned);
+  const archived =
+    current?.archived !== undefined && current.archivedOver === pushedSets.archived
+      ? current.archived
+      : (pushedSets.archived ?? current?.archived ?? sets?.archived);
   // 列表已經追上的（列上的標題等於我們頂著的）不再蓋；列表上沒有那一列的留著。
   const titles = useMemo(() => {
     if (renamed.size === 0) return NO_TITLES;

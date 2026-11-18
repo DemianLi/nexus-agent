@@ -394,3 +394,37 @@ describe('推來的新增（#2988）', () => {
     expect(effectiveBlank(state, fresh)).toBe(false);
   });
 });
+
+/** 全域下行推來的刪除與釘選、封存集合（#2990）。 */
+describe('推來的刪除與集合（#2990）', () => {
+  const requested: ThreadStatusAction = { type: 'list-requested' };
+  const removed = (threadId: string) => feed({ type: 'removed', threadId });
+  const pinned = (...ids: string[]) => feed({ type: 'pinned', pinnedThreadIds: ids });
+  const archived = (...ids: string[]) => feed({ type: 'archived', archivedThreadIds: ids });
+
+  it('刪除：推來的新增那一列拿掉；每一顆數一次，清單回來重放時不再數', () => {
+    const state = run(
+      '別條',
+      requested,
+      feed({ type: 'added', threadId: '新', updatedAt: 7 }),
+      removed('新'),
+      removed('舊'),
+      listed(item('別條')),
+    );
+    expect(unlistedRows(state)).toEqual([]);
+    expect(state.removals).toBe(2);
+  });
+
+  it('集合以推來的為準；之後才送的清單回來就清掉，照清單', () => {
+    const state = run('別條', listed(), pinned('b', 'a'), archived('c'));
+    expect(state.pushed).toEqual({ pinned: ['b', 'a'], archived: ['c'] });
+    expect(run('別條', pinned('a'), requested, listed()).pushed).toEqual({});
+  });
+
+  it('在推來之前送出、比它晚回來的清單蓋不掉它；重接也不清', () => {
+    const state = run('別條', requested, archived('c'), pinned(), listed(), {
+      type: 'connected',
+    });
+    expect(state.pushed).toEqual({ pinned: [], archived: ['c'] });
+  });
+});

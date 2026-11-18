@@ -13,7 +13,7 @@
  * @module
  */
 
-import type { Event, ThreadFeedFrame } from '@nexus/wire';
+import type { Event } from '@nexus/wire';
 import { decodeSseData, isThreadFeedFrame, THREAD_FEED_PATH } from '@nexus/wire';
 
 import type { FrontForwarder } from './front-forward.js';
@@ -23,16 +23,6 @@ import { internalThreadPath } from './wire-handler.js';
 
 /** 對話行程那條線斷了之後，隔多久重連。 */
 const RECONNECT_MS = 1_000;
-
-/**
- * 對話行程那條線上要轉的種類：這條 thread 自己的狀態與等人回答。`added` 前台接上時自己廣播過（`ThreadFeed.attach`）；
- * 刪除與釘選、封存由前台自己答、自己廣播（#2990），對話行程那頭不會有。其餘一律不轉。
- */
-const RELAYED: ReadonlySet<ThreadFeedFrame['type']> = new Set([
-  'status',
-  'input-requested',
-  'input-withdrawn',
-]);
 
 export interface FrontFeedOptions {
   readonly forwarder: FrontForwarder;
@@ -128,7 +118,7 @@ class RemoteThread implements FeedSource {
     let statusSeen = false;
     void this.#snapshot(() => statusSeen);
     for await (const frame of decodeSseData(response.body)) {
-      if (!isThreadFeedFrame(frame) || !RELAYED.has(frame.type)) continue;
+      if (!isThreadFeedFrame(frame)) continue;
       if (!('threadId' in frame) || frame.threadId !== this.threadId) continue;
       if (frame.type === 'status') {
         statusSeen = true;
@@ -141,6 +131,7 @@ class RemoteThread implements FeedSource {
         this.#tell({ type: 'input-requested', event: frame.event });
         continue;
       }
+      // `added` 前台接上這條時自己廣播過（`ThreadFeed.attach`）；刪除與釘選、封存由前台自己答、自己廣播（#2990）。
       if (frame.type !== 'input-withdrawn') continue;
       this.#pending.delete(frame.interruptId);
       this.#tell({ type: 'input-withdrawn', interruptId: frame.interruptId });
