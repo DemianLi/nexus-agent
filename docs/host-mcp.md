@@ -63,7 +63,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 | 欄位 | 內容 |
 | --- | --- |
 | `serverName` | 必填，1 到 32 個 `[A-Za-z0-9_-]`。 |
-| `connection` | 必填。HTTP：`{ transport: "http", url, headers?, credentialHeaders? }`，`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）；`headers` 的值只收 TS 代入之後的字串，憑證引用物件整列拒絕。`credentialHeaders` 是 header 名（不分大小寫）→ prefix（沒有就 `""`），標出 `headers` 裡哪幾個值來自憑證：`headers` 不是空的時候它一定要在（沒有憑證就給 `{}`，漏送會變成起不來，不是憑證靜靜沒被遮）；`headers` 裡的 `authorization`／`proxy-authorization` 一定要列；每個鍵在 `headers` 裡剛好一個（大小寫不同的同名 header 對到兩個就拒）、值以 prefix 開頭、prefix 之後那一段要過 `check_value`（`Header`：非空、至少 8 個 code point、沒有 U+00FF 之後的字元與控制字元）且與它回的值完全相同（頭尾有空白就拒，同 stdio 的 `credentialEnv`）。池的鍵含它，空的與沒給是同一把。stdio：`{ transport: "stdio", command, args?, cwd?, env, credentialEnv? }`，見下面〈stdio〉。 |
+| `connection` | 必填。HTTP：`{ transport: "http", url, headers?, credentialHeaders? }`，`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）；`headers` 的值只收 TS 代入之後的字串，憑證引用物件整列拒絕。`credentialHeaders` 是 header 名（不分大小寫）→ prefix（沒有就 `""`），標出 `headers` 裡哪幾個值來自憑證：`headers` 不是空的時候它一定要在（沒有憑證就給 `{}`，漏送會變成起不來，不是憑證靜靜沒被遮）；`headers` 裡的 `authorization`／`proxy-authorization` 一定要列；每個鍵在 `headers` 裡剛好一個（大小寫不同的同名 header 對到兩個就拒）、值以 prefix 開頭、prefix 之後那一段要過 `check_value`（`Header`：非空、至少 8 個 code point、沒有 U+00FF 之後的字元與控制字元，tab 除外）且與它回的值完全相同（頭尾有空白就拒，同 stdio 的 `credentialEnv`）。池的鍵含它，空的與沒給是同一把。stdio：`{ transport: "stdio", command, args?, cwd?, env, credentialEnv }`，見下面〈stdio〉。 |
 | `toolCallTimeoutMs` | 正整數（不大於 2^53−1，`60000.0` 也收，同 zod 的 `int`），預設 60000。 |
 | `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。照收、不用（宿主沒有存活探測，見〈跟 TS 的差距〉），只進池的鍵。 |
 | `failOnStartupError` | 預設 `false`。 |
@@ -80,7 +80,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 這些出現在送回對話行程的文字裡，一律換成 `[redacted]`。收集的入口只有一個：`Redactor::new`（`host/src/mcp/redact.rs`），`Pool` 把池的秘密（代理帳密）與這一列的合起來交進去；憑證值（stdio 的 `credentialEnv`、HTTP 的 `credentialHeaders`）都走同一個入口。
 每個值連同百分號、form 與 JSON 跳脫形式在原文上一次替換。夠長（至少 8 個 code point）的值遮所有輸出；更短的只可能是設定裡的字面值，只遮錯誤與診斷，不遮成功結果。`Server` 與 `Redactor` 的 `Debug` 不印這些。
 
-**query 一律收：** 設定格式裡網址沒有憑證引用，宿主分不出 query 的哪些值是憑證，所以全部的 query 值當秘密收，代價是字面值也會在成功結果裡被遮，不會漏。header 沒有這個近似：TS 要送 `credentialHeaders`，宿主只收它標的。對話行程那一側今天還沒送這個欄位，只有宿主這一側的測試驗到（#2570）。
+**query 一律收：** 設定格式裡網址沒有憑證引用，宿主分不出 query 的哪些值是憑證，所以全部的 query 值當秘密收，代價是字面值也會在成功結果裡被遮，不會漏。header 沒有這個近似：TS 要送 `credentialHeaders`，宿主只收它標的。送的人是 harness 的 `hostHttpConnection`（`apps/harness/src/mcp-host-http-row.ts`）：憑證引用列為憑證，直接寫成字串的 `Authorization`／`Proxy-Authorization`（D359）自動列為憑證（prefix `""`，整個值），其他字串 header 是字面值。判斷只在 `@nexus/plugin-mcp` 的 `hostHeaders` 一處，TS 外掛自己連線的 `redactorFor` 也用它；宿主對這兩個名字另有一道防線（在 `headers` 而沒列就整列拒絕）。送宿主之前 harness 先把每個字面值 header 修掉頭尾空白（整個值），憑證引用只修憑證、prefix 原樣。對話行程那一側今天還沒接上宿主，只有 `host/tests` 與 harness 的測試驗到（#2570）。
 
 ## 一代連線
 
@@ -152,7 +152,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 | `args` | 字串陣列，預設空，不含 NUL。 |
 | `cwd` | 絕對路徑；省略就繼承宿主的工作目錄。 |
 | `env` | 必填，子行程的**整份**環境：TS 清過的父環境在前、設定的在後。宿主 `env_clear` 之後只放這一份。 |
-| `credentialEnv` | `env` 裡值來自憑證的名字，每個都要在 `env` 裡。**只有這些值進遮蔽器**，並照〈MCP 憑證值的遮蔽〉的檢查（修頭尾空白、不到 8 個字元拒收）；`PATH`、`HOME` 這類字面值不進，成功結果才不會被遮壞。 |
+| `credentialEnv` | **必填**（沒有憑證就給 `[]`），`env` 裡值來自憑證的名字，每個都要在 `env` 裡。漏送整列拒絕：不然會變成起不來，而不是憑證靜靜沒被遮；它抓不到「送了 `[]` 但其實有憑證」。**只有這些值進遮蔽器**，並照〈MCP 憑證值的遮蔽〉的檢查（修頭尾空白、不到 8 個字元拒收）；`PATH`、`HOME` 這類字面值不進，成功結果才不會被遮壞。 |
 
 - 起行程：`std::process::Command`，stdin、stdout 轉成 tokio 的非阻塞管線（`tokio::net::unix::pipe`，底下是 `AsyncFd`）交給 rmcp 的 `AsyncRwTransport`；沒有新相依、沒有新 feature。
 - **stderr 現在不留**（接 `/dev/null`）。原因：宿主分不出子行程印的字裡有沒有憑證值，繼承會把它原樣寫進宿主的 stderr（監督行程的日誌，多人共用主機上是共用的）；
@@ -183,7 +183,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
-- 對話行程那一側還沒送 `credentialHeaders`：帶任何 header 的 HTTP 列在宿主這裡都會整列拒絕（見〈設定〉）。
+- 對話行程那一側的列（`hostHttpConnection`）寫好了，但還沒有產品呼叫端（接上在 #2570 後面的卡）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
 - 連線之後的錯誤：TS 的工具呼叫錯誤、`tools/list` 錯誤與重連日誌也遮網址的 query（`withUrlScrubbing`）：query 的整串與每個值（原樣、解碼後）進遮蔽器，同宿主 `secrets()`，只差不到 8 個 code point 的值不收（整串、原樣、解碼後各自算，細節與後果見 `docs/credentials-file.md`〈收集〉）。宿主收 query 值讀碼可見（`config.rs` 的 `secrets()`）；沒量的是宿主每一條錯誤出口是否都過 `scrub`。TS 這邊 resources 的錯誤（`read_mcp_resource`、`list_mcp_resources`）還沒遮。

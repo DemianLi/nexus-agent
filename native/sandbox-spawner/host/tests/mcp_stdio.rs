@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use common::fixture;
 use nexus_host::mcp::bridge::{Bridge, Command, Outcome, CLOSE_WAIT};
-use nexus_host::mcp::config::{Connection, Server};
+use nexus_host::mcp::config::{Connection, Server, AUTHORIZATION_HEADERS};
+use nexus_host::mcp::redact::Redactor;
 use nexus_host::mcp::stdio::{self, REAP_BUDGET, STDIN_GRACE, TERM_GRACE};
 use nexus_host::proxy::ProxyPolicy;
 use nexus_host::tls::{client_config, http_client};
@@ -115,6 +116,19 @@ fn 設定_形狀與憑證值的檢查() {
     assert!(with(json!({ "extra": 1 })).contains("不認得的欄位 extra"));
     assert!(with(json!({ "credentialEnv": [1] })).contains("credentialEnv"));
 
+    // 沒給 `credentialEnv` 整列拒絕：漏送會變成起不來，不是憑證靜靜沒被遮。給 `[]` 才是「沒有憑證」。
+    let mut without = ok.clone();
+    without
+        .as_object_mut()
+        .expect("物件")
+        .remove("credentialEnv");
+    let missing_field = parse_err(without);
+    assert!(
+        missing_field.contains("connection.credentialEnv"),
+        "{missing_field}"
+    );
+    assert!(!missing_field.contains("abcdefgh-1234"), "{missing_field}");
+
     // 標成憑證的名字一定要在 env 裡。
     let missing = with(json!({ "credentialEnv": ["NOT_THERE"] }));
     assert!(
@@ -139,7 +153,7 @@ fn 設定_形狀與憑證值的檢查() {
 }
 
 fn with_short_literal() -> Value {
-    json!({ "transport": "stdio", "command": "/bin/true", "env": { "LANG": "C" } })
+    json!({ "transport": "stdio", "command": "/bin/true", "env": { "LANG": "C" }, "credentialEnv": [] })
 }
 
 #[test]
@@ -413,6 +427,7 @@ mod bridge {
                 "command": "/bin/sh",
                 "args": ["-c", "echo $$ > \"$PIDFILE\"; exec sleep 300"],
                 "env": { "PIDFILE": pid_file },
+                "credentialEnv": [],
             },
         });
         let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
@@ -508,6 +523,7 @@ mod bridge {
                 "command": "/bin/sh",
                 "args": ["-c", "echo $$ > \"$PIDFILE\"; exec cat 3>&1 > /dev/null"],
                 "env": { "PIDFILE": pid_file },
+                "credentialEnv": [],
             },
         });
         let mut server = Server::parse(&config).expect("設定");
@@ -566,7 +582,7 @@ fn spawn_for_reap(command: &str, args: &[&str]) -> (stdio::Spawned, i32) {
     let spec = match Server::parse(&json!({
         "serverName": "a",
         "connection": {
-            "transport": "stdio", "command": command, "args": args, "env": {},
+            "transport": "stdio", "command": command, "args": args, "env": {}, "credentialEnv": [],
         },
     }))
     .expect("收")
@@ -1068,4 +1084,71 @@ fn 樣本_stdio_host_宿主自己的拒絕() {
             }
         }
     }
+}
+
+/// TS 的 `hostHttpConnection` 輸出的 HTTP 那一列，宿主一律收；用宿主自己收的秘密建遮蔽器，對每筆回顯遮出來的字要等於 `expect`
+/// （TS 的 `mcp-host-http-row.test.ts` 跑同一份 `httpRow`，用 `redactorFor` 比同一個 `expect`）。
+#[test]
+fn 樣本_http_row_宿主收得下_遮出來的字與_ts_相同() {
+    let doc = vectors();
+    let mut seen = 0;
+    for vector in doc["httpRow"].as_array().expect("httpRow") {
+        let name = vector["name"].as_str().expect("name");
+        let Some(row) = vector["ts"].get("row") else {
+            assert!(
+                vector["ts"]["error"].is_string(),
+                "{name}：要有 row 或 error"
+            );
+            continue;
+        };
+        let server = parse_connection(row).unwrap_or_else(|e| panic!("{name}：{e}"));
+        let redactor = Redactor::new(server.secrets());
+        for echo in vector["echoes"].as_array().unwrap_or(&Vec::new()) {
+            let text = echo["text"].as_str().expect("text");
+            let got = match echo["scope"].as_str().expect("scope") {
+                "result" => redactor.redact_text(text),
+                "error" => redactor.scrub_text(text),
+                other => panic!("{name}：認不得的 scope {other}"),
+            };
+            assert_eq!(
+                got,
+                echo["expect"].as_str().expect("expect"),
+                "{name}：{text}"
+            );
+        }
+        seen += 1;
+    }
+    assert!(seen >= 10, "有 row 的樣本太少：{seen}");
+}
+
+#[test]
+fn 樣本_http_host_宿主自己的拒絕() {
+    let doc = vectors();
+    for vector in doc["httpHost"].as_array().expect("httpHost") {
+        let name = vector["name"].as_str().expect("name");
+        let result = parse_connection(&vector["connection"]);
+        match vector["error"].as_str() {
+            None => {
+                result.unwrap_or_else(|e| panic!("{name}：{e}"));
+            }
+            Some(want) => {
+                let err = result.err().unwrap_or_else(|| panic!("{name}：要拒絕"));
+                assert!(err.contains(want), "{name}：{err} 不含 {want}");
+                assert!(!err.contains("FAKE-"), "{name}：訊息不能含值：{err}");
+            }
+        }
+    }
+}
+
+/// 授權 header 的名單與 TS 的 `AUTHORIZATION_HEADER_NAMES` 對同一行樣本。
+#[test]
+fn 樣本_授權_header_的名單() {
+    let doc = vectors();
+    let names: Vec<&str> = doc["credentialHeaderNames"]
+        .as_array()
+        .expect("credentialHeaderNames")
+        .iter()
+        .map(|v| v.as_str().expect("字串"))
+        .collect();
+    assert_eq!(names, AUTHORIZATION_HEADERS);
 }

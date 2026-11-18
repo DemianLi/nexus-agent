@@ -120,6 +120,7 @@ impl Rig {
                 "command": "/bin/sh",
                 "args": ["-c", FAKE_SERVER],
                 "env": { "PATH": "/usr/bin:/bin", "LOG": log, "FIRST": first.to_string() },
+                "credentialEnv": [],
             },
         });
         let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
