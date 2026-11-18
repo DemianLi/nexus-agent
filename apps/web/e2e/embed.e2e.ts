@@ -809,7 +809,7 @@ async function stopAtApproval(surface: Surface): Promise<void> {
   await expect
     .poll(() => scope.getByRole('button', { name: '複製回覆' }).count(), { timeout: 30_000 })
     .toBe(1);
-  // 獨立頁面的側欄有會話時，搜尋框旁邊也有一格 status：狀態列限在 main 裡找。
+  // 獨立頁面的側欄有會話時，搜尋結果那一格也是 status，DOM 上排在狀態列前面：`.first()` 會抓到它，所以限在 main 裡找。
   const statusScope = surface.embedded ? scope : surface.page.getByRole('main');
   await expect
     .poll(() => statusScope.getByRole('status').first().textContent(), { timeout: 30_000 })
