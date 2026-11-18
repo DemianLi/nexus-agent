@@ -2003,7 +2003,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     });
   /**
    * 全域下行上一次推過的釘選、封存集合（#2990）：每次整理之後拿現在的跟它比，不同才推整份。起點是建 handler 時的集合，
-   * client 的起點是列表帶的那兩個。比的是當下的集合，不是那一次變更的結果，所以並行的變更不會推出舊的那份。
+   * web 的起點是它最近一份列表帶的那兩個。比的是當下的集合，不是那一次變更的結果，所以並行的變更不會推出舊的那份。
    */
   const announcedSets = {
     pinned: [...(options.threadOrganization?.pinnedThreadIds ?? [])],

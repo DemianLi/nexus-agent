@@ -91,7 +91,9 @@ export class ThreadFeed {
     };
   }
 
-  /** 廣播一顆跟 pump 無關的：寫成功之後的刪除，或變了之後的整份釘選、封存集合。 */
+  /**
+   * 廣播一顆跟 pump 無關的：寫成功之後的刪除，或變了之後的整份釘選、封存集合。照收到的送，不去重：寫成功、有沒有變由呼叫端判斷。
+   */
   announce(frame: ThreadRemovedFrame | ThreadArchivedFrame | ThreadPinnedFrame): void {
     this.#broadcast(frame);
   }

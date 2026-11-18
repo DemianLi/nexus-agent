@@ -1107,7 +1107,7 @@ export type ThreadSearchResponse =
  * - **釘選與封存**：集合變了才各送一顆整份的 {@link ThreadArchivedFrame}、{@link ThreadPinnedFrame}（#2990），
  *   封存順手取消釘選時兩顆都送。**接上時不補送**：起點是列表帶的兩個集合。
  *
- * **client 要跳過不認得的 `type`**：這條線之後還要帶活動時間（還沒做），舊的 client 收到新種類不能當掉。
+ * **client 要跳過不認得的 `type`**：這條線之後會加種類，舊的 client 收到新種類不能當掉。
  *
  * **偏離**：dsh 的 frame 是 Cordis 的 `emit`／`waterfall`，路徑是 gateway 的；我們沒有那一層，frame 與路徑是這裡定的。
  * dsh 的撤回只送給收過那一顆的 client，我們送給每一條——多收一顆認不得的撤回，client 照規則跳過。

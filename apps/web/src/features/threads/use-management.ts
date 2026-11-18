@@ -19,7 +19,7 @@ import type {
 
 /**
  * 這份列表之後、下一份列表之前，動作回應裡的整份集合。`…Over` 是寫下它時推來的那一份（#2990）：之後又推來新的一份，
- * 推來的比較新，這一份就不算。
+ * 推來的比較新，這一份就不算。推來的每一份都是新的陣列，比參照就分得出來。
  */
 interface Overlay {
   readonly base: ThreadListResult | undefined;
