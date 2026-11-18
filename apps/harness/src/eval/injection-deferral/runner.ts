@@ -26,6 +26,7 @@ import {
   deferralWorkspaceFiles,
 } from './fixture.js';
 import type { DeferralCase } from './fixture.js';
+import { isHostReadMessage } from './host-read.js';
 import { deferralVariant, withInstructionVariant } from './variants.js';
 
 /**
@@ -49,11 +50,11 @@ export interface DeferralRun {
   readonly testCase: DeferralCase;
   /** 第一個請求裡看得到這種做法留下的痕跡（指標、摘錄通知或截斷通知）：指示檔沒整份放進去。 */
   readonly deferred: boolean;
-  /** 規則在第一個請求裡（任何角色的訊息、含系統訊息）：模型不必讀檔就看得到它。 */
+  /** 規則在第一個請求裡（任何角色的訊息、含系統訊息，也含宿主替模型讀的那一頁）：模型不必自己讀檔就看得到它。 */
   readonly ruleInjected: boolean;
-  /** 模型用 `read_file` 讀 `AGENTS.md` 的次數。 */
+  /** 模型**自己**用 `read_file` 讀 `AGENTS.md` 的次數；宿主替模型讀的那一次（`host-read`）不算。 */
   readonly readCalls: number;
-  /** 某個工具結果裡有那條規則（不限 `read_file`）。 */
+  /** 模型自己叫的某個工具結果裡有那條規則（不限 `read_file`）；宿主替模型讀的那一頁不算，那一頁看 {@link ruleInjected}。 */
   readonly ruleRead: boolean;
   /** 最後的回覆裡有規則要求的那一串。 */
   readonly followed: boolean;
@@ -80,6 +81,12 @@ function planPlugins(
 }
 
 const textOf = (message: BaseMessage): string => message.text;
+
+/** 請求裡一則訊息的文字，助手訊息另帶它叫的工具：只叫工具的那一則 `text` 是空的，工具呼叫的 id 與參數在 `tool_calls`。 */
+const requestTextOf = (message: BaseMessage): string => {
+  const calls = AIMessage.isInstance(message) ? (message.tool_calls ?? []) : [];
+  return calls.length === 0 ? message.text : `${message.text}\n${JSON.stringify(calls)}`;
+};
 
 /**
  * 跑一格。
@@ -140,7 +147,7 @@ export async function runDeferralCase(
       const callbacks = [
         {
           handleChatModelStart(_llm: unknown, batches: readonly (readonly BaseMessage[])[]) {
-            firstRequest ??= (batches[0] ?? []).map(textOf);
+            firstRequest ??= (batches[0] ?? []).map(requestTextOf);
             started += 1;
             if (started > DEFERRAL_MAX_REQUESTS) abort.abort();
           },
@@ -200,7 +207,14 @@ export function observe(
   const seen = firstRequest ?? humans;
   const marker = deferralVariant(testCase.variant ?? 'current').marker;
   const ai = messages.filter((message) => AIMessage.isInstance(message));
-  const reads = ai
+  // 宿主替模型做的那次讀（`host-read`）不算模型自己去讀：它的呼叫與結果都排除，模型之後自己翻頁才算。
+  const hostCallIds = new Set(
+    ai
+      .filter(isHostReadMessage)
+      .flatMap((message) => (message.tool_calls ?? []).map((call) => call.id)),
+  );
+  const own = ai.filter((message) => !isHostReadMessage(message));
+  const reads = own
     .flatMap((message) => message.tool_calls ?? [])
     .filter(
       (call) => call.name === 'read_file' && JSON.stringify(call.args ?? {}).includes('AGENTS.md'),
@@ -213,7 +227,9 @@ export function observe(
     ruleInjected: seen.some((text) => text.includes(DEFERRAL_MARKER)),
     readCalls: reads.length,
     ruleRead: messages
-      .filter((message) => ToolMessage.isInstance(message))
+      .filter(
+        (message) => ToolMessage.isInstance(message) && !hostCallIds.has(message.tool_call_id),
+      )
       .some((message) => textOf(message).includes(DEFERRAL_MARKER)),
     followed: finalText.includes(DEFERRAL_MARKER),
     finalText,

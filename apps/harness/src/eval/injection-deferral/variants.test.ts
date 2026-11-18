@@ -287,13 +287,14 @@ describe('truncate', () => {
 });
 
 describe('做法清單', () => {
-  it('五種做法、id 不重複，每一種都帶非空的 marker', () => {
+  it('六種做法、id 不重複，每一種都帶非空的 marker', () => {
     expect(DEFERRAL_VARIANT_IDS).toEqual([
       'current',
       'pointer-strong',
       'system-prompt',
       'head-excerpt',
       'truncate',
+      'host-read',
     ]);
     for (const variant of DEFERRAL_VARIANTS) expect(variant.marker.length).toBeGreaterThan(0);
   });

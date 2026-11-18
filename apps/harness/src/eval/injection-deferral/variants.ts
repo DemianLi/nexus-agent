@@ -23,12 +23,13 @@ import type {
   RenderedAgentInstructions,
 } from '@nexus/plugin-agent-instructions';
 
+import { HOST_READ_ID_PREFIX, createHostReadMiddleware } from './host-read.js';
 import { nextContextWindowOf } from '../../model-selection-host.js';
 import { createPreStepMiddleware } from '../../pre-step-middleware.js';
 import { registryFsLookup } from '../../registry-fs-lookup.js';
 
 export type DeferralVariantId =
-  'current' | 'pointer-strong' | 'system-prompt' | 'head-excerpt' | 'truncate';
+  'current' | 'pointer-strong' | 'system-prompt' | 'head-excerpt' | 'truncate' | 'host-read';
 
 /** 一次掛載裡的渲染，以及（有的話）要登記進系統提示的那一段。狀態活在這裡，不跨掛載。 */
 export interface VariantInstance {
@@ -43,6 +44,8 @@ export interface DeferralVariant {
   readonly marker: string;
   /** 每次掛載建一份，讓逐掛載的狀態不外漏。 */
   create(): VariantInstance;
+  /** 不經 `preStep` listener，由宿主自己的 middleware 在模型請求之前替模型讀（見 `host-read.ts`）。 */
+  readonly hostRead?: true;
 }
 
 /** `head-excerpt` 留的檔頭位元組數：小檔延後那一格的預算只有 1024，要比它小得多才不會變成整份放進去。 */
@@ -320,12 +323,22 @@ const truncate: DeferralVariant = {
   create: () => ({ render: renderTruncated }),
 };
 
+/** 宿主替模型讀第一頁：模型眼前出現一次 `read_file` 的呼叫與結果，使用者訊息裡不留指標。 */
+const hostRead: DeferralVariant = {
+  id: 'host-read',
+  marker: HOST_READ_ID_PREFIX,
+  hostRead: true,
+  // 不走 listener 的渲染：放不下的那幾份由 host-read 的 middleware 自己挑，這裡只是型別要有。
+  create: () => ({ render: renderAgentInstructions }),
+};
+
 export const DEFERRAL_VARIANTS: readonly DeferralVariant[] = [
   current,
   pointerStrong,
   systemPrompt,
   headExcerpt,
   truncate,
+  hostRead,
 ];
 
 /** 認得的做法名，`--variant` 驗值用。 */
@@ -346,6 +359,10 @@ function variantPlugin(variant: DeferralVariant, limits: AgentInstructionsLimits
   return {
     name: 'agent-instructions',
     apply(registry) {
+      if (variant.hostRead === true) {
+        registry.middleware.use(createHostReadMiddleware(registry, limits));
+        return;
+      }
       const instance = variant.create();
       const lookup = registryFsLookup(registry);
       const cutoffs = summaryCutoffsOf(registry);

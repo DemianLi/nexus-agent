@@ -97,8 +97,15 @@ describe('做法的格表', () => {
       'truncate:small/deferred/tail',
     ]);
     expect(
-      deferralCasesFor(['current', 'pointer-strong', 'system-prompt', 'head-excerpt', 'truncate']),
-    ).toHaveLength(23);
+      deferralCasesFor([
+        'current',
+        'pointer-strong',
+        'system-prompt',
+        'head-excerpt',
+        'truncate',
+        'host-read',
+      ]),
+    ).toHaveLength(27);
   });
 
   it('小檔延後、規則在檔尾：檔比蓋掉的上限大，規則在倒數第四行、不在前 1024 位元組', () => {
