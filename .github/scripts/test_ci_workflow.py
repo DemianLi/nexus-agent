@@ -638,7 +638,8 @@ class SandboxSpawner(unittest.TestCase):
         """刪除碰到分叉在 per-thread 下再跑一次（#2957）：env 沒設時照 single 跑、照樣綠，所以 env 要釘。"""
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑刪除碰到分叉')
         self.assertEqual(
-            step['run'], 'pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion'
+            step['run'],
+            'pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted',
         )
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
