@@ -673,7 +673,7 @@ describe('各注入源的用量（#2777）', () => {
     await thread.close();
   }, 60000);
 
-  it('serve 的樹：放不下的 AGENTS.md 整份延後，sources 上那一列多一格 deferredBytes', async () => {
+  it('serve 的樹：放不下的 AGENTS.md 截到預算，sources 上那一列多一格 deferredBytes（只算被截掉的那一段）', async () => {
     const booted = await boot(home());
     const agentsMd = 'x'.repeat(70_000);
     const thread = await openThread(
@@ -684,9 +684,11 @@ describe('各注入源的用量（#2777）', () => {
     );
     await thread.say('你好');
     const humans = (thread.model.prompts[0] ?? []).filter((m) => m.getType() === 'human');
-    const pointer = humans.find((m) => m.text.includes('not loaded'));
-    expect(pointer?.text).toContain('not loaded /AGENTS.md (70000 bytes)');
-    expect(pointer?.text).not.toContain('xxxx');
+    const notice = humans.find((m) => m.text.includes('Workspace instruction budget'));
+    const shown = /truncated \/AGENTS\.md from 70000 to (\d+) bytes/.exec(notice?.text ?? '')?.[1];
+    expect(shown).toBeDefined();
+    expect(notice?.text).toContain('x'.repeat(Number(shown)));
+    expect(notice?.text).not.toContain('x'.repeat(Number(shown) + 1));
     const sources = thread
       .rootLog()
       .events.filter((event) => event.type === 'context/measure')
@@ -694,12 +696,12 @@ describe('各注入源的用量（#2777）', () => {
     expect(sources.filter((source) => source.id === 'agent-instructions')).toEqual([
       {
         id: 'agent-instructions',
-        bytes: Buffer.byteLength(pointer!.text, 'utf8'),
+        bytes: Buffer.byteLength(notice!.text, 'utf8'),
         limit: 65536,
-        deferredBytes: 70_000,
+        deferredBytes: 70_000 - Number(shown),
       },
     ]);
-    // 沒延後的源沒有這一格。
+    // 沒放完的源只有這一個有這一格。
     expect(sources.filter((source) => 'deferredBytes' in source)).toHaveLength(1);
     await thread.close();
   }, 60000);

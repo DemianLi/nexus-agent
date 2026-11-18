@@ -39,7 +39,6 @@ import {
   DEFAULT_MAX_SOURCE_BYTES,
   INSTRUCTION_FILE_CANDIDATES,
   isAgentInstructionsMessage,
-  renderAgentInstructions,
 } from './index.js';
 
 /** 出廠的兩個上限。 */
@@ -94,38 +93,6 @@ function baselineMessage(): HumanMessage {
   });
 }
 
-describe('渲染可以換', () => {
-  const lookups = {
-    fs: () => ({
-      kind: 'ok' as const,
-      fs: handleOf(fakeBackend({ '/AGENTS.md': 'rules' })),
-      address: { kind: 'root' as const },
-    }),
-  };
-
-  it('給了 render：listener 注入它回的文字，並把讀到的檔與預算交給它', async () => {
-    const seen: { paths: string[]; maxBytes: number }[] = [];
-    const listener = createAgentInstructionsListener(LIMITS, lookups, (files, maxBytes) => {
-      seen.push({ paths: files.map((file) => file.displayPath), maxBytes });
-      return { text: '自訂的一則', deferred: [] };
-    });
-    const injections = await listener([], INVOCATION);
-    expect(injections?.map((injection) => injection.content)).toEqual(['自訂的一則']);
-    expect(seen).toEqual([{ paths: ['AGENTS.md'], maxBytes: DEFAULT_MAX_BYTES }]);
-  });
-
-  it('render 回 undefined：不注入', async () => {
-    const listener = createAgentInstructionsListener(LIMITS, lookups, () => undefined);
-    expect(await listener([], INVOCATION)).toBeUndefined();
-  });
-
-  it('不給 render：與出貨的渲染逐字相同', async () => {
-    const shipped = createAgentInstructionsListener(LIMITS, lookups);
-    const explicit = createAgentInstructionsListener(LIMITS, lookups, renderAgentInstructions);
-    expect(await explicit([], INVOCATION)).toEqual(await shipped([], INVOCATION));
-  });
-});
-
 describe('設定', () => {
   it('合法的覆寫會生效——上限換小之後，同一份檔整份延後、留一行指標，內容一個字都不放（#2777）', async () => {
     const long = 'x'.repeat(400);
@@ -164,6 +131,26 @@ describe('設定', () => {
     for (const invocation of [{ ...INVOCATION, contextWindow: 1_000_000 }, INVOCATION]) {
       expect(String((await listener([], invocation))?.[0]?.content)).toContain('x'.repeat(2000));
     }
+  });
+
+  it('窗口夠放一段檔頭：截斷，沒放進去的位元組只算被截掉的那一段', async () => {
+    const files = { '/AGENTS.md': 'x'.repeat(2000) };
+    const listener = createAgentInstructionsListener(
+      { ...LIMITS, contextFraction: 0.1 },
+      { fs: () => ({ kind: 'ok', fs: handleOf(fakeBackend(files)), address: { kind: 'root' } }) },
+    );
+    // 2500 × 4 × 0.1 = 1000 個位元組：放得下通知、引言與一段檔頭，放不下整份。
+    const injected = await listener([], { ...INVOCATION, contextWindow: 2500 });
+    const content = String(injected?.[0]?.content);
+    const shown = /truncated \/AGENTS\.md from 2000 to (\d+) bytes/.exec(content)?.[1];
+    expect(shown).toBeDefined();
+    expect(content).toContain('x'.repeat(Number(shown)));
+    expect(content).not.toContain('x'.repeat(Number(shown) + 1));
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(1000);
+    expect(injected?.[0]?.additionalKwargs).toEqual({
+      [AGENT_INSTRUCTIONS_MARKER]: true,
+      [INJECTION_DEFERRED_BYTES_KEY]: 2000 - Number(shown),
+    });
   });
 
   it('窗口比例要大於 0、不超過 1，不是就讓設定驗證失敗；省略是 0.1', () => {

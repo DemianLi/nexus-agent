@@ -1,12 +1,12 @@
 /**
- * 注入源延後評估的進入點 —— `pnpm --filter @nexus/harness eval:injection-deferral`。
+ * 注入源預算評估的進入點 —— `pnpm --filter @nexus/harness eval:injection-deferral`。
  * [#2929](https://github.com/DemianLi/nexus-agent/issues/2929)。
  *
- * 問的是「指示檔放不下、整份延後成一行指標之後，模型會不會去讀、讀了會不會照做」。同一份 `AGENTS.md` 跑延後與不延後兩邊，
- * 大檔四格、小檔兩格，`--only large|small` 只跑其中一種。`--variant a,b|all` 比候選做法（[#2934](https://github.com/DemianLi/nexus-agent/issues/2934)）：
- * 把指示那一列換成各做法，每種做法跑延後那四格（`small/deferred/tail` 只在這裡進來），`current` 另帶不延後的對照三格；
- * 不帶旗標就是出貨的六格、不換那一列。題目與做法見 [`fixture.ts`](./fixture.ts) 與
- * [`runner.ts`](./runner.ts)。
+ * 問的是「指示檔放不下、`agent-instructions` 把它截到預算上限並通知其餘用 `read_file` 讀之後，模型看得到多少、會不會去讀其餘的、
+ * 讀了會不會照做」。同一份 `AGENTS.md` 跑放不下與放得下兩邊：大檔四格（規則在檔頭或檔尾），小檔三格（放得下一格，放不下兩格，
+ * 規則在檔頭或檔尾），`--only large|small` 只跑其中一種。報表的「規則已在請求」是截斷後模型第一個請求就看得到規則的比例，
+ * 「去讀了」是模型自己去讀的比例；兩欄分開，才看得出照做是因為看到了還是因為讀了。題目見 [`fixture.ts`](./fixture.ts)，
+ * 判定見 [`runner.ts`](./runner.ts)。
  *
  * **不進 CI。** 需要 `NVIDIA_API_KEY`，會打真模型。每一次執行 1 到 `DEFERRAL_MAX_REQUESTS + 1` 個請求（看模型叫幾次工具；
  * 重試的每一次嘗試也算，超過上限的那一個可能已經送出）。`--samples N` 每格跑幾次（省略即 1），`--count` 只印下限與上限、不跑，
@@ -18,63 +18,32 @@
 import { installLaunchProxy } from '../../http-proxy-boot.js';
 import { DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV, loadLiveLaunchEnv } from '../../live-model.js';
 import { parseSamples } from '../cli-args.js';
-import { DEFERRAL_CASES, deferralCaseId, deferralCasesFor } from './fixture.js';
+import { DEFERRAL_CASES, deferralCaseId } from './fixture.js';
 import type { DeferralCase } from './fixture.js';
 import { DEFERRAL_MAX_REQUESTS, runDeferralCase } from './runner.js';
 import type { DeferralRun } from './runner.js';
-import { DEFERRAL_VARIANT_IDS } from './variants.js';
-import type { DeferralVariantId } from './variants.js';
 
 const ratio = (runs: readonly DeferralRun[], pick: (run: DeferralRun) => boolean): string =>
   `${runs.filter(pick).length}/${runs.length}`;
 
-/** `--variant a,b` 或 `all`：要比的做法；省略是 `undefined`（出貨的六格，不換那一列）。 */
-function parseVariants(argv: readonly string[]): readonly DeferralVariantId[] | undefined {
-  const at = argv.indexOf('--variant');
-  if (at < 0) return undefined;
-  const value = argv[at + 1];
-  if (value === undefined || value.startsWith('--')) {
-    throw new Error(`--variant 要 ${DEFERRAL_VARIANT_IDS.join('、')} 其中幾個（逗號隔開）或 all`);
-  }
-  if (value === 'all') return DEFERRAL_VARIANT_IDS;
-  const picked = value.split(',').map((item) => item.trim());
-  const unknown = picked.filter(
-    (item) => !(DEFERRAL_VARIANT_IDS as readonly string[]).includes(item),
-  );
-  if (unknown.length > 0) {
-    throw new Error(
-      `--variant 不認得 ${unknown.join('、')}；可用 ${DEFERRAL_VARIANT_IDS.join('、')}、all`,
-    );
-  }
-  return [...new Set(picked)] as DeferralVariantId[];
-}
-
 /** `--only large|small`：只跑那一種檔的格子；省略即全部。 */
-function parseOnly(argv: readonly string[], all: readonly DeferralCase[]): readonly DeferralCase[] {
+function parseOnly(argv: readonly string[]): readonly DeferralCase[] {
   const at = argv.indexOf('--only');
-  if (at < 0) return all;
+  if (at < 0) return DEFERRAL_CASES;
   const file = argv[at + 1];
   if (file !== 'large' && file !== 'small') {
     throw new Error(`--only 要 large 或 small，收到 ${file ?? '（空的）'}`);
   }
-  return all.filter((testCase) => testCase.file === file);
+  return DEFERRAL_CASES.filter((testCase) => testCase.file === file);
 }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const samples = parseSamples(argv);
-  const variants = parseVariants(argv);
-  const cases = parseOnly(
-    argv,
-    variants === undefined ? DEFERRAL_CASES : deferralCasesFor(variants),
-  );
+  const cases = parseOnly(argv);
   const runsPlanned = cases.length * samples;
-  const universe =
-    variants === undefined
-      ? `${cases.length}/${DEFERRAL_CASES.length} 格`
-      : `${cases.length} 格（做法 ${variants.join('、')}）`;
   console.log(
-    `注入源延後評估：${universe} × ${samples} 次，共 ${runsPlanned} 到 ${runsPlanned * (DEFERRAL_MAX_REQUESTS + 1)} 個模型請求` +
+    `注入源預算評估：${cases.length}/${DEFERRAL_CASES.length} 格 × ${samples} 次，共 ${runsPlanned} 到 ${runsPlanned * (DEFERRAL_MAX_REQUESTS + 1)} 個模型請求` +
       `（每次 1 到 ${DEFERRAL_MAX_REQUESTS + 1} 個，重試也算）。模型 ${DEFAULT_LIVE_MODEL_ID}。`,
   );
   if (argv.includes('--count')) return;
@@ -117,14 +86,14 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    '\n格                                  次數  延後  去讀了  規則已在請求  讀到規則  照做  請求（合計）',
+    '\n格                    次數  延後  去讀了  規則已在請求  讀到規則  照做  請求（合計）',
   );
   for (const testCase of cases) {
     const all = runs.filter((run) => run.testCase === testCase);
     // 被中止的那幾次拿不到訊息串，不算進比例；請求數照算。
     const cell = all.filter((run) => !run.capped);
     console.log(
-      `${deferralCaseId(testCase).padEnd(36)}${String(cell.length).padEnd(6)}` +
+      `${deferralCaseId(testCase).padEnd(22)}${String(cell.length).padEnd(6)}` +
         `${ratio(cell, (run) => run.deferred).padEnd(6)}${ratio(cell, (run) => run.readCalls > 0).padEnd(8)}` +
         `${ratio(cell, (run) => run.ruleInjected).padEnd(14)}${ratio(cell, (run) => run.ruleRead).padEnd(10)}${ratio(cell, (run) => run.followed).padEnd(6)}` +
         `${all.reduce((sum, run) => sum + run.requests, 0)}` +

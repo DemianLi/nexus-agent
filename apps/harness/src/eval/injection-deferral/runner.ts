@@ -1,5 +1,5 @@
 /**
- * 注入源延後評估的一次執行（[#2929](https://github.com/DemianLi/nexus-agent/issues/2929)）。
+ * 注入源預算評估的一次執行（[#2929](https://github.com/DemianLi/nexus-agent/issues/2929)、[#2934](https://github.com/DemianLi/nexus-agent/issues/2934)）。
  *
  * 走產品的組裝：真的 `createCordisRoot`、出貨清單、`root.boot('serve')`，模型由呼叫端決定（CI 用照稿回話的替身，量測用真模型）。
  * 每一格一棵自己的樹、自己的 harness home 與工作區，跑完就清掉。
@@ -13,6 +13,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
+import { AGENT_INSTRUCTIONS_BUDGET_NOTICE } from '@nexus/plugin-agent-instructions';
 
 import { createCordisRoot, entryApprovalChannel } from '../../cordis-root.js';
 import type { CredentialService } from '../../credentials.js';
@@ -26,8 +27,6 @@ import {
   deferralWorkspaceFiles,
 } from './fixture.js';
 import type { DeferralCase } from './fixture.js';
-import { isHostReadMessage } from './host-read.js';
-import { deferralVariant, withInstructionVariant } from './variants.js';
 
 /**
  * 一次執行最多幾個模型呼叫，重試的每一次嘗試也算。第 N+1 個呼叫開始時中止這一次；callback 不擋送出，所以那一個可能已經送到端點。
@@ -48,13 +47,13 @@ export interface DeferralRunOptions {
 /** 一次執行看到的事。 */
 export interface DeferralRun {
   readonly testCase: DeferralCase;
-  /** 第一個請求裡看得到這種做法留下的痕跡（指標、摘錄通知或截斷通知）：指示檔沒整份放進去。 */
+  /** 第一個請求裡有預算通知行（{@link AGENT_INSTRUCTIONS_BUDGET_NOTICE}）：指示檔有放不下的，被截或整份沒放。 */
   readonly deferred: boolean;
-  /** 規則在第一個請求裡（任何角色的訊息、含系統訊息，也含宿主替模型讀的那一頁）：模型不必自己讀檔就看得到它。 */
+  /** 規則在第一個請求裡（任何角色的訊息、含系統訊息）：截斷之後它還在放進去的那一段裡，模型不必自己讀檔就看得到。 */
   readonly ruleInjected: boolean;
-  /** 模型**自己**用 `read_file` 讀 `AGENTS.md` 的次數；宿主替模型讀的那一次（`host-read`）不算。 */
+  /** 模型用 `read_file` 讀 `AGENTS.md` 的次數。 */
   readonly readCalls: number;
-  /** 模型自己叫的某個工具結果裡有那條規則（不限 `read_file`）；宿主替模型讀的那一頁不算，那一頁看 {@link ruleInjected}。 */
+  /** 某個工具結果裡有那條規則（不限 `read_file`）。 */
   readonly ruleRead: boolean;
   /** 最後的回覆裡有規則要求的那一串。 */
   readonly followed: boolean;
@@ -68,25 +67,7 @@ export interface DeferralRun {
   readonly finalText: string;
 }
 
-/** 這一格要掛的清單：呼叫端換過的那份，再把指示那一列換成這一格的做法（沒寫做法就不換）。 */
-function planPlugins(
-  testCase: DeferralCase,
-  loaded: readonly PluginEntry[],
-  options: DeferralRunOptions,
-): readonly PluginEntry[] {
-  const base = options.plugins?.(loaded) ?? loaded;
-  return testCase.variant === undefined
-    ? base
-    : withInstructionVariant(base, deferralVariant(testCase.variant));
-}
-
 const textOf = (message: BaseMessage): string => message.text;
-
-/** 請求裡一則訊息的文字，助手訊息另帶它叫的工具：只叫工具的那一則 `text` 是空的，工具呼叫的 id 與參數在 `tool_calls`。 */
-const requestTextOf = (message: BaseMessage): string => {
-  const calls = AIMessage.isInstance(message) ? (message.tool_calls ?? []) : [];
-  return calls.length === 0 ? message.text : `${message.text}\n${JSON.stringify(calls)}`;
-};
 
 /**
  * 跑一格。
@@ -130,7 +111,7 @@ export async function runDeferralCase(
         sandbox: 'workspace-write' as const,
         ...(options.credentials !== undefined && { credentials: options.credentials }),
       },
-      { plugins: [...planPlugins(testCase, loaded.plugins, options)] },
+      { plugins: [...(options.plugins?.(loaded.plugins) ?? loaded.plugins)] },
     );
     const sessions = new SessionRegistry('deferral');
     const attachment = built.attachSessions(sessions);
@@ -147,7 +128,7 @@ export async function runDeferralCase(
       const callbacks = [
         {
           handleChatModelStart(_llm: unknown, batches: readonly (readonly BaseMessage[])[]) {
-            firstRequest ??= (batches[0] ?? []).map(requestTextOf);
+            firstRequest ??= (batches[0] ?? []).map(textOf);
             started += 1;
             if (started > DEFERRAL_MAX_REQUESTS) abort.abort();
           },
@@ -191,7 +172,7 @@ export async function runDeferralCase(
 /**
  * 從跑完的訊息串與第一個模型請求讀出這一次看到的事。
  *
- * `deferred` 與 `ruleInjected` 看第一個請求（含系統訊息）：指標可能在系統提示、規則可能在摘錄或工具結果裡，只看使用者訊息會誤判。
+ * `deferred` 與 `ruleInjected` 看第一個請求（含系統訊息），不看最終訊息串：最終訊息串裡還有模型自己讀回來的內容，分不出規則是一開始就在、還是讀了才有。
  * 沒有第一個請求（不該發生）時退回看最終訊息串裡的使用者訊息。
  *
  * @param testCase - 這一格。
@@ -205,16 +186,8 @@ export function observe(
 ): Omit<DeferralRun, 'capped' | 'requests'> {
   const humans = messages.filter((message) => HumanMessage.isInstance(message)).map(textOf);
   const seen = firstRequest ?? humans;
-  const marker = deferralVariant(testCase.variant ?? 'current').marker;
   const ai = messages.filter((message) => AIMessage.isInstance(message));
-  // 宿主替模型做的那次讀（`host-read`）不算模型自己去讀：它的呼叫與結果都排除，模型之後自己翻頁才算。
-  const hostCallIds = new Set(
-    ai
-      .filter(isHostReadMessage)
-      .flatMap((message) => (message.tool_calls ?? []).map((call) => call.id)),
-  );
-  const own = ai.filter((message) => !isHostReadMessage(message));
-  const reads = own
+  const reads = ai
     .flatMap((message) => message.tool_calls ?? [])
     .filter(
       (call) => call.name === 'read_file' && JSON.stringify(call.args ?? {}).includes('AGENTS.md'),
@@ -223,13 +196,11 @@ export function observe(
   const finalText = spoken.at(-1)?.text ?? '';
   return {
     testCase,
-    deferred: seen.some((text) => text.includes(marker)),
+    deferred: seen.some((text) => text.includes(AGENT_INSTRUCTIONS_BUDGET_NOTICE)),
     ruleInjected: seen.some((text) => text.includes(DEFERRAL_MARKER)),
     readCalls: reads.length,
     ruleRead: messages
-      .filter(
-        (message) => ToolMessage.isInstance(message) && !hostCallIds.has(message.tool_call_id),
-      )
+      .filter((message) => ToolMessage.isInstance(message))
       .some((message) => textOf(message).includes(DEFERRAL_MARKER)),
     followed: finalText.includes(DEFERRAL_MARKER),
     finalText,
