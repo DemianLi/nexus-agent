@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { resolveHarnessHome } from './harness-home.js';
+import { hostPluginRows, writeHostPluginsFile } from './host-plugins-file.js';
 import { composeDefaultEntries } from './plugin-config.js';
 import { threadCapacityConfigSchema } from './settings/thread-capacity.js';
 import type { ConfigEntry } from './plugin-config.js';
@@ -449,6 +450,8 @@ export function launchProcessModel(context: LaunchContext): false {
   }
   const home = resolveHarnessHome(context.env);
   mkdirSync(home, { recursive: true, mode: 0o700 });
+  // 宿主的插件清單每次啟動照當下的環境重寫（整份歸 harness，`host-plugins-file.ts`）。
+  writeHostPluginsFile(join(home, HOST_PLUGINS_FILE), hostPluginRows(context.env));
   const launch = supervisorLaunch({
     supervisor,
     host,

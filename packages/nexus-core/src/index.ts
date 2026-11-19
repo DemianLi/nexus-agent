@@ -314,7 +314,11 @@ export {
 export { createSharedReadMarkListener } from './shared-read-mark.js';
 export type { HostExitChild } from './host-exit-children.js';
 export { trackHostExitChild } from './host-exit-children.js';
-export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
+export {
+  installProxyFromEnvironment,
+  proxyEnvironmentForChild,
+  resolveProxyPolicy,
+} from './http-proxy/index.js';
 
 export type { DropStage, DroppedEntry, LoadOptions, LoadResult } from './load.js';
 export { loadPlugins } from './load.js';

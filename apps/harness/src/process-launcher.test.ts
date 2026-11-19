@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -374,6 +374,21 @@ describe('宿主', () => {
     expect(at).toBeLessThan(args.indexOf('--front'));
   });
 
+  it('supervisorLaunch：不帶 --eof-grace-ms（拆除梯度用監督行程自己的預設，宿主等橋的 5.5 秒排在它裡面）', () => {
+    const { args } = supervisorLaunch({
+      supervisor: '/opt/nexus/native/nexus-supervisor',
+      host: '/opt/nexus/native/nexus-host',
+      home: '/h',
+      execPath: '/usr/bin/node',
+      execArgv: [],
+      frontEntry: '/front.js',
+      conversationEntry: '/conversation.js',
+      serveArgv: [],
+    });
+    expect(args).not.toContain('--eof-grace-ms');
+    expect(args.join(' ')).not.toContain('eof-grace');
+  });
+
   it('supervisorLaunch：沒給 host 就不帶 --host，也不帶任何 --host-arg', () => {
     const { args } = supervisorLaunch({
       supervisor: '/opt/nexus/native/nexus-supervisor',
@@ -405,5 +420,39 @@ describe('宿主', () => {
         platform: 'linux',
       }),
     ).toThrow(`找不到宿主（監督行程旁邊的 nexus-host，${join(dir, 'nexus-host')}）`);
+  });
+
+  it('launchProcessModel：換成監督行程之前，照啟動環境重寫 host-plugins.json（舊內容不留）', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'process-launcher-plugins-'));
+    dirs.push(dir);
+    const supervisor = join(dir, 'nexus-supervisor');
+    await writeFile(supervisor, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    await writeFile(join(dir, 'nexus-host'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const patch = await patchFile(
+      `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${supervisor}\n`,
+    );
+    const home = join(dir, 'home');
+    await mkdir(home);
+    await writeFile(join(home, HOST_PLUGINS_FILE), '[{"name":"mcp","config":{"roots":"/old.pem"}}]');
+    const stop = new Error('execve 被攔下');
+    const real = (process as { execve?: unknown }).execve;
+    (process as { execve?: unknown }).execve = () => {
+      throw stop;
+    };
+    try {
+      expect(() =>
+        launchProcessModel({
+          argv: ['--patch', patch],
+          flag: undefined,
+          env: { NEXUS_AGENT_HOME: home, NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+          platform: 'linux',
+        }),
+      ).toThrow(stop);
+    } finally {
+      (process as { execve?: unknown }).execve = real;
+    }
+    expect(JSON.parse(readFileSync(join(home, HOST_PLUGINS_FILE), 'utf8'))).toEqual([
+      { name: 'mcp', config: { roots: '/etc/ca.pem' } },
+    ]);
   });
 });

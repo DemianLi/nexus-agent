@@ -1825,8 +1825,14 @@ nexus-agent serve --process-model per-thread
   - 呼叫編成一框（含服務名與方法名）超過 256 KiB，或參數裡有宿主收不下的值（NaN 或無限大（`JSON.stringify` 會寫成 `null`）、落單的代理對、巢狀超過 32 層（框本身算一層）、不是純物件），呼叫以 `HostProtocolError` 結算，不送出去。
     這要連上之後才檢查，所以沒有宿主或還沒連上時，先拿到的是 `host_absent` 或 `host_unavailable`。
   - 宿主推來的事件用 `onEvent(listener)` 收，只會送到服務指名的那條連線。宿主那邊的登記跟著連線走，斷線重連之後要重新登記的，放在 `bridge.onReady(listener)` 裡：每次連上（包括重連）叫一次，登記時已經連上的話當下也叫一次。listener 丟的錯記一行 log，不影響其他 listener。
-- **插件清單**：宿主照 `--plugins <檔>` 掛主機級的插件。harness 起監督行程時一律帶 `--plugins <home>/host-plugins.json`。出貨的宿主還沒有任何插件，所以清單裡目前寫不了任何一列。
-  - 宿主只在起來時讀這個檔。放了檔或改了檔之後，要等宿主重起才讀得到：重起 serve，或結束宿主行程讓監督行程照上面〈重起〉的退避重起它（只重起宿主時，對話不斷）。
+- **插件清單**：宿主照 `--plugins <檔>` 掛主機級的插件。harness 起監督行程時一律帶 `--plugins <home>/host-plugins.json`。
+  - **這個檔整份由 harness 產生，不要手改**：每次啟動 serve（`per-thread`）時，在換成監督行程之前照當下的環境重寫，舊檔裡的列（包括手寫的）都不保留。權限 0600（代理網址可能帶帳密）。出貨的宿主只有 `mcp` 一個插件，也只有 harness 會寫它：
+    - 啟動環境有設 `NODE_EXTRA_CA_CERTS`：寫一列 `mcp`，`roots` 是那個檔的絕對路徑（相對路徑照啟動時的工作目錄解）。宿主只信這個檔裡的根，不讀系統根。
+    - 同一份環境解得出代理（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`，解法與模型請求那條相同）：那一列多一個 `proxy`。**只看行程環境**：home 的 `.env` 設的代理，模型請求會走、宿主連 MCP 不會走。
+    - 沒設 `NODE_EXTRA_CA_CERTS`：不寫那一列，檔案是 `[]`，宿主不掛 `mcp`。只設代理、沒設根，一樣沒有那一列。
+    - `NODE_EXTRA_CA_CERTS` 指的檔讀不了或裡面沒有憑證：宿主照常起來，標準錯誤記一行 `插件 mcp apply 失敗：…`，`mcp` 沒掛。
+    - 這張還沒切換對話行程：今天 per-thread 的對話行程連 MCP 仍走 TS，宿主上的 `mcp` 先掛著、還沒有人呼叫它。
+  - 宿主只在起來時讀這個檔。環境變了之後，要重起 serve 才會重寫並讀到；單獨結束宿主行程，監督行程重起的宿主讀的是同一份舊檔。
   - 檔案是 JSON 陣列，一列一個插件：`name`（必填）、`config`（選填，交給插件自己判）、`disabled`（選填，`true` 或 `false`；`null` 當沒寫）。
     ```json
     [{ "name": "<插件名>", "config": {}, "disabled": false }]
@@ -2051,7 +2057,7 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 | `embed-identities.json` | 嵌入方的身分對應表（對方帳號 → nexus 使用者） | **管理者寫**；`embed-login` 列了嵌入方就要有，serve 不建 |
 | `invariant-log.jsonl` | 不變量量測記錄 | |
 | `plugin-snapshot.json` | 已儲存與執行中的清單對照 | 每次啟動重寫，還原時不必在意 |
-| `host-plugins.json` | 宿主的插件清單（主機級，見〈宿主 `nexus-host`〉） | **管理者寫**；serve 不建，不在就是沒有插件；改了要等宿主重起才讀到 |
+| `host-plugins.json` | 宿主的插件清單（主機級，見〈宿主 `nexus-host`〉） | **harness 產生，不手改**；`per-thread` 啟動時照環境整份重寫；宿主重起才讀到 |
 | `serve.lock` | 「一個 home 一個 serve」的鎖檔 | 備份可以帶，還原時不必 |
 
 備份檔裡有秘密，要用跟 home 一樣的權限保管（擁有者是跑 serve 的那個使用者、`0600`），不要放進別人讀得到的地方。
