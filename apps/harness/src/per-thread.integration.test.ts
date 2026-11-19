@@ -117,8 +117,6 @@ interface StartOptions {
    * 啟動器每次啟動都整份重寫清單，測試放在 home 的檔到不了宿主；要讓宿主讀到特定內容，只能在這裡之後蓋。
    */
   readonly beforeSupervisor?: string;
-  /** 加進 serve 行程環境的變數。 */
-  readonly env?: Readonly<Record<string, string>>;
 }
 
 async function start(
@@ -178,7 +176,6 @@ async function start(
         NEXUS_AGENT_HOME: harnessHome,
         ...(options.liveBaseUrl !== undefined && { NVIDIA_API_KEY: 'nvapi-fake-for-per-thread' }),
         ...SOURCE_PATHS,
-        ...options.env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -1041,31 +1038,6 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', 
  *
  * 量在行程樹上：stdio server 的子行程只有一個（兩條 thread 共用），它的父行程是宿主，不是任何一個對話行程。
  */
-/**
- * 宿主的 `mcp` 插件要一份根憑證檔才掛（`NODE_EXTRA_CA_CERTS`，見 `host-plugins-file.ts`）；測試的 server 是 stdio，不驗 TLS，
- * 所以任何一張合法憑證都行。這張只有公開部分、自簽、不對應任何金鑰。
- */
-const MCP_TEST_ROOT = `-----BEGIN CERTIFICATE-----
-MIIDFzCCAf+gAwIBAgIUN3tI5Qu8+lOaTHWKfxp+/cvrr1YwDQYJKoZIhvcNAQEL
-BQAwGjEYMBYGA1UEAwwPbmV4dXMtdGVzdC1yb290MCAXDTI2MTExOTExMzQyNFoY
-DzIxMjYxMDI2MTEzNDI0WjAaMRgwFgYDVQQDDA9uZXh1cy10ZXN0LXJvb3QwggEi
-MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCvd7Co5ywLNtFU4D3knhfKRlqk
-TUwseii7dYi+1jla9Z8wJAz933lzW3CT8SsLocTyT8+sk/q7sZjWWjajwT6y6Muu
-wJ+LPa9SZJSlgiR0JGpSH5ekrc3w+ySo2yW7O0zC+M99IG0QjEMKy9UVkQEip4SW
-dcQ8p4cNsIKuKmUSYBNK0Gki4A2akwnq6Uh4XqeOs0hBGU9nZ48bZ+LYmOBUUCY4
-nU3CwukBRzUYkITj43T1KkFK1pbZXGoF0w0taxodInQM3wgmIP9Ik0N9w2O5RavV
-CrtrTcn7Pgo7feEWvyf+mZ7vayQS8Sl6ud6DaiW4YLU7sTaWqKTag+YZt/J9AgMB
-AAGjUzBRMB0GA1UdDgQWBBTGP0N5Z5lpXysSfQeU+XdVvl9rFjAfBgNVHSMEGDAW
-gBTGP0N5Z5lpXysSfQeU+XdVvl9rFjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
-DQEBCwUAA4IBAQAkHZCTTW7nNy0lT+pKwRkPb+9pu9ndZSka2FlFDH9R5lU+d9Oz
-NDT3cc96UcX05ttNe6WPe0BneDt6w1BS1ZvfkEopcXFKJZRk03L7hFEvUNRvrNK5
-x6K8lS4W9N1auaZjMtQk9gIyU1/j73Ft0yAV/12ydJ/jlypvexc3tD4rLnixmuD2
-kRIFmNSHGlt5f63anluJWnqSigpE+oIdTeKnm3aCAxvqAv5vO7KCFo+VtMJw2mFc
-1MLk5aI+/TvIPp1UTQis+nE6jEXuzfe5lXaH+vbpWM8PLYYzKyJcHc4hw4NtWWF/
-FUac9t+UXTz/wdtEbN49+MsMKz7E4mS75X96
------END CERTIFICATE-----
-`;
-
 describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () => {
   const FIXTURE = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
   const callOnce = (): ScriptedTurn[] => [
@@ -1114,17 +1086,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
 
   it('兩條 thread 叫同一列：只有一個 server 子行程，它是宿主的子行程；宿主被殺重起後，同一條 thread 還叫得到', async () => {
     const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
-    const rootsDir = await mkdtemp(join(tmpdir(), 'nexus-mcp-roots-'));
-    roots.push(rootsDir);
-    const rootsFile = join(rootsDir, 'roots.pem');
-    await writeFile(rootsFile, MCP_TEST_ROOT);
-    const running = await start(
-      [...callOnce(), ...callOnce(), ...callOnce()],
-      rowFor(marker),
-      undefined,
-      [],
-      { env: { NODE_EXTRA_CA_CERTS: rootsFile } },
-    );
+    const running = await start([...callOnce(), ...callOnce(), ...callOnce()], rowFor(marker));
     try {
       const supervisor = running.child.pid!;
       const client = await clientOf(await running.loginUrl(1));
