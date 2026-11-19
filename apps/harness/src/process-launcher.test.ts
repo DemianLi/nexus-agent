@@ -433,7 +433,10 @@ describe('宿主', () => {
     );
     const home = join(dir, 'home');
     await mkdir(home);
-    await writeFile(join(home, HOST_PLUGINS_FILE), '[{"name":"mcp","config":{"roots":"/old.pem"}}]');
+    await writeFile(
+      join(home, HOST_PLUGINS_FILE),
+      '[{"name":"mcp","config":{"roots":"/old.pem"}}]',
+    );
     const stop = new Error('execve 被攔下');
     const real = (process as { execve?: unknown }).execve;
     (process as { execve?: unknown }).execve = () => {
