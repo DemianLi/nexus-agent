@@ -553,3 +553,12 @@ export {
   TOKEN_METER_TURNS_KEEP,
   TOKEN_METER_VERSION,
 } from './token-meter.js';
+export type { ThreadListQuery } from './thread-list-query.js';
+export {
+  THREAD_LIST_IDS_MAX,
+  THREAD_LIST_PAGE_MAX,
+  pageThreadList,
+  parseThreadListQuery,
+  threadListSearch,
+  threadTitleMatches,
+} from './thread-list-query.js';

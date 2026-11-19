@@ -79,6 +79,8 @@ import {
   DELETED_THREADS_PATH,
   THREAD_SEARCH_PATH,
   THREADS_PATH,
+  pageThreadList,
+  parseThreadListQuery,
   canonicalClientTimeZone,
   changesDiffPath,
   changesSummaryPath,
@@ -4334,8 +4336,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * `GET /threads`。**不經 `threadFor`**：一條 thread 都不為列表建（同 `run.cancel` 的理由，而且這裡更嚴——
    * 列的正是還沒開起來的那些）。讀不動整個目錄是協定層的錯，同 `threadOrError` 的分寸。
+   *
+   * 查詢參數（一次一頁、只比標題、封存、指定幾條，#725）見 `@nexus/wire` 的 `thread-list-query.ts`；不帶就是整份。
    */
-  async function handleList(signal: AbortSignal): Promise<Response> {
+  async function handleList(params: URLSearchParams, signal: AbortSignal): Promise<Response> {
+    const parsed = parseThreadListQuery(params);
+    if (!parsed.ok) return json(errorResponse(null, 'invalid_argument', parsed.message));
     if (options.listThreads === undefined) {
       return json(
         errorResponse(
@@ -4368,16 +4374,22 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     const organization = options.threadOrganization;
+    const page = pageThreadList(
+      stored.items,
+      parsed.query,
+      new Set(organization?.archivedThreadIds ?? []),
+    );
     const response: ThreadListResponse = {
       type: 'success',
       result: {
+        ...(page.nextCursor !== undefined && { nextCursor: page.nextCursor }),
         // 釘選與封存兩個集合跟著列表走（#633）：開頁面就拿得到，不必為了畫側欄先打五支 RPC。沒接整理檔的 server 不送。
         ...(organization !== undefined && {
           pinnedThreadIds: [...organization.pinnedThreadIds],
           archivedThreadIds: [...organization.archivedThreadIds],
         }),
         unreadable: stored.unreadable,
-        items: stored.items.map((item) => ({
+        items: page.items.map((item) => ({
           ...item,
           // 同全域下行的狀態（#632）：停在等人回答也算在跑，兩邊是同一個判準。
           running:
@@ -4980,7 +4992,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (request.method !== 'GET') return new Response('not found', { status: 404 });
       // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
       if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-      return handleList(request.signal);
+      return handleList(searchParams, request.signal);
     }
     if (pathname === DELETED_THREADS_PATH) {
       if (request.method !== 'GET') return new Response('not found', { status: 404 });

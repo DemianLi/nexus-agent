@@ -71,6 +71,8 @@ import type {
 import type { GoalPauseCommand, GoalPauseResult } from './goal.js';
 import type { HostToolDeclaration } from './host-tools.js';
 import { decodeSseData, decodeSseStream } from './sse.js';
+import { threadListSearch } from './thread-list-query.js';
+import type { ThreadListQuery } from './thread-list-query.js';
 import type {
   Command,
   CommandResponse,
@@ -487,7 +489,7 @@ export interface WireClient {
    * 這台 server 以前的 thread（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。**不綁 thread**，
    * 也不替任何一條 thread 建 agent——server 那側照 dsh 的 `session/list` 是冷讀。
    */
-  listThreads(): Promise<ThreadListOutcome>;
+  listThreads(query?: ThreadListQuery): Promise<ThreadListOutcome>;
   /**
    * 按內容搜以前的 thread（[#631](https://github.com/DemianLi/nexus-agent/issues/631)），契約見 `THREAD_SEARCH_PATH`。
    * 跟 {@link listThreads} 一樣冷讀、不綁 thread。**這個部署沒開內容搜尋時是 `rejected`，不是空的**：畫面要退回只比標題。
@@ -742,8 +744,10 @@ function readThreadList(result: unknown): ThreadListResult {
       : undefined;
   const pinned = stringArray(pinnedThreadIds);
   const archived = stringArray(archivedThreadIds);
+  const { nextCursor } = result as { nextCursor?: unknown };
   return {
     unreadable,
+    ...(typeof nextCursor === 'string' && { nextCursor }),
     ...(pinned === undefined ? {} : { pinnedThreadIds: pinned }),
     ...(archived === undefined ? {} : { archivedThreadIds: archived }),
     items: items.map((entry: unknown): ThreadSummary => {
@@ -1442,8 +1446,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return response.type === 'error' ? rejectedOf(response) : readRunResult(response.result);
     },
 
-    async listThreads() {
-      const response = await doFetch(`${base}${THREADS_PATH}`, {
+    async listThreads(query) {
+      const response = await doFetch(`${base}${THREADS_PATH}${threadListSearch(query)}`, {
         method: 'GET',
         // 同上行那一條：沒有它就是一個不發 preflight 的跨來源 simple request，見 `THREADS_PATH`。
         headers: { 'content-type': 'application/json' },
