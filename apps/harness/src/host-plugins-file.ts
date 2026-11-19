@@ -62,7 +62,7 @@ export function hostPluginRows(
  *
  * @param path - 通常是 `<home>/host-plugins.json`；它的目錄要已經存在。
  * @param rows - {@link hostPluginRows} 的結果。
- * @throws 寫不進去（權限、磁碟）。暫存檔不留。
+ * @throws 寫不進去（權限、磁碟、目標是目錄）：訊息以「寫不了宿主的插件清單」開頭並指名檔案。暫存檔不留。
  */
 export function writeHostPluginsFile(path: string, rows: readonly HostPluginRow[]): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -72,6 +72,9 @@ export function writeHostPluginsFile(path: string, rows: readonly HostPluginRow[
     renameSync(tmp, path);
   } catch (error) {
     rmSync(tmp, { force: true });
-    throw error;
+    throw new Error(
+      `寫不了宿主的插件清單 ${path}：${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 }

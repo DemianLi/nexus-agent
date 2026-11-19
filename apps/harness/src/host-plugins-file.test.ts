@@ -127,7 +127,7 @@ describe('writeHostPluginsFile', () => {
     await mkdir(path);
     expect(() => {
       writeHostPluginsFile(path, []);
-    }).toThrow();
+    }).toThrow(`寫不了宿主的插件清單 ${path}`);
     expect((await readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 });
