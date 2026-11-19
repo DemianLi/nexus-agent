@@ -19,7 +19,7 @@ function pending(args: unknown, name = 'echo', description?: string): PendingApp
 }
 
 describe('前景子代理在問（#328）', () => {
-  it('給了 asker：卡上寫誰在問、它在做什麼；沒給（root 自己問）沒有這一行', () => {
+  it('給了 asker：內文最上面一行只寫它在做的事，不加前綴、不重複子代理名（#3039）；沒給（root 自己問）沒有這一行', () => {
     const { rerender } = render(
       <ApprovalCard
         pending={pending({ file: 'a' })}
@@ -30,7 +30,8 @@ describe('前景子代理在問（#328）', () => {
       />,
     );
     const line = screen.getByTestId('approval-asker');
-    expect(line.textContent).toBe('子代理「explore」要執行這個操作，它在做：整理 README');
+    expect(line.textContent).toBe('整理 README');
+    expect(line.parentElement?.firstElementChild).toBe(line);
     rerender(
       <ApprovalCard
         pending={pending({ file: 'a' })}
@@ -42,7 +43,7 @@ describe('前景子代理在問（#328）', () => {
     expect(screen.queryByTestId('approval-asker')).toBeNull();
   });
 
-  it('委派卡沒有說明：只寫誰在問', () => {
+  it('委派卡沒有說明：沒有這一行，誰在問由名稱列講', () => {
     render(
       <ApprovalCard
         pending={pending({})}
@@ -52,9 +53,40 @@ describe('前景子代理在問（#328）', () => {
         onStop={() => {}}
       />,
     );
-    expect(screen.getByTestId('approval-asker').textContent).toBe(
-      '子代理「explore」要執行這個操作',
+    expect(screen.queryByTestId('approval-asker')).toBeNull();
+  });
+});
+
+describe('多個操作（#3039 第 1 項）', () => {
+  const twoActions = {
+    kind: 'approval',
+    interruptId: 'int-1',
+    actions: [
+      { name: 'read_file', args: { path: 'a' } },
+      { name: 'write_file', args: { path: 'b' } },
+    ],
+    allowedDecisions: ['approve', 'reject'],
+  } as unknown as PendingApproval;
+
+  it('每段參數上方放工具名標籤，不加前綴字；單一操作不放', () => {
+    const { rerender } = render(
+      <ApprovalCard pending={twoActions} busy={false} onDecide={() => {}} onStop={() => {}} />,
     );
+    const tools = screen.getAllByTestId('approval-tool');
+    expect(tools.map((tool) => [tool.tagName, tool.textContent])).toEqual([
+      ['CODE', 'read_file'],
+      ['CODE', 'write_file'],
+    ]);
+    expect(tools[1]?.parentElement?.textContent).toContain('"path": "b"');
+    rerender(
+      <ApprovalCard
+        pending={pending({ file: 'a' })}
+        busy={false}
+        onDecide={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('approval-tool')).toBeNull();
   });
 });
 

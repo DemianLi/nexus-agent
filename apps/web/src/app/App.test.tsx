@@ -832,8 +832,11 @@ describe('核准請求', () => {
     render(<App client={client} />);
 
     await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
-    expect(screen.getByText('alpha')).toBeTruthy();
-    expect(screen.getByText('beta')).toBeTruthy();
+    // 多個操作時每段參數上方各有工具名標籤（#3039）。
+    expect(screen.getAllByTestId('approval-tool').map((tool) => tool.textContent)).toEqual([
+      'alpha',
+      'beta',
+    ]);
     // 等核准時送不出下一句話：基座那時會把中斷靜靜丟掉。面板換掉了輸入框（#408），送出鍵不在可及的畫面上，
     // 藏起來的那一顆也照舊是停用的。
     expect(screen.queryByRole('button', { name: '送出' })).toBeNull();
@@ -2460,9 +2463,9 @@ describe('提問面板', () => {
       const { client } = fakeClient([elicitationFrame()]);
       render(<App client={client} />);
       const panel = await elicitationPanel();
-      expect(within(panel).getByTestId('question-origin').textContent).toContain(
-        'MCP 伺服器「files」的工具「delete_dir」在問你',
-      );
+      expect(
+        within(panel).getByRole('group', { name: 'MCP 伺服器「files」的工具「delete_dir」在問你' }),
+      ).toBe(within(panel).getByTestId('question-origin'));
       expect(within(panel).getByTestId('question-origin-arguments').textContent).toContain(
         '/tmp/x',
       );
@@ -2473,7 +2476,7 @@ describe('提問面板', () => {
       const first = fakeClient([elicitationFrame('q-1')]);
       const view = render(<App client={first.client} />);
       let panel = await elicitationPanel();
-      fireEvent.click(within(panel).getByRole('button', { name: '拒絕' }));
+      fireEvent.click(within(panel).getByRole('button', { name: /^拒絕/ }));
       await waitFor(() => expect(first.responded).toHaveLength(1));
       expect(first.responded[0]).toEqual({
         namespace: ['tools:a'],
@@ -2492,7 +2495,7 @@ describe('提問面板', () => {
       const second = fakeClient([elicitationFrame('q-2')]);
       render(<App client={second.client} />);
       panel = await elicitationPanel();
-      fireEvent.click(within(panel).getByRole('button', { name: '取消' }));
+      fireEvent.click(within(panel).getByRole('button', { name: /^取消/ }));
       await waitFor(() => expect(second.responded).toHaveLength(1));
       expect(second.responded[0]).toEqual({
         namespace: ['tools:a'],
@@ -2519,8 +2522,8 @@ describe('提問面板', () => {
       const plain = fakeClient([questionFrame('q-4')]);
       render(<App client={plain.client} />);
       const plainPanel = await questionPanel();
-      expect(within(plainPanel).queryByRole('button', { name: '拒絕' })).toBeNull();
-      expect(within(plainPanel).queryByRole('button', { name: '取消' })).toBeNull();
+      expect(within(plainPanel).queryByRole('button', { name: /^拒絕/ })).toBeNull();
+      expect(within(plainPanel).queryByRole('button', { name: /^取消/ })).toBeNull();
     });
   });
 
@@ -2554,16 +2557,19 @@ describe('提問面板', () => {
     expect(screen.getByRole('status').textContent).toBe(
       '等待核准：write_file（子代理「explore」要的）（1／2）',
     );
-    expect(within(first).getByTestId('approval-asker').textContent).toBe(
-      '子代理「explore」要執行這個操作，它在做：整理 README',
+    // 誰在問由名稱列講，卡裡只留它在做的事（#3039）。
+    expect(within(first).getByTestId('pending-head').textContent).toBe(
+      '等待核准 write_file・子代理「explore」（1／2）',
     );
+    expect(within(first).getByTestId('approval-asker').textContent).toBe('整理 README');
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded).toHaveLength(1));
     expect(responded[0]).toMatchObject({ namespace: ['tools:u1'], interrupt_id: 'int-1' });
 
     // 第一顆答掉之後才輪到第二顆，講的是另一個子代理。
     const second = await findPanel('等待核准：write_file（子代理「writer」要的）');
-    expect(within(second).getByTestId('approval-asker').textContent).toContain('子代理「writer」');
+    expect(within(second).getByTestId('pending-head').textContent).toContain('子代理「writer」');
+    expect(within(second).getByTestId('approval-asker').textContent).toBe('寫測試');
     fireEvent.click(within(second).getByRole('button', { name: '全部拒絕' }));
     await waitFor(() => expect(responded).toHaveLength(2));
     expect(responded[1]).toMatchObject({ namespace: ['tools:u2'], interrupt_id: 'int-2' });
@@ -2585,7 +2591,10 @@ describe('提問面板', () => {
     render(<App client={client} />);
 
     const panel = await findPanel('等待核准：write_file（子代理要的）');
-    expect(within(panel).getByTestId('approval-asker').textContent).toBe('子代理要執行這個操作');
+    expect(within(panel).getByTestId('pending-head').textContent).toBe(
+      '等待核准 write_file・子代理',
+    );
+    expect(within(panel).queryByTestId('approval-asker')).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded).toHaveLength(1));
     expect(responded[0]).toMatchObject({ namespace: ['tools:gone'], interrupt_id: 'int-9' });

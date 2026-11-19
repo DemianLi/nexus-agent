@@ -18,10 +18,12 @@
  * **單選自動跳只認指標選取**（§8、WCAG 3.2.2）：滑鼠、觸控、VoiceOver 點兩下選了才跳，先停 200 讓勾選看得到；
  * 鍵盤（方向鍵、數字鍵）改選取不跳，要按 Enter。說明句放在題目描述裡事先告知。
  *
- * **MCP server 的反問**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）：`pending.origin` 有值才多這三樣，沒有就跟
- * 以前一樣。①面板最上面講**是哪台 server 的哪支工具在問、用什麼有效參數**——一個不說來源的問答卡，讓人不知道自己在回答誰；
+ * **MCP server 的反問**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）：`pending.origin` 有值才多這三樣，沒有就只有
+ * 題目與操作列。①面板最上面講**是哪台 server 的哪支工具在問、用什麼有效參數**——一個不說來源的問答卡，讓人不知道自己在回答誰。
+ * 看得到的是圖示＋`server` › `tool` 兩個 code 標籤，全句是那一組的 `aria-label`（#3039 第 3 項）；
  * ②操作列下面多一列「拒絕」（明確說不給）與「取消」（先不回答），MCP 的 `decline`／`cancel`，與作答的 `accept` 並列，**都不停止這一輪**
- * （名稱列的 ❌ 才是停止，§4.3）；③參數原文照畫在可捲動的區塊裡，不截斷（人要看得到將被同意的是什麼）。
+ * （名稱列的 ❌ 才是停止，§4.3）。兩者的差別寫在 tooltip，同一句也在按鈕名稱裡（§8：tooltip 報讀器聽不到，#3039 第 5 項）；
+ * ③參數原文照畫在可捲動的區塊裡、常駐不折疊，不截斷（人要看得到將被同意的是什麼）；區塊沒有看得到的小標，名稱在 `aria-label`（#3039 第 4 項）。
  *
  * **換題時高度用過渡跟上**（§7「面板高度差 resize 300」，[#1306](https://github.com/DemianLi/nexus-agent/issues/1306)）：
  * `useResizeTransition` 掛在外框上，先量再過渡；reduced-motion 直接到位。**「（推薦）」字尾畫成小標**，送出的值不變
@@ -32,6 +34,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { Plug } from 'lucide-react';
 
 import type { PendingQuestion } from '@nexus/wire';
 
@@ -39,6 +42,7 @@ import { MonoBlock } from '@/shared/blocks/mono-block';
 import { Badge } from '@/components/ui/badge';
 import { Surface } from '@/shared/blocks/surface';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { MarkdownText } from '@/shared/markdown/text';
 import {
   Questionnaire,
@@ -77,6 +81,12 @@ const STICKY_STAGE =
 export function questionPosition(index: number, total: number): string {
   return `第 ${index + 1} 題，共 ${total} 題`;
 }
+
+/** MCP 反問兩顆鈕看得到的字與 tooltip；按鈕名稱由 `OriginButton` 拼成「字：tooltip」。 */
+const DECLINE_LABEL = '拒絕';
+const DECLINE_HINT = '明確不給，這一輪繼續';
+const DISMISS_LABEL = '取消';
+const DISMISS_HINT = '先不回答，這一輪繼續';
 
 /** 自由作答那一列的名稱與提示字。 */
 export const FREE_ANSWER_LABEL = '輸入你的答案';
@@ -279,30 +289,26 @@ export function QuestionPanel({
         ) : (
           <div className={`${STICKY_STAGE} sticky bottom-0 flex flex-col gap-2 pb-4`}>
             {actions(false)}
-            <div className="flex justify-end gap-2" data-testid="origin-actions">
-              {onDecline !== undefined && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 sm:min-h-0"
-                  disabled={busy}
-                  onClick={onDecline}
-                >
-                  拒絕
-                </Button>
-              )}
-              {onDismiss !== undefined && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 sm:min-h-0"
-                  disabled={busy}
-                  onClick={onDismiss}
-                >
-                  取消
-                </Button>
-              )}
-            </div>
+            <TooltipProvider>
+              <div className="flex justify-end gap-2" data-testid="origin-actions">
+                {onDecline !== undefined && (
+                  <OriginButton
+                    label={DECLINE_LABEL}
+                    hint={DECLINE_HINT}
+                    busy={busy}
+                    onClick={onDecline}
+                  />
+                )}
+                {onDismiss !== undefined && (
+                  <OriginButton
+                    label={DISMISS_LABEL}
+                    hint={DISMISS_HINT}
+                    busy={busy}
+                    onClick={onDismiss}
+                  />
+                )}
+              </div>
+            </TooltipProvider>
           </div>
         )}
       </Questionnaire>
@@ -337,31 +343,72 @@ function argumentsText(value: unknown): string {
   }
 }
 
+/** 拒絕／取消：差別在 tooltip，按鈕名稱帶同一句（tooltip 不給報讀器，§8）。 */
+function OriginButton({
+  label,
+  hint,
+  busy,
+  onClick,
+}: {
+  readonly label: string;
+  readonly hint: string;
+  readonly busy: boolean;
+  readonly onClick: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-11 sm:min-h-0"
+            aria-label={`${label}：${hint}`}
+            disabled={busy}
+            onClick={onClick}
+          />
+        }
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** 「MCP 伺服器「x」的工具「y」在問你」：來源那一組的報讀名稱，看得到的是它的縮寫（#3039 第 3 項）。 */
+function originLabel(origin: NonNullable<PendingQuestion['origin']>): string {
+  return `MCP 伺服器「${origin.server}」的工具「${origin.tool}」在問你`;
+}
+
 /** 這組問題是哪台 MCP server 的哪支工具在問（#1098）：最上面，題目之前。 */
 function OriginBlock({ origin }: { origin: NonNullable<PendingQuestion['origin']> }) {
   return (
     <div
       data-testid="question-origin"
+      role="group"
+      aria-label={originLabel(origin)}
       className="border-border text-body mb-3 flex flex-col gap-2 rounded-lg border px-3 py-2"
     >
-      <p className="font-medium">
-        MCP 伺服器「<code className="font-mono">{origin.server}</code>」的工具「
-        <code className="font-mono">{origin.tool}</code>」在問你
+      {/* 名稱已在這一組的 `aria-label`：看得到的縮寫藏起來，免得唸兩次。 */}
+      <p
+        className="flex min-w-0 flex-wrap items-center gap-1.5"
+        aria-hidden
+        data-testid="question-origin-source"
+      >
+        <Plug className="text-muted-foreground size-4 shrink-0" />
+        <code className="font-mono font-medium">{origin.server}</code>
+        <span className="text-muted-foreground">›</span>
+        <code className="font-mono font-medium">{origin.tool}</code>
       </p>
-      <div className="flex flex-col gap-1">
-        <p className="text-muted-foreground text-tip">呼叫參數</p>
-        <MonoBlock
-          data-testid="question-origin-arguments"
-          tabIndex={0}
-          aria-label="呼叫參數"
-          className="max-h-32"
-        >
-          {argumentsText(origin.arguments)}
-        </MonoBlock>
-      </div>
-      <p className="text-muted-foreground text-tip">
-        這是外部伺服器在問，不是模型。拒絕＝明確不給；取消＝先不回答。兩者都不會停止這一輪。
-      </p>
+      <MonoBlock
+        data-testid="question-origin-arguments"
+        tabIndex={0}
+        aria-label="呼叫參數"
+        className="max-h-32"
+      >
+        {argumentsText(origin.arguments)}
+      </MonoBlock>
     </div>
   );
 }
