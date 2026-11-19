@@ -40,8 +40,13 @@ describe('resolveOnPath', () => {
     expect(resolveOnPath('my-server', `/nonexistent:${dir}`)).toBe(join(dir, 'my-server'));
   });
 
-  it('有斜線的原樣；找不到的原樣（交給宿主列拒絕並指名）；不可執行的跳過', () => {
-    expect(resolveOnPath('./rel/server', '/usr/bin')).toBe('./rel/server');
+  it('有斜線的相對路徑照對話行程的 cwd 解成絕對，絕對的原樣', () => {
+    expect(resolveOnPath('./rel/server', '/usr/bin')).toBe(join(process.cwd(), 'rel/server'));
+    expect(resolveOnPath('sub/server', '/usr/bin')).toBe(join(process.cwd(), 'sub/server'));
+    expect(resolveOnPath('/opt/x/server', '/usr/bin')).toBe('/opt/x/server');
+  });
+
+  it('找不到的原樣（交給宿主列拒絕並指名）；不可執行的跳過', () => {
     expect(resolveOnPath('nope-nope-nope', '/usr/bin')).toBe('nope-nope-nope');
     const dir = binDir('plain', 0o644);
     expect(resolveOnPath('plain', dir)).toBe('plain');

@@ -11,7 +11,7 @@
  */
 
 import { accessSync, constants, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 
 import type { McpConfig, McpHostRowBuilder } from '@nexus/plugin-mcp';
 
@@ -19,12 +19,15 @@ import type { ResolvedCredential } from './credentials.js';
 import { hostHttpConnection } from './mcp-host-http-row.js';
 import { hostStdioConnection } from './mcp-host-stdio-row.js';
 
-/** 沿 `PATH` 找可執行檔；有斜線的原樣，找不到也原樣（讓 {@link hostStdioConnection} 以「要絕對路徑」拒絕並指名它）。 */
+/**
+ * 沿 `PATH` 找可執行檔；有斜線的相對路徑照對話行程的 cwd 解成絕對（TS 自己連時 SDK 的 spawn 也是這樣解，宿主的 cwd 不同，不解會指到別處）；
+ * 找不到的原樣（讓 {@link hostStdioConnection} 以「要絕對路徑」拒絕並指名它）。
+ */
 export function resolveOnPath(
   command: string,
   pathVar: string | undefined = process.env.PATH,
 ): string {
-  if (command.includes('/')) return command;
+  if (command.includes('/')) return isAbsolute(command) ? command : resolve(command);
   for (const dir of (pathVar ?? '').split(delimiter)) {
     if (dir === '' || !dir.startsWith('/')) continue;
     const candidate = join(dir, command);
