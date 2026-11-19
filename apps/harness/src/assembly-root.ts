@@ -57,7 +57,7 @@ import type { ToolResultStashOptions } from './tool-result-stash.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
-import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
+import { MCP_CREDENTIALS_SERVICE, MCP_HOST_ROW_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
 import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
 import { ABSENT_HOST_BRIDGE, HOST_BRIDGE_SERVICE, type HostBridge } from '@nexus/host-bridge';
 import {
@@ -85,6 +85,7 @@ import { LEGACY_ENV_FILE, legacyEnvFileFor } from './launch-env.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import { MCP_GUARD_SERVICE, MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
+import { mcpHostRow } from './mcp-host-row-service.js';
 import { GIT_STARTER_SERVICE, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
@@ -1298,8 +1299,11 @@ export async function createCliAgent(
       createHostServicesPlugin({
         channel,
         approvalPolicy,
-        // MCP 連線池（#1677）：缺席＝每列自己連（CLI）。
-        [MCP_POOL_SERVICE]: mcpPool,
+        // 有宿主（per-thread 的對話行程，#3000）：MCP 連線在宿主那邊，這條 thread 只向它 `open` 一份綁定，不用連線池。
+        // 沒有宿主：MCP 連線池（#1677），缺席＝每列自己連（CLI）。
+        ...(hostBridge === undefined
+          ? { [MCP_POOL_SERVICE]: mcpPool }
+          : { [MCP_HOST_ROW_SERVICE]: mcpHostRow }),
         // 宿主服務的門面（#2569）：一定有這一格，沒有宿主時呼叫回 host_absent。
         [HOST_BRIDGE_SERVICE]: hostBridge ?? ABSENT_HOST_BRIDGE,
         // MCP 設定裡的憑證引用（#1989）：跟模型 key 同一份憑證服務、同一條規則；缺席＝寫了引用的列連不上。

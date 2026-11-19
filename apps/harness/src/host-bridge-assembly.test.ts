@@ -15,6 +15,7 @@ import {
   createHostBridge,
   type HostBridge,
 } from '@nexus/host-bridge';
+import { MCP_HOST_ROW_SERVICE, MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -69,5 +70,53 @@ describe('組裝點的 hostBridge', () => {
     const failure = await bridge?.call('s', 'm', null).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(HostCallError);
     expect((failure as HostCallError).code).toBe('host_absent');
+  });
+});
+
+/** MCP 兩個連線服務在這一次組裝裡掛了哪幾個（`apply` 當下讀）。 */
+async function mcpServices(session: { hostBridge?: HostBridge; mcpPool?: McpConnectionPool }) {
+  const root = await mkdtemp(join('/var/tmp', 'nexus-host-bridge-assembly-'));
+  roots.push(root);
+  const seen: { row?: unknown; pool?: unknown } = {};
+  const entry: PluginEntry = {
+    plugin: {
+      name: 'mcp-services-probe',
+      apply(registry) {
+        seen.row = registry.services.get(MCP_HOST_ROW_SERVICE);
+        seen.pool = registry.services.get(MCP_POOL_SERVICE);
+      },
+    },
+  };
+  const built = await createCliAgent(
+    { live: false, workspace: root },
+    [...shipped, entry],
+    root,
+    session,
+  );
+  await built.dispose();
+  return seen;
+}
+
+describe('MCP 連線服務隨有沒有宿主分岔（#3000）', () => {
+  it('有宿主：掛 row 服務，連線池不掛（就算組裝點手上有一座）', async () => {
+    const pool = new McpConnectionPool({ log: () => undefined });
+    try {
+      const seen = await mcpServices({ hostBridge: createHostBridge().bridge, mcpPool: pool });
+      expect(typeof seen.row).toBe('function');
+      expect(seen.pool).toBeUndefined();
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('沒有宿主：連線池照舊，row 服務不掛', async () => {
+    const pool = new McpConnectionPool({ log: () => undefined });
+    try {
+      const seen = await mcpServices({ mcpPool: pool });
+      expect(seen.row).toBeUndefined();
+      expect(seen.pool).toBe(pool);
+    } finally {
+      await pool.close();
+    }
   });
 });

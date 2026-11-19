@@ -1232,7 +1232,15 @@ async function startServer(
         threadTitleLlm,
         optionalEntries,
       },
-      { session: { mcpPool } },
+      // 對話行程的試組也走宿主（#3000）：不在這一個行程裡自己連一次 MCP server。
+      {
+        session: {
+          mcpPool,
+          ...(options.conversation?.hostBridge !== undefined && {
+            hostBridge: options.conversation.hostBridge,
+          }),
+        },
+      },
     )
     .catch(async (error: unknown) => {
       if (!(error instanceof AssemblyDropError)) throw error;
