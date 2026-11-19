@@ -1,20 +1,20 @@
 /**
- * 經宿主連 MCP server（#3000 E4b）：每條對話行程不再自己連，向宿主的 `mcp/client` 服務 `open` 一份綁定、再用 `call` 送請求，
+ * 經宿主連 MCP server（#3000 E4b）：每條對話行程不自己連，向宿主的 `mcp/client` 服務 `open` 一份綁定、再用 `call` 送請求，
  * 宿主整台共用一份連線。協議與切塊見 `docs/host-mcp.md`。
  *
  * 這一層只做一件事：**長得像 SDK 的 `Client`**（{@link HostMcpClient}），交給 {@link attemptsOn} 的 `open` 縫。下游的
  * `connectGeneration`、`toolCallOf`、`Supervisor`、資源來源都不知道連線在宿主那邊。
  *
  * **兩層重連，各管各的**：宿主自己對 MCP server 退避重連（空窗裡的呼叫回 `server is disconnected`，綁定不變、不通知這一側）；
- * 這一側只在「宿主連線斷了又連上」（`onReady`）時重新 `open`。所以這個 client 只在自己 `close()` 時呼叫 `onclose`（SDK 的 client 也是；
+ * 綁定沒了（宿主的 `open` 呼叫結束，包括宿主連線斷了）之後，這一側在宿主連線回來（`onReady`）或下一次呼叫進來時重新 `open`，同一時間只有一個（單飛）。所以這個 client 只在自己 `close()` 時呼叫 `onclose`（SDK 的 client 也是；
  * TS 的 `Supervisor` 靠它確認這一代關掉了），宿主重起、server 掉線都不呼叫，`Supervisor` 不會因此重連，也不吃那一列的 `reconnect` 設定。
  *
  * 重新 `open` 之前的呼叫：等當前綁定最多 {@link DEFAULT_REBIND_WAIT_MS}，到了回 `server is disconnected`；
  * 送出去之後宿主連線斷了的（`host_lost`），結果不明、不重送。
  *
- * 取代 SDK 替我們做的事，逐項：逾時取消（{@link HostMcpClient.callTool} 的 `timeout`，到了送取消）、`outputSchema` 驗證
+ * 取代 SDK 替我們做的事，逐項：逾時取消（工具逾時由宿主算；這一側只在有傳 `timeout` 時，送出後 `timeout` 加 W 到期送取消、丟 `REQUEST_TIMEOUT`）、`outputSchema` 驗證
  * （照 `toolDefinition`，每次呼叫都驗）、`resources/list` 翻頁（呼叫端逐頁走，這裡原樣轉）、掉線分類（宿主自己重連，這一側不分類）、
- * 探活（宿主那一側，這裡的 `listTools` 回開時的清單）、`taskSupport`（宿主拿不到這一欄，`connectGeneration` 照舊在列工具後擋）。
+ * 探活（宿主那一側，這裡的 `listTools` 回開時的清單）、`taskSupport`（宿主的清單沒有 `execution`，宿主路徑上擋不到 `taskSupport: 'required'`，已知差異，見 `docs/host-mcp.md`〈跟 TS 的差距〉）。
  *
  * @module
  */
@@ -26,7 +26,7 @@ import { DefaultJsonSchemaValidator } from '@modelcontextprotocol/client/_shims'
 /** 宿主交連線的服務名。 */
 export const MCP_HOST_SERVICE = 'mcp/client';
 
-/** 重新 `open` 之前的呼叫最多等多久（毫秒）。對話行程重連宿主的上限是 1 秒，重起一次空窗通常在這之內。 */
+/** 重新 `open` 之前的呼叫最多等多久（毫秒）。蓋住一次宿主重起：監督行程第一次重起等 1 秒，對話行程重連間隔封頂 1 秒。正式值待 #3032。 */
 export const DEFAULT_REBIND_WAIT_MS = 5_000;
 
 /** 重新 `open` 失敗之後，等綁定的呼叫隔多久再試（毫秒）。 */
@@ -42,8 +42,8 @@ export interface HostCallOptionsLike {
 }
 
 /**
- * 宿主門面（`@nexus/host-bridge` 的 `HostBridge`）在這一層用到的部分。結構型別：外掛不相依 host-bridge 套件，
- * 沒有宿主時插件服務表上也沒有它。錯誤用 `code` 分：`host_lost`（送出去之後斷線）、`host_unavailable`／`host_absent`（沒送出去）。
+ * 宿主門面（`@nexus/host-bridge` 的 `HostBridge`）在這一層用到的部分。結構型別：外掛不相依 host-bridge 套件。
+ * 沒有宿主時服務表上掛的是一律回 `host_absent` 的門面；走不走宿主看 `MCP_HOST_ROW_SERVICE` 有沒有掛。錯誤用 `code` 分：`host_lost`（送出去之後斷線）、`host_unavailable`／`host_absent`（沒送出去）。
  */
 export interface HostCaller {
   call(
@@ -119,7 +119,7 @@ export interface HostOpenOptions {
   readonly server: { readonly serverName: string } & Readonly<Record<string, unknown>>;
   /** 要宣告反問能力的旗標，原樣給宿主；宿主路徑上反問的 `_meta` 由宿主一家帶，這一側不送。 */
   readonly elicitation: boolean;
-  /** 一次呼叫送出之前最多等多久（毫秒，單一期限，等綁定與等宿主連線都算在裡面），預設 {@link DEFAULT_REBIND_WAIT_MS}。 */
+  /** 一次呼叫送出之前最多等多久（毫秒，單一期限，等綁定與等宿主連線都算在裡面），預設 {@link DEFAULT_REBIND_WAIT_MS}；送出之後，它是保險計時比工具逾時多等的那一段。 */
   readonly rebindWaitMs?: number;
   /** 重新 `open` 失敗等記錄。 */
   readonly log?: (message: string) => void;
@@ -133,7 +133,7 @@ interface CallOptions {
   readonly allowInputRequired?: boolean;
 }
 
-/** 等不到綁定（到期、或關了）的錯。不含 `Not connected` 之類 {@link isConnectionLost} 認的字：宿主那邊的 server 照舊由宿主重連，這一側不算掉線。 */
+/** W 到期時 abort 的 reason，據此回 `server is disconnected`。錯誤文字不含 `Not connected` 之類 {@link isConnectionLost} 認的字：宿主那邊的 server 照舊由宿主重連，這一側不算掉線。 */
 const DEADLINE = Symbol('rebind-deadline');
 
 /**
@@ -154,7 +154,7 @@ function neutralized(error: unknown): unknown {
 
 /** 長得像 SDK `Client`、底下是宿主綁定的連線。結構上夠 {@link attemptsOn} 與 {@link toolCallOf} 用。 */
 export class HostMcpClient {
-  /** 從不叫：宿主自己重連，這一側的重新 `open` 不算掉線。 */
+  /** 只在自己 `close()` 時叫一次；宿主重起、server 掉線都不叫（宿主自己重連，這一側的重新 `open` 不算掉線）。 */
   onclose?: () => void;
 
   readonly #caller: HostCaller;
@@ -325,13 +325,23 @@ export class HostMcpClient {
     };
     if (options.signal?.aborted === true) forward();
     options.signal?.addEventListener('abort', forward, { once: true });
-    const deadline = setTimeout(() => {
-      abort.abort(DEADLINE);
-    }, waitMs);
+    const started = Date.now();
+    let deadline: NodeJS.Timeout | undefined;
+    /** W 的計時（從呼叫進來起算）；「沒送出去」重試時重新掛上剩下的那一段。 */
+    const armDeadline = (): void => {
+      deadline = setTimeout(
+        () => {
+          abort.abort(DEADLINE);
+        },
+        Math.max(0, waitMs - (Date.now() - started)),
+      );
+    };
+    armDeadline();
     let safety: NodeJS.Timeout | undefined;
     let safetyFired = false;
     const sent = (): void => {
       clearTimeout(deadline);
+      clearTimeout(safety);
       if (options.timeout !== undefined) {
         safety = setTimeout(() => {
           safetyFired = true;
@@ -372,8 +382,13 @@ export class HostMcpClient {
             continue;
           }
           // 對已失效的編號回「沒有已經 ready 的綁定」：沒送進 server，改送新綁定；對當前編號的是真錯。
-          if (code === 'BadPayload' && this.#stale.has(current) && this.#bound !== current)
+          if (code === 'BadPayload' && this.#stale.has(current) && this.#bound !== current) {
+            // 沒送出去：撤掉送出時掛的保險計時，W 接著算剩下的。
+            clearTimeout(safety);
+            safety = undefined;
+            armDeadline();
             continue;
+          }
           if (code === 'host_lost') {
             throw new Error(
               `${this.#label()}: the host connection dropped while this call was running; the result is unknown and the call was not retried`,
@@ -419,6 +434,12 @@ export class HostMcpClient {
     return Promise.resolve({ tools: this.#document?.tools ?? [] });
   }
 
+  /**
+   * 呼叫一個工具。宿主路徑上 `_meta` 由宿主帶，這裡拿掉。
+   *
+   * @throws 等不到綁定、W 到期或已經 `close`：`server is disconnected`；送出之後宿主連線斷了：結果不明、不重送；
+   * 送出後 `timeout` 加 W 到期：`REQUEST_TIMEOUT`；`structuredContent` 不合 `outputSchema`：丟錯。
+   */
   async callTool(params: unknown, options: CallOptions = {}): Promise<unknown> {
     // 宿主路徑上 `_meta`（反問能力）由宿主一家帶；`toolCallOf` 照舊寫的，這裡拿掉。
     const { _meta: _ignored, ...forwarded } = (params ?? {}) as Record<string, unknown>;
@@ -441,7 +462,7 @@ export class HostMcpClient {
     return this.#request('resources/read', params, options);
   }
 
-  /** 放掉綁定：取消 open 呼叫（宿主放掉綁定、連線留在池裡）、取消 `onReady` 登記、等綁定的呼叫立刻結算。冪等，不拋。 */
+  /** 放掉綁定：取消 open 呼叫（宿主放掉綁定、連線留在池裡）、取消 `onReady` 登記、等綁定的呼叫立刻結算，第一次關時叫一次 `onclose`。冪等，不拋。 */
   close(): Promise<void> {
     if (!this.#closed) {
       this.#closed = true;

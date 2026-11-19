@@ -3,7 +3,7 @@
  *
  * 實際的連線欄位交給 {@link hostHttpConnection} 與 {@link hostStdioConnection}（遮蔽、憑證檢查的規則只在那兩處）；這裡補三件它們不管的事：
  *
- * - 其餘的設定欄位（逾時、`failOnStartupError`、指引上限、重連）原樣帶，`approval` 不帶（宿主整列拒絕，核准閘門留在 TS）。
+ * - 其餘的設定欄位（逾時、`failOnStartupError`、指引上限、重連）（含 `elicitation`）原樣帶，`approval` 不帶（宿主整列拒絕，核准閘門留在 TS）。
  * - stdio 的 `command` 不是路徑（例如沒被沙箱包裝的 `npx`）時照 `PATH` 找成絕對路徑，因為宿主不查 `PATH`。TS 自己連的那條路由 Node 查，換條路不能因此壞掉。
  * - stdio 的 `credentialEnv`：`env` 裡寫成 `{ credential }` 的那幾個名字，值是修過頭尾的憑證（兩條路對憑證的修剪一致，由 {@link hostStdioConnection} 核對）。
  *
@@ -50,7 +50,7 @@ function asResolved(credentials: ReadonlyMap<string, string>): Map<string, Resol
  * @param config - 外掛驗過的設定，stdio 的 `command` 與 `args` 已照沙箱政策包過。
  * @param credentials - 解析好的憑證值，名字 → 值。
  * @returns 宿主 `open` 的 `server`。
- * @throws 憑證不合規則（`InvalidCredentialError`）、stdio 的 `command` 找不到絕對路徑；訊息不含憑證值。
+ * @throws 憑證不合規則（`InvalidCredentialError`）、stdio 的 `env` 引用的憑證沒有解析到值、stdio 的 `command` 找不到絕對路徑；訊息不含憑證值。
  */
 export function mcpHostRow(
   config: McpConfig,

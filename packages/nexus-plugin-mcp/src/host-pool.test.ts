@@ -250,7 +250,7 @@ describe('outputSchema 驗證（SDK 替我們做的，宿主給的是原文）',
 });
 
 describe('宿主連線斷了又連上', () => {
-  it('送出去之後斷線（host_lost）：結果不明，不重送（M2）', async () => {
+  it('送出去之後斷線（host_lost）：結果不明，不重送', async () => {
     const host = fakeHost({
       onCall: (call) => {
         call.reject(new HostError('host_lost', '呼叫送出之後宿主連線斷了，結果不明'));
@@ -264,7 +264,7 @@ describe('宿主連線斷了又連上', () => {
     expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(1);
   });
 
-  it('空窗裡的呼叫等重新 open 的綁定，用新的編號送（M3）', async () => {
+  it('空窗裡的呼叫等重新 open 的綁定，用新的編號送', async () => {
     const host = fakeHost({ onCall: (call) => answer(call, { ok: true }) });
     const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
     host.holdOpens();
@@ -360,6 +360,30 @@ describe('宿主連線斷了又連上', () => {
     await expect(client.callTool({ name: 'echo', arguments: {} })).resolves.toEqual({ ok: true });
     const sent = host.calls.filter((c) => c.method === 'call').map((c) => c.payload.open);
     expect(sent).toEqual([oldId, host.opens()[1]?.id]);
+  });
+
+  it('已失效的編號重試時 W 照算：新綁定一直沒 ready，呼叫在 W 之內回 server is disconnected', async () => {
+    const host: ReturnType<typeof fakeHost> = fakeHost({
+      onCall: () =>
+        (async () => {
+          host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          host.holdOpens();
+          host.fireReady();
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          throw new HostError('BadPayload', '沒有已經 ready 的綁定');
+        })(),
+    });
+    const client = await HostMcpClient.open(host.caller, {
+      server,
+      elicitation: false,
+      rebindWaitMs: 150,
+    });
+    const started = Date.now();
+    await expect(client.callTool({ name: 'echo', arguments: {} })).rejects.toThrow(
+      'server is disconnected',
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('宿主對當前編號回 BadPayload：照真錯回出去，不重送', async () => {

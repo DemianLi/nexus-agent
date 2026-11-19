@@ -12,8 +12,8 @@
 import { HostClient, createHostBridge, type HostBridgeHandle } from '@nexus/host-bridge';
 
 /**
- * 對話行程重連宿主的等待上限（毫秒）。宿主重起之後，MCP 呼叫在這段空窗裡等連線回來；預設的 5 秒會讓一次重起就吃掉整個等待額度，
- * 降到 1 秒，空窗只剩宿主自己起來的那一段。
+ * 對話行程重連宿主的間隔上限（毫秒）：連不上時的等待從 200 毫秒起加倍，封頂在這裡，所以宿主回來之後最多晚這麼久連上。
+ * `HostClient` 預設的封頂是 5 秒，一次重起就可能吃掉整個 MCP 等待額度 W（見 `docs/host-mcp.md`）。
  */
 export const HOST_RECONNECT_MAX_MS = 1_000;
 

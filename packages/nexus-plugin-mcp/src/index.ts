@@ -335,7 +335,7 @@ export async function mountServer(thread: ToolThread, declared: McpConfig): Prom
   const hostRow = thread.services.get(MCP_HOST_ROW_SERVICE) as McpHostRowBuilder | undefined;
   const hostBridge = thread.services.get(MCP_HOST_BRIDGE_SERVICE) as HostCaller | undefined;
   const throughHost = hostRow !== undefined && hostBridge !== undefined;
-  // 宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
+  // 沒走宿主時：宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
   const pool = throughHost
     ? undefined
     : (thread.services.get(MCP_POOL_SERVICE) as McpConnectionPool | undefined);

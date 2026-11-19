@@ -1832,7 +1832,7 @@ nexus-agent serve --process-model per-thread
     - 沒設 `NODE_EXTRA_CA_CERTS`：那一列不帶 `roots`，宿主不信任任何 https 憑證：網址是 https 的 MCP server 連不上，錯誤訊息指名 `NODE_EXTRA_CA_CERTS`；http 與 stdio 的 server 照常。只設代理、沒設根，那一列只帶 `proxy`。
     - `NODE_EXTRA_CA_CERTS` 指的檔讀不了或裡面沒有憑證：宿主照常起來，標準錯誤記一行 `插件 mcp apply 失敗：…`，`mcp` 沒掛。
     - **per-thread 的對話行程連 MCP 一律走宿主**（`mcp` 沒掛上時，工具連不上，不退回 TS 自己連）：每條對話向宿主 `open` 一份綁定，同一份設定整台共用一份連線。單行程（`single`）、CLI 與前台的試組不經宿主，照舊由 TS 自己連。
-    - 宿主重起（崩潰、被監督行程重起）時，對話行程自己重連宿主（等待上限 1 秒），執行中的 MCP 工具呼叫回「結果不明」、不自動重送；呼叫進來時綁定還沒回來的，最多等 5 秒，到了回 `server is disconnected`。
+    - 宿主重起（崩潰、被監督行程重起）時，對話行程自己重連宿主（重連間隔封頂 1 秒），執行中的 MCP 工具呼叫回「結果不明」、不自動重送；呼叫進來時綁定還沒回來的，最多等 5 秒，到了回 `server is disconnected`。
   - 宿主只在起來時讀這個檔。環境變了之後（包括帶 `--live` 時 `.env` 裡的代理），要重起 serve 才會重寫並讀到；單獨結束宿主行程，監督行程重起的宿主讀的是同一份舊檔。前台被重起時會重讀 `.env`、模型請求吃到新的代理，宿主清單不會跟著重讀，兩邊要等 serve 重起才一致。
   - 檔案是 JSON 陣列，一列一個插件：`name`（必填）、`config`（選填，交給插件自己判）、`disabled`（選填，`true` 或 `false`；`null` 當沒寫）。
     ```json

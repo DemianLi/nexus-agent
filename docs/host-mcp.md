@@ -6,7 +6,7 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio�
 **現況：`process-model: per-thread` 的對話行程連 MCP 一律走這裡**（#3000）：`packages/nexus-plugin-mcp` 在有宿主時用 `host-pool.ts` 的門面（長得像 SDK `Client`）向 `mcp/client` `open` 一份綁定、用 `call` 送請求，
 連線在宿主，整台共用。單行程 serve、CLI 與前台的試組沒有宿主，仍由 TS 自己連。語意照 TS，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
 
-兩層重連，各管各的：宿主自己對 MCP server 退避重連（空窗裡的呼叫回 `server is disconnected`，綁定不變）；對話行程只在**宿主連線斷了又連上**時重新 `open`（單飛、單一期限 W＝5 秒，到了回 `server is disconnected`，不送出）。**W 只保證蓋住第一次宿主重起**：監督行程對宿主重起有退避（第一次等 1 秒，每次加倍到 30 秒，宿主活過 60 秒才歸回 1 秒），60 秒內連續被殺第四次起，退避（8 秒）就超過 W。正式值待驗收量測（#3032）。
+兩層重連，各管各的：宿主自己對 MCP server 退避重連（空窗裡的呼叫回 `server is disconnected`，綁定不變）；綁定沒了之後，對話行程在宿主連線回來或下一次呼叫進來時重新 `open`（單飛、單一期限 W＝5 秒，到了回 `server is disconnected`，不送出）。**W 只保證蓋住第一次宿主重起**：監督行程對宿主重起有退避（第一次等 1 秒，每次加倍到 30 秒，宿主活過 60 秒才歸回 1 秒），每一代都活不到 60 秒就被殺時，第四次重起起，退避（8 秒）就超過 W。正式值待驗收量測（#3032）。
 送出去之後宿主連線斷了的呼叫回「結果不明」，不重送。
 **宿主放棄重連（`maxAttempts` 到了）時 TS 收不到訊號**：`hiddenAfterGiveUp` 在宿主路徑不觸發，放棄後工具仍在清單、呼叫回斷線（已知差異，補訊號另開 #3008）。
 

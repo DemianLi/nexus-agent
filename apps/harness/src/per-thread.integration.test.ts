@@ -1145,7 +1145,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     );
     const client = await clientOf(await running.loginUrl(1));
     const text = toolText(await turn(client, 'thread-m1', '動手'));
-    expect(text).toContain('MCP_TOKEN=');
+    expect(text).toContain('MCP_TOKEN=[redacted]');
     expect(text).not.toContain(secret);
   }, 180_000);
 
