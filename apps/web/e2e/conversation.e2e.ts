@@ -193,7 +193,7 @@ describe('核准卡的四種收法（#2358）', () => {
     await expect
       .poll(() => log.getByText('已經寫進 /visitors.csv。').count(), { timeout: 30_000 })
       .toBe(1);
-    expect(await log.getByRole('button', { name: /submit_record 完成$/ }).count()).toBe(1);
+    expect(await log.getByRole('button', { name: /^提交紀錄.* 完成$/ }).count()).toBe(1);
     await expect.poll(() => approvalCard(page).count(), { timeout: 30_000 }).toBe(0);
     await expectIdle(page);
     await shot(page, `${LOOP}-approve-2-done`);
@@ -204,7 +204,7 @@ describe('核准卡的四種收法（#2358）', () => {
     await approvalCard(page).getByRole('button', { name: '全部拒絕' }).click();
     const log = transcript(page);
     await expect.poll(() => log.getByText('好，這一筆不寫。').count(), { timeout: 30_000 }).toBe(1);
-    expect(await log.getByRole('button', { name: /submit_record 完成$/ }).count()).toBe(0);
+    expect(await log.getByRole('button', { name: /^提交紀錄.* 完成$/ }).count()).toBe(0);
     await expect.poll(() => approvalCard(page).count(), { timeout: 30_000 }).toBe(0);
     await expectIdle(page);
     await shot(page, `${LOOP}-reject-1-done`);
@@ -250,7 +250,7 @@ describe('核准卡的四種收法（#2358）', () => {
     await row.click();
     const log = transcript(page);
     await expect
-      .poll(() => log.getByRole('button', { name: /submit_record 失敗/ }).count(), {
+      .poll(() => log.getByRole('button', { name: /^提交紀錄.* 失敗/ }).count(), {
         timeout: 30_000,
       })
       .toBe(1);
