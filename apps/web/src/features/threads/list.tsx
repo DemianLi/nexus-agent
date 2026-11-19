@@ -86,6 +86,23 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  */
 
 const NO_WATERMARKS: ReadonlyMap<string, number> = new Map();
+const NO_ROWS: readonly ThreadSummary[] = [];
+
+/** 清單合上另外拿到的幾列（server 比到的標題）：已經在的不重複，照列表的順序排。沒有另外的就原樣回傳。 */
+function withRows(
+  items: readonly ThreadSummary[],
+  extra: readonly ThreadSummary[],
+): readonly ThreadSummary[] {
+  if (extra.length === 0) return items;
+  const listed = new Set(items.map((item) => item.threadId));
+  const fresh = extra.filter((item) => !listed.has(item.threadId));
+  if (fresh.length === 0) return items;
+  return [...items, ...fresh].sort(
+    (left, right) =>
+      right.updatedAt - left.updatedAt ||
+      (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0),
+  );
+}
 
 function labelOf(item: ThreadSummary): string {
   return threadLabel(item.title, item.blank);
@@ -115,7 +132,18 @@ export function ThreadList({
   /** 釘選、封存、改名（#633）；沒給就沒有那些。 */
   readonly management?: ThreadManagement;
 }) {
-  const { listing, statusOf, blankOf, refresh, placeholders } = directory;
+  const {
+    listing,
+    statusOf,
+    blankOf,
+    refresh,
+    placeholders,
+    loadMore,
+    loadingMore,
+    ensureRows,
+    findTitles,
+  } = directory;
+  const hasMore = listing.kind === 'ok' && listing.result.nextCursor !== undefined;
   const labelId = useId();
 
   useEffect(() => {
@@ -128,6 +156,12 @@ export function ThreadList({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [deletedOpen, setDeletedOpen] = useState(false);
+  // 打開「已封存」：封存的那幾條照 id 補齊，不只畫載到的那幾頁裡的（#725）。
+  const archivedIds = management?.archivedIds;
+  useEffect(() => {
+    if (archivedOpen && archivedIds !== undefined && archivedIds.size > 0)
+      ensureRows([...archivedIds]);
+  }, [archivedOpen, archivedIds, ensureRows]);
   // **被拒不記住**：`rejected` 分不出是沒開、查詢不合法還是搜尋失敗（線上只帶訊息），記住的話偶發失敗一次這一頁就再也不搜
   // 內容。所以每一次都問，被拒或失敗就那一次只比標題。
   // 伺服器回過一次「有」之前不畫骨架：出廠是關的，先畫的話每次搜都會閃一下，「搜不到」也晚一拍（同 #653 的選單）。
@@ -166,8 +200,34 @@ export function ThreadList({
       controller.abort();
     };
   }, [searching, needle, search]);
+  // 還有沒載的頁（#725）：標題也問 server，沒載到的那幾頁一樣比得到。等的方式同內容搜尋。
+  const [titleAnswer, setTitleAnswer] = useState<{
+    readonly query: string;
+    readonly items: readonly ThreadSummary[];
+  } | null>(null);
+  useEffect(() => {
+    if (needle === '' || !hasMore) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void findTitles(needle, controller.signal).then((items) => {
+        if (items !== undefined) setTitleAnswer({ query: needle, items });
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [needle, hasMore, findTitles]);
+  const serverTitles = hasMore && titleAnswer?.query === needle ? titleAnswer.items : NO_ROWS;
   // 回來的那一份是這個查詢的才算；不是就還在等（dsh 的 `currentRemote`）。
   const current = searching && answer?.query === needle ? answer.matches : undefined;
+  // 內容命中、但還沒載到的那幾條：照 id 補進清單，不然合併時會被當成「清單上沒有」丟掉。
+  const contentHits = current !== undefined && 'items' in current ? current.items : undefined;
+  useEffect(() => {
+    if (contentHits !== undefined && contentHits.length > 0) {
+      ensureRows(contentHits.map((hit) => hit.threadId));
+    }
+  }, [contentHits, ensureRows]);
   const pending = searching && on && current === undefined;
   const fellBack = current !== undefined && 'fallback' in current;
   const fallback = fellBack ? current.fallback : null;
@@ -180,7 +240,7 @@ export function ThreadList({
   const visible =
     listing.kind === 'ok'
       ? withCurrentTitle(
-          withPlaceholders(listing.result.items, placeholders),
+          withPlaceholders(withRows(listing.result.items, serverTitles), placeholders),
           currentThreadId,
           currentTitle,
         ).filter(
@@ -338,6 +398,11 @@ export function ThreadList({
                   }}
                   archivedOpen={archivedOpen || needle !== ''}
                   onArchivedOpenChange={setArchivedOpen}
+                  more={
+                    hasMore && needle === ''
+                      ? { loading: loadingMore, onLoad: loadMore }
+                      : undefined
+                  }
                 />
               )}
               {pending && (
@@ -419,6 +484,7 @@ function ThreadGroupList({
   row,
   archivedOpen,
   onArchivedOpenChange,
+  more,
 }: {
   readonly sections: ThreadSections;
   readonly isBlank: (item: ThreadSummary) => boolean;
@@ -430,6 +496,8 @@ function ThreadGroupList({
   readonly row: (item: ThreadSummary) => ReactNode;
   readonly archivedOpen: boolean;
   readonly onArchivedOpenChange: (open: boolean) => void;
+  /** server 上還有沒載的（#725）：時間組最後多一顆「載入更多」。 */
+  readonly more?: { readonly loading: boolean; readonly onLoad: () => void };
 }) {
   const { blank, groups } = groupThreads(sections.rest, Date.now(), isBlank);
   return (
@@ -451,6 +519,18 @@ function ThreadGroupList({
           />
         </BucketGroup>
       ))}
+      {more !== undefined && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-muted-foreground mt-1 h-11 w-full justify-start px-2 text-ui font-normal lg:h-8"
+          disabled={more.loading}
+          onClick={more.onLoad}
+          data-testid="thread-load-more"
+        >
+          {more.loading ? '載入中…' : '載入更多會話'}
+        </Button>
+      )}
       {sections.archived.length > 0 && (
         <Collapsible
           open={archivedOpen}

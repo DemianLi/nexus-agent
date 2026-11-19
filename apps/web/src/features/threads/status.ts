@@ -79,7 +79,16 @@ export type ThreadStatusAction =
   | { readonly type: 'frame'; readonly frame: ThreadFeedFrame }
   /** 送出一次列表請求，記在送出之前。 */
   | { readonly type: 'list-requested' }
-  | { readonly type: 'listed'; readonly items: readonly ThreadSummary[] }
+  /**
+   * 列表回來了。`complete` 是 `false` 時這只是前面幾頁（#725）：沒列到的不能當成不在了，它們的狀態留著。省略是整份。
+   */
+  | {
+      readonly type: 'listed';
+      readonly items: readonly ThreadSummary[];
+      readonly complete?: boolean;
+    }
+  /** 多載了幾列（下一頁，或照 id 補的）：只當這幾列的基線，不清別的、不當成一次刷新。 */
+  | { readonly type: 'paged'; readonly items: readonly ThreadSummary[] }
   /** 最新那一次列表請求失敗了：紀錄不再有人重放。 */
   | { readonly type: 'list-failed' }
   /** 分叉成功：子 thread 的佔位。 */
@@ -175,10 +184,8 @@ function applyFrame(state: ThreadStatusState, frame: ThreadFeedFrame): ThreadSta
   }
 }
 
-function applyListing(
-  state: ThreadStatusState,
-  items: readonly ThreadSummary[],
-): ThreadStatusState {
+/** 這幾列的「在跑」當基線：先前不知道的安靜寫入，知道而不同的當成一次翻轉。 */
+function baseline(state: ThreadStatusState, items: readonly ThreadSummary[]): ThreadStatusState {
   let next = state;
   for (const item of items) {
     const previous = next.running.get(item.threadId);
@@ -191,11 +198,24 @@ function applyListing(
       next = { ...next, engaged: new Set(next.engaged).add(item.threadId) };
     }
   }
+  return next;
+}
+
+function applyListing(
+  state: ThreadStatusState,
+  items: readonly ThreadSummary[],
+  complete: boolean,
+): ThreadStatusState {
+  const next = baseline(state, items);
   const present = new Set(items.map((item) => item.threadId));
+  const added = next.added.filter((row) => !present.has(row.threadId));
+  if (!complete) {
+    const unread = new Set([...next.unread].filter((id) => id !== next.current));
+    return { ...next, unread, added, pushed: {}, baselined: true };
+  }
   const running = new Map([...next.running].filter(([id]) => present.has(id)));
   const unread = new Set([...next.unread].filter((id) => present.has(id) && id !== next.current));
   const engaged = new Set([...next.engaged].filter((id) => present.has(id)));
-  const added = next.added.filter((row) => !present.has(row.threadId));
   return { ...next, running, unread, engaged, added, pushed: {}, baselined: true };
 }
 
@@ -246,11 +266,16 @@ export function reduceThreadStatus(
       // 清單是基線：在途之前放的佔位由它取代，在途期間放的由重放放回去。
       return {
         ...replay(
-          { ...applyListing(state, action.items), placeholders: [] },
+          { ...applyListing(state, action.items, action.complete ?? true), placeholders: [] },
           state.mutations ?? [],
         ),
         mutations: undefined,
       };
+    case 'paged': {
+      const next = baseline(state, action.items);
+      const present = new Set(action.items.map((item) => item.threadId));
+      return { ...next, added: next.added.filter((row) => !present.has(row.threadId)) };
+    }
     case 'list-failed':
       return state.mutations === undefined ? state : { ...state, mutations: undefined };
     case 'placeholder': {

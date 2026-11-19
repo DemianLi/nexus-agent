@@ -953,6 +953,8 @@ export type SkillListResult = { readonly skills: readonly SkillEntry[] };
  * **`GET` 也要帶 `content-type: application/json`**，server 沒帶就回 415。這一條不是潔癖，是上行那道
  * 閘門的延伸：瀏覽器對不帶自訂 header 的跨來源 `GET` 不發 preflight，而這一份回應帶著每一條 thread 的標題，
  * 標題是從第一句話來的。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
+ *
+ * 選填的查詢參數（一次一頁、只比標題、封存、指定幾條，[#725](https://github.com/DemianLi/nexus-agent/issues/725)）見 `thread-list-query.ts`；不帶就是整份。
  */
 export const THREADS_PATH = '/threads';
 
@@ -1004,6 +1006,8 @@ export interface ThreadListResult extends Partial<ThreadListSets> {
   readonly items: readonly ThreadSummary[];
   /** header 讀不懂、或格式版本比這台 server 新而沒列的份數。 */
   readonly unreadable: number;
+  /** 帶了 `limit` 而後面還有：原樣放進下一次的 `cursor`（#725，見 `thread-list-query.ts`）。 */
+  readonly nextCursor?: string;
   // 另有選填的 `pinnedThreadIds`、`archivedThreadIds`（#633，見 `thread-management.ts`）：沒有實作釘選與封存的 server 不送。
 }
 

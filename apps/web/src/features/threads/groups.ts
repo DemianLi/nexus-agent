@@ -12,6 +12,7 @@
  */
 
 import type { ThreadSummary } from '@nexus/wire';
+import { threadTitleMatches } from '@nexus/wire';
 
 export type ThreadBucket = 'today' | 'yesterday' | 'week' | 'older';
 
@@ -85,12 +86,11 @@ export function groupThreads(
   };
 }
 
-/** 搜尋：空字串（含只有空白）回原清單；否則只留標題含這段字的列。 */
+/** 搜尋：空字串（含只有空白）回原清單；否則只留標題對得上的列。規則跟 server 的 `q` 同一個（`threadTitleMatches`）。 */
 export function filterThreads(
   items: readonly ThreadSummary[],
   query: string,
 ): readonly ThreadSummary[] {
-  const needle = query.trim().toLocaleLowerCase();
-  if (needle === '') return items;
-  return items.filter((item) => item.title?.toLocaleLowerCase().includes(needle) === true);
+  if (query.trim() === '') return items;
+  return items.filter((item) => threadTitleMatches(item.title, query));
 }
