@@ -1828,7 +1828,7 @@ nexus-agent serve --process-model per-thread
 - **插件清單**：宿主照 `--plugins <檔>` 掛主機級的插件。harness 起監督行程時一律帶 `--plugins <home>/host-plugins.json`。
   - **這個檔整份由 harness 產生，不要手改**：每次啟動 serve（`per-thread`）時，在換成監督行程之前照當下的環境重寫，舊檔裡的列（包括手寫的）都不保留。權限 0600（代理網址可能帶帳密）。出貨的宿主只有 `mcp` 一個插件，也只有 harness 會寫它：
     - 啟動環境有設 `NODE_EXTRA_CA_CERTS`：寫一列 `mcp`，`roots` 是那個檔的絕對路徑（相對路徑照啟動時的工作目錄解）。宿主只信這個檔裡的根，不讀系統根。
-    - 同一份環境解得出代理（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`，解法與模型請求那條相同）：那一列多一個 `proxy`。**只看行程環境**：home 的 `.env` 設的代理，模型請求會走、宿主連 MCP 不會走。
+    - 同一份環境解得出代理（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`，解法與模型請求那條相同）：那一列多一個 `proxy`。解的環境與模型請求看的是同一份：帶 `--live` 時是行程環境加上 home 的 `.env`（行程環境優先），沒帶 `--live` 只有行程環境。`.env` 的值不會進行程環境，監督行程與子行程繼承的環境不變。home 的 `.env` 壞了（設了只有啟動環境能設的名字），啟動器就丟錯，不再等前台起來才丟。
     - 沒設 `NODE_EXTRA_CA_CERTS`：不寫那一列，檔案是 `[]`，宿主不掛 `mcp`。只設代理、沒設根，一樣沒有那一列。
     - `NODE_EXTRA_CA_CERTS` 指的檔讀不了或裡面沒有憑證：宿主照常起來，標準錯誤記一行 `插件 mcp apply 失敗：…`，`mcp` 沒掛。
     - 這張還沒切換對話行程：今天 per-thread 的對話行程連 MCP 仍走 TS，宿主上的 `mcp` 先掛著、還沒有人呼叫它。
