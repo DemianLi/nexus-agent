@@ -108,6 +108,16 @@ describe('mcpHostRow', () => {
     }
   });
 
+  it('stdio：設定的 env.PATH 優先於對話行程的 PATH', () => {
+    const dir = binDir('only-in-config');
+    const config = mcpConfigSchema.parse({
+      serverName: 'local',
+      connection: { transport: 'stdio', command: 'only-in-config', env: { PATH: dir } },
+    });
+    const row = mcpHostRow(config, new Map());
+    expect(row.connection).toMatchObject({ command: join(dir, 'only-in-config') });
+  });
+
   it('stdio：找不到的 command 以「要絕對路徑」拒絕，訊息指名它', () => {
     const config = mcpConfigSchema.parse({
       serverName: 'local',

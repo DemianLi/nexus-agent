@@ -3,8 +3,12 @@
 Rust 宿主（`native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio）的現有行為（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D）。
 寫給要改這一層、或要對照 TS 的人。管理者怎麼設一列 MCP，看 [`operations.md`](operations.md)，這裡不重寫。
 
-**現況：對話行程那一側還沒接上。** 插件 `mcp` 與它 expose 的服務 `mcp/client` 都在，但對話行程還不會叫它。
-今天的 MCP 一律由 TS 的 `packages/nexus-plugin-mcp` 連。語意照那邊，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
+**現況：`process-model: per-thread` 的對話行程連 MCP 一律走這裡**（#3000）：`packages/nexus-plugin-mcp` 在有宿主時用 `host-pool.ts` 的門面（長得像 SDK `Client`）向 `mcp/client` `open` 一份綁定、用 `call` 送請求，
+連線在宿主，整台共用。單行程 serve、CLI 與前台的試組沒有宿主，仍由 TS 自己連。語意照 TS，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
+
+兩層重連，各管各的：宿主自己對 MCP server 退避重連（空窗裡的呼叫回 `server is disconnected`，綁定不變）；對話行程只在**宿主連線斷了又連上**時重新 `open`（單飛、單一期限 W＝5 秒，到了回 `server is disconnected`，不送出）。
+送出去之後宿主連線斷了的呼叫回「結果不明」，不重送。
+**宿主放棄重連（`maxAttempts` 到了）時 TS 收不到訊號**：`hiddenAfterGiveUp` 在宿主路徑不觸發，放棄後工具仍在清單、呼叫回斷線（已知差異，補訊號另開 #3008）。
 
 - 程式：`host/src/mcp/`（`config.rs` 設定、`connection.rs` 一代連線、`stdio.rs` stdio 的子行程、`supervisor.rs` 退避重連、`pool.rs` 連線池、`bridge.rs` 跑它們的執行緒、
   `service.rs` 插件與服務）、`host/src/wake.rs`、`host/src/tls.rs`、`host/src/proxy.rs`。
@@ -80,7 +84,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 這些出現在送回對話行程的文字裡，一律換成 `[redacted]`。收集的入口只有一個：`Redactor::new`（`host/src/mcp/redact.rs`），`Pool` 把池的秘密（代理帳密）與這一列的合起來交進去；憑證值（stdio 的 `credentialEnv`、HTTP 的 `credentialHeaders`）都走同一個入口。
 每個值連同百分號、form 與 JSON 跳脫形式在原文上一次替換。夠長（至少 8 個 code point）的值遮所有輸出；更短的只可能是設定裡的字面值，只遮錯誤與診斷，不遮成功結果。`Server` 與 `Redactor` 的 `Debug` 不印這些。
 
-**query 一律收：** 設定格式裡網址沒有憑證引用，宿主分不出 query 的哪些值是憑證，所以全部的 query 值當秘密收，代價是字面值也會在成功結果裡被遮，不會漏。header 沒有這個近似：TS 要送 `credentialHeaders`，宿主只收它標的。送的人是 harness 的 `hostHttpConnection`（`apps/harness/src/mcp-host-http-row.ts`）：憑證引用列為憑證，直接寫成字串的 `Authorization`／`Proxy-Authorization`（D359）自動列為憑證（prefix `""`，整個值），其他字串 header 是字面值。判斷只在 `@nexus/plugin-mcp` 的 `hostHeaders` 一處，TS 外掛自己連線的 `redactorFor` 也用它；宿主對這兩個名字另有一道防線（在 `headers` 而沒列就整列拒絕）。送宿主之前 harness 先把每個字面值 header 修掉頭尾空白（整個值），憑證引用只修憑證、prefix 原樣。對話行程那一側今天還沒接上宿主，只有 `host/tests` 與 harness 的測試驗到（#2570）。
+**query 一律收：** 設定格式裡網址沒有憑證引用，宿主分不出 query 的哪些值是憑證，所以全部的 query 值當秘密收，代價是字面值也會在成功結果裡被遮，不會漏。header 沒有這個近似：TS 要送 `credentialHeaders`，宿主只收它標的。送的人是 harness 的 `hostHttpConnection`（`apps/harness/src/mcp-host-http-row.ts`）：憑證引用列為憑證，直接寫成字串的 `Authorization`／`Proxy-Authorization`（D359）自動列為憑證（prefix `""`，整個值），其他字串 header 是字面值。判斷只在 `@nexus/plugin-mcp` 的 `hostHeaders` 一處，TS 外掛自己連線的 `redactorFor` 也用它；宿主對這兩個名字另有一道防線（在 `headers` 而沒列就整列拒絕）。送宿主之前 harness 先把每個字面值 header 修掉頭尾空白（整個值），憑證引用只修憑證、prefix 原樣。對話行程那一側由 `mcp-host-row-service.ts` 呼叫它（#3000）。
 
 ## 一代連線
 
@@ -175,7 +179,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   - `panic = "abort"` 只在 release：出貨的宿主在橋的執行緒上 panic 是整個宿主結束；dev 與測試建置是 unwind，只有那條執行緒結束，領頭同樣被殺。
   - 子行程不在宿主那一組裡：終端機的 Ctrl-C、監督行程對宿主那一組送的訊號都打不到它；橋在宿主結束前跑完 `close`、連線的 guard 被 drop，起它的橋執行緒結束時（`PR_SET_PDEATHSIG` 殺領頭），或宿主結束時監督行程掃同 session 的行程時才會收。
 - 池的鍵：整份成品（含 `env` 的值）；換了憑證是另一份，`credentialEnv` 的順序與重複不影響。
-- 缺口：「哪幾個名字是憑證」由誰產生（匯出外掛的 `substituted`，或外掛回報）留給 PR-E，與 dev-h2 一起定；在那之前沒有生產端呼叫 `hostStdioConnection`。
+- 「哪幾個名字是憑證」由 `mcp-host-row-service.ts` 判斷：`env` 裡寫成 `{ credential }` 的名字進 `credentialEnv`，值是修過頭尾的憑證。
 
 ## 跟 TS 的差距
 
@@ -183,7 +187,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
-- 對話行程那一側的列（`hostHttpConnection`）寫好了，但還沒有產品呼叫端（接上在 #2570 後面的卡）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。
+- 對話行程那一側的列由 harness 的 `mcp-host-row-service.ts` 產生（`MCP_HOST_ROW_SERVICE`，包 `hostHttpConnection`／`hostStdioConnection`，沒有斜線的 `command` 照 `PATH` 解成絕對路徑）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
 - 連線之後的錯誤：TS 的工具呼叫錯誤、`tools/list` 錯誤與重連日誌也遮網址的 query（`withUrlScrubbing`）：query 的整串與每個值（原樣、解碼後）進遮蔽器，同宿主 `secrets()`，只差不到 8 個 code point 的值不收（整串、原樣、解碼後各自算，細節與後果見 `docs/credentials-file.md`〈收集〉）。宿主收 query 值讀碼可見（`config.rs` 的 `secrets()`）；沒量的是宿主每一條錯誤出口是否都過 `scrub`。TS 這邊 resources 的錯誤（`read_mcp_resource`、`list_mcp_resources`）還沒遮。

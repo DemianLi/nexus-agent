@@ -92,7 +92,7 @@ export function mcpHostRow(
   return {
     ...common,
     connection: hostStdioConnection({
-      command: resolveOnPath(connection.command),
+      command: resolveOnPath(connection.command, env.PATH),
       args: connection.args ?? [],
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
       env,
