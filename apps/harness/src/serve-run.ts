@@ -1233,11 +1233,12 @@ async function startServer(
         threadTitleLlm,
         optionalEntries,
       },
-      // 對話行程的試組不在這一個行程裡自己連 MCP server（#3000），也不等還沒接上的宿主：用試組專用的門面，見 `mcp-trial-host-bridge.ts`。
+      // per-thread 的對話行程與前台，試組都不在這一個行程裡自己連 MCP server（#3000、#3031），也不等還沒接上的宿主：用試組專用的門面，見 `mcp-trial-host-bridge.ts`。
+      // 前台不組 thread，連線只在對話行程向宿主 `open`。
       {
         session: {
           mcpPool,
-          ...(options.conversation?.hostBridge !== undefined && {
+          ...((options.conversation?.hostBridge !== undefined || options.front !== undefined) && {
             hostBridge: TRIAL_HOST_BRIDGE,
           }),
         },
