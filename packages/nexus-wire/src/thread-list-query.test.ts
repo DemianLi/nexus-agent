@@ -80,7 +80,7 @@ describe('server 照查詢切一刀', () => {
   it('翻頁之間有一條跳到最前面：後面的不重複也不漏', () => {
     const first = pageThreadList(items, { limit: 2 }, new Set());
     expect(first.items.map(({ threadId }) => threadId)).toEqual(['a', 'b']);
-    // d 講了話：updatedAt 變成最新。照位置切的話，第二頁會從 c 之後少一條。
+    // d 講了話：updatedAt 變成最新。照位置切的話，第二頁會重複 b。
     const moved = sorted(items.map((item) => (item.threadId === 'd' ? row('d', 9) : item)));
     const second = pageThreadList(moved, { limit: 2, cursor: first.nextCursor! }, new Set());
     expect(second.items.map(({ threadId }) => threadId)).toEqual(['c', 'e']);

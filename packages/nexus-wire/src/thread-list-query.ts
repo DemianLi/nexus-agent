@@ -4,7 +4,7 @@
  * **全部選填**：一個參數都不帶就是整份，跟以前一樣，沒升級的呼叫端照舊。
  *
  * - **一頁**：`limit` 條，接在 `cursor` 之後；還有就回 `nextCursor`。游標記的是上一頁最後一列的 `(updatedAt, threadId)`，
- *   不是第幾條：翻頁之間有一條講了話跳到最前面，後面的不會因此重複或漏掉。
+ *   不是第幾條：翻頁之間有一條講了話跳到最前面，其餘的不重複也不漏；跳走的那一條若還沒翻到，這一趟就不會再出現。
  * - **只比標題**（`q`）：規則同側欄（{@link threadTitleMatches}），在 server 上比，翻到哪一頁都比得到整份。
  * - **封存**（`archived`）：`exclude` 不列封存的、`only` 只列封存的。不帶就不分。
  * - **指定幾條**（`id`，可重複）：只回這幾條裡列得出來的，順序照列表。跟上面幾個不能一起用。
@@ -33,7 +33,7 @@ export interface ThreadListQuery {
   readonly ids?: readonly string[];
 }
 
-/** 側欄與 server 共用的標題比對：去頭尾空白、不分大小寫、子字串；沒有標題的不算對上。 */
+/** 側欄與 server 共用的標題比對：去頭尾空白、不分大小寫、子字串；沒有標題的不算對上。查詢是空的（含只有空白）就全部對上。 */
 export function threadTitleMatches(title: string | undefined, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase();
   if (needle === '') return true;
