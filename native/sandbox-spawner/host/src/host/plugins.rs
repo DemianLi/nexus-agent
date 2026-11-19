@@ -158,6 +158,34 @@ mod tests {
         assert!(parsed("[]").unwrap().is_empty());
     }
 
+    /// 共用樣本 `host-plugins-vectors.json`：TS 的 `hostPluginRows` 產生的清單（`apps/harness/src/host-plugins-file.test.ts`
+    /// 對同一份比對），宿主要整份收下，而且每一列都過得了 `mcp` 插件的 `build`。
+    #[test]
+    fn harness_generated_lists_are_accepted() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../host-plugins-vectors.json");
+        let vectors: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).expect("樣本檔")).expect("樣本是 JSON");
+        let cases = vectors["cases"].as_array().expect("cases");
+        assert!(!cases.is_empty());
+        let specs: &[&'static Spec] = &[&crate::mcp::service::SPEC];
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let file = &case["file"];
+            let rows = parse(&serde_json::to_vec(file).unwrap(), specs)
+                .unwrap_or_else(|err| panic!("{name}：{err}"));
+            assert_eq!(rows.len(), file.as_array().unwrap().len(), "{name}");
+            for row in rows {
+                let Row::Plugin { spec, config, .. } = row else {
+                    panic!("{name}：清單不產生 group");
+                };
+                assert_eq!(spec.name, "mcp", "{name}");
+                if let Err(err) = (spec.build)(&config) {
+                    panic!("{name}：mcp 插件不收這份設定：{}", err.0);
+                }
+            }
+        }
+    }
+
     #[test]
     fn intercept_is_refused_with_its_card() {
         let err = parsed(r#"[{"name":"a"},{"name":"a","intercept":{}}]"#).unwrap_err();

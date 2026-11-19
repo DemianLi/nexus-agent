@@ -112,6 +112,11 @@ interface StartOptions {
   readonly liveBaseUrl?: string;
   /** 加在 serve 後面的旗標，對話行程也收（`CONVERSATION_FLAGS`）。 */
   readonly serveArgs?: readonly string[];
+  /**
+   * 啟動器寫完 `host-plugins.json`、換成監督行程之前，包裝腳本先跑的一段 shell（`$NEXUS_AGENT_HOME` 是 harness home）。
+   * 啟動器每次啟動都整份重寫清單，測試放在 home 的檔到不了宿主；要讓宿主讀到特定內容，只能在這裡之後蓋。
+   */
+  readonly beforeSupervisor?: string;
 }
 
 async function start(
@@ -127,10 +132,14 @@ async function start(
   // 監督行程的旗標由啟動器組，測試要加的經一支 `exec` 包裝：pid 不變，`childrenRunning` 照樣找得到子行程。
   // 啟動器在 `supervisorBinary` 旁邊找宿主，所以包裝旁邊也要有一個。
   let supervisorBinary = SUPERVISOR!;
-  if (supervisorArgs.length > 0) {
+  if (supervisorArgs.length > 0 || options.beforeSupervisor !== undefined) {
     supervisorBinary = join(dir, 'supervisor-wrapper.sh');
     const quoted = [SUPERVISOR!, ...supervisorArgs].map((arg) => `'${arg}'`).join(' ');
-    await writeFile(supervisorBinary, `#!/bin/sh\nexec ${quoted} "$@"\n`, { mode: 0o755 });
+    await writeFile(
+      supervisorBinary,
+      `#!/bin/sh\n${options.beforeSupervisor ?? ''}\nexec ${quoted} "$@"\n`,
+      { mode: 0o755 },
+    );
     await symlink(join(dirname(SUPERVISOR!), 'nexus-host'), join(dir, 'nexus-host'));
   }
   const rows = `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${supervisorBinary}\n${extraRows}`;
@@ -994,13 +1003,33 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', 
     expect(replies(await turn(client, 'thread-h', '再一輪'))).toEqual(['第二輪。']);
   }, 180_000);
 
-  it('home 底下的 host-plugins.json 壞了：宿主起不來，整台以 5 結束、stderr 寫明宿主設定壞了', async () => {
-    const running = await start([], '', async (home) => {
-      await writeFile(join(home, HOST_PLUGINS_FILE), '{ 不是 JSON', 'utf8');
+  it('宿主讀到的 host-plugins.json 壞了：宿主起不來，整台以 5 結束、stderr 寫明宿主設定壞了', async () => {
+    // 啟動器會整份重寫 home 裡的清單，所以壞檔要在它寫完之後、監督行程起宿主之前蓋上去（包裝腳本）。
+    const running = await start([], '', undefined, [], {
+      beforeSupervisor: `printf '%s' '{ 不是 JSON' > "$NEXUS_AGENT_HOME/${HOST_PLUGINS_FILE}"`,
     });
     const code = await new Promise<number | null>((resolve) => running.child.once('exit', resolve));
     expect(code).toBe(5);
     expect(running.log()).toContain('宿主設定壞了');
+  }, 180_000);
+
+  it('home 底下的 host-plugins.json 是手放的壞檔：啟動器照環境重寫，整台照常起來', async () => {
+    const running = await start([{ content: '好。' }], '', async (home) => {
+      await writeFile(join(home, HOST_PLUGINS_FILE), '{ 不是 JSON', 'utf8');
+    });
+    const client = await clientOf(await running.loginUrl(1));
+    expect(replies(await turn(client, 'thread-p', '你好'))).toEqual(['好。']);
+    expect(running.log()).not.toContain('宿主設定壞了');
+  }, 180_000);
+
+  it('host-plugins.json 的位置被一個目錄佔住、清單寫不進去：serve 起不來，錯誤指名那個檔', async () => {
+    const running = await start([], '', async (home) => {
+      await mkdir(join(home, HOST_PLUGINS_FILE));
+    });
+    const code = await new Promise<number | null>((resolve) => running.child.once('exit', resolve));
+    expect(code).not.toBe(0);
+    expect(running.log()).toContain('寫不了宿主的插件清單');
+    expect(running.log()).toContain(HOST_PLUGINS_FILE);
   }, 180_000);
 });
 
