@@ -9,7 +9,8 @@
  * 載入了一頁，這裡的數字照樣等於 frame 的值（`cost-view.test.ts`）。`entries` 只用來數壓縮次數與找背景子代理，兩者都標明
  * 「只算已載入的」。
  *
- * **口徑不在畫面上**，在 `docs/operations.md`〈成本與觀測分頁的口徑與限制〉：這一版不畫金額、完成率、「本輪」與工具次數。
+ * **口徑寫在畫面上**（{@link COST_LIMITS}）：這一版不畫金額（端點不回報單價）、不畫完成率（沒有任務成功的判準）、不畫
+ * 「本輪」與工具次數（`sessionStats` 沒有工具次數這一格、也沒有逐輪的值），這些要有用量投影才有。
  *
  * @module
  */
@@ -32,6 +33,44 @@ import {
 } from '@/shared/lib/usage-view';
 
 export type CostRow = readonly [label: string, value: string];
+
+/** 分頁頂上那一句。 */
+export const COST_HEADLINE = '第 0 版：只用現有的總帳，不畫金額、不畫完成率';
+
+export const COST_LIMITS_HEADING = '口徑';
+
+/**
+ * 這一版數字的口徑，全部寫在畫面上。`key` 是 `data-limit`，測試用它對。
+ *
+ * - `scope`：主對話那份總帳的缺口，出處在 `packages/nexus-core/src/token-usage.ts` 檔頭（生摘要那次不進帳、供應商沒報用量的
+ *   呼叫不進帳）與 `apps/harness/src/session-title-llm.ts`（標題呼叫在 agent 之外，不寫 `model/usage`）。失敗與中止的呼叫
+ *   在 #1022 之後會進帳（供應商在串流裡報過用量的那些），所以這句不再說它們不算。
+ * - `time`：模型耗時含重試退避與失敗呼叫的時間；工具耗時不含等人核准（`session-totals.ts`）。
+ */
+export const COST_LIMITS = {
+  scope:
+    '這裡的 token 只是主對話那一份總帳：不含任何子代理（背景的在下面分列，前景的目前沒有數字）、不含生摘要的那一次、不含生標題的那一次；失敗或中止的呼叫算在裡面，但供應商沒報用量的不在（燒了多少不知道，所以是下限）。',
+  input:
+    '合計是各項相加就是整筆帳：這台 server 有分快取時，輸入只算未快取的部分，快取讀、快取寫另列；沒分的話輸入含快取讀取。',
+  cache:
+    '快取命中率是快取讀佔整筆輸入的比例（快取讀 ÷ 未快取、快取讀、快取寫相加），整段帳加起來算，不是各輪比例的平均；有一個快取桶沒記就寫「沒記」，不寫 0%；兩個都沒記就不畫。',
+  time: '模型耗時含重試退避與失敗呼叫的時間；工具耗時不含等人核准。',
+  loaded:
+    '壓縮次數與背景子代理的分列只算已載入的對話：更早的在對話裡上捲、載入之後才會出現在這裡。',
+  subagent: '背景子代理的數字是讀取當下的，它還在跑就會繼續增加；按「重新讀取」更新。',
+  absent:
+    '沒有金額（端點不回報單價）、沒有完成率（沒有任務成功的判準），也沒有逐輪與工具次數：這幾項要有用量投影才畫得出來，這台伺服器沒給。',
+} as const;
+
+/**
+ * 要畫的口徑清單。**`cache` 那一句只在畫了命中率時才有**（{@link cacheHitRate} 不是 `undefined`）：沒有快取數字的 server 上
+ * 多一句講不存在的東西，只是雜訊。
+ */
+export function costLimits(tokenUsage: WireTokenUsage | null): Readonly<Record<string, string>> {
+  if (cacheHitRate(usageBuckets(tokenUsage)) !== undefined) return COST_LIMITS;
+  const { cache: _unused, ...rest } = COST_LIMITS;
+  return rest;
+}
 
 export interface UsageSections {
   /** token 那一段；一次都沒有回報用量（輸入輸出都是 0）就沒有。 */
@@ -97,14 +136,6 @@ export function contextRows(pressure: WireContextPressure | null): readonly Cost
         [row.type === 'tokens' ? 'token 門檻' : '訊息門檻', row.text] as const satisfies CostRow,
     ),
   ];
-}
-
-/** 「目前的 context」那一段：context 的列（有的話）加上已載入的壓縮次數，所以這一段一定有列。 */
-export function contextSectionRows(
-  pressure: WireContextPressure | null,
-  compactions: number,
-): readonly CostRow[] {
-  return [...(contextRows(pressure) ?? []), ['已載入的壓縮次數', `${compactions} 次`]];
 }
 
 /** 已載入的壓縮次數。 */
