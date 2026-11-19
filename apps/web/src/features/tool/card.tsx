@@ -36,7 +36,6 @@ import {
 import { outputOf } from '@/shared/lib/tool-output';
 import { toStep } from '@/features/tool/step';
 import { classifyTool } from '@/features/tool/view';
-import { hasOwnTitle } from '@/features/tool/tools';
 
 export { TOOL_STATUS_LABEL } from '@/features/tool/step';
 
@@ -163,10 +162,8 @@ export function ToolCard({
         onOpenChange={setOpen}
         trailing={
           <>
-            {/* 標題不是這支工具專屬的（{@link hasOwnTitle}）才補工具名；手機寬度讓給摘要（#625 實機）。 */}
-            {!hasOwnTitle(entry.name) && (
-              <code className="hidden shrink-0 font-mono text-tip sm:inline">{entry.name}</code>
-            )}
+            {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的（#625 實機）。 */}
+            <code className="hidden shrink-0 font-mono text-tip sm:inline">{entry.name}</code>
             {view.todoExtra > 0 && (
               <span className="shrink-0 text-tip" data-testid="todo-extra">
                 <span aria-hidden>+{view.todoExtra}</span>

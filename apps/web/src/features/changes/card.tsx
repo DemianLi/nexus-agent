@@ -64,7 +64,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
           className="text-muted-foreground group-hover/pressable:text-foreground size-5 shrink-0"
           aria-hidden
         />
-        <span className="min-w-0 flex-1 font-medium">{`${total} 個檔案`}</span>
+        <span className="min-w-0 flex-1 font-medium">{`${total} 個檔案有改動`}</span>
         <DiffStats added={added} removed={deleted} />
       </Pressable>
       <ul className="flex flex-col px-1 pb-1">
@@ -96,7 +96,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
           )}
           {unlisted > 0 && (
             // 摘要有上限；總數與總行數含沒列出來的那些。
-            <span className="text-muted-foreground px-2 text-tip">{`另有 ${unlisted} 個未列出`}</span>
+            <span className="text-muted-foreground px-2 text-tip">{`另有 ${unlisted} 個檔沒有列出`}</span>
           )}
         </div>
       )}

@@ -268,7 +268,9 @@ describe('交付卡片歸到輪尾', () => {
     const card = screen.getByRole('region', { name: '這一輪交付的檔案，共 1 個' });
     const reply1 = screen.getByTestId('ai-entry');
     expect(reply1.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(card).getByTestId('deliverable').textContent).toBe('report.pdfout季報');
+    expect(within(card).getByTestId('deliverable').textContent).toBe(
+      'report.pdf季報out/report.pdf',
+    );
   });
 
   it('兩個 store 有交到卡片手上（#452）——沒交到的話那兩顆鈕就不見了', () => {

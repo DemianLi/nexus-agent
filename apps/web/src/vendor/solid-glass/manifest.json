@@ -194,13 +194,12 @@
     "components/ui/tool-steps.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/tool-steps.tsx",
-      "sha256": "ad785acee70820709d144d409ea34d3ed61eec3c2dc3fdda0b58d4ce3c96c840",
+      "sha256": "f7eaf97d65c6fb20cc371034bf1439e19943c38943d5a3a89d085a3121039636",
       "patches": [
         "patches/0016-tool-steps-strict-index.patch",
         "patches/0017-tool-steps-controlled-open.patch",
         "patches/0018-tool-steps-slots.patch",
-        "patches/0019-tool-steps-output-focus.patch",
-        "patches/0028-tool-steps-hide-label.patch"
+        "patches/0019-tool-steps-output-focus.patch"
       ],
       "upstreamSha256": "65d161ca73c2c6ace8782302db0557ef4c101e39c78513f9de3dd00bb986f7bb"
     },

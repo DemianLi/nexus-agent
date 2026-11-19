@@ -50,13 +50,6 @@ export function basename(path: string): string {
   return at === -1 ? path : path.slice(at + 1);
 }
 
-/** {@link basename} 前面那一截，不含最後的分隔符；沒有目錄是 `undefined`，在根目錄底下是那個分隔符。 */
-export function dirname(path: string): string | undefined {
-  const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  if (at === -1) return undefined;
-  return at === 0 ? path.slice(0, 1) : path.slice(0, at);
-}
-
 /** 收著時那一行：檔名接起來；多於一個時補總數。 */
 export function presentSummary(files: readonly PresentedFile[]): string {
   if (files.length === 0) return '沒有檔案';

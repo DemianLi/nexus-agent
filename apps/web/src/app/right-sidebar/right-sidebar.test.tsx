@@ -138,7 +138,7 @@ const panel = () => screen.getByTestId('right-sidebar');
 const tabNames = () => screen.getAllByRole('tab').map((tab) => tab.textContent);
 const cardHeader = (seq: number) =>
   within(screen.getAllByTestId('changes')[seq === 7 ? 0 : 1]!).getByRole('button', {
-    name: /^\d+ 個檔案/,
+    name: /個檔案有改動/,
   });
 
 function saved(threadId = 't'): SidebarLayout | undefined {
@@ -209,7 +209,7 @@ describe('從卡片打開', () => {
     ).toBe('true');
   });
 
-  it('改動分頁的標題：一個檔不寫「等」；滑鼠移上去只列路徑，沒列出的數量不在這裡講', () => {
+  it('改動分頁的標題：一個檔不寫「等」；滑鼠移上去列出全部', () => {
     expect(changesTabTitle(undefined)).toEqual({ label: '改動', detail: undefined });
     expect(changesTabTitle({ files: [{ display: 'a/b.ts' }], total: 1 })).toEqual({
       label: '改動 · b.ts',
@@ -217,7 +217,7 @@ describe('從卡片打開', () => {
     });
     expect(
       changesTabTitle({ files: [{ display: 'a/b.ts' }, { display: 'c.ts' }], total: 5 }).detail,
-    ).toBe('a/b.ts\nc.ts');
+    ).toBe('a/b.ts\nc.ts\n另有 3 個檔沒有列出');
   });
 });
 

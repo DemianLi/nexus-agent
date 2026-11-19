@@ -32,7 +32,11 @@ export function changesTabTitle(
   if (summary === undefined || first === undefined) return { label: '改動', detail: undefined };
   const name = basename(first.display);
   const label = summary.total > 1 ? `改動 · ${name} 等 ${summary.total} 個` : `改動 · ${name}`;
-  const detail = summary.files.map((file) => file.display).join('\n');
+  const unlisted = summary.total - summary.files.length;
+  const detail = [
+    ...summary.files.map((file) => file.display),
+    ...(unlisted > 0 ? [`另有 ${unlisted} 個檔沒有列出`] : []),
+  ].join('\n');
   return { label, detail };
 }
 

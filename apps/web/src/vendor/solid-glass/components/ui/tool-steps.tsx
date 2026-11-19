@@ -31,18 +31,16 @@ function OutputBlock({
   label,
   text,
   tone,
-  hideLabel,
   className,
 }: {
   label: string
   text: string
   tone?: "error"
-  hideLabel?: boolean
   className?: string
 }) {
   return (
     <div data-slot="output-block" className={cn("glass-panel overflow-hidden rounded-md", className)}>
-      {!hideLabel && <div className="border-b border-border/70 px-3 py-1 text-[11px] text-muted-foreground">{label}</div>}
+      <div className="border-b border-border/70 px-3 py-1 text-[11px] text-muted-foreground">{label}</div>
       <pre
         tabIndex={0}
         aria-label={label}
@@ -108,11 +106,11 @@ function StepRow({
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {step.detail && <OutputBlock label={step.detailLabel ?? words.detail} text={step.detail} hideLabel />}
+            {step.detail && <OutputBlock label={step.detailLabel ?? words.detail} text={step.detail} />}
             {step.error ? (
               <OutputBlock label={words.error} text={step.error} tone="error" />
             ) : (
-              step.output && <OutputBlock label={words.output} text={step.output} hideLabel />
+              step.output && <OutputBlock label={words.output} text={step.output} />
             )}
             {children}
           </div>
