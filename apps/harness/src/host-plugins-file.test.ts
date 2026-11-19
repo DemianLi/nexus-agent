@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,19 +35,19 @@ describe('hostPluginRows', () => {
     ]);
   });
 
-  it('有根有代理：proxy 用 TS 同一份解法，帶上併入本機項目的 noProxy，不帶 source', () => {
+  it('有根有代理：proxy 整個物件照 TS 同一份解法，noProxy 是使用者寫的加上本機項目，不帶 source', () => {
     const [row] = hostPluginRows({
       NODE_EXTRA_CA_CERTS: '/etc/ca.pem',
       HTTPS_PROXY: 'http://proxy.example:3128',
       NO_PROXY: 'intranet.example',
     });
-    expect(row?.config.roots).toBe('/etc/ca.pem');
-    expect(row?.config.proxy).toMatchObject({
-      httpsProxy: 'http://proxy.example:3128',
-      noProxy: expect.stringContaining('intranet.example') as string,
+    expect(row?.config).toEqual({
+      roots: '/etc/ca.pem',
+      proxy: {
+        httpsProxy: 'http://proxy.example:3128',
+        noProxy: 'intranet.example,localhost,127.0.0.1,::1,[::1]',
+      },
     });
-    expect(row?.config.proxy).not.toHaveProperty('source');
-    expect(row?.config.proxy).not.toHaveProperty('httpProxy');
   });
 
   it('只設 ALL_PROXY：兩個協定都用它，跟 TS 的解法一致', () => {
@@ -66,6 +67,36 @@ describe('hostPluginRows', () => {
       HTTPS_PROXY: 'socks5://proxy.example:1080',
     });
     expect(row?.config).toEqual({ roots: '/etc/ca.pem' });
+  });
+});
+
+interface PluginVectors {
+  readonly cwd: string;
+  readonly cases: readonly {
+    readonly name: string;
+    readonly env: Record<string, string>;
+    readonly file: readonly unknown[];
+  }[];
+}
+
+describe('共用樣本 host-plugins-vectors.json（宿主的 plugins::parse 讀同一份）', () => {
+  const vectors = JSON.parse(
+    readFileSync(
+      new URL('../../../native/sandbox-spawner/host-plugins-vectors.json', import.meta.url),
+      'utf8',
+    ),
+  ) as PluginVectors;
+
+  it('每個案例的產出等於樣本，寫成檔再讀回也一樣', async () => {
+    expect(vectors.cases.length).toBeGreaterThan(0);
+    const dir = await tempDir();
+    for (const { name, env, file } of vectors.cases) {
+      const rows = hostPluginRows(env, vectors.cwd);
+      expect(rows, name).toEqual(file);
+      const path = join(dir, 'host-plugins.json');
+      writeHostPluginsFile(path, rows);
+      expect(JSON.parse(await readFile(path, 'utf8')), name).toEqual(file);
+    }
   });
 });
 
