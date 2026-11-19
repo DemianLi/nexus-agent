@@ -47,8 +47,6 @@ export interface ThreadFeedOptions {
   readonly warn?: (message: string) => void;
   /** `added` 的時間；預設 `Date.now`。 */
   readonly now?: () => number;
-  /** 接上一條、或它講了任何一件之後叫（#725：per-thread 前台的列表索引靠它知道哪一條動過）。不能拋。 */
-  readonly onActivity?: (threadId: string) => void;
 }
 
 /**
@@ -65,7 +63,6 @@ export class ThreadFeed {
   readonly #maxQueuedBytes: number;
   readonly #warn: ((message: string) => void) | undefined;
   readonly #now: () => number;
-  readonly #onActivity: ((threadId: string) => void) | undefined;
   readonly #pumps = new Map<string, FeedSource>();
   readonly #subscribers = new Set<FeedSubscriber>();
   #closed = false;
@@ -74,7 +71,6 @@ export class ThreadFeed {
     this.#maxQueuedBytes = options.maxQueuedBytes ?? DEFAULT_DOWNLINK_MAX_BYTES;
     this.#warn = options.warn;
     this.#now = options.now ?? Date.now;
-    this.#onActivity = options.onActivity;
   }
 
   /**
@@ -86,10 +82,8 @@ export class ThreadFeed {
     const threadId = pump.threadId;
     this.#pumps.set(threadId, pump);
     const unwatch = pump.watch((activity: PumpActivity) => {
-      this.#onActivity?.(threadId);
       this.#broadcast({ ...activity, threadId } as ThreadFeedFrame);
     });
-    this.#onActivity?.(threadId);
     this.#broadcast({ type: 'added', threadId, updatedAt: this.#now() });
     return () => {
       unwatch();
