@@ -1751,7 +1751,7 @@ export async function openTraceSteps(page: Page): Promise<void> {
 
 /**
  * 會話清單頁的時鐘（#2051）：夾具的更新時間是 `Date.now()` 往前推，第二行印成 zh-TW 的時刻，字寬隨時刻變。
- * 釘住之後每次量到的字寬一樣；第二行只剩時間（#3038），在兩種寬度都放得下。
+ * 釘住之後每次量到的字寬一樣；第二行是時間（#3038），在兩種寬度都放得下。
  */
 export const THREAD_CLOCK = {
   at: new Date('2026-10-26T12:00:00+08:00'),

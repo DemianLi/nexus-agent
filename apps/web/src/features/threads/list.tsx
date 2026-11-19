@@ -81,7 +81,7 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  *
  * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
  * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
- * 自動展開）。沒給就跟以前一樣，什麼都不多畫。規則與開關見 `features/threads/management.ts`。
+ * 自動展開）。沒給就什麼都不多畫。規則與開關見 `features/threads/management.ts`。
  *
  * **每組先畫幾條**（[#2960](https://github.com/DemianLi/nexus-agent/issues/2960)）：時間組、搜尋結果、已封存每組先 10 條，組尾「顯示更多」，
  * 規則在 `features/threads/show-more.ts`。釘選區全畫。水位跟著搜尋字記：換了搜尋字就當成沒按過；側欄收起時清單卸掉，也回到起點。
@@ -269,7 +269,7 @@ export function ThreadList({
     needle,
     current === undefined || 'fallback' in current ? undefined : current,
   );
-  // 沒有 `management` 時全部歸「其餘」：畫面跟以前一樣。
+  // 沒有 `management` 時全部歸「其餘」：不分釘選與封存。
   const sections =
     management === undefined
       ? { pinned: [], rest: view.items, archived: [] }
@@ -349,7 +349,7 @@ export function ThreadList({
             <>
               {/* 有字才有 ×（#1307，比對文件 C6）：按下清空、焦點留在搜尋框，接著打字。Esc 照舊也是清空。
                   瀏覽器自己的 search 清除鈕藏起來：它沒有名字、Tab 走不到，兩顆 × 並排也不對。 */}
-              {/* 放大鏡講「這是搜尋」，提示字只在範圍縮小（只比標題）時多講一次（#3038 第 6 項）；圖示同 SG `command` 的搜尋框。 */}
+              {/* 放大鏡講「這是搜尋」；伺服器還沒回過一次內容搜尋（`on`）時提示字寫「搜尋標題」（#3038 第 6 項）。圖示同 SG `command` 的搜尋框。 */}
               <div className="relative mb-1">
                 <Search
                   aria-hidden
@@ -470,7 +470,7 @@ export function ThreadList({
               )}
             </>
           )}
-          {/* 原因（讀不懂或格式比這台 server 新）寫在 `docs/operations.md`〈會話日誌〉，畫面上只講數量。 */}
+          {/* 原因寫在 `docs/operations.md`「N 份無法顯示」那一條，畫面上只講數量。 */}
           {listing.result.unreadable > 0 && (
             <p className="text-muted-foreground px-2 text-tip">
               {listing.result.unreadable} 份無法顯示
@@ -645,7 +645,7 @@ function LimitedRows<T>({
   const hidden = items.length - shown;
   return (
     <>
-      <SidebarMenu ref={listRef}>{items.slice(0, shown).map(row)}</SidebarMenu>
+      <SidebarMenu ref={listRef}>{items.slice(0, shown).map((item) => row(item))}</SidebarMenu>
       {hidden > 0 && (
         <Button
           type="button"

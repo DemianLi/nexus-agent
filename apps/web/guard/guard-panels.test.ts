@@ -1341,7 +1341,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
           expect(row.titleWidth).toBeGreaterThanOrEqual(150);
           expect(row.ownLine).toBe(true);
         }
-        // 第二行只剩時間（#3038 第 1–3 項）：在 THREAD_CLOCK 那個時刻每列都放得下，連目前這條也是。
+        // 第二行是時間（#3038 第 1–3 項）：在 THREAD_CLOCK 那個時刻每列都放得下。
         expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([]);
 
         // 報讀名稱用瀏覽器算的（ariaSnapshot）：狀態字只出現一次。

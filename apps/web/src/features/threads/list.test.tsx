@@ -415,6 +415,16 @@ describe('釘選、封存、改名（#633）', () => {
     expect(menuItems()).toEqual(['重新命名', '取消封存']);
   });
 
+  it('已釘選與已封存不分時間組，列上寫完整的日期時刻（#3038 第 3 項）', () => {
+    renderManaged(managed({ pinnedIds: ['c'], archivedIds: new Set(['b']) }).management);
+    const archived = screen.getByTestId('thread-archived');
+    fireEvent.click(within(archived).getByRole('button', { name: '已封存（1）' }));
+    const full = new Date(NOW).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+    for (const section of [screen.getByTestId('thread-pinned'), archived]) {
+      expect(within(section).getByTestId('thread-time').textContent).toBe(full);
+    }
+  });
+
   it('搜尋時封存區自動展開，命中的封存會話看得到', () => {
     renderManaged(managed({ archivedIds: new Set(['b']) }).management);
     expect(screen.queryByText('讀規格')).toBeNull();
