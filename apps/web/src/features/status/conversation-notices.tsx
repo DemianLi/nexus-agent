@@ -1,9 +1,8 @@
 /**
- * 對話區最上面那一塊（狀態列與換線、舊格式、歷史拿不回來的那幾句），從 `app/App.tsx` 的會話畫面拆出來，獨立頁面與嵌入版
+ * 對話區最上面那一塊（換線、舊格式、歷史拿不回來的那幾句；狀態列在輸入框上緣，見 `conversation-status.tsx`），從 `app/App.tsx` 的會話畫面拆出來，獨立頁面與嵌入版
  * 共用（#2366）。`LEGACY_THREAD_NOTICE` 由 `app/App.tsx` 再匯出，原本從那裡讀它的測試照舊。
  */
 
-import { StatusLine } from '@/features/status/line';
 import type { Conversation, ConversationLink } from '@/shared/connection/use-conversation';
 import { refusalText } from '@/shared/connection/refusal-text';
 
@@ -15,7 +14,7 @@ export const LEGACY_THREAD_NOTICE =
   '這條會話是舊格式：模型的回覆沒有保存，底下只有你打的字與工具卡；模型也不記得之前的對話，從空的開始。';
 
 /**
- * 對話區最上面那一塊：狀態列，加上這條 thread 從哪來、歷史拿不拿得回來的那幾句。
+ * 對話區最上面那一塊：這條 thread 從哪來、歷史拿不拿得回來的那幾句。
  *
  * @param notice - 換到這條時要講的那一句（接著上一次、切過來、分叉）；沒有就不講。
  */
@@ -23,37 +22,12 @@ export function ConversationNotices({
   conversation,
   notice,
 }: {
-  readonly conversation: ConversationLink &
-    Pick<
-      Conversation,
-      'state' | 'history' | 'historyError' | 'commandError' | 'slashError' | 'slashNotice'
-    >;
+  readonly conversation: Pick<ConversationLink, 'refusal'> &
+    Pick<Conversation, 'history' | 'historyError'>;
   readonly notice: string | undefined;
 }) {
   return (
     <div className="space-y-1">
-      <StatusLine
-        state={conversation.state}
-        connected={conversation.connected}
-        slowConnect={conversation.slowConnect}
-        opening={conversation.opening}
-        {...(conversation.connectionError === undefined
-          ? {}
-          : { connectionError: conversation.connectionError })}
-        {...(conversation.refusal === undefined ? {} : { refusal: conversation.refusal })}
-        {...(conversation.commandError === undefined
-          ? {}
-          : { commandError: conversation.commandError })}
-        {...(conversation.slashError === undefined ? {} : { slashError: conversation.slashError })}
-        {...(conversation.slashNotice === undefined
-          ? {}
-          : { slashNotice: conversation.slashNotice })}
-        {...(conversation.reconnecting === undefined
-          ? {}
-          : { reconnecting: conversation.reconnecting })}
-        recovered={conversation.recovered}
-        onReconnect={conversation.reconnectNow}
-      />
       {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。
           伺服器不收這條下行時（thread 數滿了）不講「接著上一次／之前的對話回來了」：跟狀態列的「打不開」矛盾（#1483）。 */}
       {notice !== undefined && conversation.refusal === undefined && (

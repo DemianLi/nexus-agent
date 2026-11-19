@@ -1,6 +1,9 @@
 /**
  * 這一輪跑到哪了。
  *
+ * **位置在輸入框（或待決面板）的上緣**（#3035 結論 D）：連線、拒絕、失敗、`/` 指令的話都在這一格。待決由面板名稱列講、
+ * 就緒不必講，這兩種只給讀屏，`min-h-lh` 照樣佔一行：換狀態時底下的面板不跳（#1684）。
+ *
  * `awaiting-input` **不是結束**：基座在中斷時照樣發 `lifecycle completed / root`，
  * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在換手層的面板上，這一行只說它在等人。
  *
@@ -21,7 +24,7 @@
  * **執行中帶經過時間**（[#1308](https://github.com/DemianLi/nexus-agent/issues/1308)）：從 server 記下的這一輪開始時刻起算
  * （`features/status/running-turn.ts`），用回應的 `Date` 標頭換算兩邊的時鐘差（`shared/connection/server-clock.ts`），所以重新整理不歸零。每秒跳，
  * **放在 live region 外面、而且 `aria-hidden`**：放裡面的話報讀器每秒重唸一次（所以不放進 TurnStatus 的 `trailing`：它也在
- * live region 裡）。只跟著「執行中」出現——停在核准點時這一格唸的是面板名稱；核准後續接，時間從第一段接著算，含等人的那段
+ * live region 裡）。只跟著「執行中」出現——停在核准點時這一格只給讀屏唸面板的 `aria-label`；核准後續接，時間從第一段接著算，含等人的那段
  * （同觀測分頁的牆鐘）。滿 1 秒才畫（照 SG）。
  */
 
@@ -223,15 +226,17 @@ export function StatusLine({
   }
   const pending = state.pendings[0];
   if (state.status === 'awaiting-input' && pending !== undefined) {
-    // **唸的是換手層上那一個面板的名稱**（§8）：面板出現不另開 live region，名稱與面板的 `aria-label` 同一句，
+    // **唸的是換手層上那一個面板的 `aria-label`**（§8）：面板出現不另開 live region。看得到的由面板名稱列講，這裡只給讀屏；
     // 帶跨面板進度「（1／2）」——兩種中斷混著掛時，進度讓人知道後面還有幾個。
     return (
-      <p className="text-body" role="status">
-        {pendingLabel(
-          pending,
-          { index: 0, total: state.pendings.length },
-          pendingAsker(state, pending)?.label,
-        )}
+      <p className="text-body min-h-lh" role="status">
+        <span className="sr-only">
+          {pendingLabel(
+            pending,
+            { index: 0, total: state.pendings.length },
+            pendingAsker(state, pending)?.label,
+          )}
+        </span>
       </p>
     );
   }
@@ -256,13 +261,17 @@ export function StatusLine({
     );
   }
   return (
-    <p className="text-muted-foreground text-body" role="status">
-      {/* 已停止不是失敗（#276）：人按的、時間到停下的都不用紅字；兩種分開講（#1631）。 */}
-      {state.status === 'stopped'
-        ? stoppedByTurnClock(state.stopCause)
-          ? TIMED_OUT_STATUS_TEXT
-          : STOPPED_STATUS_TEXT
-        : '就緒'}
+    <p className="text-muted-foreground text-body min-h-lh" role="status">
+      {/* 已停止不是失敗（#276）：人按的、時間到停下的都不用紅字；兩種分開講（#1631）。就緒只給讀屏（#3035）。 */}
+      {state.status === 'stopped' ? (
+        stoppedByTurnClock(state.stopCause) ? (
+          TIMED_OUT_STATUS_TEXT
+        ) : (
+          STOPPED_STATUS_TEXT
+        )
+      ) : (
+        <span className="sr-only">就緒</span>
+      )}
     </p>
   );
 }

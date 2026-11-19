@@ -881,10 +881,10 @@ describe('核准請求', () => {
     const panel = await screen.findByTestId('approval-card');
     expect(within(panel).queryByRole('button', { name: '全部核准' })).toBeNull();
     expect(within(panel).queryByRole('button', { name: '全部拒絕' })).toBeNull();
-    // 原始中斷先摺著。
-    expect(within(panel).queryByText('alpha')).toBeNull();
+    // 原始中斷先摺著；工具名由面板名稱列講（#3035），摺著的是參數。
+    expect(within(panel).queryByText(/"n": "alpha"/)).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: '原始中斷內容' }));
-    expect(await within(panel).findByText('alpha')).toBeTruthy();
+    expect(await within(panel).findByText(/"n": "alpha"/)).toBeTruthy();
 
     fireEvent.click(within(panel).getByRole('button', { name: '停止這一輪' }));
     await waitFor(() => expect(cancels).toHaveLength(1));

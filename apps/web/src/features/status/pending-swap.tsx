@@ -3,7 +3,9 @@
  *
  * - **輸入框隱藏不卸載**：`hidden`＋`inert`，草稿還在呼叫端的 state 裡、游標與選單也不重來。原型的 `Swap` 會卸載，
  *   不能照抄。
- * - **同時只一個面板、先來先處理**：畫 `pendings` 的第一顆；面板名稱帶跨面板進度「（1／2）」（`pendingLabel`）。
+ * - **同時只一個面板、先來先處理**：畫 `pendings` 的第一顆；面板名稱帶跨面板進度「（1／2）」。
+ * - **待決由名稱列講**（#3035 結論 D）：看得到的是縮寫（`pendingHead`：「等待核准」＋工具名標籤＋「・子代理」＋進度），
+ *   `aria-label` 是狀態列唸的那一句全句（`pendingLabel`），狀態列在待決時只給讀屏。
  * - **焦點只在本來會丟掉時才搬**，判斷只寫在這裡：焦點在這一區裡（輸入框要被藏起來、上一張面板被拿掉）或已經掉到
  *   body 時才搬；人在別處看工具卡就不搶，由狀態列唸面板名稱。搬到面板時落在面板宣告的位置（`data-pending-focus`，
  *   ⑨ 的當前題），沒有就落在面板本身（`tabIndex=-1`，核准面板不落在按鈕上）；面板收掉時到下一張或回輸入框。
@@ -21,7 +23,8 @@ import { Chevron } from '@/shared/blocks/chevron';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { activeElementOf } from '@/shared/lib/active-element';
-import { pendingLabel } from '@/features/status/pending-label';
+import { pendingHead, pendingLabel } from '@/features/status/pending-label';
+import type { PendingHead } from '@/features/status/pending-label';
 import { isPlanReview } from '@/features/plan';
 
 /** 舊的那一邊淡出多久，要等於 `motion.css` 的 `.motion-swap[data-phase='out']`；淡完才換成新的（§7）。 */
@@ -61,17 +64,8 @@ export function PendingSwap({
   if (current !== undefined) lastShown.current = current;
   const panel = shown === COMPOSER ? undefined : (current ?? lastShown.current);
   const index = panel === undefined ? -1 : pendings.indexOf(panel);
-  const label =
-    panel === undefined
-      ? undefined
-      : pendingLabel(
-          panel,
-          {
-            index: Math.max(0, index),
-            total: Math.max(1, pendings.length),
-          },
-          askerOf?.(panel),
-        );
+  const position = { index: Math.max(0, index), total: Math.max(1, pendings.length) };
+  const asker = panel === undefined ? undefined : askerOf?.(panel);
 
   useEffect(() => {
     if (!leaving) return;
@@ -108,10 +102,11 @@ export function PendingSwap({
         <div hidden={panel !== undefined} inert={panel !== undefined}>
           {composer}
         </div>
-        {panel !== undefined && label !== undefined && (
+        {panel !== undefined && (
           <PendingPanel
             key={panel.interruptId}
-            label={label}
+            label={pendingLabel(panel, position, asker)}
+            head={pendingHead(panel, position, asker)}
             collapsible={panel.kind === 'question' && !isPlanReview(panel.questions)}
             actions={renderActions?.(panel)}
           >
@@ -126,11 +121,13 @@ export function PendingSwap({
 /** 一個面板：名稱列（brand 點、名稱、收起鈕、呼叫端的按鈕）＋內容。每一顆中斷一個，換顆就重來（收起狀態不帶過去）。 */
 function PendingPanel({
   label,
+  head: name,
   collapsible,
   actions,
   children,
 }: {
   readonly label: string;
+  readonly head: PendingHead;
   readonly collapsible: boolean;
   readonly actions: ReactNode;
   readonly children: ReactNode;
@@ -141,7 +138,17 @@ function PendingPanel({
   const head = (
     <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-ui lg:min-h-9">
       <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate" data-testid="pending-head">
+        {name.kind}
+        {name.tools.map((tool, index) => (
+          <span key={`${tool.text}-${index}`}>
+            {index === 0 ? ' ' : '、'}
+            {tool.code ? <code className="font-mono font-medium">{tool.text}</code> : tool.text}
+          </span>
+        ))}
+        {name.asker !== undefined && `・${name.asker}`}
+        {name.position}
+      </span>
       {collapsible && (
         <CollapsibleTrigger
           ref={trigger}
