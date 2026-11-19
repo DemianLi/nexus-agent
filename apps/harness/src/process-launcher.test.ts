@@ -427,11 +427,19 @@ describe('宿主', () => {
     readonly argv?: readonly string[];
     readonly env?: NodeJS.ProcessEnv;
     readonly homeFiles?: Readonly<Record<string, string>>;
+    /** 目前資料夾（專案那層）底下的檔。 */
+    readonly projectFiles?: Readonly<Record<string, string>>;
     /** home 底下要建成目錄的名字。 */
     readonly homeDirs?: readonly string[];
   }): Promise<{ home: string; env: NodeJS.ProcessEnv; thrown: unknown }> {
     const dir = await mkdtemp(join(tmpdir(), 'process-launcher-plugins-'));
     dirs.push(dir);
+    // 專案那層 .env 所在的目錄：指到臨時目錄，不吃跑測試的資料夾，免得本機有 .env 莫名紅。
+    const cwd = join(dir, 'project');
+    await mkdir(cwd);
+    for (const [name, content] of Object.entries(options.projectFiles ?? {})) {
+      await writeFile(join(cwd, name), content);
+    }
     const supervisor = join(dir, 'nexus-supervisor');
     await writeFile(supervisor, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     await writeFile(join(dir, 'nexus-host'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -457,6 +465,7 @@ describe('宿主', () => {
         flag: undefined,
         env,
         platform: 'linux',
+        cwd,
       });
     } catch (error) {
       thrown = error;
@@ -532,6 +541,15 @@ describe('宿主', () => {
     });
     expect(String(thrown)).toContain('NODE_OPTIONS');
     expect(readFileSync(join(home, HOST_PLUGINS_FILE), 'utf8')).toBe(old);
+  });
+
+  it('launchProcessModel：帶 --live 且目前資料夾的 .env 設了代理（專案那層不准設）：啟動器就丟，跟前台同一句', async () => {
+    const { thrown } = await launchOnce({
+      argv: ['--live'],
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+      projectFiles: { '.env': 'HTTPS_PROXY=http://project.corp.test:3128\n' },
+    });
+    expect(String(thrown)).toContain('HTTPS_PROXY');
   });
 
   it('launchProcessModel：.env 讀不了的警告啟動器不印（前台載同一份時印一次）', async () => {
