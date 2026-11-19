@@ -422,9 +422,24 @@ describe('宿主', () => {
     ).toThrow(`找不到宿主（監督行程旁邊的 nexus-host，${join(dir, 'nexus-host')}）`);
   });
 
-  it('launchProcessModel：換成監督行程之前，照啟動環境重寫 host-plugins.json（舊內容不留）', async () => {
+  /** 照 per-thread 啟動一次（`execve` 被攔下）：回 home 與傳進去的環境物件，檔在 `<home>/host-plugins.json`。 */
+  async function launchOnce(options: {
+    readonly argv?: readonly string[];
+    readonly env?: NodeJS.ProcessEnv;
+    readonly homeFiles?: Readonly<Record<string, string>>;
+    /** 目前資料夾（專案那層）底下的檔。 */
+    readonly projectFiles?: Readonly<Record<string, string>>;
+    /** home 底下要建成目錄的名字。 */
+    readonly homeDirs?: readonly string[];
+  }): Promise<{ home: string; env: NodeJS.ProcessEnv; thrown: unknown }> {
     const dir = await mkdtemp(join(tmpdir(), 'process-launcher-plugins-'));
     dirs.push(dir);
+    // 專案那層 .env 所在的目錄：指到臨時目錄，不吃跑測試的資料夾，免得本機有 .env 莫名紅。
+    const cwd = join(dir, 'project');
+    await mkdir(cwd);
+    for (const [name, content] of Object.entries(options.projectFiles ?? {})) {
+      await writeFile(join(cwd, name), content);
+    }
     const supervisor = join(dir, 'nexus-supervisor');
     await writeFile(supervisor, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     await writeFile(join(dir, 'nexus-host'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -433,29 +448,129 @@ describe('宿主', () => {
     );
     const home = join(dir, 'home');
     await mkdir(home);
-    await writeFile(
-      join(home, HOST_PLUGINS_FILE),
-      '[{"name":"mcp","config":{"roots":"/old.pem"}}]',
-    );
+    for (const name of options.homeDirs ?? []) await mkdir(join(home, name));
+    for (const [name, content] of Object.entries(options.homeFiles ?? {})) {
+      await writeFile(join(home, name), content);
+    }
+    const env: NodeJS.ProcessEnv = { NEXUS_AGENT_HOME: home, ...options.env };
     const stop = new Error('execve 被攔下');
     const real = (process as { execve?: unknown }).execve;
     (process as { execve?: unknown }).execve = () => {
       throw stop;
     };
+    let thrown: unknown;
     try {
-      expect(() =>
-        launchProcessModel({
-          argv: ['--patch', patch],
-          flag: undefined,
-          env: { NEXUS_AGENT_HOME: home, NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
-          platform: 'linux',
-        }),
-      ).toThrow(stop);
+      launchProcessModel({
+        argv: ['--patch', patch, ...(options.argv ?? [])],
+        flag: undefined,
+        env,
+        platform: 'linux',
+        cwd,
+      });
+    } catch (error) {
+      thrown = error;
+      if (error !== stop) return { home, env, thrown };
     } finally {
       (process as { execve?: unknown }).execve = real;
     }
-    expect(JSON.parse(readFileSync(join(home, HOST_PLUGINS_FILE), 'utf8'))).toEqual([
-      { name: 'mcp', config: { roots: '/etc/ca.pem' } },
+    return { home, env, thrown: undefined };
+  }
+
+  const pluginsOf = (home: string): unknown =>
+    JSON.parse(readFileSync(join(home, HOST_PLUGINS_FILE), 'utf8'));
+
+  it('launchProcessModel：換成監督行程之前，照啟動環境重寫 host-plugins.json（舊內容不留）', async () => {
+    const { home, thrown } = await launchOnce({
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+      homeFiles: { [HOST_PLUGINS_FILE]: '[{"name":"mcp","config":{"roots":"/old.pem"}}]' },
+    });
+    expect(thrown).toBeUndefined();
+    expect(pluginsOf(home)).toEqual([{ name: 'mcp', config: { roots: '/etc/ca.pem' } }]);
+  });
+
+  it('launchProcessModel：帶 --live 時宿主代理也看 home 的 .env（D364），行程環境不被 .env 污染', async () => {
+    const { home, env } = await launchOnce({
+      argv: ['--live'],
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+      homeFiles: {
+        '.env': 'HTTPS_PROXY=http://envfile.corp.test:3128\nOTHER_VALUE=from-env-file\n',
+      },
+    });
+    expect(pluginsOf(home)).toEqual([
+      {
+        name: 'mcp',
+        config: {
+          roots: '/etc/ca.pem',
+          proxy: {
+            httpsProxy: 'http://envfile.corp.test:3128',
+            noProxy: 'localhost,127.0.0.1,::1,[::1]',
+          },
+        },
+      },
     ]);
+    // 傳給 `execve` 的環境不能多出 `.env` 的任何值，不然監督行程與每個子行程都會繼承。
+    expect(env).not.toHaveProperty('HTTPS_PROXY');
+    expect(env).not.toHaveProperty('OTHER_VALUE');
+  });
+
+  it('launchProcessModel：行程環境的代理勝過 home 的 .env', async () => {
+    const { home } = await launchOnce({
+      argv: ['--live'],
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem', HTTPS_PROXY: 'http://real.corp.test:3128' },
+      homeFiles: { '.env': 'HTTPS_PROXY=http://envfile.corp.test:3128\n' },
+    });
+    expect(pluginsOf(home)).toMatchObject([
+      { config: { proxy: { httpsProxy: 'http://real.corp.test:3128' } } },
+    ]);
+  });
+
+  it('launchProcessModel：沒帶 --live 不讀 .env（跟 serve 為模型請求裝代理一致）', async () => {
+    const { home } = await launchOnce({
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+      homeFiles: { '.env': 'HTTPS_PROXY=http://envfile.corp.test:3128\n' },
+    });
+    expect(pluginsOf(home)).toEqual([{ name: 'mcp', config: { roots: '/etc/ca.pem' } }]);
+  });
+
+  it('launchProcessModel：帶 --live 且 home 的 .env 設了只有啟動環境能設的名字：啟動器就丟，清單不動', async () => {
+    const old = '[{"name":"mcp","config":{"roots":"/old.pem"}}]';
+    const { home, thrown } = await launchOnce({
+      argv: ['--live'],
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+      homeFiles: { '.env': 'NODE_OPTIONS=--inspect\n', [HOST_PLUGINS_FILE]: old },
+    });
+    expect(String(thrown)).toContain('NODE_OPTIONS');
+    expect(readFileSync(join(home, HOST_PLUGINS_FILE), 'utf8')).toBe(old);
+  });
+
+  it('launchProcessModel：帶 --live 且目前資料夾的 .env 設了代理（專案那層不准設）：啟動器就丟，跟前台同一句', async () => {
+    const { thrown } = await launchOnce({
+      argv: ['--live'],
+      env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+      projectFiles: { '.env': 'HTTPS_PROXY=http://project.corp.test:3128\n' },
+    });
+    expect(String(thrown)).toContain('HTTPS_PROXY');
+  });
+
+  it('launchProcessModel：.env 讀不了的警告啟動器不印（前台載同一份時印一次）', async () => {
+    const written: string[] = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let thrown: unknown;
+    try {
+      // home 的 .env 是個目錄：`readFileSync` 以 EISDIR 失敗，走 launch-env 的「讀不了」警告。
+      ({ thrown } = await launchOnce({
+        argv: ['--live'],
+        env: { NODE_EXTRA_CA_CERTS: '/etc/ca.pem' },
+        homeDirs: ['.env'],
+      }));
+    } finally {
+      process.stderr.write = realWrite;
+    }
+    expect(thrown).toBeUndefined();
+    expect(written.join('')).not.toContain('launch-env:');
   });
 });

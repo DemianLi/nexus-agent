@@ -26,6 +26,7 @@ import { parseArgs } from 'node:util';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { hostPluginRows, writeHostPluginsFile } from './host-plugins-file.js';
+import { loadLaunchEnv, processLaunchEnv, type LaunchEnvironment } from './launch-env.js';
 import { composeDefaultEntries } from './plugin-config.js';
 import { threadCapacityConfigSchema } from './settings/thread-capacity.js';
 import type { ConfigEntry } from './plugin-config.js';
@@ -354,6 +355,8 @@ export interface LaunchContext {
   readonly flag: ProcessModel | undefined;
   readonly env: NodeJS.ProcessEnv;
   readonly platform: NodeJS.Platform;
+  /** 專案那層 `.env` 所在的目前資料夾；省略是 `process.cwd()`。測試才傳。 */
+  readonly cwd?: string;
 }
 
 /**
@@ -419,9 +422,30 @@ export function resolveProcessModel(context: LaunchContext): {
 }
 
 /**
+ * 解宿主代理用的啟動環境，跟 `serve-run.ts` 為模型請求裝代理時看的是同一份：帶 `--live` 才讀兩層 `.env`（目前資料夾、home），沒帶只有行程環境。
+ *
+ * - **不動行程環境**：`target` 傳複本。`loadLaunchEnv` 會把 `.env` 的值寫進 `target`，寫進真的 `context.env` 就會經 `execve`
+ *   帶給監督行程與它起的每個子行程，那是行為變更。
+ * - **不印警告**：`.env` 讀不了的訊息由前台載入同一份 `.env` 時印一次；啟動器再印就是兩次。
+ * - **壞的 `.env` 在這裡就丟**（任何一層設了只有啟動環境能設的名字）：換成監督行程之後前台會丟同一個錯、起不來、被一直重起，
+ *   在啟動器丟，錯誤直接出現在啟動的終端機上。
+ */
+function proxyLaunchEnv(context: LaunchContext, home: string): LaunchEnvironment {
+  const live = flagGroups(context.argv).some((group) => group.name === 'live');
+  if (!live) return processLaunchEnv(context.env);
+  return loadLaunchEnv({
+    cwd: context.cwd ?? process.cwd(),
+    home,
+    target: { ...context.env },
+    warn: () => {},
+  });
+}
+
+/**
  * `per-thread` 就換成監督行程，不會回來；`single` 回 `false`，呼叫端照單行程起 server。
  *
- * @throws 平台不對、設定列寫壞、找不到監督行程或它旁邊的宿主、PDEATHSIG 會被清掉，或 `execve` 失敗。
+ * @throws 平台不對、設定列寫壞、找不到監督行程或它旁邊的宿主、PDEATHSIG 會被清掉、帶 `--live` 時 `.env` 設了只有啟動環境能設的名字、
+ *   清單寫不進去，或 `execve` 失敗。
  */
 export function launchProcessModel(context: LaunchContext): false {
   const model = resolveProcessModel(context);
@@ -451,7 +475,10 @@ export function launchProcessModel(context: LaunchContext): false {
   const home = resolveHarnessHome(context.env);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   // 宿主的插件清單每次啟動照當下的環境重寫（整份歸 harness，`host-plugins-file.ts`）。
-  writeHostPluginsFile(join(home, HOST_PLUGINS_FILE), hostPluginRows(context.env));
+  writeHostPluginsFile(
+    join(home, HOST_PLUGINS_FILE),
+    hostPluginRows(context.env, context.cwd ?? process.cwd(), proxyLaunchEnv(context, home)),
+  );
   const launch = supervisorLaunch({
     supervisor,
     host,
