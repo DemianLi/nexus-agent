@@ -34,54 +34,21 @@ describe('會話累計用量（#574）', () => {
     expect(chip().getAttribute('aria-label')).toBe('這條對話的用量：422k token，點開看明細');
   });
 
-  it('點開：累計三格加一句說明，時間三列；沒有首字延遲與輸出速度', () => {
+  it('點開：只有精確總數與成本分頁入口，逐項明細與時間不在這裡', () => {
     render(<SessionUsage tokenUsage={usage} sessionStats={stats} />);
     fireEvent.click(chip());
     const dialog = screen.getByRole('dialog', { name: '這條對話的用量明細' });
-    const tokens = screen.getByTestId('session-usage-tokens');
-    expect(tokens.textContent).toContain('422,195 token');
-    expect(tokens.textContent).toContain('輸入412,380 token');
-    expect(tokens.textContent).toContain('輸出9,815 token');
-    // 這份資料沒帶快取兩格：畫沒記，不畫 0。
-    expect(tokens.textContent).toContain('快取讀沒記');
-    expect(tokens.textContent).toContain('快取寫沒記');
-    expect(tokens.textContent).not.toContain('快取讀0');
-    expect(tokens.textContent).toContain('不含子代理與自動摘要');
-    expect(screen.getByTestId('session-usage-time').textContent).toBe(
-      '時間輪／模型呼叫4 輪／17 次模型時間2 分 13 秒工具時間38.4 秒',
-    );
-    expect(dialog.textContent).not.toContain('首字');
-    expect(dialog.textContent).not.toContain('token/秒');
+    expect(screen.getByTestId('session-usage-total').textContent).toBe('累計422,195 token');
+    expect(dialog.textContent).not.toContain('輸入');
+    expect(dialog.textContent).not.toContain('快取');
+    expect(dialog.textContent).not.toContain('模型時間');
   });
 
-  it('新 server 帶了快取兩格：寫數字，輸入只算未快取，說明講四項互不重疊', () => {
-    render(
-      <SessionUsage
-        tokenUsage={{
-          ...usage,
-          uncachedInputTokens: 112_380,
-          cacheReadTokens: 300_000,
-          cacheWriteTokens: 0,
-        }}
-        sessionStats={stats}
-      />,
-    );
-    fireEvent.click(chip());
-    const tokens = screen.getByTestId('session-usage-tokens');
-    expect(tokens.textContent).toContain('快取讀300,000 token');
-    expect(tokens.textContent).toContain('快取寫0 token');
-    expect(tokens.textContent).toContain('輸入112,380 token');
-    expect(tokens.textContent).toContain('合計是四項相加');
-    expect(tokens.textContent).not.toContain('沒記');
-  });
-
-  it('沒有 token：只有時間那一段，也沒有分隔線', () => {
-    const { baseElement } = render(<SessionUsage tokenUsage={null} sessionStats={stats} />);
+  it('沒有 token：總數那格退成次數', () => {
+    render(<SessionUsage tokenUsage={null} sessionStats={stats} />);
     expect(chip().textContent).toBe('4 輪／17 次');
     fireEvent.click(chip());
-    expect(screen.queryByTestId('session-usage-tokens')).toBeNull();
-    expect(screen.getByTestId('session-usage-time')).not.toBeNull();
-    expect(baseElement.querySelector('hr')).toBeNull();
+    expect(screen.getByTestId('session-usage-total').textContent).toBe('累計4 輪／17 次');
   });
 
   it('更新時不唸：沒有 role="status"，也沒有 aria-live', () => {
@@ -99,7 +66,7 @@ describe('會話累計用量（#574）', () => {
   });
 });
 
-describe('看明細（#1031）', () => {
+describe('到成本分頁（#1031）', () => {
   it('沒有右側欄時不畫：一顆按了沒反應的鈕比不給更糟', () => {
     render(<SessionUsage tokenUsage={usage} sessionStats={stats} />);
     fireEvent.click(chip());

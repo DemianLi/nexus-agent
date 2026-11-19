@@ -881,10 +881,10 @@ describe('核准請求', () => {
     const panel = await screen.findByTestId('approval-card');
     expect(within(panel).queryByRole('button', { name: '全部核准' })).toBeNull();
     expect(within(panel).queryByRole('button', { name: '全部拒絕' })).toBeNull();
-    // 原始中斷先摺著。
-    expect(within(panel).queryByText('alpha')).toBeNull();
+    // 原始中斷先摺著；工具名由面板名稱列講（#3035），摺著的是參數。
+    expect(within(panel).queryByText(/"n": "alpha"/)).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: '原始中斷內容' }));
-    expect(await within(panel).findByText('alpha')).toBeTruthy();
+    expect(await within(panel).findByText(/"n": "alpha"/)).toBeTruthy();
 
     fireEvent.click(within(panel).getByRole('button', { name: '停止這一輪' }));
     await waitFor(() => expect(cancels).toHaveLength(1));
@@ -923,7 +923,7 @@ describe('核准請求', () => {
     const first = await findPanel('等待核准：alpha（1／2）');
     expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
     expect(within(first).queryByText('beta')).toBeNull();
-    // 狀態列唸的就是面板名稱。
+    // 狀態列唸的就是面板的 `aria-label`。
     expect(screen.getByRole('status').textContent).toBe('等待核准：alpha（1／2）');
 
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
@@ -1678,13 +1678,14 @@ describe('目標列（#945）', () => {
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
     await waitFor(() => expect(bar()).toBeTruthy());
-    expect(bar()!.textContent).toContain('目標：未完成');
+    expect(bar()!.getAttribute('aria-label')).toBe('目標：未完成，把登入改好');
     expect(bar()!.textContent).toContain('把登入改好');
-    // 只推了目標、沒推 activation（還沒收到，`null`）：照中性的寫，不說進行中（#1608）。
-    expect(bar()!.textContent).not.toMatch(/進行中|正在跑/);
+    // 只推了目標、沒推 activation（還沒收到，`null`）：畫面上不寫階段字，名稱照中性的寫，不說進行中（#1608、#3052）。
+    expect(bar()!.textContent).not.toMatch(/目標|未完成|進行中|正在跑/);
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ phase: 'paused' }))]);
-    await waitFor(() => expect(bar()!.textContent).toContain('目標：已暫停'));
+    await waitFor(() => expect(bar()!.textContent).toContain('已暫停'));
+    expect(bar()!.textContent).not.toContain('目標：');
   });
 
   it('blocked 的理由直接顯示在列上；從有目標變成沒有（清掉）時整列消失', async () => {
@@ -1703,7 +1704,7 @@ describe('目標列（#945）', () => {
     await waitFor(() => expect(bar()).toBeNull());
   });
 
-  it('active 時看 activation（#1608）：disarmed 講沒有在跑並給下一步，armed 寫進行中、那句消失', async () => {
+  it('active 時看 activation（#1608）：disarmed 講沒有在跑並給下一步，armed 不寫階段字、那句消失', async () => {
     const { downlink, opened } = await mounted();
     const activationFrame = (activation: 'armed' | 'disarmed'): Event =>
       downlink.customFrame(GOAL_ACTIVATION, { goal: { id: 'g1', revision: 1, activation } });
@@ -1714,14 +1715,16 @@ describe('目標列（#945）', () => {
     expect(hint()).toBeNull();
 
     downlink.push(opened[0]!, [activationFrame('disarmed')]);
-    await waitFor(() => expect(hint()?.textContent).toBe('輸入 /goal resume 讓它繼續。'));
-    expect(bar()!.textContent).toContain('目標：未完成，沒有在跑');
+    await waitFor(() => expect(hint()?.textContent).toBe('/goal resume 繼續'));
+    expect(hint()!.querySelector('code')?.textContent).toBe('/goal resume');
+    expect(bar()!.textContent).toContain('沒有在跑');
     expect(bar()!.getAttribute('aria-label')).toContain('/goal resume');
     // 暫停鈕照舊只看相位（Q1 (a)）。
     expect(screen.getByRole('button', { name: '暫停目標' })).toBeTruthy();
 
     downlink.push(opened[0]!, [activationFrame('armed')]);
-    await waitFor(() => expect(bar()!.textContent).toContain('目標：進行中'));
+    await waitFor(() => expect(bar()!.getAttribute('aria-label')).toContain('目標：進行中'));
+    expect(bar()!.textContent).not.toMatch(/進行中|沒有在跑/);
     expect(hint()).toBeNull();
     expect(screen.getByRole('button', { name: '暫停目標' })).toBeTruthy();
   });
@@ -1799,11 +1802,11 @@ describe('目標列（#945）', () => {
       expect(paused).toEqual([{ threadId: opened[0], goalId: 'g1', revision: 3 }]),
     );
     // 收下了也不搶先改：相位要等下行。
-    expect(bar()!.textContent).toContain('目標：未完成');
+    expect(bar()!.getAttribute('aria-label')).toContain('目標：未完成');
     expect(screen.queryByTestId('goal-pause-failure')).toBeNull();
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ revision: 4, phase: 'paused' }))]);
-    await waitFor(() => expect(bar()!.textContent).toContain('目標：已暫停'));
+    await waitFor(() => expect(bar()!.textContent).toContain('已暫停'));
     expect(pauseButton()).toBeNull();
   });
 

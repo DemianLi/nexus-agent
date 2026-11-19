@@ -12,18 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TRACE_TAB } from './sidebar-tab';
 import type { TabBodyProps } from '@/shared/right-sidebar/tab';
-import {
-  REANNOUNCE_MS,
-  TRACE_EMPTY_HINT,
-  TRACE_EMPTY_TEXT,
-  TRACE_LOCATED_TEXT,
-} from '@/features/trace/panel';
+import { REANNOUNCE_MS, TRACE_EMPTY_TEXT, TRACE_LOCATED_TEXT } from '@/features/trace/panel';
 import { TRACE_LOCATE_LABEL } from '@/features/trace/row';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import { LOCATED_MS, registerRunExpander } from '@/features/transcript/locate';
-import { TRACE_HEADLINE, TRACE_LIMITS, TRACE_TARGET_MISSING_TEXT } from '@/features/trace/view';
+import { TRACE_TARGET_MISSING_TEXT } from '@/features/trace/view';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
@@ -89,7 +84,7 @@ const rows = () => screen.getAllByTestId('trace-row');
 const kinds = () => rows().map((row) => row.getAttribute('data-kind'));
 
 describe('觀測分頁：內容', () => {
-  it('每種條目各有一列、順序照對話；限制與「只有順序、沒有時間」寫在畫面上', async () => {
+  it('每種條目各有一列、順序照對話；畫面上沒有標語與限制清單', async () => {
     mount(conversation());
     await act(async () => {});
     expect(kinds()).toEqual([
@@ -103,10 +98,8 @@ describe('觀測分頁：內容', () => {
       'compaction',
       'reply',
     ]);
-    expect(screen.getByTestId('trace-headline').textContent).toBe(TRACE_HEADLINE);
-    const limits = within(screen.getByTestId('trace-limits')).getAllByRole('listitem');
-    expect(limits.map((item) => item.textContent)).toEqual(Object.values(TRACE_LIMITS));
-    expect(screen.getByRole('heading', { name: '這一版的限制' })).toBeTruthy();
+    expect(screen.queryByTestId('trace-headline')).toBeNull();
+    expect(screen.queryByTestId('trace-limits')).toBeNull();
   });
 
   it('工具列：名稱、一行摘要、狀態、失敗碼；收著時不掛 ToolCard，展開才掛', async () => {
@@ -144,7 +137,8 @@ describe('觀測分頁：內容', () => {
     expect(reply.textContent).not.toContain('接下來改寫');
   });
 
-  it('決定只存本地（限制 2）：重新整理之後決定那一列不見，畫面上的那句話還在', async () => {
+  // 刻意的限制，不是 bug：說明在 docs/operations.md〈成本與觀測分頁的口徑與限制〉。
+  it('決定只存本地：重新整理之後決定那一列不見，被拒的工具卡還在', async () => {
     const { unmount } = mount(conversation(true));
     await act(async () => {});
     const decision = rows().find((row) => row.getAttribute('data-kind') === 'decision');
@@ -155,25 +149,16 @@ describe('觀測分頁：內容', () => {
     mount(conversation(false));
     await act(async () => {});
     expect(kinds()).not.toContain('decision');
-    // 工具卡照樣在，只是看不到人按了什麼；那句限制講得清楚。
+    // 工具卡照樣在，只是看不到人按了什麼。
     expect(kinds().filter((kind) => kind === 'tool')).toHaveLength(3);
-    const text = screen.getByTestId('trace-limits').textContent ?? '';
-    expect(text).toContain('重新整理之後看不到你當時按了什麼');
   });
 
-  it('只看得到已載入的那幾頁（限制 3）有字', async () => {
-    mount(conversation());
-    await act(async () => {});
-    expect(screen.getByTestId('trace-limits').textContent).toContain(TRACE_LIMITS.loaded);
-  });
-
-  it('沒有對話可看就是空狀態（SG Empty：標題與一句說明），限制不假裝有內容', async () => {
+  it('沒有對話可看就是空狀態（SG Empty：只有標題）', async () => {
     mount(emptyConversation());
     await act(async () => {});
     const empty = screen.getByTestId('right-sidebar-panel-trace');
     expect(empty.getAttribute('data-slot')).toBe('empty');
-    expect(empty.textContent).toBe(TRACE_EMPTY_TEXT + TRACE_EMPTY_HINT);
-    expect(screen.queryByTestId('trace-limits')).toBeNull();
+    expect(empty.textContent).toBe(TRACE_EMPTY_TEXT);
   });
 });
 

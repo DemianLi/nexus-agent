@@ -5,19 +5,20 @@ import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Rows } from '@/features/cost/usage-rows';
 import { sessionUsageView } from '@/shared/lib/usage-view';
 
 /**
  * 頂列右邊那顆「這條對話的用量」（[#574](https://github.com/DemianLi/nexus-agent/issues/574) 決定 3、4）：收著顯示
- * 總量，點開分「這條對話累計」與「時間」兩段。畫什麼、什麼時候不畫在 `shared/lib/usage-view.ts`。
+ * 總量，點開只有精確總數與成本分頁的入口；逐項明細只由成本分頁負責。畫什麼、什麼時候不畫在 `shared/lib/usage-view.ts`。
  *
  * - **popover，不是 tooltip**：手機上沒有 hover（同用量表）。
  * - **不掛 `role="status"`**：代理的現況只由狀態列唸（§8），每次模型呼叫都唸一次太吵（同用量表）。
  * - 頂列不會被核准或提問面板換掉，所以不用像用量表那樣在 `hidden` 時自己關。
- * - **底部「看明細」**（#1031，#1017 Q3 ②）：打開右側欄的成本分頁。沒有右側欄時不畫（同卡片的慣例）。按下去先關 popover，
+ * - **底部「到成本分頁」**（#1031，#1017 Q3 ②）：打開右側欄的成本分頁。沒有右側欄時不畫（同卡片的慣例）。按下去先關 popover，
  *   這一次明寫不還焦點（`finalFocus` 回 `false`），焦點留給成本分頁；其餘關法照常還給觸發鈕。
  */
+export const SESSION_USAGE_DETAIL_LABEL = '到成本分頁';
+
 export function SessionUsage({
   tokenUsage,
   sessionStats,
@@ -30,7 +31,6 @@ export function SessionUsage({
   const [open, setOpen] = useState(false);
   const toCost = useRef(false);
   if (view === null) return null;
-  const { usage, time } = view;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -45,46 +45,17 @@ export function SessionUsage({
         side="bottom"
         align="end"
         aria-label="這條對話的用量明細"
-        className="w-72 space-y-3 text-body"
+        className="w-72 space-y-2 text-body"
         finalFocus={() => {
           if (!toCost.current) return true;
           toCost.current = false;
           return false;
         }}
       >
-        {usage !== undefined && (
-          <section className="space-y-1.5" data-testid="session-usage-tokens">
-            <div className="flex items-baseline justify-between">
-              <p className="text-muted-foreground text-tip">這條對話累計</p>
-              <p className="font-medium tabular-nums">{usage.total}</p>
-            </div>
-            <Rows
-              rows={[
-                ['輸入', usage.input],
-                ['快取讀', usage.cacheRead],
-                ['快取寫', usage.cacheWrite],
-                ['輸出', usage.output],
-              ]}
-            />
-            <p className="text-muted-foreground text-tip">{usage.cacheNote}</p>
-            <p className="text-muted-foreground text-tip">
-              每一次模型呼叫的帳加起來，所以比「目前大小」大很多。不含子代理與自動摘要那幾次。
-            </p>
-          </section>
-        )}
-        {usage !== undefined && time !== undefined && <hr className="border-border" />}
-        {time !== undefined && (
-          <section className="space-y-1.5" data-testid="session-usage-time">
-            <p className="text-muted-foreground text-tip">時間</p>
-            <Rows
-              rows={[
-                ['輪／模型呼叫', time.counts],
-                ...(time.llm !== undefined ? [['模型時間', time.llm] as const] : []),
-                ...(time.tool !== undefined ? [['工具時間', time.tool] as const] : []),
-              ]}
-            />
-          </section>
-        )}
+        <div className="flex items-baseline justify-between" data-testid="session-usage-total">
+          <p className="text-muted-foreground text-tip">累計</p>
+          <p className="font-medium tabular-nums">{view.total ?? view.label}</p>
+        </div>
         {sidebar !== undefined && (
           <Button
             type="button"
@@ -97,7 +68,7 @@ export function SessionUsage({
               sidebar.openPanel('cost', event.currentTarget);
             }}
           >
-            看明細
+            {SESSION_USAGE_DETAIL_LABEL}
             <ChevronRight aria-hidden />
           </Button>
         )}

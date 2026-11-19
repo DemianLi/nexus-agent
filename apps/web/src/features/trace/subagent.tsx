@@ -170,9 +170,7 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
         <HeadFacts head={turn.head} noEnd={turn.head.kind === 'run'} />
       </p>
       {turn.elidedCalls !== undefined && (
-        <p className="text-muted-foreground px-2 text-tip">
-          更早的 {turn.elidedCalls} 次呼叫被單輪上限摺掉了，只留計數。
-        </p>
+        <p className="text-muted-foreground px-2 text-tip">另摺掉 {turn.elidedCalls} 次呼叫</p>
       )}
       {grouped ? (
         <div className="px-2 pt-1">
