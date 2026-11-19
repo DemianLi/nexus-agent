@@ -55,7 +55,10 @@ describe('會話列表索引接在 serve 上', () => {
     const deleted = await tempDir('nexus-thread-index-store-');
     const serve = await startScriptedServe(TURNS, {
       argv: ['--session-log', root],
-      extraRows: `- id: thread-deletion-store\n  config:\n    path: ${JSON.stringify(deleted)}\n`,
+      // 落盤窗口拉長：靠窗口到期才落盤的改動，這裡立刻列就對不上。
+      extraRows:
+        `- id: thread-deletion-store\n  config:\n    path: ${JSON.stringify(deleted)}\n` +
+        `- id: session-persistence\n  config:\n    windowMs: 600000\n`,
     });
     opened.push(serve);
     const client = await serveClient(serve.running);
@@ -84,6 +87,9 @@ describe('會話列表索引接在 serve 上', () => {
       result: { ok: true },
     });
     await matchesDisk('改名 y');
+    const renamed = await client.listThreads();
+    if (renamed.kind !== 'ok') throw new Error('列表失敗');
+    expect(renamed.result.items.find(({ threadId }) => threadId === 'y')?.title).toBe('改過的名字');
 
     const history = await client.threadHistory('x');
     if (history.kind !== 'ok') throw new Error('歷史拿不到');
