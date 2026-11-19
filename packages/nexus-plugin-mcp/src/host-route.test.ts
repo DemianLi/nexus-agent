@@ -58,13 +58,16 @@ function fakeHost() {
   return { caller, seen };
 }
 
-async function mounted(services: Record<string, unknown>): Promise<PluginRegistry> {
+async function mounted(
+  services: Record<string, unknown>,
+  row: McpPluginOptions = options,
+): Promise<{ registry: PluginRegistry; dispose: () => Promise<void> }> {
   const { registry, dispose } = await loadPlugins([
     createHostServicesPlugin({ [CHANNEL_SERVICE]: undefined, ...services }),
-    mcpEntry(options),
+    mcpEntry(row),
   ]);
   cleanup.push(dispose);
-  return registry;
+  return { registry, dispose };
 }
 
 describe('MCP 連線走宿主', () => {
@@ -78,7 +81,7 @@ describe('MCP 連線走宿主', () => {
     const pool = {
       acquire: () => Promise.reject(new Error('不該走池')),
     };
-    const registry = await mounted({
+    const { registry } = await mounted({
       [MCP_HOST_ROW_SERVICE]: row,
       [MCP_HOST_BRIDGE_SERVICE]: host.caller,
       [MCP_POOL_SERVICE]: pool,
@@ -97,14 +100,14 @@ describe('MCP 連線走宿主', () => {
 
   it('只有門面、沒有 row 服務：不走宿主（沒有宿主的行程把門面掛成一律 host_absent）', async () => {
     const host = fakeHost();
-    const registry = await mounted({ [MCP_HOST_BRIDGE_SERVICE]: host.caller });
+    const { registry } = await mounted({ [MCP_HOST_BRIDGE_SERVICE]: host.caller });
     expect(registry.tools.resolve('mcp__srv__echo')).toBeUndefined();
     expect(host.seen).toEqual([]);
   });
 
   it('row 服務拋（例如 command 不是絕對路徑）：這一列連不上，不碰宿主', async () => {
     const host = fakeHost();
-    const registry = await mounted({
+    const { registry } = await mounted({
       [MCP_HOST_ROW_SERVICE]: () => {
         throw new Error('stdio 的 command 要是絕對路徑');
       },
@@ -112,5 +115,23 @@ describe('MCP 連線走宿主', () => {
     });
     expect(registry.tools.resolve('mcp__srv__echo')).toBeUndefined();
     expect(host.seen).toEqual([]);
+  });
+
+  it('收掉這條 thread 只放掉綁定：不起新的一代、不向宿主再 open、不走掉線的通報', async () => {
+    const host = fakeHost();
+    const { registry, dispose } = await mounted(
+      {
+        [MCP_HOST_ROW_SERVICE]: (config: { serverName: string }) => ({
+          serverName: config.serverName,
+          connection: { transport: 'http', url: 'x' },
+        }),
+        [MCP_HOST_BRIDGE_SERVICE]: host.caller,
+      },
+      { ...options, reconnect: { initialDelayMs: 5, maxDelayMs: 5 } },
+    );
+    expect(registry.tools.resolve('mcp__srv__echo')).toBeDefined();
+    await dispose();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(host.seen.map((item) => item.method)).toEqual(['open']);
   });
 });
