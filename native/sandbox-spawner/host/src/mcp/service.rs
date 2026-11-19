@@ -482,7 +482,7 @@ mod tests {
             r#"{"serverName":"b","connection":{"transport":"http","url":"http://example.test/mcp"}}"#,
         );
         let stdio = server(
-            r#"{"serverName":"c","connection":{"transport":"stdio","command":"/bin/true"}}"#,
+            r#"{"serverName":"c","connection":{"transport":"stdio","command":"/bin/true","env":{},"credentialEnv":[]}}"#,
         );
         let refusal = refuse_https(&https, false).expect("https 要被拒");
         assert!(refusal.contains("NODE_EXTRA_CA_CERTS"), "{refusal}");
