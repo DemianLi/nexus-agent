@@ -32,7 +32,7 @@ import type { RowStatus, ThreadStatusState } from '@/features/threads/status';
  *   側欄，就一次都不抓。另外在動作之後由呼叫端叫 `refresh`：側欄的封存、刪除、復原成功之後，打開的這條被拒說已刪除時，以及打開的這條講過話、清單上卻沒有它時（`app/App.tsx`）。晚送出的那一次回來之後，早送出、晚回來的那一份丟掉。送出前記 `list-requested`，途中的
  *   frame 在回應到了之後重放（#1600，見 `features/threads/status.ts`）。
  * - **一次一頁**（[#725](https://github.com/DemianLi/nexus-agent/issues/725)）：先載 {@link THREAD_PAGE_SIZE} 條，`loadMore` 再多一頁；重抓載回跟現在一樣多條。
- *   一定要在清單上的（目前這條、釘選的、有狀態的、內容搜尋命中的）沒載到就照 id 補，所以「清單上沒有」仍然是「server 上沒有」。
+ *   一定要在清單上的（目前這條、釘選的、有狀態的、內容搜尋命中的、打開的已封存）沒載到就照 id 補，所以「清單上沒有」仍然是「server 上沒有」。
  *   還有沒載的頁時，列表回來不清掉沒列到的那幾條的狀態（`listed` 的 `complete`）。
  *
  * @module
@@ -52,18 +52,18 @@ export type Listing =
 export const THREAD_PAGE_SIZE = 50;
 
 export interface ThreadDirectory {
-  /** 載入了的列：前面幾頁，加上照 id 補的（目前這條、釘選的、有狀態的、內容搜尋命中的）。`nextCursor` 在就是還有沒載的。 */
+  /** 載入了的列：前面幾頁，加上照 id 補的（目前這條、釘選的、有狀態的、內容搜尋命中的、打開的已封存）。`nextCursor` 在就是還有沒載的。 */
   readonly listing: Listing;
   readonly statusOf: (item: ThreadSummary) => RowStatus;
   /** 這一列算不算空白：清單說空白、而且沒有人說它在跑過（#1600，`effectiveBlank`）。 */
   readonly blankOf: (item: ThreadSummary) => boolean;
-  /** 重抓一次列表：載回跟現在一樣多頁。 */
+  /** 重抓一次列表：載回跟現在一樣多條（至少一頁）。 */
   readonly refresh: () => void;
   /** 多載一頁；已經在載或沒有下一頁就什麼都不做。 */
   readonly loadMore: () => void;
   /** 正在多載一頁。 */
   readonly loadingMore: boolean;
-  /** 要這幾條在清單上：沒載到的照 id 補（內容搜尋的命中用）。不存在的不再問。 */
+  /** 要這幾條在清單上：沒載到的照 id 補（內容搜尋的命中、打開的已封存）。不存在的不再問。 */
   readonly ensureRows: (threadIds: readonly string[]) => void;
   /** 只比標題，問 server（還有沒載的頁時用）：回比到的前 {@link THREAD_PAGE_SIZE} 條。失敗回 `undefined`。 */
   readonly findTitles: (
@@ -133,9 +133,9 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
   const [loadingMore, setLoadingMore] = useState(false);
   const ticket = useRef(0);
   const loaded = useRef<Loaded | undefined>(undefined);
-  /** 照 id 問過、server 說沒有的：不再問。重抓時清掉。 */
+  /** 不必再照 id 問的：正在問的、問過說沒有的、翻到底也沒列到的。重抓時重算。 */
   const absent = useRef(new Set<string>());
-  /** 呼叫端要的（內容搜尋的命中）。 */
+  /** 呼叫端要的（{@link ThreadDirectory.ensureRows}）。 */
   const [requested, setRequested] = useState<ReadonlySet<string>>(new Set());
   const wanted = useRef<readonly string[]>([]);
 
