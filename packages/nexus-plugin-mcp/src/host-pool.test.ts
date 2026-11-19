@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { HostMcpClient, Reassembly } from './host-pool.js';
 import type { HostCallOptionsLike, HostCaller } from './host-pool.js';
-import { isRequestTimeout } from './connection.js';
+import { isRequestTimeout, probeLiveness } from './connection.js';
 import { isConnectionLost } from './index.js';
 
 /** 照 `docs/host-mcp.md` 切塊：字串塊加摘要。 */
@@ -396,6 +396,44 @@ describe('宿主連線斷了又連上', () => {
     const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
     await expect(client.callTool({ name: 'echo', arguments: {} })).rejects.toThrow('params 不合法');
     expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(1);
+  });
+
+  it('宿主回的錯，cause 鏈裡帶 Not connected／Connection closed 字樣：換掉，isConnectionLost 不認', async () => {
+    const host = fakeHost({
+      onCall: (call) => {
+        call.reject(
+          new Error('server 層的錯', {
+            cause: new Error('wrapped', {
+              cause: new Error('Connection closed (MCP error -32000)'),
+            }),
+          }),
+        );
+        return undefined;
+      },
+    });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    const error = await client.callTool({ name: 'echo', arguments: {} }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(isConnectionLost(error)).toBe(false);
+  });
+
+  it('資源讀取逾時後的探活：宿主那一代不會被判卡死，onclose 不被叫（TS 的 Supervisor 不重連）', async () => {
+    const host = fakeHost({});
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    let closed = 0;
+    client.onclose = () => {
+      closed += 1;
+    };
+    let stalled = 0;
+    probeLiveness(
+      { calls: new Map(), sdk: client as never, closed: Promise.resolve(), livenessTimeoutMs: 10 },
+      () => {
+        stalled += 1;
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stalled).toBe(0);
+    expect(closed).toBe(0);
   });
 
   it('宿主路徑上不送 _meta（由宿主一家帶）', async () => {

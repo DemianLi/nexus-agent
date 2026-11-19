@@ -140,16 +140,23 @@ const DEADLINE = Symbol('rebind-deadline');
  * 宿主回的錯文字裡 {@link isConnectionLost} 會認成「這一代斷了」的幾句（server 層的 JSON-RPC 錯誤原樣帶來），換成認不得的寫法：
  * 連線在宿主那邊，這一側的監督者不該為它重連。
  */
-function neutralized(error: unknown): unknown {
-  if (!(error instanceof Error)) return error;
-  const message = error.message
+function neutralized(error: unknown, depth = 0): unknown {
+  if (typeof error === 'string') return neutralText(error);
+  if (!(error instanceof Error) || depth >= 5) return error;
+  const message = neutralText(error.message);
+  // `isConnectionLost` 沿 `cause` 往下找，所以整條 cause 鏈都要換。
+  const cause = neutralized(error.cause, depth + 1);
+  if (message === error.message && cause === error.cause) return error;
+  return Object.assign(new Error(message, { cause }), {
+    ...(codeOf(error) !== undefined && { code: codeOf(error) }),
+  });
+}
+
+function neutralText(text: string): string {
+  return text
     .replace(/\bNot connected\b/gu, 'not connected')
     .replace(/\bConnection closed\b/gu, 'connection closed')
     .replace(/MCP error -32000/gu, 'MCP error (-32000)');
-  if (message === error.message) return error;
-  return Object.assign(new Error(message, { cause: error.cause }), {
-    ...(codeOf(error) !== undefined && { code: codeOf(error) }),
-  });
 }
 
 /** 長得像 SDK `Client`、底下是宿主綁定的連線。結構上夠 {@link attemptsOn} 與 {@link toolCallOf} 用。 */
