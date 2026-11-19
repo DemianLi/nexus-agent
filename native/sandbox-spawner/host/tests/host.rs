@@ -1539,8 +1539,11 @@ mod calls {
     mod mcp {
         use super::*;
         use crate::tls_common::fake_mcp::{big_text, handler, FakeMcp};
-        use crate::tls_common::{fixture, Request, TlsServer};
-        use nexus_host::mcp::service::{PIECES_PER_STEP, PIECE_BYTES, SERVICE};
+        use crate::tls_common::{
+            fixture, ConnectProxy, PlainServer, ProxyMode, Request, Response, TlsServer,
+        };
+        use nexus_host::mcp::service::{NO_ROOTS, PIECES_PER_STEP, PIECE_BYTES, SERVICE};
+        use serde_json::json;
         use std::sync::{Arc, Mutex};
 
         struct Fake {
@@ -1560,12 +1563,14 @@ mod calls {
 
         /// 掛著 `mcp` 的宿主，根憑證是夾具的 CA。
         fn host(tag: &str) -> (HostProc, PathBuf) {
+            host_with(tag, serde_json::json!({ "roots": fixture("ca-a.pem") }))
+        }
+
+        /// 掛著 `mcp` 的宿主，插件的設定是 `config`。
+        fn host_with(tag: &str, config: Value) -> (HostProc, PathBuf) {
             let dir = temp_dir(tag);
             let plugins = dir.join("host-plugins.json");
-            let list = serde_json::json!([{
-                "name": "mcp",
-                "config": { "roots": fixture("ca-a.pem") },
-            }]);
+            let list = serde_json::json!([{ "name": "mcp", "config": config }]);
             std::fs::write(&plugins, list.to_string()).unwrap();
             let socket = dir.join("host.sock");
             let mut host = HostProc::start_with_plugins(&socket, &plugins);
@@ -1574,13 +1579,19 @@ mod calls {
         }
 
         fn server(port: u16) -> String {
-            serde_json::json!({
-                "server": {
-                    "serverName": "fake",
-                    "connection": { "transport": "http", "url": format!("https://localhost:{port}/mcp") },
-                },
-            })
-            .to_string()
+            at(&format!("https://localhost:{port}/mcp"), json!({}))
+        }
+
+        /// `open` 的酬載：一台網址是 `url` 的 HTTP server，`extra` 的欄位併進 `server`。
+        fn at(url: &str, extra: Value) -> String {
+            let mut server = json!({
+                "serverName": "fake",
+                "connection": { "transport": "http", "url": url },
+            });
+            for (key, value) in extra.as_object().expect("物件") {
+                server[key] = value.clone();
+            }
+            json!({ "server": server }).to_string()
         }
 
         /// 收到的一塊：序號與內容。
@@ -1638,7 +1649,12 @@ mod calls {
 
         /// open 到 `ready`，回拼好的清單文件。
         fn open(stream: &mut UnixStream, id: u64, port: u16) -> Value {
-            call_to(stream, id, SERVICE, "open", &server(port));
+            open_with(stream, id, &server(port))
+        }
+
+        /// 同 [`open`]，`payload` 是整份 `open` 的酬載。
+        fn open_with(stream: &mut UnixStream, id: u64, payload: &str) -> Value {
+            call_to(stream, id, SERVICE, "open", payload);
             let (mut pieces, outcome) = read_pieces(stream, id, |p| p.get("ready").is_some());
             assert_eq!(outcome, None, "open 不該收尾");
             let (_, ready) = pieces.pop().unwrap();
@@ -1647,12 +1663,38 @@ mod calls {
         }
 
         fn call_tool(stream: &mut UnixStream, id: u64, open: u64, name: &str, arguments: Value) {
+            call_params(
+                stream,
+                id,
+                open,
+                &serde_json::json!({ "name": name, "arguments": arguments }),
+            );
+        }
+
+        /// 一次 `tools/call`，`params` 整份由呼叫端給（反問的第二輪要帶 `inputResponses`、`requestState`）。
+        fn call_params(stream: &mut UnixStream, id: u64, open: u64, params: &Value) {
             let payload = serde_json::json!({
                 "open": open,
                 "method": "tools/call",
-                "params": serde_json::json!({ "name": name, "arguments": arguments }).to_string(),
+                "params": params.to_string(),
             });
             call_to(stream, id, SERVICE, "call", &payload.to_string());
+        }
+
+        /// 讀 `id` 這次 `call` 的結果，拼回成 JSON。
+        fn result_of(stream: &mut UnixStream, id: u64) -> Value {
+            let (pieces, outcome) = read_pieces(stream, id, |_| false);
+            let summary = outcome.expect("要收尾").expect("成功");
+            let text = reassemble(&pieces, &summary).expect("拼得回來");
+            serde_json::from_str(&text).expect("結果是 JSON")
+        }
+
+        /// `open` 以錯收尾：回錯誤碼與訊息。
+        fn open_refused(stream: &mut UnixStream, id: u64, payload: &str) -> CallError {
+            call_to(stream, id, SERVICE, "open", payload);
+            let (pieces, outcome) = read_pieces(stream, id, |p| p.get("ready").is_some());
+            assert!(pieces.is_empty(), "被拒的 open 不送塊：{pieces:?}");
+            outcome.expect("要收尾").expect_err("要被拒")
         }
 
         fn cancelled_notices(log: &Mutex<Vec<Request>>) -> usize {
@@ -1820,6 +1862,400 @@ mod calls {
                 .filter(|r| String::from_utf8_lossy(&r.body).contains(r#""initialize""#))
                 .count();
             assert_eq!(handshakes, 1);
+        }
+
+        /// 新協定每次請求帶 client 能力的 `_meta` 鍵。
+        const CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+        /// [`asking`] 第一輪給的 `requestState`。
+        const STATE: &str = "state-1";
+
+        fn question() -> Value {
+            json!({
+                "method": "elicitation/create",
+                "params": {
+                    "mode": "form",
+                    "message": "請問怎麼稱呼？",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": { "name": { "type": "string", "title": "名字" } },
+                        "required": ["name"]
+                    }
+                }
+            })
+        }
+
+        fn text_result(text: &str) -> Value {
+            json!({
+                "resultType": "complete",
+                "content": [{ "type": "text", "text": text }],
+                "isError": false,
+            })
+        }
+
+        /// 會反問的新協定假 server（HTTPS）。握手與清單照 [`FakeMcp`]；`tools/call` 看請求決定怎麼回：
+        /// `_meta` 沒帶反問能力回「沒問」；帶了、還沒有答案回 `input_required`（題目 [`question`]、`requestState` 是 [`STATE`]）；
+        /// 帶了答案回「答：」加答案裡的名字。`log` 只記 `tools/call`。
+        fn asking() -> Fake {
+            let log: Arc<Mutex<Vec<Request>>> = Arc::default();
+            let base = handler(FakeMcp::with_tools(true, &["ask"]), Arc::default());
+            let seen = Arc::clone(&log);
+            let server = TlsServer::start(Arc::new(move |request: &Request| {
+                let message: Value = serde_json::from_slice(&request.body).unwrap_or_default();
+                if message["method"] != "tools/call" {
+                    return base(request);
+                }
+                seen.lock().unwrap().push(request.clone());
+                let params = &message["params"];
+                let result = if !params["_meta"][CAPABILITIES]["elicitation"].is_object() {
+                    text_result("沒問")
+                } else if params.get("inputResponses").is_none() {
+                    json!({
+                        "resultType": "input_required",
+                        "inputRequests": { "q1": question() },
+                        "requestState": STATE,
+                    })
+                } else {
+                    let name = params["inputResponses"]["q1"]["content"]["name"]
+                        .as_str()
+                        .unwrap_or("?");
+                    text_result(&format!("答：{name}"))
+                };
+                let body = json!({ "jsonrpc": "2.0", "id": message["id"], "result": result });
+                Response::new(200, "application/json", body.to_string())
+            }));
+            Fake {
+                port: server.port,
+                log,
+            }
+        }
+
+        /// [`asking`] 那台 server 的 `open` 酬載，`elicitation` 是這次取用開不開反問。
+        fn asking_server(port: u16, elicitation: bool) -> String {
+            json!({
+                "server": {
+                    "serverName": "fake",
+                    "connection": { "transport": "http", "url": format!("https://localhost:{port}/mcp") },
+                },
+                "elicitation": elicitation,
+            })
+            .to_string()
+        }
+
+        /// server 收到的每一次 `tools/call` 的 `params`，依序。
+        fn tool_calls(log: &Mutex<Vec<Request>>) -> Vec<Value> {
+            log.lock()
+                .unwrap()
+                .iter()
+                .map(|r| serde_json::from_slice::<Value>(&r.body).expect("JSON")["params"].clone())
+                .collect()
+        }
+
+        fn answer() -> Value {
+            json!({ "q1": { "action": "accept", "content": { "name": "小明" } } })
+        }
+
+        /// R5：真宿主加會反問的假 server。第一輪拿到題目與 `requestState`；帶答案與同一份 `requestState` 再叫一次，拿到最終結果。
+        /// server 兩輪收到的都帶反問能力，第二輪的答案與狀態逐欄位等於送的。
+        #[test]
+        fn r5_一次呼叫問一題_答完拿到結果() {
+            let fake = asking();
+            let (_host, socket) = host("mcp-r5");
+            let mut stream = connect(&socket);
+            let listed = open_with(&mut stream, 1, &asking_server(fake.port, true));
+            assert_eq!(listed["tools"][0]["name"], "ask", "{listed}");
+
+            let arguments = json!({ "topic": "天氣" });
+            call_params(
+                &mut stream,
+                2,
+                1,
+                &json!({ "name": "ask", "arguments": arguments }),
+            );
+            let first = result_of(&mut stream, 2);
+            assert_eq!(first["resultType"], "input_required", "{first}");
+            assert_eq!(
+                first["inputRequests"],
+                json!({ "q1": question() }),
+                "{first}"
+            );
+            assert_eq!(first["requestState"], STATE, "{first}");
+
+            call_params(
+                &mut stream,
+                3,
+                1,
+                &json!({
+                    "name": "ask",
+                    "arguments": arguments,
+                    "inputResponses": answer(),
+                    "requestState": first["requestState"],
+                }),
+            );
+            let second = result_of(&mut stream, 3);
+            assert_eq!(second["content"][0]["text"], "答：小明", "{second}");
+
+            let calls = tool_calls(&fake.log);
+            assert_eq!(calls.len(), 2, "server 收到兩次 tools/call：{calls:?}");
+            for call in &calls {
+                assert_eq!(
+                    call["_meta"][CAPABILITIES],
+                    json!({ "elicitation": { "form": {}, "url": {} } }),
+                    "每一輪都帶反問能力：{call}"
+                );
+                assert_eq!(call["name"], "ask", "{call}");
+                assert_eq!(call["arguments"], arguments, "{call}");
+            }
+            assert!(calls[0].get("inputResponses").is_none(), "{}", calls[0]);
+            assert_eq!(calls[1]["inputResponses"], answer(), "{}", calls[1]);
+            assert_eq!(calls[1]["requestState"], STATE, "{}", calls[1]);
+        }
+
+        /// `open` 沒開反問：`tools/call` 不帶反問能力，同一台 server 不問、直接回結果。
+        #[test]
+        fn open_沒開反問_呼叫不帶反問能力_server_不問() {
+            let fake = asking();
+            let (_host, socket) = host("mcp-no-elicitation");
+            let mut stream = connect(&socket);
+            open_with(&mut stream, 1, &asking_server(fake.port, false));
+            call_params(
+                &mut stream,
+                2,
+                1,
+                &json!({ "name": "ask", "arguments": {} }),
+            );
+            let result = result_of(&mut stream, 2);
+            assert_eq!(result["content"][0]["text"], "沒問", "{result}");
+            let calls = tool_calls(&fake.log);
+            assert_eq!(calls.len(), 1, "{calls:?}");
+            assert!(
+                calls[0]["_meta"][CAPABILITIES]["elicitation"].is_null(),
+                "{}",
+                calls[0]
+            );
+        }
+
+        /// R6：等答時宿主被殺。補起的宿主上舊的綁定編號不存在：帶著它送第二輪會被拒，server 收不到；
+        /// 重新 `open` 之後，帶答案與原本那份 `requestState` 的第二輪經新的綁定送到 server，拿到最終結果。
+        #[test]
+        fn r6_等答時宿主被殺_補起後第二輪經新的綁定送到() {
+            let fake = asking();
+            let (old, socket) = host("mcp-r6-old");
+            let mut stream = connect(&socket);
+            open_with(&mut stream, 1, &asking_server(fake.port, true));
+            call_params(
+                &mut stream,
+                2,
+                1,
+                &json!({ "name": "ask", "arguments": {} }),
+            );
+            let first = result_of(&mut stream, 2);
+            assert_eq!(first["resultType"], "input_required", "{first}");
+            drop(old);
+            assert_eq!(read_message(&mut stream), None, "宿主被殺，舊連線要斷");
+
+            let (_new, socket) = host("mcp-r6-new");
+            let mut stream = connect(&socket);
+            let second = json!({
+                "name": "ask",
+                "arguments": {},
+                "inputResponses": answer(),
+                "requestState": first["requestState"],
+            });
+            call_params(&mut stream, 2, 1, &second);
+            assert_eq!(error_code(&mut stream, 2), ErrorCode::BadPayload);
+            assert_eq!(
+                tool_calls(&fake.log).len(),
+                1,
+                "帶舊編號的第二輪不該送到 server"
+            );
+
+            open_with(&mut stream, 3, &asking_server(fake.port, true));
+            call_params(&mut stream, 4, 3, &second);
+            let result = result_of(&mut stream, 4);
+            assert_eq!(result["content"][0]["text"], "答：小明", "{result}");
+            let calls = tool_calls(&fake.log);
+            assert_eq!(calls.len(), 2, "{calls:?}");
+            assert_eq!(calls[1]["inputResponses"], answer(), "{}", calls[1]);
+            assert_eq!(calls[1]["requestState"], STATE, "{}", calls[1]);
+        }
+
+        /// 一台 stdio 的假 server：把自己的 pid 寫進 `$PIDFILE`，握手走舊協定，`tools/call` 回 `from-stdio`。
+        const STDIO_SERVER: &str = r#"
+echo $$ > "$PIDFILE"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"server/discover"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id";;
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"0"}}}\n' "$id";;
+    *'"method":"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}\n' "$id";;
+    *'"method":"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"from-stdio"}],"isError":false}}\n' "$id";;
+  esac
+done
+"#;
+
+        /// [`STDIO_SERVER`] 的 `open` 酬載。
+        fn stdio_server(pid_file: &Path) -> String {
+            json!({
+                "server": {
+                    "serverName": "fake",
+                    "connection": {
+                        "transport": "stdio",
+                        "command": "/bin/sh",
+                        "args": ["-c", STDIO_SERVER],
+                        "env": { "PATH": "/usr/bin:/bin", "PIDFILE": pid_file },
+                        "credentialEnv": [],
+                    },
+                },
+            })
+            .to_string()
+        }
+
+        /// `/proc/<pid>/stat` 裡的父行程。
+        fn parent_of(pid: u32) -> u32 {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("行程還在");
+            let after_name = &stat[stat.rfind(')').expect("stat 的格式") + 1..];
+            after_name
+                .split_whitespace()
+                .nth(1)
+                .and_then(|ppid| ppid.parse().ok())
+                .expect("ppid")
+        }
+
+        /// open 一列 [`STDIO_SERVER`]、叫一次工具，確認結果來自它，而且它是 `host` 的子行程。
+        fn assert_stdio_works(host: &HostProc, stream: &mut UnixStream, tag: &str) {
+            let pid_file = temp_dir(tag).join("server.pid");
+            let listed = open_with(stream, 20, &stdio_server(&pid_file));
+            assert_eq!(listed["warning"], Value::Null, "{listed}");
+            assert_eq!(listed["tools"][0]["name"], "echo", "{listed}");
+            call_tool(stream, 21, 20, "echo", json!({}));
+            let result = result_of(stream, 21);
+            assert_eq!(result["content"][0]["text"], "from-stdio", "{result}");
+            let pid: u32 = std::fs::read_to_string(&pid_file)
+                .expect("server 寫了 pid")
+                .trim()
+                .parse()
+                .expect("pid");
+            assert_eq!(parent_of(pid), host.child.id(), "server 要是宿主的子行程");
+        }
+
+        /// 啟動時 stderr 上根憑證的警告行。
+        fn root_warnings(host: &HostProc) -> Vec<String> {
+            host.stderr()
+                .lines()
+                .filter(|line| line.starts_with("nexus-host: mcp 警告："))
+                .map(str::to_string)
+                .collect()
+        }
+
+        /// 沒設根憑證（插件的設定不帶 `roots`）：http 與 stdio 的 server 連得上、叫得到工具；https 的當場被拒，訊息是 [`NO_ROOTS`]；啟動時不印警告。
+        #[test]
+        fn 沒設根憑證_http_與_stdio_照常_https_當場被拒() {
+            let log: Arc<Mutex<Vec<Request>>> = Arc::default();
+            let plain = PlainServer::start(handler(
+                FakeMcp::with_tools(false, &["a"]),
+                Arc::clone(&log),
+            ));
+            let (host, socket) = host_with("mcp-no-roots", json!({}));
+            let mut stream = connect(&socket);
+            let url = format!("http://localhost:{}/mcp", plain.port);
+            let listed = open_with(&mut stream, 1, &at(&url, json!({})));
+            assert_eq!(listed["warning"], Value::Null, "{listed}");
+            assert_eq!(listed["tools"][0]["name"], "a", "{listed}");
+            call_tool(&mut stream, 2, 1, "a", json!({ "x": 1 }));
+            let result = result_of(&mut stream, 2);
+            assert_eq!(result["content"][0]["text"], r#""a":{"x":1}"#, "{result}");
+
+            assert_stdio_works(&host, &mut stream, "mcp-no-roots-stdio");
+
+            let refused = open_refused(&mut stream, 3, &at("https://localhost:1/mcp", json!({})));
+            assert_eq!(refused.code, ErrorCode::ServiceError);
+            assert_eq!(refused.message, NO_ROOTS);
+            assert_eq!(root_warnings(&host), Vec::<String>::new());
+        }
+
+        /// `roots` 指的檔不能用：宿主照常起來，啟動時在 stderr 印一行警告、指名那個檔；stdio 照常；https 的被拒，訊息指名那個檔、不說成沒設。
+        #[test]
+        fn 根憑證檔不能用_宿主照常起來_啟動時印一行警告_stdio_照常_https_指名檔案() {
+            let roots = temp_dir("mcp-bad-roots-file").join("broken.pem");
+            std::fs::write(
+                &roots,
+                "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+            )
+            .unwrap();
+            let shown = roots.display().to_string();
+            let (host, socket) = host_with("mcp-bad-roots", json!({ "roots": roots }));
+            let warnings = root_warnings(&host);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(
+                warnings[0].contains("NODE_EXTRA_CA_CERTS 指的根憑證檔不能用")
+                    && warnings[0].contains(&shown),
+                "{warnings:?}"
+            );
+
+            let mut stream = connect(&socket);
+            assert_stdio_works(&host, &mut stream, "mcp-bad-roots-stdio");
+
+            let refused = open_refused(&mut stream, 1, &at("https://localhost:1/mcp", json!({})));
+            assert_eq!(refused.code, ErrorCode::ServiceError);
+            assert!(refused.message.contains(&shown), "{}", refused.message);
+            assert!(
+                !refused.message.contains("沒設 NODE_EXTRA_CA_CERTS"),
+                "{}",
+                refused.message
+            );
+        }
+
+        /// https 的 server 要走代理、又沒設根憑證：`open` 當場被拒，訊息是 [`NO_ROOTS`]，代理沒有收到任何請求。
+        #[test]
+        fn https_的_server_走代理_沒設根憑證_當場被拒_不碰代理() {
+            let proxy = ConnectProxy::start(ProxyMode::Reject);
+            let policy = json!({
+                "httpsProxy": format!("http://127.0.0.1:{}", proxy.port),
+                "noProxy": "",
+            });
+            let (_host, socket) = host_with("mcp-proxy-no-roots", json!({ "proxy": policy }));
+            let mut stream = connect(&socket);
+            let refused =
+                open_refused(&mut stream, 1, &at("https://mcp.nexus.test/mcp", json!({})));
+            assert_eq!(refused.code, ErrorCode::ServiceError);
+            assert_eq!(refused.message, NO_ROOTS);
+            assert!(proxy.seen().is_empty(), "被拒的 open 不該連代理");
+        }
+
+        /// 代理的網址是 https、又沒設根憑證：http 的 server 也要先跟代理做 TLS，空信任庫驗不過，連不上。
+        /// 釘現況：錯誤只說送不出請求，沒有提代理、TLS 或根憑證。
+        #[test]
+        fn http_的_server_走_https_的代理_沒設根憑證_連不上() {
+            let proxy = TlsServer::start(Arc::new(|_| Response::empty(502)));
+            let policy = json!({
+                "httpProxy": format!("https://localhost:{}", proxy.port),
+                "noProxy": "",
+            });
+            let (_host, socket) = host_with("mcp-tls-proxy-no-roots", json!({ "proxy": policy }));
+            let mut stream = connect(&socket);
+            let refused = open_refused(
+                &mut stream,
+                1,
+                &at(
+                    "http://mcp.nexus.test/mcp",
+                    json!({ "failOnStartupError": true }),
+                ),
+            );
+            assert_eq!(refused.code, ErrorCode::ServiceError);
+            assert!(
+                refused.message.contains("error sending request"),
+                "{}",
+                refused.message
+            );
+            assert!(
+                !refused.message.contains("NODE_EXTRA_CA_CERTS"),
+                "{}",
+                refused.message
+            );
         }
     }
 }

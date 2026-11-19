@@ -1,0 +1,268 @@
+{
+  "description": "宿主 `mcp/client` 的 `open` 收的 `server` 整份的共用樣本（#3044）：TS 的 mcpHostRow（apps/harness/src/mcp-host-row-service.ts）在工作目錄是 cwd、環境是 parentEnv 時，對 config 與 credentials 的產出要等於 server；宿主的 Server::parse 讀同一份 server 都要收，欄位的值要對得上。有 relativeCommand 的案例，server 的 command 要等於 server 的 cwd 接上 relativeCommand。憑證值都是假的。",
+  "cwd": "/srv/nexus",
+  "parentEnv": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/home/nexus",
+    "LANG": "C.UTF-8",
+    "GITHUB_TOKEN": "FAKE-parent-token-0001",
+    "NEXUS_AGENT_HOME": "/srv/nexus/home"
+  },
+  "cases": [
+    {
+      "name": "http：只寫網址，其餘都是預設值",
+      "config": {
+        "serverName": "docs",
+        "connection": {
+          "transport": "http",
+          "url": "http://mcp.corp.test:8080/mcp"
+        }
+      },
+      "credentials": {},
+      "server": {
+        "serverName": "docs",
+        "toolCallTimeoutMs": 60000,
+        "livenessTimeoutMs": 15000,
+        "failOnStartupError": false,
+        "maxInstructionBytes": 32768,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 500,
+          "maxDelayMs": 30000,
+          "maxAttempts": 10
+        },
+        "elicitation": true,
+        "connection": {
+          "transport": "http",
+          "url": "http://mcp.corp.test:8080/mcp",
+          "headers": {},
+          "credentialHeaders": {}
+        }
+      }
+    },
+    {
+      "name": "http：憑證 header，每個設定欄位都寫，approval 不交給宿主",
+      "config": {
+        "serverName": "gh",
+        "connection": {
+          "transport": "http",
+          "url": "https://mcp.corp.test/mcp",
+          "headers": {
+            "Authorization": {
+              "credential": "GH",
+              "prefix": "Bearer "
+            },
+            "X-Plain": "v"
+          }
+        },
+        "toolCallTimeoutMs": 1234,
+        "livenessTimeoutMs": 2345,
+        "failOnStartupError": true,
+        "maxInstructionBytes": 4096,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 250,
+          "maxDelayMs": 4000,
+          "maxAttempts": 3
+        },
+        "elicitation": false,
+        "approval": {
+          "default": "allow"
+        }
+      },
+      "credentials": {
+        "GH": " FAKE-token-000001 "
+      },
+      "server": {
+        "serverName": "gh",
+        "toolCallTimeoutMs": 1234,
+        "livenessTimeoutMs": 2345,
+        "failOnStartupError": true,
+        "maxInstructionBytes": 4096,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 250,
+          "maxDelayMs": 4000,
+          "maxAttempts": 3
+        },
+        "elicitation": false,
+        "connection": {
+          "transport": "http",
+          "url": "https://mcp.corp.test/mcp",
+          "headers": {
+            "Authorization": "Bearer FAKE-token-000001",
+            "X-Plain": "v"
+          },
+          "credentialHeaders": {
+            "Authorization": "Bearer "
+          }
+        }
+      }
+    },
+    {
+      "name": "stdio：絕對的 command，env 有憑證引用與字面值",
+      "config": {
+        "serverName": "local",
+        "connection": {
+          "transport": "stdio",
+          "command": "/opt/tools/server",
+          "args": ["--mode", "fast"],
+          "cwd": "/srv/data",
+          "env": {
+            "TOKEN": {
+              "credential": "TK"
+            },
+            "MODE": "fast"
+          }
+        }
+      },
+      "credentials": {
+        "TK": "\nFAKE-secret-000002\n"
+      },
+      "server": {
+        "serverName": "local",
+        "toolCallTimeoutMs": 60000,
+        "livenessTimeoutMs": 15000,
+        "failOnStartupError": false,
+        "maxInstructionBytes": 32768,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 500,
+          "maxDelayMs": 30000,
+          "maxAttempts": 10
+        },
+        "elicitation": true,
+        "connection": {
+          "transport": "stdio",
+          "command": "/opt/tools/server",
+          "args": ["--mode", "fast"],
+          "cwd": "/srv/data",
+          "env": {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/nexus",
+            "LANG": "C.UTF-8",
+            "TOKEN": "FAKE-secret-000002",
+            "MODE": "fast"
+          },
+          "credentialEnv": ["TOKEN"]
+        }
+      }
+    },
+    {
+      "name": "stdio：相對的 command，cwd 是絕對路徑",
+      "relativeCommand": "./bin/server",
+      "config": {
+        "serverName": "rel-abs",
+        "connection": {
+          "transport": "stdio",
+          "command": "./bin/server",
+          "cwd": "/work/b"
+        }
+      },
+      "credentials": {},
+      "server": {
+        "serverName": "rel-abs",
+        "toolCallTimeoutMs": 60000,
+        "livenessTimeoutMs": 15000,
+        "failOnStartupError": false,
+        "maxInstructionBytes": 32768,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 500,
+          "maxDelayMs": 30000,
+          "maxAttempts": 10
+        },
+        "elicitation": true,
+        "connection": {
+          "transport": "stdio",
+          "command": "/work/b/bin/server",
+          "args": [],
+          "cwd": "/work/b",
+          "env": {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/nexus",
+            "LANG": "C.UTF-8"
+          },
+          "credentialEnv": []
+        }
+      }
+    },
+    {
+      "name": "stdio：相對的 command，cwd 是相對路徑",
+      "relativeCommand": "./bin/server",
+      "config": {
+        "serverName": "rel-rel",
+        "connection": {
+          "transport": "stdio",
+          "command": "./bin/server",
+          "cwd": "tools/b"
+        }
+      },
+      "credentials": {},
+      "server": {
+        "serverName": "rel-rel",
+        "toolCallTimeoutMs": 60000,
+        "livenessTimeoutMs": 15000,
+        "failOnStartupError": false,
+        "maxInstructionBytes": 32768,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 500,
+          "maxDelayMs": 30000,
+          "maxAttempts": 10
+        },
+        "elicitation": true,
+        "connection": {
+          "transport": "stdio",
+          "command": "/srv/nexus/tools/b/bin/server",
+          "args": [],
+          "cwd": "/srv/nexus/tools/b",
+          "env": {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/nexus",
+            "LANG": "C.UTF-8"
+          },
+          "credentialEnv": []
+        }
+      }
+    },
+    {
+      "name": "stdio：相對的 command，沒設 cwd",
+      "relativeCommand": "bin/server",
+      "config": {
+        "serverName": "rel-none",
+        "connection": {
+          "transport": "stdio",
+          "command": "bin/server"
+        }
+      },
+      "credentials": {},
+      "server": {
+        "serverName": "rel-none",
+        "toolCallTimeoutMs": 60000,
+        "livenessTimeoutMs": 15000,
+        "failOnStartupError": false,
+        "maxInstructionBytes": 32768,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 500,
+          "maxDelayMs": 30000,
+          "maxAttempts": 10
+        },
+        "elicitation": true,
+        "connection": {
+          "transport": "stdio",
+          "command": "/srv/nexus/bin/server",
+          "args": [],
+          "cwd": "/srv/nexus",
+          "env": {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/nexus",
+            "LANG": "C.UTF-8"
+          },
+          "credentialEnv": []
+        }
+      }
+    }
+  ]
+}
