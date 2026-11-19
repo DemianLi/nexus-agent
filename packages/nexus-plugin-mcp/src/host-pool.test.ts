@@ -426,7 +426,7 @@ describe('宿主連線斷了又連上', () => {
     expect(host.calls.at(-1)?.options.signal?.aborted).toBe(true);
   });
 
-  it('從不叫 onclose：宿主重起不是 server 掉線，TS 的監督者不重連', async () => {
+  it('宿主重起不叫 onclose：不是 server 掉線，TS 的監督者不重連', async () => {
     const host = fakeHost({});
     const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
     let closed = 0;
@@ -439,6 +439,18 @@ describe('宿主連線斷了又連上', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(closed).toBe(0);
     expect(host.opens()).toHaveLength(2);
+  });
+
+  it('自己 close 叫一次 onclose，Supervisor 才確認得到這一代關掉了', async () => {
+    const host = fakeHost({});
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    let closed = 0;
+    client.onclose = () => {
+      closed += 1;
+    };
+    await client.close();
+    await client.close();
+    expect(closed).toBe(1);
   });
 
   it('close 之後 onReady 不再重新 open，且取消 open 呼叫', async () => {

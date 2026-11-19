@@ -6,8 +6,8 @@
  * `connectGeneration`、`toolCallOf`、`Supervisor`、資源來源都不知道連線在宿主那邊。
  *
  * **兩層重連，各管各的**：宿主自己對 MCP server 退避重連（空窗裡的呼叫回 `server is disconnected`，綁定不變、不通知這一側）；
- * 這一側只在「宿主連線斷了又連上」（`onReady`）時重新 `open`。所以這個 client 從不呼叫 `onclose`，TS 的 `Supervisor` 不會因此重連，
- * 也不吃那一列的 `reconnect` 設定。
+ * 這一側只在「宿主連線斷了又連上」（`onReady`）時重新 `open`。所以這個 client 只在自己 `close()` 時呼叫 `onclose`（SDK 的 client 也是；
+ * TS 的 `Supervisor` 靠它確認這一代關掉了），宿主重起、server 掉線都不呼叫，`Supervisor` 不會因此重連，也不吃那一列的 `reconnect` 設定。
  *
  * 重新 `open` 之前的呼叫：等當前綁定最多 {@link DEFAULT_REBIND_WAIT_MS}，到了回 `server is disconnected`；
  * 送出去之後宿主連線斷了的（`host_lost`），結果不明、不重送。
@@ -448,6 +448,7 @@ export class HostMcpClient {
       this.#unsubscribe();
       this.#abort.abort();
       this.#wake();
+      this.onclose?.();
     }
     return Promise.resolve();
   }
