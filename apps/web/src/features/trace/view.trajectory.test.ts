@@ -22,8 +22,6 @@ import {
   withTrajectory,
 } from '@/test/trajectory-fixtures';
 import {
-  TRACE_LIMITS,
-  TRACE_STRUCTURED_LIMITS,
   sameRow,
   traceModel,
   traceTurns,
@@ -821,19 +819,6 @@ describe('traceModel：列只放原始值，投影整份換掉時 memo 才擋得
     const flat = (m: typeof first) => m.turns.flatMap((t) => t.rows);
     expect(flat(second)).toHaveLength(flat(first).length);
     flat(first).forEach((row, i) => expect(sameRow(row, flat(second)[i]!)).toBe(true));
-  });
-});
-
-describe('限制文字', () => {
-  it('結構化的限制拿掉了「切輪靠人」；決定那條不再說「只存本地」（核准結局來自軌跡）', () => {
-    expect(Object.keys(TRACE_STRUCTURED_LIMITS)).toEqual(['decisions', 'loaded', 'absent']);
-    expect(TRACE_STRUCTURED_LIMITS.decisions).not.toBe(TRACE_LIMITS.decisions);
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('重新整理後仍在');
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('更早的輪只剩摘要');
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('載入這一輪的細節');
-    expect(TRACE_STRUCTURED_LIMITS.loaded).toContain('載入這一輪的細節');
-    expect(TRACE_STRUCTURED_LIMITS.decisions).not.toContain('只記在這個分頁');
-    expect(Object.keys(TRACE_LIMITS)).toEqual(['turns', 'decisions', 'loaded', 'absent']);
   });
 });
 

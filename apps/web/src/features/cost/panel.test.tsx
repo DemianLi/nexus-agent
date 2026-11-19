@@ -17,7 +17,6 @@ import { COST_NO_USAGE, COST_RELOAD_LABEL } from '@/features/cost/panel';
 import { RightSidebarToggle } from '@/app/right-sidebar/right-sidebar';
 import { COST_TAB } from './sidebar-tab';
 import type { TabBodyProps } from '@/shared/right-sidebar/tab';
-import { COST_HEADLINE, COST_LIMITS } from '@/features/cost/view';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
@@ -155,19 +154,10 @@ describe('成本分頁：快取命中率（#724）', () => {
     expect(text('cost-totals')).not.toContain('快取命中率');
   });
 
-  it('口徑那一句只在畫了命中率時才有', async () => {
-    mount(withUsage(cached));
-    await act(async () => {});
-    expect(screen.getByTestId('cost-limits').textContent).toContain(COST_LIMITS.cache);
-    cleanup();
-    mount(withUsage({ inputTokens: 5_000, uncachedInputTokens: 5_000, outputTokens: 500 }));
-    await act(async () => {});
-    expect(screen.getByTestId('cost-limits').textContent).not.toContain(COST_LIMITS.cache);
-  });
 });
 
 describe('成本分頁：主對話', () => {
-  it('累計、context、壓縮都照總帳與 frame；口徑與標語寫在畫面上', async () => {
+  it('累計、context、壓縮都照總帳與 frame；畫面上沒有標語與口徑清單', async () => {
     mount(conversation(false), loaderOf());
     await act(async () => {});
     const totals = text('cost-totals');
@@ -181,11 +171,10 @@ describe('成本分頁：主對話', () => {
     const context = text('cost-context');
     expect(context).toContain('約 49%');
     expect(context).toContain('4,800 token');
-    expect(text('cost-compactions')).toContain('1 次');
-    expect(text('cost-headline')).toBe(COST_HEADLINE);
-    const limits = within(screen.getByTestId('cost-limits')).getAllByRole('listitem');
-    const { cache: _cache, ...withoutCache } = COST_LIMITS;
-    expect(limits.map((item) => item.textContent)).toEqual(Object.values(withoutCache));
+    expect(context).toContain('已載入的壓縮次數1 次');
+    expect(screen.queryByTestId('cost-compactions')).toBeNull();
+    expect(screen.queryByTestId('cost-headline')).toBeNull();
+    expect(screen.queryByTestId('cost-limits')).toBeNull();
   });
 
   it('只有 frame、一則對話都沒載入（entries 為空）時數字仍照 frame', async () => {
@@ -205,7 +194,9 @@ describe('成本分頁：主對話', () => {
     await act(async () => {});
     expect(text('cost-totals')).toContain(COST_NO_USAGE);
     expect(text('cost-totals')).not.toContain('0 token');
-    expect(screen.queryByTestId('cost-context')).toBeNull();
+    // 摘要的 context 列沒有，壓縮次數那一列照樣在。
+    expect(text('cost-context')).not.toContain('離自動摘要');
+    expect(text('cost-context')).toContain('已載入的壓縮次數0 次');
   });
 
   it('沒有對話可看就是空狀態', async () => {

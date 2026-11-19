@@ -6,12 +6,11 @@
  *
  * - **有 token** 指輸入或輸出大於 0（`:330`）。模型呼叫全都沒報用量時，只畫次數，不畫用量那一段。
  * - **一次模型呼叫都沒結束、也沒有 token，整顆不畫**（`:347`）。`null` 當成 dsh 的「全是 0」。
- * - 時間那兩列**大於 0 才列**（`:201-212`）。
  *
  * 跟 dsh 不同的地方，都是 #574 定過的 UI 形狀：
  *
- * - dsh 是輸入框底列兩顆 pill，這裡**併成頂列一顆**，點開分兩段。平常顯示總量，沒有 token 時退成次數，跟 dsh
- *   只剩時間那顆時一樣。
+ * - dsh 是輸入框底列兩顆 pill，這裡**併成頂列一顆**。平常顯示總量，沒有 token 時退成次數，跟 dsh
+ *   只剩時間那顆時一樣；點開只有精確總數與成本分頁的入口，明細只在成本分頁（#3036 第 6 條）。
  * - **四桶互不重疊**（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，照 dsh `usage-projection`）：輸入（未快取）、
  *   快取讀、快取寫、輸出，**合計是四項相加，不再靠 `inputTokens` 含不含快取**（{@link usageBuckets}）。server 有送
  *   `uncachedInputTokens` 就走這條，所以 `inputTokens` 之後改成只算未快取，畫面的數字不變；沒送的舊 server 退回讀
@@ -93,20 +92,8 @@ export interface SessionUsageView {
   readonly label: string;
   /** 按鈕的名稱（給報讀）。 */
   readonly ariaLabel: string;
-  /** 用量那一段；沒有 token 時不給。 */
-  readonly usage?: {
-    readonly total: string;
-    readonly input: string;
-    readonly output: string;
-    /** 命中快取讀出來的那部分輸入；沒記畫 {@link NOT_RECORDED}。 */
-    readonly cacheRead: string;
-    /** 寫進快取的那部分輸入；沒記畫 {@link NOT_RECORDED}。 */
-    readonly cacheWrite: string;
-    /** 兩格底下那一句說明：有記時講已含在輸入裡，有沒記的時講沒記不是 0。 */
-    readonly cacheNote: string;
-  };
-  /** 時間那一段；一次模型呼叫都沒結束時不給。 */
-  readonly time?: { readonly counts: string; readonly llm?: string; readonly tool?: string };
+  /** 點開後的精確總數；沒有 token 時不給。明細只在成本分頁。 */
+  readonly total?: string;
 }
 
 /** 快取那兩格缺席時畫的字（缺席＝沒記，不是 0）。 */
@@ -138,39 +125,12 @@ export function sessionUsageView(
   const hasTokens = buckets.total > 0;
   const steps = sessionStats?.steps ?? 0;
   if (steps === 0 && !hasTokens) return null;
-
-  const { cacheRead, cacheWrite } = buckets;
-  const unrecorded = cacheRead === undefined || cacheWrite === undefined;
-  const usage = hasTokens
-    ? {
-        total: exactTokens(buckets.total),
-        input: exactTokens(buckets.input),
-        output: exactTokens(buckets.output),
-        cacheRead: cacheRead === undefined ? NOT_RECORDED : exactTokens(cacheRead),
-        cacheWrite: cacheWrite === undefined ? NOT_RECORDED : exactTokens(cacheWrite),
-        cacheNote: unrecorded
-          ? buckets.cacheInInput
-            ? '「沒記」是這台 server 沒有記錄，不是 0。'
-            : '「沒記」是這台 server 沒有記錄，不是 0；合計不含沒記的那一項。'
-          : buckets.cacheInInput
-            ? '快取讀、快取寫已含在輸入裡。'
-            : '輸入是未快取的部分；輸入、快取讀、快取寫、輸出互不重疊，合計是四項相加。',
-      }
-    : undefined;
-  const time =
-    sessionStats !== null && steps > 0
-      ? {
-          counts: `${sessionStats.turns} 輪／${steps} 次`,
-          ...(sessionStats.llmMs > 0 ? { llm: formatDuration(sessionStats.llmMs) } : {}),
-          ...(sessionStats.toolMs > 0 ? { tool: formatDuration(sessionStats.toolMs) } : {}),
-        }
-      : undefined;
-
-  const label = hasTokens ? `${compact(buckets.total)} token` : time!.counts;
+  const label = hasTokens
+    ? `${compact(buckets.total)} token`
+    : `${sessionStats!.turns} 輪／${steps} 次`;
   return {
     label,
     ariaLabel: `這條對話的用量：${label}，點開看明細`,
-    ...(usage !== undefined ? { usage } : {}),
-    ...(time !== undefined ? { time } : {}),
+    ...(hasTokens ? { total: exactTokens(buckets.total) } : {}),
   };
 }

@@ -16,7 +16,7 @@ import {
   RightSidebarToggle,
 } from '@/app/right-sidebar/right-sidebar';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
-import { TRACE_EMPTY_HINT, TRACE_EMPTY_TEXT } from '@/features/trace/panel';
+import { TRACE_EMPTY_TEXT } from '@/features/trace/panel';
 import { createChangesStores } from '@/features/changes/diff';
 import { createDeliverableFileStore } from '@/features/deliverable/file';
 import type { LocatedFile } from '@/shared/lib/located-file';
@@ -453,7 +453,7 @@ describe('單例面板：觀測與成本（#1031）', () => {
     expect(tab.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(tab);
     expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe(
-      TRACE_EMPTY_TEXT + TRACE_EMPTY_HINT,
+      TRACE_EMPTY_TEXT,
     );
     // 有分頁之後空狀態讓位。
     expect(screen.queryByText(RIGHT_SIDEBAR_EMPTY_TEXT)).toBeNull();

@@ -7,8 +7,8 @@
  * **有用量投影時**（#1028，`projections['token-meter']`）整個畫面改走 {@link StructuredCost}：
  * - **數字只有一個來源**：累計、逐輪、子代理全部取自投影，不再混 `sessionStats`（它的 `llmMs` 沒扣重試退避，兩個來源會差一截）。
  *   累計之外畫「更早合併的」「逐輪」「不在任何輪裡的」三段，加起來就是累計。
- * - **每個數字附口徑**：每一格帶 `data-field`，底下一個摺起來的「每個數字的口徑」逐項列出 `TOKEN_METER_CALIBER` 的句子；沒報用量的呼叫
- *   讓 token 標「下限」，殘差為負照實寫。
+ * - **每個數字附口徑**：每一格帶 `data-field`，底下一個摺起來的「每個數字的口徑」逐項列出 `TOKEN_METER_CALIBER` 的句子，是畫面上
+ *   唯一的口徑入口；整體的限制在 `docs/operations.md`〈成本與觀測分頁的口徑與限制〉。沒報用量的呼叫讓 token 標「下限」，殘差為負照實寫。
  * - **子代理含前景**：從 root 的 `links` 接回 `subagentProjections[runId]`，投影還沒到寫「還沒有資料」；不呼叫 `subagentHistory`。
  * - **「在觀測分頁看這一輪」**：呼叫右側欄的 `revealTurn(seq)`，`seq` 是 `TokenMeterTurn.seq`（等於觀測分頁那一組的 `turn-<seq>`）；
  *   觀測分頁已經沒有那一輪的資料時鈕停用並講原因。
@@ -19,7 +19,7 @@
  *   數字取自 `subagentHistory` 那一頁的兩顆總帳（`features/cost/subagent-usage.ts`）。
  * - **只在看得見時訂閱與讀取**：主對話走 `useVisibleSnapshot`、子代理走 `useSubagentUsages`，分頁藏起來時串流的逐字片段不重算、
  *   也不發請求。內容那一層 `memo`：看得見時逐字片段會讓這裡重新取快照，但總帳的身分只在值變了才換，所以表不重畫。
- * - **口徑全部寫在畫面上**（`COST_LIMITS`），版型沿用用量鈕的 `Rows`（`dl` 兩欄、`tabular-nums`），不畫圖表。
+ * - 口徑不在畫面上（見 `docs/operations.md`）；版型沿用用量鈕的 `Rows`（`dl` 兩欄、`tabular-nums`），不畫圖表。
  *
  * 375／768 單欄，觸控目標 44px（`min-h-11`）。
  */
@@ -45,18 +45,9 @@ import { useStableNames, subagentLabel } from '@/features/tool';
 import { useSubagentUsages } from '@/features/cost/use-subagent-usages';
 import type { SubagentUsageSlot } from '@/features/cost/use-subagent-usages';
 import { useVisibleSnapshot } from '@/shared/lib/use-visible-snapshot';
-import {
-  COST_HEADLINE,
-  costLimits,
-  COST_LIMITS_HEADING,
-  compactionCount,
-  contextRows,
-  usageSections,
-} from '@/features/cost/view';
+import { compactionCount, contextSectionRows, usageSections } from '@/features/cost/view';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
 import {
-  COST_STRUCTURED_HEADLINE,
-  COST_STRUCTURED_LIMITS,
   caliberOf,
   costSubagents,
   costTurnRows,
@@ -189,23 +180,6 @@ function Subagents({
   );
 }
 
-function Limits({ tokenUsage }: { tokenUsage: WireTokenUsage | null }) {
-  return (
-    <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-tip">
-      <h3 id="cost-limits" className="mb-1 font-medium">
-        {COST_LIMITS_HEADING}
-      </h3>
-      <ul className="flex list-disc flex-col gap-1 pl-4" data-testid="cost-limits">
-        {Object.entries(costLimits(tokenUsage)).map(([key, text]) => (
-          <li key={key} data-limit={key}>
-            {text}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 /** 兩欄清單，每一格帶 `data-field`（口徑表的鍵）：每個數字都找得到它的口徑句。 */
 function FieldRows({ rows }: { rows: readonly FieldRow[] }) {
   return (
@@ -310,11 +284,6 @@ function SubagentCard({ subagent, label }: { subagent: CostSubagent; label: stri
           <FieldRows rows={spanRows(view.session)} />
         </div>
       )}
-      {mode === 'one-shot' && (
-        <p className="text-muted-foreground text-tip">
-          前景子代理跑的時間已經在派它的那顆工具的耗時裡，不要和主對話的時間相加。
-        </p>
-      )}
     </li>
   );
 }
@@ -344,23 +313,6 @@ function Calibers({ rows }: { rows: readonly FieldRow[] }) {
   );
 }
 
-function StructuredLimits() {
-  return (
-    <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-tip">
-      <h3 id="cost-limits" className="mb-1 font-medium">
-        {COST_LIMITS_HEADING}
-      </h3>
-      <ul className="flex list-disc flex-col gap-1 pl-4" data-testid="cost-limits">
-        {Object.entries(COST_STRUCTURED_LIMITS).map(([key, text]) => (
-          <li key={key} data-limit={key}>
-            {text}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 interface StructuredCostProps {
   meter: TokenMeterView;
   turns: readonly CostTurnRow[];
@@ -379,7 +331,7 @@ function StructuredCost({
   compactions,
   contextPressure,
 }: StructuredCostProps) {
-  const context = contextRows(contextPressure);
+  const context = contextSectionRows(contextPressure, compactions);
   const total = spanRows(meter.session);
   const withSubagents = subagents.length > 0 ? tokensWithSubagents(meter, subagents) : undefined;
   const hasOutside = meter.outside.steps > 0 || meter.outside.toolCalls > 0;
@@ -388,6 +340,9 @@ function StructuredCost({
     ...(withSubagents === undefined ? [] : [['subagentTokens', '含子代理的 token', ''] as const]),
     ...turns.flatMap((row) => row.fields),
     ...(meter.earlier === undefined ? [] : spanRows(meter.earlier)),
+    ...(subagents.some((subagent) => subagent.mode === 'one-shot')
+      ? [['foregroundSubagentTime', '前景子代理的時間', ''] as const]
+      : []),
   ];
   const empty = meter.session.steps === 0 && meter.session.toolCalls === 0;
   return (
@@ -398,10 +353,7 @@ function StructuredCost({
       data-structured=""
       tabIndex={0}
     >
-      <p className="text-muted-foreground mb-1 px-2 text-tip" data-testid="cost-headline">
-        {COST_STRUCTURED_HEADLINE}
-      </p>
-      <Section title="這條對話累計" testId="cost-totals">
+      <Section title="累計" testId="cost-totals">
         {empty ? (
           <p className="text-muted-foreground text-body">{COST_NO_USAGE}</p>
         ) : (
@@ -422,16 +374,9 @@ function StructuredCost({
         )}
       </Section>
       <Distributions meter={meter} />
-      {context !== undefined && (
-        <Section title="目前的 context" testId="cost-context">
-          <div className="text-body">
-            <Rows rows={context} />
-          </div>
-        </Section>
-      )}
-      <Section title="壓縮" testId="cost-compactions">
+      <Section title="目前的 context" testId="cost-context">
         <div className="text-body">
-          <Rows rows={[['已載入的壓縮次數', `${compactions} 次`]]} />
+          <Rows rows={context} />
         </div>
       </Section>
       <Section title="逐輪" testId="cost-turns">
@@ -473,14 +418,8 @@ function StructuredCost({
             ))}
           </ul>
         )}
-        {meter.linksOmitted > 0 && (
-          <p className="text-muted-foreground text-tip" data-testid="cost-links-omitted">
-            更早派出的 {meter.linksOmitted} 個子代理沒有逐個列出，含子代理的 token 因此是下限。
-          </p>
-        )}
       </Section>
       <Calibers rows={allRows} />
-      <StructuredLimits />
     </section>
   );
 }
@@ -504,7 +443,7 @@ const CostView = memo(function CostView({
   loadSubagentUsage,
   visible,
 }: CostViewProps) {
-  const context = contextRows(contextPressure);
+  const context = contextSectionRows(contextPressure, compactions);
   return (
     <section
       aria-label="這條對話的成本"
@@ -513,28 +452,17 @@ const CostView = memo(function CostView({
       // 可捲動的區塊要能用鍵盤捲：進 Tab 順序（同觀測與計劃分頁，§8）。
       tabIndex={0}
     >
-      <p className="text-muted-foreground mb-1 px-2 text-tip" data-testid="cost-headline">
-        {COST_HEADLINE}
-      </p>
-      <Section title="這條對話累計" testId="cost-totals">
+      <Section title="累計" testId="cost-totals">
         <Totals tokenUsage={tokenUsage} sessionStats={sessionStats} />
       </Section>
-      {context !== undefined && (
-        <Section title="目前的 context" testId="cost-context">
-          <div className="text-body">
-            <Rows rows={context} />
-          </div>
-        </Section>
-      )}
-      <Section title="壓縮" testId="cost-compactions">
+      <Section title="目前的 context" testId="cost-context">
         <div className="text-body">
-          <Rows rows={[['已載入的壓縮次數', `${compactions} 次`]]} />
+          <Rows rows={context} />
         </div>
       </Section>
       {loadSubagentUsage !== undefined && (
         <Subagents names={names} load={loadSubagentUsage} visible={visible} />
       )}
-      <Limits tokenUsage={tokenUsage} />
     </section>
   );
 });
