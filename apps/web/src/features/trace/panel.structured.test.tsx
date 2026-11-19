@@ -10,13 +10,20 @@ import {
   DIGEST_PAGE,
   ROW_PAGE,
   TRACE_MORE_ROWS_LABEL,
+  TRACE_LEGACY_GROUP_TEXT,
   TRACE_MORE_DIGESTS_LABEL,
 } from '@/features/trace/groups';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import type { RightSidebarSources } from '@/shared/right-sidebar/api';
-import { TRACE_CALL_UNLOADED_TEXT } from '@/features/trace/view';
+import {
+  TRACE_CALL_UNLOADED_TEXT,
+  TRACE_HEADLINE,
+  TRACE_LIMITS,
+  TRACE_STRUCTURED_HEADLINE,
+  TRACE_STRUCTURED_LIMITS,
+} from '@/features/trace/view';
 import { TRACE_LOCATE_LOADING_TEXT } from '@/shared/right-sidebar/locate-text';
 import { clockText } from '@/features/trace/trajectory-view';
 import { axeViolations } from '@/test/axe';
@@ -116,11 +123,11 @@ function conversation() {
 const kinds = () => screen.getAllByTestId('trace-row').map((row) => row.getAttribute('data-kind'));
 
 describe('觀測分頁：結構化模式', () => {
-  it('輪的標題、模型呼叫段落、重試、重複呼叫提醒照順序出現，畫面上沒有標語與限制清單', async () => {
+  it('輪的標題、模型呼叫段落、重試、重複呼叫提醒照順序出現，限制換成結構化的那一組', async () => {
     const { script, state, trajectory } = conversation();
     mount(withTrajectory(state, script, trajectory));
     await act(async () => {});
-    expect(screen.queryByTestId('trace-headline')).toBeNull();
+    expect(screen.getByTestId('trace-headline').textContent).toBe(TRACE_STRUCTURED_HEADLINE);
     // 提醒（seq 12）發生在第一次呼叫（5）之後、第二次呼叫（16）之前。
     expect(kinds()).toEqual([
       'input',
@@ -142,7 +149,14 @@ describe('觀測分頁：結構化模式', () => {
     expect(heads[0]!.textContent).toContain('人的訊息');
     expect(heads[0]!.textContent).toContain('2 次呼叫');
     expect(heads[0]!.textContent).toContain('耗時 2.5 秒');
-    expect(screen.queryByTestId('trace-limits')).toBeNull();
+    const limits = within(screen.getByTestId('trace-limits')).getAllByRole('listitem');
+    expect(limits.map((item) => item.textContent)).toEqual(Object.values(TRACE_STRUCTURED_LIMITS));
+    // 切輪那一條沒有了；決定那一條換成「核准結局來自軌跡」。
+    expect(limits.map((item) => item.getAttribute('data-limit'))).toEqual([
+      'decisions',
+      'loaded',
+      'absent',
+    ]);
   });
 
   it('工具列帶投影的時刻與耗時；重試列帶原因碼、狀態與等了多久；提醒寫出工具與次數', async () => {
@@ -311,7 +325,7 @@ describe('觀測分頁：結構化模式', () => {
     expect(screen.getByTestId('trace-call-unloaded').textContent).toBe(TRACE_CALL_UNLOADED_TEXT);
   });
 
-  it('單輪上限摺掉的部分只寫數量，標頭的計數仍包含它們', async () => {
+  it('單輪上限摺掉的部分講明白：計數仍包含它們', async () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [script.running(), script.completed()]);
     const trajectory = view([
@@ -325,7 +339,9 @@ describe('觀測分頁：結構化模式', () => {
     mount(withTrajectory(state, script, trajectory));
     await act(async () => {});
     const note = screen.getByTestId('trace-elided').textContent!;
-    expect(note).toBe('另摺掉 39 次呼叫、9 個工具');
+    expect(note).toContain('另有 39 次呼叫已摺掉');
+    expect(note).toContain('9 個工具已摺掉');
+    expect(note).toContain('仍包含它們');
     expect(screen.getByTestId('trace-turn-head').textContent).toContain('40 次呼叫');
   });
 
@@ -411,17 +427,22 @@ describe('觀測分頁：結構化模式', () => {
     await act(async () => {});
     const groups = screen.getAllByTestId('trace-turn');
     expect(groups).toHaveLength(2);
-    expect(groups[0]!.hasAttribute('data-legacy')).toBe(true);
-    expect(groups[1]!.hasAttribute('data-legacy')).toBe(false);
+    expect(within(groups[0]!).getByTestId('trace-legacy-group').textContent).toBe(
+      TRACE_LEGACY_GROUP_TEXT,
+    );
     expect(within(groups[0]!).queryByTestId('trace-turn-head')).toBeNull();
     expect(within(groups[1]!).getByTestId('trace-turn-head').textContent).toContain('第 1 輪');
   });
 
-  it('沒有投影：整個是第 0 版，沒有標題與段落', async () => {
+  it('沒有投影：整個是第 0 版，標語與四條限制都在，沒有標題與段落', async () => {
     const { state } = conversation();
     mount(state);
     await act(async () => {});
+    expect(screen.getByTestId('trace-headline').textContent).toBe(TRACE_HEADLINE);
+    const limits = within(screen.getByTestId('trace-limits')).getAllByRole('listitem');
+    expect(limits.map((item) => item.textContent)).toEqual(Object.values(TRACE_LIMITS));
     expect(screen.queryByTestId('trace-turn-head')).toBeNull();
+    expect(screen.queryByTestId('trace-legacy-group')).toBeNull();
     expect(kinds()).not.toContain('call');
   });
 

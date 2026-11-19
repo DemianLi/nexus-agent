@@ -26,23 +26,37 @@ describe('sessionUsageView（#574）', () => {
     expect(view).toEqual({
       label: '422k token',
       ariaLabel: '這條對話的用量：422k token，點開看明細',
-      total: '422,195 token',
+      usage: {
+        total: '422,195 token',
+        input: '412,380 token',
+        output: '9,815 token',
+        cacheRead: '沒記',
+        cacheWrite: '沒記',
+        cacheNote: '「沒記」是這台 server 沒有記錄，不是 0。',
+      },
+      time: { counts: '4 輪／17 次', llm: '2 分 13 秒', tool: '38.4 秒' },
     });
   });
 
-  describe('總數（#724）：快取不重複加、沒記的不加', () => {
+  describe('快取讀、快取寫（#724）：缺席是「沒記」，不是 0', () => {
     const base = { inputTokens: 412_380, outputTokens: 9_815 };
 
-    it('舊 server（沒有 uncachedInputTokens）：快取是輸入的明細，總數不重複加', () => {
+    it('舊 server（沒有 uncachedInputTokens）：兩格是輸入的明細，說明講已含在輸入裡；總量不重複加', () => {
       const view = sessionUsageView(
         { ...base, cacheReadTokens: 300_000, cacheWriteTokens: 12_380 },
         stats,
       );
       expect(view?.label).toBe('422k token');
-      expect(view?.total).toBe('422,195 token');
+      expect(view?.usage).toMatchObject({
+        total: '422,195 token',
+        input: '412,380 token',
+        cacheRead: '300,000 token',
+        cacheWrite: '12,380 token',
+        cacheNote: '快取讀、快取寫已含在輸入裡。',
+      });
     });
 
-    it('新 server（有 uncachedInputTokens）：總數是四項相加', () => {
+    it('新 server（有 uncachedInputTokens）：輸入只算未快取的，四桶互不重疊，總量是四項相加', () => {
       const view = sessionUsageView(
         {
           ...base,
@@ -53,28 +67,64 @@ describe('sessionUsageView（#574）', () => {
         stats,
       );
       expect(view?.label).toBe('422k token');
-      expect(view?.total).toBe('422,195 token');
+      expect(view?.usage).toMatchObject({
+        total: '422,195 token',
+        input: '100,000 token',
+        cacheRead: '300,000 token',
+        cacheWrite: '12,380 token',
+        cacheNote: '輸入是未快取的部分；輸入、快取讀、快取寫、輸出互不重疊，合計是四項相加。',
+      });
     });
 
-    it('新 server 的快取缺席：總數不含沒記的那一項', () => {
+    it('記了、值是 0：寫 0 token，不寫沒記（兩件事分開）', () => {
+      const view = sessionUsageView({ ...base, cacheReadTokens: 0, cacheWriteTokens: 0 }, stats);
+      expect(view?.usage).toMatchObject({ cacheRead: '0 token', cacheWrite: '0 token' });
+    });
+
+    it('只有一格有：另一格寫沒記，說明講沒記不是 0', () => {
+      const view = sessionUsageView({ ...base, cacheReadTokens: 5_000 }, stats);
+      expect(view?.usage).toMatchObject({
+        cacheRead: '5,000 token',
+        cacheWrite: '沒記',
+        cacheNote: '「沒記」是這台 server 沒有記錄，不是 0。',
+      });
+    });
+
+    it('新 server 的快取缺席：合計不含沒記的那一項，說明這麼講', () => {
       const view = sessionUsageView(
         { inputTokens: 999, uncachedInputTokens: 1_000, outputTokens: 50 },
         stats,
       );
-      expect(view?.total).toBe('1,050 token');
+      expect(view?.usage).toMatchObject({
+        total: '1,050 token',
+        input: '1,000 token',
+        cacheRead: '沒記',
+        cacheWrite: '沒記',
+        cacheNote: '「沒記」是這台 server 沒有記錄，不是 0；合計不含沒記的那一項。',
+      });
+    });
+
+    it('沒有 token 時用量那一段不畫，快取兩格也就不畫', () => {
+      expect(sessionUsageView(null, stats)?.usage).toBeUndefined();
     });
   });
 
-  it('模型呼叫都沒報用量：沒有總數，收著改寫次數（同 dsh 只剩時間那顆）', () => {
+  it('模型呼叫都沒報用量：只剩時間那一段，收著改寫次數（同 dsh 只剩時間那顆）', () => {
     const view = sessionUsageView(null, stats);
-    expect(view?.total).toBeUndefined();
+    expect(view?.usage).toBeUndefined();
     expect(view?.label).toBe('4 輪／17 次');
+    expect(view?.time?.counts).toBe('4 輪／17 次');
   });
 
-  it('有 token、統計還是 null：照樣有總數', () => {
+  it('有 token、統計還是 null：只有用量那一段（兩格互相獨立）', () => {
     const view = sessionUsageView({ inputTokens: 1_200, outputTokens: 0 }, null);
     expect(view?.label).toBe('1.2k token');
-    expect(view?.total).toBe('1,200 token');
+    expect(view?.time).toBeUndefined();
+  });
+
+  it('時間那兩列大於 0 才列', () => {
+    const view = sessionUsageView(null, { ...stats, llmMs: 0, toolMs: 0 });
+    expect(view?.time).toEqual({ counts: '4 輪／17 次' });
   });
 });
 
@@ -104,7 +154,12 @@ describe('usageBuckets（#724 收尾第 1 步）', () => {
     const before = sessionUsageView({ ...full, inputTokens: 1_000 }, stats);
     const after = sessionUsageView({ ...full, inputTokens: 200 }, stats);
     expect(after).toEqual(before);
-    expect(after?.total).toBe('1,050 token');
+    expect(after?.usage).toMatchObject({
+      total: '1,050 token',
+      input: '200 token',
+      cacheRead: '700 token',
+      cacheWrite: '100 token',
+    });
     expect(usageBuckets({ ...full, inputTokens: 1_000 })).toEqual(
       usageBuckets({ ...full, inputTokens: 200 }),
     );

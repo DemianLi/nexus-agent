@@ -12,10 +12,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { COST_NO_USAGE, COST_SUBAGENT_PENDING } from '@/features/cost/panel';
 import { RightSidebarToggle } from '@/app/right-sidebar/right-sidebar';
 import { createConversationStore } from '@/shared/connection/conversation-store';
+import { COST_HEADLINE, COST_LIMITS } from '@/features/cost/view';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
-import { caliberOf } from '@/features/cost/token-meter-view';
+import {
+  COST_STRUCTURED_HEADLINE,
+  COST_STRUCTURED_LIMITS,
+  caliberOf,
+} from '@/features/cost/token-meter-view';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
@@ -189,14 +194,15 @@ describe('成本分頁：有用量投影的四桶與命中率（#724）', () => 
 });
 
 describe('成本分頁：有用量投影', () => {
-  it('沒有標語與口徑清單；累計逐格等於 view.session；不再讀 sessionStats、不呼叫子代理 loader', async () => {
+  it('標語與口徑換成第 1 版；累計逐格等於 view.session；不再讀 sessionStats、不呼叫子代理 loader', async () => {
     const { script, view } = sample();
     const load = vi.fn<SubagentUsageLoader>(async () => {
       throw new Error('不該被呼叫');
     });
     mount(withMeter(base(script), script, view), load);
     await act(async () => {});
-    expect(screen.queryByTestId('cost-headline')).toBeNull();
+    expect(text('cost-headline')).toBe(COST_STRUCTURED_HEADLINE);
+    expect(text('cost-headline')).not.toBe(COST_HEADLINE);
     const totals = screen.getByTestId('cost-totals');
     const field = (name: string) => totals.querySelector(`[data-field="${name}"]`);
     expect(numberIn(field('inputTokens'))).toBe(view.session.inputTokens);
@@ -205,7 +211,9 @@ describe('成本分頁：有用量投影', () => {
       view.session.inputTokens + view.session.outputTokens,
     );
     expect(numberIn(field('steps'))).toBe(view.session.steps);
-    expect(screen.queryByTestId('cost-limits')).toBeNull();
+    const limits = within(screen.getByTestId('cost-limits')).getAllByRole('listitem');
+    expect(limits.map((item) => item.textContent)).toEqual(Object.values(COST_STRUCTURED_LIMITS));
+    expect(limits.map((item) => item.textContent)).not.toEqual(Object.values(COST_LIMITS));
     expect(screen.queryByTestId('cost-subagent-reload')).toBeNull();
     expect(load).not.toHaveBeenCalled();
   });
@@ -355,14 +363,14 @@ describe('成本分頁：有用量投影', () => {
     ]);
     mount(withBackground, load);
     await act(async () => {});
+    expect(text('cost-headline')).toBe(COST_HEADLINE);
     expect(screen.queryByTestId('cost-turns')).toBeNull();
-    expect(screen.queryByTestId('cost-subagent-reload')).not.toBeNull();
     expect(load).toHaveBeenCalled();
   });
 });
 
 describe('成本分頁：子代理（來自投影，含前景）', () => {
-  it('每個 link 一列：前景標前景、時間不能相加的口徑收進口徑區塊、背景標背景；投影還沒到寫「還沒有資料」；含子代理的 token 只加 token', async () => {
+  it('每個 link 一列：前景標前景並提醒時間不能相加、背景標背景；投影還沒到寫「還沒有資料」；含子代理的 token 只加 token', async () => {
     const script = new Script();
     const root = meterView({
       outside: span({ steps: 1, inputTokens: 100, outputTokens: 10 }),
@@ -388,12 +396,7 @@ describe('成本分頁：子代理（來自投影，含前景）', () => {
     expect(rows[0]!.textContent).toContain('背景');
     expect(rows[0]!.textContent).toContain('第 1 輪派出');
     expect(rows[1]!.textContent).toContain('前景');
-    expect(rows[1]!.textContent).not.toContain('不要和主對話的時間相加');
-    fireEvent.click(within(screen.getByTestId('cost-calibers')).getByRole('button'));
-    await act(async () => {});
-    expect(
-      screen.getByTestId('cost-calibers').querySelector('[data-caliber="foregroundSubagentTime"]'),
-    ).not.toBeNull();
+    expect(rows[1]!.textContent).toContain('不要和主對話的時間相加');
     expect(numberIn(rows[1]!.querySelector('[data-field="inputTokens"]'))).toBe(40);
     // 前景的對不到名字就寫「子代理」（不是「背景子代理」）；背景對不到名字才寫「背景子代理」。
     expect(rows[1]!.querySelector('p')!.textContent).toMatch(/^子代理前景/u);
@@ -407,7 +410,7 @@ describe('成本分頁：子代理（來自投影，含前景）', () => {
     expect(total).toContain('含子代理的 token');
     expect(total).toContain('274 token');
     expect(total).toContain('（下限）');
-    expect(screen.queryByTestId('cost-links-omitted')).toBeNull();
+    expect(text('cost-links-omitted')).toContain('3 個子代理');
     // 時間沒有跨會話加總：累計那一段的模型耗時還是 root 自己的。
     expect(
       screen.getByTestId('cost-totals').querySelector('[data-field="modelMs"] dd')!.textContent,
