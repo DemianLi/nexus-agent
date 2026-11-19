@@ -9,12 +9,14 @@
  * - **待審時自動打開全文一次**：同一份只自動開一次，人關掉就不再彈；「查看全文」是手動的入口。dsh 的右側欄沒有窄螢幕
  *   覆蓋的版型，我們 1024 以下不自動開（二-Q4）。
  *
- * 面板與計劃卡同一套版型（標題＋兩行摘要＋「查看全文」），計劃卡多一顆結果 chip（二-Q2、二-Q6）；這是 web 的 UI/UX，
- * 不照 dsh（dsh 的計劃卡是一張文件卡）。
+ * 面板與計劃卡同一套版型（標題＋兩行摘要＋「查看全文」），計劃卡在標題列前後多一個圖示與一顆結果 chip（二-Q2、二-Q6），
+ * 不另起表頭列：圖示與卡的無障礙名稱「計劃：…」已經講了這是計劃（[#3052](https://github.com/DemianLi/nexus-agent/issues/3052)）；
+ * 這是 web 的 UI/UX，不照 dsh（dsh 的計劃卡是一張文件卡）。
  */
 
 import { ChevronRight, ScrollText } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
+import type { ReactNode } from 'react';
 
 import type { ConversationEntry, PendingInput, PendingQuestion, ToolEntry } from '@nexus/wire';
 
@@ -92,15 +94,27 @@ function planArgument(entry: ToolEntry): string | undefined {
   }
 }
 
-/** 面板與計劃卡共用的那一塊：標題、兩行摘要、「查看全文」。 */
-function PlanSummary({ plan, id }: { plan: PlanDocument; id: string }) {
+/** 面板與計劃卡共用的那一塊：標題、兩行摘要、「查看全文」；計劃卡在標題前後各插一塊（圖示、結果 chip）。 */
+function PlanSummary({
+  plan,
+  id,
+  leading,
+  trailing,
+}: {
+  plan: PlanDocument;
+  id: string;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+}) {
   const sidebar = useRightSidebar();
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
+        {leading}
         <h3 className="min-w-0 flex-1 text-body font-medium break-words" data-testid="plan-title">
           {plan.title}
         </h3>
+        {trailing}
         {/* 沒有右側欄時不給這顆：按了沒反應比不給更糟（同交付卡）。 */}
         {sidebar !== undefined && (
           <Button
@@ -189,16 +203,21 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
       data-testid="plan-card"
       data-outcome={outcome}
     >
-      <div className="text-muted-foreground flex min-h-9 items-center gap-2 px-3 pt-1 text-ui">
-        <ScrollText aria-hidden className="size-4 shrink-0" />
-        <span className="flex-1">計劃</span>
-        {outcome !== undefined && (
-          <span className="bg-muted rounded-4xl px-3 py-1 text-tip" data-testid="plan-outcome">
-            {PLAN_OUTCOME_LABEL[outcome]}
-          </span>
-        )}
-      </div>
-      <PlanSummary plan={plan} id={entry.callId} />
+      <PlanSummary
+        plan={plan}
+        id={entry.callId}
+        leading={<ScrollText aria-hidden className="text-muted-foreground size-4 shrink-0" />}
+        trailing={
+          outcome !== undefined && (
+            <span
+              className="bg-muted text-muted-foreground shrink-0 rounded-4xl px-3 py-1 text-tip"
+              data-testid="plan-outcome"
+            >
+              {PLAN_OUTCOME_LABEL[outcome]}
+            </span>
+          )
+        }
+      />
     </Surface>
   );
 }
