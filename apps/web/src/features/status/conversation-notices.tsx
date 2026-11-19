@@ -1,6 +1,6 @@
 /**
  * 對話區最上面那一塊（換線、舊格式、歷史拿不回來的那幾句；狀態列在輸入框上緣，見 `conversation-status.tsx`），從 `app/App.tsx` 的會話畫面拆出來，獨立頁面與嵌入版
- * 共用（#2366）。`LEGACY_THREAD_NOTICE` 由 `app/App.tsx` 再匯出，原本從那裡讀它的測試照舊。
+ * 共用（#2366）。`LEGACY_THREAD_NOTICE` 由 `app/App.tsx` 再匯出（`history-ui.test.tsx` 從那裡讀）。
  */
 
 import type { Conversation, ConversationLink } from '@/shared/connection/use-conversation';

@@ -277,7 +277,7 @@ describe('StatusLine 在待決與就緒時只給讀屏（#3035）', () => {
     expect(status.classList.contains('min-h-lh')).toBe(true);
   });
 
-  it('已停止照舊看得到：卡上只搬待決與就緒', () => {
+  it('已停止看得到：只給讀屏的只有待決與就緒', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [script.running(), script.stopped()]);
     render(<StatusLine state={state} connected />);

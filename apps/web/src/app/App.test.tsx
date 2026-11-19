@@ -923,7 +923,7 @@ describe('核准請求', () => {
     const first = await findPanel('等待核准：alpha（1／2）');
     expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
     expect(within(first).queryByText('beta')).toBeNull();
-    // 狀態列唸的就是面板名稱。
+    // 狀態列唸的就是面板的 `aria-label`。
     expect(screen.getByRole('status').textContent).toBe('等待核准：alpha（1／2）');
 
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));

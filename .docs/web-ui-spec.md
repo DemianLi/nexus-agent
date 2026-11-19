@@ -106,7 +106,7 @@
 - **提問的 ❌＝停止這一輪，拿掉「放棄整組」**。這是**寫明的例外**：dsh 的取消是放棄後這一輪繼續，我們表達得出來，是 demian 選擇不讓模型接著猜。停止後那張提問工具卡直接展開、列出題目與選項，標「已停止，請直接打字回覆」。
 - **答完**：`ask_user_question` 的工具卡上列「問題 → 回答」（按 id 配對，配不起來退成「已回答 N 題」）；拿掉 `features/transcript/transcript.tsx` 的 `answerSummary`，重寫 `app/App.tsx` 的 `stuck` 邏輯（它的「解鎖輸入框」本來就是假出口）。
 - **計劃審核**（[#654](https://github.com/DemianLi/nexus-agent/issues/654)，harness 那一半是 #652）：見下一節。
-- **`questionnaire` 要補**：自由作答列、單選自動跳、中文進度（primitive 寫死 `Question ${n} of ${total}`；看得到的是一題一格，中文只在 `aria-valuetext`，#3035）、真的渲染 `QuestionnaireError` 並給中文訊息、數字快捷鍵、❌ 的位置、跨面板進度、收起／展開、legend 前的 sr-only 題號。
+- **`questionnaire` 要補**：自由作答列、單選自動跳、中文進度（primitive 寫死 `Question ${n} of ${total}`；看得到的是一題一格，進度條的中文只在 `aria-valuetext`，#3035）、真的渲染 `QuestionnaireError` 並給中文訊息、數字快捷鍵、❌ 的位置、跨面板進度、收起／展開、legend 前的 sr-only 題號。
 
 #### 計劃審核
 

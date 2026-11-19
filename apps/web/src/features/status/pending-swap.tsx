@@ -4,10 +4,10 @@
  * - **輸入框隱藏不卸載**：`hidden`＋`inert`，草稿還在呼叫端的 state 裡、游標與選單也不重來。原型的 `Swap` 會卸載，
  *   不能照抄。
  * - **同時只一個面板、先來先處理**：畫 `pendings` 的第一顆；面板名稱帶跨面板進度「（1／2）」。
- * - **待決由名稱列講**（#3035 結論 D）：看得到的是縮寫（`pendingHead`：「等待核准」＋工具名標籤＋「・子代理」＋進度），
+ * - **待決由名稱列講**（#3035 結論 D）：看得到的是縮寫（`pendingHead`：種類，核准再接工具名標籤與「・子代理」，最後是進度），
  *   `aria-label` 是狀態列唸的那一句全句（`pendingLabel`），狀態列在待決時只給讀屏。
  * - **焦點只在本來會丟掉時才搬**，判斷只寫在這裡：焦點在這一區裡（輸入框要被藏起來、上一張面板被拿掉）或已經掉到
- *   body 時才搬；人在別處看工具卡就不搶，由狀態列唸面板名稱。搬到面板時落在面板宣告的位置（`data-pending-focus`，
+ *   body 時才搬；人在別處看工具卡就不搶，由狀態列唸面板 `aria-label` 那一句。搬到面板時落在面板宣告的位置（`data-pending-focus`，
  *   ⑨ 的當前題），沒有就落在面板本身（`tabIndex=-1`，核准面板不落在按鈕上）；面板收掉時到下一張或回輸入框。
  * - **動效是「換內容」**（§7）：舊的 150 淡出，換過去之後新的 250 長出（`motion-swap`，在 `styles/motion.css`）。
  *   第一次畫出來不動：載入歷史、切換對話不走動效。
@@ -121,7 +121,7 @@ export function PendingSwap({
 /** 一個面板：名稱列（brand 點、名稱、收起鈕、呼叫端的按鈕）＋內容。每一顆中斷一個，換顆就重來（收起狀態不帶過去）。 */
 function PendingPanel({
   label,
-  head: name,
+  head,
   collapsible,
   actions,
   children,
@@ -135,19 +135,19 @@ function PendingPanel({
   const [open, setOpen] = useState(true);
   const trigger = useRef<HTMLButtonElement>(null);
 
-  const head = (
+  const headRow = (
     <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-ui lg:min-h-9">
       <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
       <span className="min-w-0 flex-1 truncate" data-testid="pending-head">
-        {name.kind}
-        {name.tools.map((tool, index) => (
+        {head.kind}
+        {head.tools.map((tool, index) => (
           <span key={`${tool.text}-${index}`}>
             {index === 0 ? ' ' : '、'}
             {tool.code ? <code className="font-mono font-medium">{tool.text}</code> : tool.text}
           </span>
         ))}
-        {name.asker !== undefined && `・${name.asker}`}
-        {name.position}
+        {head.asker !== undefined && `・${head.asker}`}
+        {head.position}
       </span>
       {collapsible && (
         <CollapsibleTrigger
@@ -182,7 +182,7 @@ function PendingPanel({
     >
       {collapsible ? (
         <Collapsible open={open} onOpenChange={setOpen}>
-          {head}
+          {headRow}
           {/* 內容一直掛著，答到一半的不丟；收起就 `hidden`，不等 Base UI 自己設（#1687 驗收 B3）。 */}
           <CollapsibleContent keepMounted hidden={!open} inert={!open} className="overflow-hidden">
             {children}
@@ -190,7 +190,7 @@ function PendingPanel({
         </Collapsible>
       ) : (
         <>
-          {head}
+          {headRow}
           {children}
         </>
       )}

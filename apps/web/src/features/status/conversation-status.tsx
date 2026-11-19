@@ -1,8 +1,10 @@
-/** 狀態列接上對話（#3035 結論 D 搬到輸入框或待決面板的上緣），獨立頁面與嵌入版共用。 */
-
 import { StatusLine } from '@/features/status/line';
 import type { Conversation, ConversationLink } from '@/shared/connection/use-conversation';
 
+/**
+ * 對話的狀態列：把 `Conversation` 接到 `StatusLine`，獨立頁面與嵌入版共用。呼叫端把它放在 `PendingSwap` 正上方、換手區外面
+ * （#3035）。
+ */
 export function ConversationStatus({
   conversation,
 }: {
