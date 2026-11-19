@@ -888,8 +888,8 @@ export interface CreateCliAgentSession {
    */
   readonly mcpPool?: McpConnectionPool;
   /**
-   * 宿主服務的門面（`@nexus/host-bridge`）：**只有對話行程傳**，監督行程有起宿主時建一個，每條 thread 的組裝交同一個。
-   * 省略＝沒有宿主（單行程 serve、CLI），或是 serve 起動時的試組；組裝點照樣以 `hostBridge` 交一個呼叫一律回 `host_absent` 的，插件不必分兩種情況讀。
+   * 宿主服務的門面（`@nexus/host-bridge`）：對話行程傳監督行程有起宿主時建的那一個，每條 thread 的組裝交同一個；per-thread 的前台與對話行程的啟動試組傳不連線的試組門面（`mcp-trial-host-bridge.ts`）。
+   * 省略＝沒有宿主（單行程 serve、CLI）；組裝點照樣以 `hostBridge` 交一個呼叫一律回 `host_absent` 的，插件不必分兩種情況讀。
    */
   readonly hostBridge?: HostBridge;
 }
@@ -1299,7 +1299,7 @@ export async function createCliAgent(
       createHostServicesPlugin({
         channel,
         approvalPolicy,
-        // 有宿主（per-thread 的對話行程，#3000）：MCP 連線在宿主那邊，這條 thread 只向它 `open` 一份綁定，不用連線池。
+        // 有宿主（per-thread 的對話行程，#3000；前台與啟動試組交的是不連線的試組門面，#3031）：MCP 連線在宿主那邊，這條 thread 只向它 `open` 一份綁定，不用連線池。
         // 沒有宿主：MCP 連線池（#1677），缺席＝每列自己連（CLI）。
         ...(hostBridge === undefined
           ? { [MCP_POOL_SERVICE]: mcpPool }

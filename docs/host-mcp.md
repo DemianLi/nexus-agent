@@ -5,8 +5,8 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio�
 
 **現況：`process-model: per-thread` 的對話行程連 MCP 一律走這裡**（#3000）：`packages/nexus-plugin-mcp` 在有宿主時用 `host-pool.ts` 的門面（長得像 SDK `Client`）向 `mcp/client` `open` 一份綁定、用 `call` 送請求，
 連線在宿主，整台共用。單行程 serve 與 CLI 沒有宿主，仍由 TS 自己連。
-per-thread 的前台與對話行程啟動時的試組都不連線（`mcp-trial-host-bridge.ts`）：只驗設定與組裝，所以起不來的 server 不會讓那一列在試組掉掉，連得上連不上到 thread 組裝時才知道。
-寫入口（`plugin add` 等，`plugin-trial.ts`）是另一個行程、不知道 serve 用哪種行程模型，試掛時仍自己連一次、組完就收。
+per-thread 的前台與對話行程啟動時的試組都不連線（`mcp-trial-host-bridge.ts`）：只驗設定與組裝，所以起不來的 server 不會讓那一列在試組掉，連得上連不上到 thread 組裝時才知道。
+寫入口（`plugin enable`、`plugin config set` 等，`plugin-trial.ts`）是另一個行程，拿不到 serve 的 `--process-model` 旗標，不分行程模型，試掛時一律自己連一次、組完就收。
 
 語意照 TS，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
 

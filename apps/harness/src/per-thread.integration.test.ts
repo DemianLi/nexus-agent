@@ -1115,7 +1115,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     try {
       const supervisor = running.child.pid!;
       const client = await clientOf(await running.loginUrl(1));
-      // 起動時前台與對話行程各試組一次（#3031）：試組不連線，還沒有 thread 叫它之前，整台沒有任何一個 server。
+      // 前台的試組不連線（#3031）：還沒有 thread 叫它之前，整台沒有任何一個 server。
       expect(withMarker(marker)).toEqual([]);
       expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
       expect(toolText(await turn(client, 'thread-m2', '動手'))).toContain('已登記：x');
@@ -1123,7 +1123,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
       expect(host).toBeDefined();
       const servers = withMarker(marker).filter((item) => item.ppid === host);
       expect(servers).toHaveLength(1);
-      // 整台只有宿主底下那一個：前台底下沒有（前台的試組不自建連線池）。
+      // 整台只有宿主底下那一個：前台底下沒有（前台的試組有門面，不經連線池連）。
       expect(withMarker(marker)).toHaveLength(1);
       const fronts = childrenRunning(supervisor, 'front-process');
       expect(withMarker(marker).filter((item) => fronts.includes(item.ppid))).toEqual([]);
