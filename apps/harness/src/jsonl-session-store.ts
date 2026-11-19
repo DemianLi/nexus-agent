@@ -332,8 +332,6 @@ interface LeaseContext {
   readonly pending: Set<string>;
   /** 冷讀解析快取（{@link ColdLogMemo}）。 */
   readonly coldLogs: ColdLogMemo;
-  /** {@link JsonlSessionStoreOptions.onWritten}；沒給就什麼都不做。 */
-  readonly written: (id: string) => void;
   /**
    * 這個後端**所有同時在跑的列舉共用**的並行上限，照 dsh 的 `listLimit`（`index.ts:297-302`、`:328`）：
    * 兩個 `list()` 同時跑，加起來也最多 `listConcurrency` 份在讀。
@@ -683,11 +681,7 @@ class JsonlStoredSession implements StoredSession {
           );
         }
       }
-      try {
-        await this.#persist(batch);
-      } finally {
-        this.#context.written(this.#header.id);
-      }
+      await this.#persist(batch);
       this.#nextSeq += batch.length;
     });
   }
@@ -700,11 +694,7 @@ class JsonlStoredSession implements StoredSession {
       if (this.#opened) return;
       // 一份還沒寫過任何事件的會話，在這裡才真的變成磁碟上看得到的東西——dsh 同條
       // （「一个空的已创建会话在此变得可持久列出」）。發佈的暫存檔寫完就 fsync 過了。
-      try {
-        await this.#materialize([]);
-      } finally {
-        this.#context.written(this.#header.id);
-      }
+      await this.#materialize([]);
     });
   }
 
@@ -2816,11 +2806,6 @@ export interface JsonlSessionStoreOptions {
    * serve 與 CLI 傳各自照 `thread-capacity` 開的那一本，測試換小的。
    */
   readonly logBudget?: SessionLogBudget;
-  /**
-   * 這個後端寫過某一份之後叫它（#725）：`append` 落盤與 `flush` 第一次實體化之後，成敗都叫，失敗時檔案可能已截回。只給 id，
-   * 要什麼自己讀；serve 的會話索引靠它知道哪幾條要重讀。不能拋。
-   */
-  readonly onWritten?: (id: string) => void;
 }
 
 /**
@@ -2895,7 +2880,6 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
     fs: options.fs ?? defaultStableReadFs,
     pending: new Set(),
     coldLogs: new ColdLogMemo(),
-    written: options.onWritten ?? (() => {}),
     listLimit: createListLimit(listConcurrency),
     logBudget: options.logBudget ?? processSessionLogBudget(),
     unavailable: (outcome) => {

@@ -4051,12 +4051,6 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         title,
         threadTitleLimits.maxTitleBytes ?? DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES,
       );
-      // 回之前排空批次窗口：會話列表讀磁碟（#725），不排空的話改名回來之後立刻列，還是舊標題。排空失敗不算改名失敗：記憶體裡已經改了，事件留著，下一次排空時重試。
-      try {
-        await thread.flushPending();
-      } catch (error: unknown) {
-        options.warn?.(`[thread] "${threadId}" 改名之後排空失敗：${errorChain(error)}`);
-      }
       return json(successResponse(id, { ok: true, value: accepted }));
     } catch (error) {
       if (error instanceof ThreadTitleInvalidError) {
