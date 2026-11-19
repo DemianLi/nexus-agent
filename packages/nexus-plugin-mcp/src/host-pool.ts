@@ -29,8 +29,19 @@ export const MCP_HOST_SERVICE = 'mcp/client';
 /** 重新 `open` 之前的呼叫最多等多久（毫秒）。蓋住一次宿主重起：監督行程第一次重起等 1 秒，對話行程重連間隔封頂 1 秒。正式值待 #3032。 */
 export const DEFAULT_REBIND_WAIT_MS = 5_000;
 
-/** 重新 `open` 失敗之後，等綁定的呼叫隔多久再試（毫秒）。 */
+/**
+ * 宿主回給這一層、要依它分流的錯誤碼。字串要跟宿主上線的一致（`@nexus/host-bridge` 的 `HOST_ERROR_CODES`、`HOST_ABSENCE_CODES`）：
+ * 外掛不相依那個套件，型別擋不到對不上，由 harness 的測試釘住。
+ */
+export const HOST_CODES = {
+  badPayload: 'bad_payload',
+  unavailable: 'host_unavailable',
+  lost: 'host_lost',
+} as const;
+
+/** 重新 `open` 失敗之後，等綁定的呼叫隔多久再試（毫秒）：從這裡起每連續失敗一次加倍，封頂 {@link REBIND_RETRY_MAX_MS}，連上就歸回。 */
 const REBIND_RETRY_MS = 50;
+const REBIND_RETRY_MAX_MS = 1_000;
 
 /** 一份宿主的 `open`／`call` 呼叫選項。 */
 export interface HostCallOptionsLike {
@@ -173,6 +184,8 @@ export class HostMcpClient {
   #document: OpenDocument | undefined;
   /** 當前綁定的呼叫編號；空窗（還沒綁、宿主斷線）是 `undefined`。 */
   #bound: number | undefined;
+  /** 下一次重新 `open` 失敗後，等綁定的呼叫隔多久再試。 */
+  #retryMs = REBIND_RETRY_MS;
   /** 已經失效的綁定編號：宿主對它們回「沒有已經 ready 的綁定」時，當作沒送出、改送新的。 */
   readonly #stale = new Set<number>();
   /** 重新 `open` 的單飛：同一時間只有一個。 */
@@ -277,15 +290,19 @@ export class HostMcpClient {
   #ensureBinding(): void {
     if (this.#closed || this.#bound !== undefined || this.#rebinding !== undefined) return;
     const flight: Promise<void> = this.#openOnce().then(
-      () => undefined,
+      () => {
+        this.#retryMs = REBIND_RETRY_MS;
+      },
       (error: unknown) => {
         this.#options.log?.(
           `重新向宿主 open 失敗：${error instanceof Error ? error.message : String(error)}`,
         );
         // 還在等綁定的呼叫過一會兒經同一個入口再試一次（算在它自己的 W 裡）；隔一下，不在失敗得很快時空轉。
+        const delay = this.#retryMs;
+        this.#retryMs = Math.min(delay * 2, REBIND_RETRY_MAX_MS);
         setTimeout(() => {
           this.#wake();
-        }, REBIND_RETRY_MS).unref();
+        }, delay).unref();
       },
     );
     this.#rebinding = flight;
@@ -384,19 +401,23 @@ export class HostMcpClient {
           }
           const code = codeOf(error);
           // 沒送出去（宿主還沒連上）：在 W 內重試。
-          if (code === 'host_unavailable') {
+          if (code === HOST_CODES.unavailable) {
             await new Promise((resolve) => setTimeout(resolve, 20));
             continue;
           }
           // 對已失效的編號回「沒有已經 ready 的綁定」：沒送進 server，改送新綁定；對當前編號的是真錯。
-          if (code === 'BadPayload' && this.#stale.has(current) && this.#bound !== current) {
+          if (
+            code === HOST_CODES.badPayload &&
+            this.#stale.has(current) &&
+            this.#bound !== current
+          ) {
             // 沒送出去：撤掉送出時掛的保險計時，W 接著算剩下的。
             clearTimeout(safety);
             safety = undefined;
             armDeadline();
             continue;
           }
-          if (code === 'host_lost') {
+          if (code === HOST_CODES.lost) {
             throw new Error(
               `${this.#label()}: the host connection dropped while this call was running; the result is unknown and the call was not retried`,
               { cause: error },

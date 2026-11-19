@@ -149,7 +149,7 @@ describe('HostMcpClient.open', () => {
 
   it('ready 之前 open 就以錯結算，原樣丟出', async () => {
     const caller: HostCaller = {
-      call: () => Promise.reject(new HostError('service', 'failOnStartupError 連不上')),
+      call: () => Promise.reject(new HostError('service_error', 'failOnStartupError 連不上')),
       onReady: () => () => undefined,
     };
     await expect(HostMcpClient.open(caller, { server, elicitation: false })).rejects.toThrow(
@@ -331,7 +331,7 @@ describe('宿主連線斷了又連上', () => {
     host.holdOpens();
     const first = client.callTool({ name: 'echo', arguments: {} }, {});
     await new Promise((resolve) => setTimeout(resolve, 5));
-    host.opens()[1]?.reject(new HostError('service', '宿主拒絕'));
+    host.opens()[1]?.reject(new HostError('service_error', '宿主拒絕'));
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(host.opens()).toHaveLength(3);
     host.releaseOpens();
@@ -339,7 +339,7 @@ describe('宿主連線斷了又連上', () => {
     expect(await client.listTools()).toMatchObject({ tools: [{ name: 'echo' }] });
   });
 
-  it('宿主對已失效的編號回 BadPayload：當作沒送出，改送新綁定（舊編號不重送）', async () => {
+  it('宿主對已失效的編號回 bad_payload：當作沒送出，改送新綁定（舊編號不重送）', async () => {
     let attempts = 0;
     const host: ReturnType<typeof fakeHost> = fakeHost({
       onCall: (call) => {
@@ -351,7 +351,7 @@ describe('宿主連線斷了又連上', () => {
           await new Promise((resolve) => setTimeout(resolve, 5));
           host.fireReady();
           await new Promise((resolve) => setTimeout(resolve, 5));
-          throw new HostError('BadPayload', '沒有已經 ready 的綁定');
+          throw new HostError('bad_payload', '沒有已經 ready 的綁定');
         })();
       },
     });
@@ -371,7 +371,7 @@ describe('宿主連線斷了又連上', () => {
           host.holdOpens();
           host.fireReady();
           await new Promise((resolve) => setTimeout(resolve, 5));
-          throw new HostError('BadPayload', '沒有已經 ready 的綁定');
+          throw new HostError('bad_payload', '沒有已經 ready 的綁定');
         })(),
     });
     const client = await HostMcpClient.open(host.caller, {
@@ -386,10 +386,33 @@ describe('宿主連線斷了又連上', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it('宿主對當前編號回 BadPayload：照真錯回出去，不重送', async () => {
+  it('重新 open 連續失敗：重試間隔加倍，不是固定 50 毫秒連打宿主', async () => {
+    const host = fakeHost({});
+    const client = await HostMcpClient.open(host.caller, {
+      server,
+      elicitation: false,
+      rebindWaitMs: 900,
+    });
+    host.holdOpens();
+    host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const calling = client.callTool({ name: 'echo', arguments: {} }).catch((e: unknown) => e);
+    // 之後每一次 open 都失敗。
+    const failAll = setInterval(() => {
+      for (const open of host.opens().slice(1))
+        open.reject(new HostError('service_error', '連不上'));
+    }, 5);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    clearInterval(failAll);
+    // 固定 50 毫秒的話 700 毫秒內會試約 14 次；加倍（50、100、200、400…）只有 4～5 次。
+    expect(host.opens().length - 1).toBeLessThanOrEqual(6);
+    expect(String(await calling)).toContain('server is disconnected');
+  });
+
+  it('宿主對當前編號回 bad_payload：照真錯回出去，不重送', async () => {
     const host = fakeHost({
       onCall: (call) => {
-        call.reject(new HostError('BadPayload', 'params 不合法'));
+        call.reject(new HostError('bad_payload', 'params 不合法'));
         return undefined;
       },
     });
@@ -449,7 +472,7 @@ describe('宿主連線斷了又連上', () => {
   it('server 層的連線字樣不被 isConnectionLost 認成掉線；逾時不算掉線', async () => {
     const host = fakeHost({
       onCall: (call) => {
-        call.reject(new HostError('service', 'MCP error -32000: Connection closed'));
+        call.reject(new HostError('service_error', 'MCP error -32000: Connection closed'));
         return undefined;
       },
     });

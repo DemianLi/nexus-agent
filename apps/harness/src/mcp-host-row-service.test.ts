@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { HOST_BRIDGE_SERVICE } from '@nexus/host-bridge';
-import { MCP_HOST_BRIDGE_SERVICE, mcpConfigSchema } from '@nexus/plugin-mcp';
+import { HOST_ABSENCE_CODES, HOST_BRIDGE_SERVICE, HOST_ERROR_CODES } from '@nexus/host-bridge';
+import { HOST_CODES, MCP_HOST_BRIDGE_SERVICE, mcpConfigSchema } from '@nexus/plugin-mcp';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { mcpHostRow, resolveOnPath } from './mcp-host-row-service.js';
@@ -25,6 +25,12 @@ function binDir(name: string, mode = 0o755): string {
 describe('外掛與 harness 對門面的名字', () => {
   it('外掛不相依 host-bridge 套件，兩邊的服務名由這一條釘住', () => {
     expect(MCP_HOST_BRIDGE_SERVICE).toBe(HOST_BRIDGE_SERVICE);
+  });
+
+  it('外掛依錯誤碼分流的三個字串，都是宿主上線的碼（`bad_payload` 曾寫成 `BadPayload`，單元測試的假宿主跟著錯而全綠）', () => {
+    expect(HOST_ERROR_CODES).toContain(HOST_CODES.badPayload);
+    expect(HOST_ABSENCE_CODES).toContain(HOST_CODES.unavailable);
+    expect(HOST_ABSENCE_CODES).toContain(HOST_CODES.lost);
   });
 });
 

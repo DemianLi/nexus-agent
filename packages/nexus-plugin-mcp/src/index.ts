@@ -45,7 +45,12 @@ export { approvalReason, mcpApprovalSchema } from './approval.js';
 export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
 export { FIRST_CONNECT_WAIT_MS, MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
-export { DEFAULT_REBIND_WAIT_MS, HostMcpClient, MCP_HOST_SERVICE } from './host-pool.js';
+export {
+  DEFAULT_REBIND_WAIT_MS,
+  HOST_CODES,
+  HostMcpClient,
+  MCP_HOST_SERVICE,
+} from './host-pool.js';
 export type { HostCaller, HostOpenOptions } from './host-pool.js';
 export type { Acquired, McpConnectionPoolOptions, SharedConnection } from './pool.js';
 export {
