@@ -33,13 +33,9 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  App,
-  RESUMED_THREAD_NOTICE,
-  STOP_QUESTIONS_LABEL,
-  SWITCHED_THREAD_NOTICE,
-} from '@/app/App';
+import { App, STOP_QUESTIONS_LABEL } from '@/app/App';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/features/threads/list';
+import { formatLastActivity } from '@/features/transcript';
 import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/shared/connection/stall';
 import { REMEMBERED_THREAD_KEY } from '@/features/threads/remembered-thread';
 import {
@@ -60,6 +56,7 @@ import {
   historyFrame,
   historySaid,
   memoryStorage,
+  ONE_TURN_HISTORY,
   setSeq,
   textFrames,
   threadRows,
@@ -82,18 +79,18 @@ describe('記住這條 thread', () => {
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId }));
   }
 
-  it('第一次載入：開一條新的、記下來，不說「接著上一次」', async () => {
+  it('第一次載入：開一條新的、記下來，不畫重播結尾的線', async () => {
     setSeq(0);
     const { client, opened } = fakeClient([]);
     render(<App client={client} />);
 
     await waitFor(() => expect(opened).toHaveLength(1));
     await waitFor(() => expect(stored()).toBe(opened[0]));
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
   });
 
   /** jsdom 裡的重新整理：拆掉再掛一次，中間只剩 `localStorage`。 */
-  it('重新載入：開的是同一條，而且講一聲是接著上一次', async () => {
+  it('重新載入：開的是同一條，重播的內容結尾畫一條線', async () => {
     setSeq(0);
     const first = fakeClient([]);
     render(<App client={first.client} />);
@@ -101,9 +98,9 @@ describe('記住這條 thread', () => {
     cleanup();
 
     const second = fakeClient([]);
-    render(<App client={second.client} />);
+    render(<App client={{ ...second.client, threadHistory: ONE_TURN_HISTORY }} />);
     await waitFor(() => expect(second.opened).toEqual(first.opened));
-    expect(screen.getByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    expect(await screen.findByRole('separator', { name: /^以上是之前的對話/ })).toBeTruthy();
   });
 
   it('新對話：換一個 id、記下來，上一條的話與提示都不留在畫面上', async () => {
@@ -126,7 +123,7 @@ describe('記住這條 thread', () => {
     await waitFor(() => expect(stored()).toBe(opened[1]));
     // **只斷言「開了另一條」不夠**：不重掛的話下行照樣換一條，留下來的是上一條的 transcript。
     expect(screen.queryByText('記一筆。')).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
   });
 
   /**
@@ -426,7 +423,7 @@ describe('記住這條 thread', () => {
 
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
     expect(opened).toHaveLength(1);
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
   });
 
   it.each([
@@ -443,7 +440,7 @@ describe('記住這條 thread', () => {
     render(<App client={client} />);
 
     await waitFor(() => expect(opened).toHaveLength(1));
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     // 壞掉的那一份被這一條蓋掉，下一次載入就接得回來。
     await waitFor(() => expect(stored()).toBe(opened[0]));
   });
@@ -1021,13 +1018,25 @@ describe('以前的會話', () => {
     });
   });
 
-  it('點一條就切過去：開那一條、記下來、講一聲切過去了，上一條的話不留', async () => {
+  it('點一條就切過去：開那一條、記下來、重播結尾的線寫清單上的時間，上一條的話不留', async () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    render(<App client={listing(fake, async () => ({ kind: 'ok', result: LISTED }))} />);
+    render(
+      <App
+        client={{
+          ...listing(fake, async () => ({ kind: 'ok', result: LISTED })),
+          threadHistory: ONE_TURN_HISTORY,
+        }}
+      />,
+    );
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
-    expect(screen.getByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    // 清單上沒有「上一條」：不知道上一次的時間，只畫線。
+    expect(
+      (await screen.findByRole('separator', { name: /^以上是之前的對話/ })).getAttribute(
+        'aria-label',
+      ),
+    ).toBe('以上是之前的對話');
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
@@ -1037,9 +1046,12 @@ describe('以前的會話', () => {
 
     await waitFor(() => expect(fake.opened).toEqual(['上一條', '跑著的那條']));
     await waitFor(() => expect(stored()).toBe('跑著的那條'));
-    expect(screen.getByText(SWITCHED_THREAD_NOTICE)).toBeTruthy();
-    // 從清單點的一定是接回來的：換成確定的那一句，條件句那一句不再出現。
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(
+      await screen.findByRole('separator', {
+        name: `以上是之前的對話，最後一次是 ${formatLastActivity(3_000)}`,
+      }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('separator', { name: /^以上是之前的對話/ })).toHaveLength(1);
     expect(screen.queryByText('記一筆。')).toBeNull();
   });
 
@@ -1889,7 +1901,7 @@ describe('新對話重用空白會話', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
-  it('講過話之後：切到清單上第一條空白的，不開新 id，也不講「切到以前的一條」', async () => {
+  it('講過話之後：切到清單上第一條空白的，不開新 id，也不畫重播結尾的線', async () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
@@ -1900,8 +1912,7 @@ describe('新對話重用空白會話', () => {
 
     await waitFor(() => expect(fake.opened).toEqual(['上一條', '空白那條']));
     await waitFor(() => expect(stored()).toBe('空白那條'));
-    expect(screen.queryByText(SWITCHED_THREAD_NOTICE)).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     expect(screen.queryByText('記一筆。')).toBeNull();
   });
 

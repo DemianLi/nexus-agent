@@ -23,9 +23,9 @@ import { randomUuid } from '@/shared/lib/uuid';
 export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
 
 /**
- * 現在開的是哪一條，**以及它從哪裡來**——三種來源在畫面上講的話不同：
+ * 現在開的是哪一條，**以及它從哪裡來**——來源決定重播結尾那條線畫哪一種（`features/transcript/replay-end.tsx`）：
  *
- * - `fresh`：這一次才生的 id，或按「新對話」重用的一條空白會話（#313）。兩種都是空的，畫面上不用講話。
+ * - `fresh`：這一次才生的 id，或按「新對話」重用的一條空白會話（#313）。兩種都是空的，不畫線。
  * - `recalled`：從上一次讀回來的。伺服器是接回來還是新開的，這一端分不出來。
  * - `listed`：從 `GET /threads` 的清單點的。那份清單只列落了盤、切得過去的 thread，所以這一條一定是接回來的。
  * - `forked`：剛從一則回覆分出來的（#1581）。server 分好才回，所以它一定在，內容是到分叉那一輪為止的來源。
@@ -33,6 +33,11 @@ export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
 export interface ThreadChoice {
   readonly threadId: string;
   readonly origin: 'fresh' | 'recalled' | 'listed' | 'forked';
+  /**
+   * `forked` 時的來源：結尾那條線連回它。標題是分叉那一刻畫面上那一列寫的，沒有就不帶。
+   * 只在這次分叉時有，不存進 localStorage：重新整理後這條當成 `recalled`。
+   */
+  readonly forkedFrom?: { readonly threadId: string; readonly title?: string };
 }
 
 /**

@@ -24,6 +24,7 @@
 
 import { Activity, ArrowDown, GitBranch, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 
 import type {
@@ -84,6 +85,9 @@ import {
 import { mentionDisplayText } from '@/shared/lib/session-mention';
 import { decisionText } from '@/features/approval';
 import { groupToolRuns, toolRunOf } from '@/features/transcript/tool-runs';
+import type { GroupedItem } from '@/features/transcript/tool-runs';
+import { ReplayEndDivider, replayEndIndex } from '@/features/transcript/replay-end';
+import type { ReplayEnd } from '@/features/transcript/replay-end';
 import { registerRunExpander, registerTranscriptScroller } from '@/features/transcript/locate';
 import { FEEDBACK_COPY, isRatable } from '@/features/feedback';
 import {
@@ -607,6 +611,8 @@ export function Transcript({
   earlier,
   changes,
   deliverableDownload,
+  replay,
+  head,
 }: {
   state: ConversationState;
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
@@ -623,6 +629,10 @@ export function Transcript({
    * 不需要讀檔。預覽鈕看有沒有右側欄（#640）。這一點跟改動卡相反：那一張沒有摘要就整張沒有內容。
    */
   deliverableDownload?: DeliverableDownloader;
+  /** 重播結尾那條線（`replay-end.tsx`）：重播了哪幾則、畫哪一種。沒給就不畫。 */
+  replay?: { readonly ids: ReadonlySet<string>; readonly end: ReplayEnd };
+  /** 排在所有訊息前面的那一格（第一頁歷史拿不回來的那一句）。 */
+  head?: ReactNode;
 }) {
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
   // 串流中 `entries` 每一格都換；名字表內容沒變就回同一份，工具卡的 memo（`toStep` 裡的 diff、讀檔、搜尋）才擋得住（#1682）。
@@ -658,26 +668,28 @@ export function Transcript({
       />
     );
   };
-  const items = grouped.flatMap((item) => {
+  function transcriptNode(item: GroupedItem): { id: string; node: ReactNode }[] {
     if (item.kind === 'tool-run') {
-      return {
-        id: item.id,
-        node: (
-          <ToolRun
-            run={item}
-            open={openRuns.has(item.id)}
-            onOpenChange={(open) =>
-              setOpenRuns((current) => {
-                const next = new Set(current);
-                if (open) next.add(item.id);
-                else next.delete(item.id);
-                return next;
-              })
-            }
-            renderEntry={renderEntry}
-          />
-        ),
-      };
+      return [
+        {
+          id: item.id,
+          node: (
+            <ToolRun
+              run={item}
+              open={openRuns.has(item.id)}
+              onOpenChange={(open) =>
+                setOpenRuns((current) => {
+                  const next = new Set(current);
+                  if (open) next.add(item.id);
+                  else next.delete(item.id);
+                  return next;
+                })
+              }
+              renderEntry={renderEntry}
+            />
+          ),
+        },
+      ];
     }
     if (item.kind === 'changes') {
       return changes === undefined
@@ -685,12 +697,22 @@ export function Transcript({
         : [{ id: item.id, node: <ChangesCard seq={item.seq} changes={changes} /> }];
     }
     if (item.kind === 'deliverables') {
-      return {
-        id: item.id,
-        node: <DeliverablesCard files={item.files} download={deliverableDownload} />,
-      };
+      return [
+        {
+          id: item.id,
+          node: <DeliverablesCard files={item.files} download={deliverableDownload} />,
+        },
+      ];
     }
-    return { id: item.entry.id, node: renderEntry(item.entry) };
+    return [{ id: item.entry.id, node: renderEntry(item.entry) }];
+  }
+  const dividerAfter = replay === undefined ? undefined : replayEndIndex(grouped, replay.ids);
+  const items: { id: string; node: ReactNode }[] =
+    head === undefined ? [] : [{ id: 'transcript-head', node: head }];
+  grouped.forEach((item, index) => {
+    items.push(...transcriptNode(item));
+    if (index === dividerAfter && replay !== undefined)
+      items.push({ id: 'replay-end', node: <ReplayEndDivider end={replay.end} /> });
   });
   // 串流中段出錯、正在等著整次重打（#520）：接在這一輪的最後，下一則回覆一開始就收掉（折疊器清成 `null`）。
   if (state.retry !== null) {

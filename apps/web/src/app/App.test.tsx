@@ -29,7 +29,7 @@ import {
 } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, STOP_QUESTIONS_LABEL } from '@/app/App';
+import { App, inputPlaceholder, STOP_QUESTIONS_LABEL } from '@/app/App';
 import { NO_DECISION_REASON } from '@/features/approval/card';
 import { commandsFailedText } from '@/shared/connection/use-conversation';
 import {
@@ -77,6 +77,7 @@ import {
   setSeq,
   stoppedQuestionFrames,
   textFrames,
+  ONE_TURN_HISTORY,
   toastWith,
 } from '@/test/app-harness.fixture';
 
@@ -717,17 +718,19 @@ describe('對話介面', () => {
     ]).toEqual([1, 1, 1]);
   });
 
-  it('續開記住的會話被拒（#1483 驗收 E）：不講「接著上一次」；接上之後照舊講', async () => {
+  it('續開記住的會話被拒（#1483 驗收 E）：不畫重播結尾那條線；接上之後照舊畫', async () => {
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '記住的那條' }));
-    render(<App client={refusedOnce(THREAD_AT_CAPACITY)} />);
+    render(
+      <App client={{ ...refusedOnce(THREAD_AT_CAPACITY), threadHistory: ONE_TURN_HISTORY }} />,
+    );
 
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
     );
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
-    expect(await screen.findByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    expect(await screen.findByRole('separator', { name: /^以上是之前的對話/ })).toBeTruthy();
   });
 
   it('記住的是子代理的會話（#1708，localStorage 被改過）：講那一句，沒有重連鈕、不接原文，也不再開', async () => {
@@ -753,7 +756,7 @@ describe('對話介面', () => {
     expect(screen.getByPlaceholderText(REFUSED_PLACEHOLDER)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/subagent\.send|下行被拒/)).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     // 第一次退避最多 500ms：等過去，下行仍只開過一次。
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(openEvents).toHaveBeenCalledOnce();
@@ -781,7 +784,7 @@ describe('對話介面', () => {
     expect(screen.getByPlaceholderText(REFUSED_PLACEHOLDER)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/建不起來|下行被拒|上限 600/)).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     // 第一次退避最多 500ms：等過去，下行仍只開過一次。
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(openEvents).toHaveBeenCalledOnce();
