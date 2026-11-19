@@ -6,10 +6,10 @@ import {
   DELIVERABLE_ACTIONS,
   DELIVERABLE_ROW,
   DeliverablesCard,
-  fallbackDescription,
 } from '@/features/deliverable/card';
 import { Control, type RightSidebarControl } from '@/shared/right-sidebar/context';
 import type { LocatedFile } from '@/shared/lib/located-file';
+import { dirname } from '@/features/deliverable/present-view';
 import { axeViolations } from '@/test/axe';
 
 const toastSpy = vi.hoisted(() => {
@@ -19,7 +19,7 @@ const toastSpy = vi.hoisted(() => {
 });
 vi.mock('sonner', () => ({ toast: toastSpy }));
 
-/** 交付卡片（#441 第二刀）：檔名、說明、完整路徑、複製路徑；超過四個先收起。 */
+/** 交付卡片（#441 第二刀）：檔名、同一行的目錄、有給才畫的說明、複製路徑；超過四個先收起。 */
 
 afterEach(() => {
   cleanup();
@@ -49,20 +49,31 @@ describe('交付卡片', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('每列是檔名、說明（沒給退回副檔名）、完整路徑', () => {
-    render(<DeliverablesCard files={located([REPORT, { path: 'src/a.ts' }, NOTES])} />);
-    expect(screen.getByRole('region', { name: '這一輪交付的檔案，共 3 個' })).toBeTruthy();
+  it('每列是檔名、同一行的目錄，說明只在給了時才有', () => {
+    render(
+      <DeliverablesCard
+        files={located([REPORT, { path: 'a.ts' }, NOTES, { path: 'x/y.md', description: '' }])}
+      />,
+    );
+    expect(screen.getByRole('region', { name: '這一輪交付的檔案，共 4 個' })).toBeTruthy();
     expect(rows().map((row) => row.textContent)).toEqual([
-      'report.pdf季報out/report.pdf',
-      'a.tsTS 檔src/a.ts',
-      'README檔案notes/README',
+      'report.pdfout季報',
+      'a.ts',
+      'READMEnotes',
+      'y.mdx',
     ]);
+    // 沒有目錄就不畫那一格；目錄從頭截（rtl），路徑本身是 ltr。
+    const dirs = screen.getAllByTestId('deliverable-dir');
+    expect(dirs).toHaveLength(3);
+    expect(dirs[0]!.getAttribute('dir')).toBe('rtl');
+    expect(dirs[0]!.querySelector('bdi')?.getAttribute('dir')).toBe('ltr');
   });
 
-  it('副檔名的退路：點開頭的隱藏檔、結尾的點都不算副檔名', () => {
-    expect(fallbackDescription('a/b/.env')).toBe('檔案');
-    expect(fallbackDescription('dist/build.')).toBe('檔案');
-    expect(fallbackDescription('C:\\x\\data.csv')).toBe('CSV 檔');
+  it('目錄：沒有分隔符是 undefined，根目錄留分隔符，Windows 路徑也認', () => {
+    expect(dirname('a.ts')).toBeUndefined();
+    expect(dirname('/x.md')).toBe('/');
+    expect(dirname('C:\\x\\data.csv')).toBe('C:\\x');
+    expect(dirname('../pkg/src/a.ts')).toBe('../pkg/src');
   });
 
   it('按「複製路徑」寫進剪貼簿的是完整路徑，勾勾 1.5 秒後退回', async () => {

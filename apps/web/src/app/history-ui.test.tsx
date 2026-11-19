@@ -224,7 +224,7 @@ describe('畫面照日誌重播', () => {
     await waitFor(() => expect(screen.getByText('即時的回覆')).toBeTruthy());
     const lines = transcript();
     expect(lines[0]).toBe('記住暗號是藍鯨');
-    expect(lines[1]).toContain('echo');
+    expect(lines[1]).toContain('回聲');
     expect(lines[1]).toContain('完成');
     // 回覆底下的讚踩列旁多了「這一輪的過程」（#1031），所以是「開頭是」而不是「整句是」。
     expect(lines[2]).toMatch(/^記住了。/);
