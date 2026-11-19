@@ -1956,10 +1956,10 @@ mod calls {
             json!({ "q1": { "action": "accept", "content": { "name": "小明" } } })
         }
 
-        /// R5：真宿主加會反問的假 server。第一輪拿到題目與 `requestState`；帶答案與同一份 `requestState` 再叫一次，拿到最終結果。
+        /// 真宿主接會反問的假 server：第一輪拿到題目與 `requestState`；帶答案與同一份 `requestState` 再叫一次，拿到最終結果。
         /// server 兩輪收到的都帶反問能力，第二輪的答案與狀態逐欄位等於送的。
         #[test]
-        fn r5_一次呼叫問一題_答完拿到結果() {
+        fn 反問_一次呼叫問一題_答完拿到結果() {
             let fake = asking();
             let (_host, socket) = host("mcp-r5");
             let mut stream = connect(&socket);
@@ -2036,10 +2036,10 @@ mod calls {
             );
         }
 
-        /// R6：等答時宿主被殺。補起的宿主上舊的綁定編號不存在：帶著它送第二輪會被拒，server 收不到；
+        /// 等答時宿主被殺：補起的宿主上沒有舊的綁定編號，帶著它送第二輪會被拒，server 收不到；
         /// 重新 `open` 之後，帶答案與原本那份 `requestState` 的第二輪經新的綁定送到 server，拿到最終結果。
         #[test]
-        fn r6_等答時宿主被殺_補起後第二輪經新的綁定送到() {
+        fn 反問_等答時宿主被殺_補起後第二輪經新的綁定送到() {
             let fake = asking();
             let (old, socket) = host("mcp-r6-old");
             let mut stream = connect(&socket);
@@ -2228,7 +2228,7 @@ done
             assert!(proxy.seen().is_empty(), "被拒的 open 不該連代理");
         }
 
-        /// 代理的網址是 https、信任庫是空的：http 的 server 也要先跟代理做 TLS，驗不過。在 `open` 當場拒絕並指名原因，不去連代理。
+        /// 代理政策：http 的網址走 `proxy` 這個 https 的代理，`no_proxy` 是放行清單。
         fn tls_proxy_policy(proxy: &TlsServer, no_proxy: &str) -> Value {
             json!({
                 "httpProxy": format!("https://localhost:{}", proxy.port),
@@ -2236,6 +2236,7 @@ done
             })
         }
 
+        /// 代理的網址是 https、信任庫是空的：http 的 server 也要先跟代理做 TLS，驗不過，所以 `open` 當場被拒並指名原因。
         #[test]
         fn http_的_server_走_https_的代理_沒設根憑證_當場被拒_指名代理是_https() {
             let proxy = TlsServer::start(Arc::new(|_| Response::empty(502)));

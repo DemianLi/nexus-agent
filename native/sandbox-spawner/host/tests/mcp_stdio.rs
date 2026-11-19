@@ -1154,7 +1154,7 @@ fn 樣本_授權_header_的名單() {
 }
 
 /// TS 的 `mcpHostRow` 交出的整份 `server`（`mcp-host-row-vectors.json`，TS 的 `mcp-host-row-service.test.ts` 跑同一份），宿主一律收，
-/// 解出來的值等於樣本寫的。有 `relativeCommand` 的案例：`command` 等於 `cwd` 接上它，也就是宿主起子行程的目錄就是 TS 解相對路徑的基準。
+/// 名稱、時限、指引上限、重連、反問、`url`、`cwd`、`command` 解出來等於樣本寫的。有 `relativeCommand` 的案例：`command` 等於 `cwd` 接上它，也就是宿主起子行程的目錄就是 TS 解相對路徑的基準。
 #[test]
 fn 樣本_host_row_ts_交出的整份_server_宿主收得下_值對得上() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../mcp-host-row-vectors.json");
