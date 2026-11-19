@@ -85,14 +85,14 @@ describe('normalizeTitle', () => {
   });
 });
 
-describe('explainArchiveStop（#633）：封存還在跑的會話前，確認框講它在跑什麼', () => {
+describe('explainArchiveStop（#633）：封存還在跑的會話前，確認框講封存會停掉哪些事', () => {
   it.each([
-    [['turn'], '「甲」正在回答。要停掉再封存嗎？'],
-    [['subagent'], '「甲」還有背景子代理在跑。要停掉再封存嗎？'],
-    [['turn', 'subagent'], '「甲」正在回答，背景子代理也還在跑。要停掉再封存嗎？'],
-    [[], '「甲」正在執行。要停掉再封存嗎？'],
+    [['turn'], '正在回答。'],
+    [['subagent'], '還有背景子代理在跑。'],
+    [['turn', 'subagent'], '正在回答，背景子代理也還在跑。'],
+    [[], '正在執行。'],
   ] as const)('%j', (activity, text) => {
-    expect(explainArchiveStop('甲', activity)).toBe(text);
+    expect(explainArchiveStop(activity)).toBe(text);
   });
 });
 

@@ -1272,7 +1272,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
     { width: 375, height: 812 },
     { width: 1024, height: 900 },
   ])(
-    'S1（#1696）：$width 寬時字過 4.5、色條是狀態的顏色、報讀只唸一次狀態、標題沒被擠掉',
+    'S1（#1696）：$width 寬時字過 4.5、色條是狀態的顏色、報讀只唸一次狀態、標題沒被擠掉、時間放得下',
     async (viewport) => {
       const page = await openOverlay('thread-statuses', theme, {
         viewport,
@@ -1282,13 +1282,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
           [`${ROW}:not([disabled]) [data-testid="thread-title-text"]`]: {
             'data-guard-text': 'title',
           },
-          [`${ROW}:not([disabled]) [data-testid="thread-status"]`]: { 'data-guard-text': 'status' },
+          [`${ROW}:not([disabled]) [data-testid="thread-time"]`]: { 'data-guard-text': 'time' },
           [`${ROW}:not([disabled])`]: { 'data-guard-focus': 'row' },
         },
       });
       const key = `thread-statuses:${theme}:${viewport.width}`;
       try {
-        expectTexts(await collectTexts(page), ['title', 'status'], key);
+        expectTexts(await collectTexts(page), ['title', 'time'], key);
         const focus = await collectFocus(page);
         expect(focus.map((f) => f.name)).toEqual([
           'row-0',
@@ -1314,7 +1314,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
               const title = button.querySelector<HTMLElement>('[data-testid="thread-title-text"]')!;
               const status = button.querySelector('[data-testid="thread-status"]');
               const kind = status?.getAttribute('data-status') ?? null;
-              const line = title.nextElementSibling as HTMLElement | null;
+              const line = button.querySelector<HTMLElement>('[data-testid="thread-time"]');
               const titleBox = title.getBoundingClientRect();
               return {
                 title: title.textContent,
@@ -1341,10 +1341,8 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
           expect(row.titleWidth).toBeGreaterThanOrEqual(150);
           expect(row.ownLine).toBe(true);
         }
-        // 第二行放不下就截（帶省略號）。在 THREAD_CLOCK 那個時刻只有目前這條會截，其餘每列都放得下。
-        expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([
-          '部署腳本除錯',
-        ]);
+        // 第二行是時間（#3038 第 1–3 項）：在 THREAD_CLOCK 那個時刻每列都放得下。
+        expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([]);
 
         // 報讀名稱用瀏覽器算的（ariaSnapshot）：狀態字只出現一次。
         const buttons = page.locator(ROW);
