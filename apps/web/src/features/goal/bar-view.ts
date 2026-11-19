@@ -16,8 +16,8 @@ import type { WireGoal, WireGoalActivation, WireGoalPhase } from '@nexus/wire';
  * 只有 `active` 看 activation：`paused`、`blocked` 自己就講了它沒在跑，`complete` 不畫。
  *
  * **畫面上的字與無障礙名稱分開**（[#3052](https://github.com/DemianLi/nexus-agent/issues/3052)）：畫面上不寫「目標：」，
- * 圖示已經講了這一列是什麼；`active` 而且 `armed` 或還沒收到（`null`）時不寫階段字，暫停鈕在就表示它沒停。`disarmed`
- * 寫「沒有在跑」並給下一步 `/goal resume`（wire 沒有 `goal.resume`，所以不做成按鈕，#1608 Q2 (a)）。無障礙名稱照舊寫全句：
+ * 圖示已經講了這一列是什麼；`active` 而且 `armed` 或還沒收到（`null`）時不寫階段字，暫停鈕在就表示它沒有暫停。`disarmed`
+ * 寫「沒有在跑」並給下一步 `/goal resume`（wire 沒有 `goal.resume`，所以不做成按鈕，#1608 Q2 (a)）。無障礙名稱一律寫以「目標：」開頭的全句：
  * armed 是「進行中」，還沒收到是中性的「未完成」，不猜它會不會跑（`goal.ts` 的 `GOAL_ACTIVATION` 說明）。
  *
  * @module
@@ -48,9 +48,13 @@ export const GOAL_ACTIVE_DISARMED_LABEL = '目標：未完成，沒有在跑';
 /** `disarmed` 時畫面上的階段字。 */
 export const GOAL_ACTIVE_DISARMED_TEXT = '沒有在跑';
 
-/** `disarmed` 時的下一步：畫面上是 `code` 標籤的指令接 {@link GOAL_RESUME_VERB}，無障礙名稱用 {@link GOAL_RESUME_HINT}。 */
+/** `disarmed` 時畫面上下一步的指令，用 `code` 標籤畫，後面接 {@link GOAL_RESUME_VERB}。 */
 export const GOAL_RESUME_COMMAND = '/goal resume';
+
+/** 畫面上接在 {@link GOAL_RESUME_COMMAND} 後面的動詞。 */
 export const GOAL_RESUME_VERB = '繼續';
+
+/** `disarmed` 時無障礙名稱結尾的下一步全句；畫面上不顯示。 */
 export const GOAL_RESUME_HINT = `輸入 ${GOAL_RESUME_COMMAND} 讓它繼續。`;
 
 /**
@@ -107,7 +111,13 @@ export function goalBarView(
     ...(rounds === undefined ? {} : { rounds }),
     ...(blockedReason === undefined ? {} : { blockedReason }),
     resumable,
-    label: [phaseLabel, goal.objective, rounds, blockedReason, resumable ? GOAL_RESUME_HINT : undefined]
+    label: [
+      phaseLabel,
+      goal.objective,
+      rounds,
+      blockedReason,
+      resumable ? GOAL_RESUME_HINT : undefined,
+    ]
       .filter((part): part is string => part !== undefined)
       .join('，'),
     pausable: goal.phase === 'active',

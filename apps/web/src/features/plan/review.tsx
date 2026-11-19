@@ -9,9 +9,9 @@
  * - **待審時自動打開全文一次**：同一份只自動開一次，人關掉就不再彈；「查看全文」是手動的入口。dsh 的右側欄沒有窄螢幕
  *   覆蓋的版型，我們 1024 以下不自動開（二-Q4）。
  *
- * 面板與計劃卡同一套版型（標題＋兩行摘要＋「查看全文」），計劃卡在標題列多一個圖示與一顆結果 chip（二-Q2、二-Q6），
- * 不另外畫一列寫「計劃」的表頭（[#3052](https://github.com/DemianLi/nexus-agent/issues/3052)）；這是 web 的 UI/UX，
- * 不照 dsh（dsh 的計劃卡是一張文件卡）。
+ * 面板與計劃卡同一套版型（標題＋兩行摘要＋「查看全文」），計劃卡在標題列前後多一個圖示與一顆結果 chip（二-Q2、二-Q6），
+ * 不另起表頭列：圖示與卡的無障礙名稱「計劃：…」已經講了這是計劃（[#3052](https://github.com/DemianLi/nexus-agent/issues/3052)）；
+ * 這是 web 的 UI/UX，不照 dsh（dsh 的計劃卡是一張文件卡）。
  */
 
 import { ChevronRight, ScrollText } from 'lucide-react';

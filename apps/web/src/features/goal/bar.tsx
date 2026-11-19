@@ -18,8 +18,8 @@ import {
  * - **只做暫停**（[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)，送 #1516 的 `goal.pause`）：恢復、編輯、清除
  *   不在這條上，建立目標在 `/goal` 斜線命令。暫停鈕在相位是 `active` 時才有（PM 定，不看 activation；
  *   [#1608](https://github.com/DemianLi/nexus-agent/issues/1608) Q1 (a) 沿用）。
- * - **看得出會不會自己續行**（#1608）：`active` 時只有 `disarmed` 寫階段字「沒有在跑」，列上多一行下一步
- *   （`/goal resume`，同 `blocked` 理由的寫法）；`armed` 與還沒收到不寫，由暫停鈕講（#3052）。判斷在 `goalBarView`。
+ * - **看得出沒有在跑**（#1608）：`active` 時只有 `disarmed` 寫階段字「沒有在跑」，列上多一行下一步
+ *   （`/goal resume`，同 `blocked` 理由的版型）；`armed` 與還沒收到不寫，由暫停鈕講（#3052）。判斷在 `goalBarView`。
  * - **不是樂觀更新**：按下去送出，成功了也不自己改相位，等下行把目標翻成 `paused`，鈕自己消失；一輪跑著時停下來的樣子
  *   也走下行（跟按停止同一條，#1516）。送出期間停用、防連按；斷線時停用，原因放 `title`。
  * - **失敗時列留著**，列下面一句帶原因的字（目標剛被改過、已經不在進行、伺服器不支援）。下一次按再試時先收掉上一句。
