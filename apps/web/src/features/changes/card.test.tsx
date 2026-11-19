@@ -83,7 +83,8 @@ describe('改動卡', () => {
   it('標頭是總檔數與總行數；一檔一列，二進位的不給行數；行數照 SG 不分位（#1685）', async () => {
     await renderCard(() => json(SUMMARY));
     const card = screen.getByRole('region', { name: '這一輪改動的檔案，共 2 個' });
-    expect(card.textContent).toContain('2 個檔案有改動');
+    expect(card.textContent).toContain('2 個檔案');
+    expect(card.textContent).not.toContain('有改動');
     expect(screen.getAllByTestId('changed-file').map((row) => row.textContent)).toEqual([
       'src/app.ts+1234 −5新增 1234 行，刪除 5 行',
       'logo.png二進位檔',
@@ -99,7 +100,7 @@ describe('改動卡', () => {
     }));
     await renderCard(() => json({ files, total: 9, added: 9, deleted: 0 }));
     expect(screen.getAllByTestId('changed-file')).toHaveLength(COLLAPSED_ROWS);
-    expect(screen.getByText('另有 4 個檔沒有列出')).toBeTruthy();
+    expect(screen.getByText('另有 4 個未列出')).toBeTruthy();
     const toggle = screen.getByRole('button', { name: /顯示全部 5 個/ });
     fireEvent.click(toggle);
     expect(screen.getAllByTestId('changed-file')).toHaveLength(5);

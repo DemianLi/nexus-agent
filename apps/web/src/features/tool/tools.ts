@@ -113,3 +113,11 @@ export function titleOf(name: string): string {
   const row = rowOf(name);
   return row.title ?? row.adapter.title;
 }
+
+/**
+ * 標題是不是這支工具專屬的：表上有自己的 `title` 才算。同一類共用的通用標題（「讀取」「工具」）、MCP 與宿主頁工具都不算，
+ * 這時卡上要另外寫出原始工具名才分得出是哪一支（#3040 第 1 項）。
+ */
+export function hasOwnTitle(name: string): boolean {
+  return !name.startsWith(HOST_TOOL_PREFIX) && rowOf(name).title !== undefined;
+}
