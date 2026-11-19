@@ -2914,7 +2914,7 @@ fn a_host_that_never_gets_ready_is_killed_and_counts_as_a_failure() {
 }
 
 /// 停機輪到宿主：監督行程關它的 stdin，宿主關掉 stdout 再自己收尾 1 秒。監督行程讀到那頭的 EOF 不動作：不起第二個宿主、不殺它，
-/// 等它自己以 0 結束，稽核裡宿主那一行排在前台那一行前面。寬限用接近出貨的 6000：預設的 300 ms 比宿主收尾的 1 秒短，測到的會是 SIGTERM 那一步。
+/// 等它自己以 0 結束，稽核裡宿主那一行排在前台那一行前面。寬限用預設的 6000：預設的 300 ms 比宿主收尾的 1 秒短，測到的會是 SIGTERM 那一步。
 #[test]
 fn a_host_that_closes_its_stdout_while_winding_down_is_waited_for_not_killed() {
     let mut h = Harness::start(Options {
