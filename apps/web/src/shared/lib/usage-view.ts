@@ -4,7 +4,7 @@
  *
  * 顯示條件照 dsh `StatsPills`（`packages/client/ui-chat/src/client/chat/StatsPills.tsx`，`477b4f4`）：
  *
- * - **有 token** 指輸入或輸出大於 0（`:330`）。模型呼叫全都沒報用量時，只畫次數，不畫用量那一段。
+ * - **有 token** 指輸入或輸出大於 0（`:330`）。模型呼叫全都沒報用量時，收著與點開都只畫次數，不給 `total`。
  * - **一次模型呼叫都沒結束、也沒有 token，整顆不畫**（`:347`）。`null` 當成 dsh 的「全是 0」。
  *
  * 跟 dsh 不同的地方，都是 #574 定過的 UI 形狀：
@@ -15,7 +15,7 @@
  *   快取讀、快取寫、輸出，**合計是四項相加，不再靠 `inputTokens` 含不含快取**（{@link usageBuckets}）。server 有送
  *   `uncachedInputTokens` 就走這條，所以 `inputTokens` 之後改成只算未快取，畫面的數字不變；沒送的舊 server 退回讀
  *   `inputTokens`（含快取讀取，兩格快取是它的明細）。
- * - **快取讀、快取寫缺席畫「沒記」，不畫 0**——舊日誌、供應商沒報快取細節的呼叫、還沒寫這兩格的 server 都沒有，而 0 是
+ * - **快取讀、快取寫缺席時各處畫 {@link NOT_RECORDED}，不畫 0**——舊日誌、供應商沒報快取細節的呼叫、還沒寫這兩格的 server 都沒有，而 0 是
  *   「記了、沒命中」，兩件事分開（以後算命中率的分母不能混進沒記的）；沒記的那一項在合計裡不加。
  * - **沒有首字延遲與輸出速度**：我們沒記串流第一個 token 的時間。
  *
@@ -96,7 +96,7 @@ export interface SessionUsageView {
   readonly total?: string;
 }
 
-/** 快取那兩格缺席時畫的字（缺席＝沒記，不是 0）。 */
+/** 快取桶或命中率缺席時畫的字（缺席＝沒記，不是 0）。 */
 export const NOT_RECORDED = '沒記';
 
 /** 快取桶的數字寫成字：缺席寫 {@link NOT_RECORDED}（不是 0）。 */

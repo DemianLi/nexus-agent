@@ -104,7 +104,7 @@ describe('traceModel：結構化模式的歸位', () => {
     expect(kinds(model.turns[0]!.rows)).toEqual(['input', 'call', 'reply']);
   });
 
-  it('目標自己排的輪沒有人話，也是自己一組（取代第 0 版限制 1 的釘子）', () => {
+  it('目標自己排的輪沒有人話，也是自己一組', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
       script.running(),
@@ -124,7 +124,7 @@ describe('traceModel：結構化模式的歸位', () => {
     expect(model.turns).toHaveLength(2);
     expect(model.turns[1]!.head?.kind).toBe('goal');
     expect(kinds(model.turns[1]!.rows)).toEqual(['call', 'reply']);
-    // 同一份對話在沒有投影時（第 0 版）仍黏在前一輪——那條限制還在、仍寫在畫面上。
+    // 同一份對話在沒有投影時（第 0 版）仍黏在前一輪。
     expect(traceTurns(state)).toHaveLength(1);
   });
 

@@ -115,7 +115,7 @@ describe('traceTurns：一輪一組、依序一列', () => {
   });
 });
 
-describe('切輪（限制 1）', () => {
+describe('切輪', () => {
   it('人的話、結算通知、子代理來信各開一輪', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
@@ -135,7 +135,7 @@ describe('切輪（限制 1）', () => {
     ]);
   });
 
-  it('目標自己排的輪次沒有人話，列黏在前一輪後面——限制寫在畫面上', () => {
+  it('目標自己排的輪次沒有人話，列黏在前一輪後面（docs/operations.md 記為已知限制）', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
       script.running(),
@@ -184,7 +184,7 @@ describe('切輪（限制 1）', () => {
   });
 });
 
-describe('決定只存本地（限制 2）', () => {
+describe('決定只存本地', () => {
   it('重新整理之後（同樣的 frame 重放、沒有 appendDecision）決定列不見了，工具卡的失敗還在', () => {
     // 同一串 frame：核准點上人按了拒絕，被拒的那顆在日誌裡是一張失敗的卡（#297）。
     const build = (withDecision: boolean) => {

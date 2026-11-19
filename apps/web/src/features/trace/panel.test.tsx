@@ -88,7 +88,7 @@ const rows = () => screen.getAllByTestId('trace-row');
 const kinds = () => rows().map((row) => row.getAttribute('data-kind'));
 
 describe('觀測分頁：內容', () => {
-  it('每種條目各有一列、順序照對話；限制與「只有順序、沒有時間」寫在畫面上', async () => {
+  it('每種條目各有一列、順序照對話；畫面上沒有標語與限制清單', async () => {
     mount(conversation());
     await act(async () => {});
     expect(kinds()).toEqual([

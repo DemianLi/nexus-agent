@@ -2,7 +2,8 @@
  * 右側欄的「成本」分頁（[#1032](https://github.com/DemianLi/nexus-agent/issues/1032)，殼與入口在 #1031、決定在
  * [#1017](https://github.com/DemianLi/nexus-agent/issues/1017)、範圍在 [#1019](https://github.com/DemianLi/nexus-agent/issues/1019)；
  * 第 1 版在 [#1034](https://github.com/DemianLi/nexus-agent/issues/1034)）：這條對話累計燒了多少、每一輪各燒了多少、
- * 現在離自動摘要多遠，加上子代理各自的用量。投影與口徑在 `features/cost/token-meter-view.ts`（第 1 版）與 `features/cost/view.ts`（第 0 版），這裡只畫。
+ * 現在離自動摘要多遠，加上子代理各自的用量。投影在 `features/cost/token-meter-view.ts`（第 1 版，含每格口徑）與 `features/cost/view.ts`（第 0 版）；整體限制在
+ * `docs/operations.md`〈成本與觀測分頁的口徑與限制〉，這裡只畫。
  *
  * **有用量投影時**（#1028，`projections['token-meter']`）整個畫面改走 {@link StructuredCost}：
  * - **數字只有一個來源**：累計、逐輪、子代理全部取自投影，不再混 `sessionStats`（它的 `llmMs` 沒扣重試退避，兩個來源會差一截）。
