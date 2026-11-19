@@ -57,6 +57,7 @@ import {
   QuestionnaireSubmit,
   QuestionnaireTitle,
 } from '@/components/ui/questionnaire';
+import { cn } from '@/lib/utils';
 import { useResizeTransition } from '@/shared/lib/use-resize-transition';
 import { RECOMMENDED_BADGE, splitRecommended } from '@/features/question/recommended-option';
 
@@ -72,7 +73,7 @@ const AUTO_ADVANCE_MS = 200;
 const STICKY_STAGE =
   'bg-background bg-[image:linear-gradient(var(--hover-faint),var(--hover-faint)),linear-gradient(var(--card),var(--card))]';
 
-/** 「第 2 題，共 3 題」：進度字與 legend 前的 sr-only 題號同一句（§8）。 */
+/** 「第 2 題，共 3 題」：進度條的 `aria-valuetext` 與 legend 前的 sr-only 題號同一句（§8）；看得到的是格子（#3035）。 */
 export function questionPosition(index: number, total: number): string {
   return `第 ${index + 1} 題，共 ${total} 題`;
 }
@@ -172,13 +173,25 @@ export function QuestionPanel({
         }}
         shortcuts="numbers"
       >
-        {/* 進度自己寫中文；`aria-live` 關掉，換題時由 legend 前的題號一次唸（§8，絆索 8）。 */}
+        {/* 進度自己寫中文；`aria-live` 關掉，換題時由 legend 前的題號一次唸（§8，絆索 8）。
+            看得到的是一題一格、目前這題用品牌色（#3035）；設計系統還沒有這個樣式，缺口記在 #2916。 */}
         <QuestionnaireProgress
           aria-live="off"
           aria-label="問題進度"
           aria-valuetext={questionPosition(current, ids.length)}
+          className="flex min-w-0 items-center gap-1"
         >
-          {questionPosition(current, ids.length)}
+          {ids.map((id, index) => (
+            <span
+              key={id}
+              aria-hidden
+              data-current={index === current ? '' : undefined}
+              className={cn(
+                'h-1 w-4 rounded-full',
+                index === current ? 'bg-(--brand)' : 'bg-muted-foreground/30',
+              )}
+            />
+          ))}
         </QuestionnaireProgress>
         {pending.questions.map((question, index) => {
           const options = question.options ?? [];

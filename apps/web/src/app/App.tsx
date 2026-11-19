@@ -50,7 +50,7 @@ import {
 import { ConversationBody, Entry as TranscriptEntry, useFreshItems } from '@/features/transcript';
 import { ConversationFeedbackDialog, useFeedback } from '@/features/feedback';
 import { FEEDBACK_COMMAND_LINE } from '@/shared/connection/command-line';
-import { ConversationNotices, PendingSwap } from '@/features/status';
+import { ConversationNotices, ConversationStatus, PendingSwap } from '@/features/status';
 import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
 import { GoalBar } from '@/features/goal';
 import { PlanChip, usePlanLibrary } from '@/features/plan';
@@ -765,6 +765,8 @@ function ConversationView({
           {archived && threadManagement !== undefined && (
             <ArchivedBanner onRestore={() => threadManagement.onUnarchive(threadId)} />
           )}
+          {/* 狀態列貼著輸入框或面板的上緣（#3035），在換手區外面：「立刻重連」不算進焦點搬移的範圍。 */}
+          <ConversationStatus conversation={conversation} />
           <PendingSwap
             pendings={pendings}
             askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}

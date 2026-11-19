@@ -248,6 +248,43 @@ describe('StatusLine 停下的原因（#1631）', () => {
   });
 });
 
+describe('StatusLine 在待決與就緒時只給讀屏（#3035）', () => {
+  it('就緒：字在 sr-only 裡，這一行照樣佔著', () => {
+    render(<StatusLine state={idle} connected />);
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('就緒');
+    expect(status.querySelector('.sr-only')?.textContent).toBe('就緒');
+    expect(status.classList.contains('min-h-lh')).toBe(true);
+  });
+
+  it('待決：唸面板的 aria-label 那一句，看得到的由面板名稱列講', () => {
+    const state: ConversationState = {
+      ...idle,
+      status: 'awaiting-input',
+      pendings: [
+        {
+          kind: 'question',
+          interruptId: 'q',
+          namespace: [],
+          questions: [{ id: 'a', question: '哪一天？' }],
+        } as unknown as ConversationState['pendings'][number],
+      ],
+    };
+    render(<StatusLine state={state} connected />);
+    const status = screen.getByRole('status');
+    expect(status.querySelector('.sr-only')?.textContent).toBe('有 1 個問題要你回答');
+    expect(status.textContent).toBe('有 1 個問題要你回答');
+    expect(status.classList.contains('min-h-lh')).toBe(true);
+  });
+
+  it('已停止看得到：只給讀屏的只有待決與就緒', () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [script.running(), script.stopped()]);
+    render(<StatusLine state={state} connected />);
+    expect(screen.getByRole('status').querySelector('.sr-only')).toBeNull();
+  });
+});
+
 describe('StatusLine 執行中的經過時間（#1308）', () => {
   /** server 時鐘上的「現在」，整秒（標頭只到秒）。 */
   const SERVER_NOW = Date.UTC(2026, 9, 10, 3, 0, 0);

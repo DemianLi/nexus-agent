@@ -91,7 +91,7 @@
 | 27 | slash 選單 | SG `Command` | 在 `features/composer/composer.tsx` |
 | 28 | `@` 引用 | SG `Command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `shared/lib/file-mention.ts`、`shared/lib/session-mention.ts`、`features/composer/mention-menu.ts`、`features/transcript/session-reference.tsx`、在 `features/composer/composer.tsx` |
 | 29 | 送出佇列 | 自建，SG `Collapsible`＋`Button`＋`Textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改、刪與插話；插話鈕只在這一輪跑著時按得動，按下去那一則離開佇列、改畫在對話尾端）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），送出提示跟著換（#1591 起提示只給報讀：sr-only、掛在輸入框的 `aria-describedby`，畫面上不畫，看畫面的人因此看不到加速鍵那一句，PM 已告知 demian）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話。**草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話**（照 dsh `steerQueue`：照排的先後一件一件送，碰到「不收了」或「不在隊裡」靜靜停），輸入框提示字跟著換 | `features/queue/dock.tsx`、`features/composer/submit-mode.ts`、`features/queue/steer-view.ts`、`features/queue/steer-queue.ts` |
-| 31 | 狀態列 | 執行中那一列是 SG 的 `TurnStatus`＋`StatusGlyph`（#1684，vendor 原樣加 patch `0022`、`0023`）；其他支自建 | `features/status/line.tsx` 留（live region 與轉接層） |
+| 31 | 狀態列 | 擺在輸入框（或待決面板）的上緣（#3035）；執行中那一列是 SG 的 `TurnStatus`＋`StatusGlyph`（#1684，vendor 原樣加 patch `0022`、`0023`）；其他支自建 | `features/status/line.tsx` 留（live region 與轉接層） |
 | 35 | 讚踩＋回饋框 | 框換 SG `Dialog`，表單邏輯留；讚踩按鈕留在 `features/transcript/transcript.tsx` | `features/feedback/dialog.tsx` 換外殼 |
 | 36 | Toast | SG `Toaster`（`sonner.tsx`）；`theme` 由呼叫端給，不靠 `next-themes`（vendor README 第 49、50 條） | — |
 
@@ -106,7 +106,7 @@
 - **提問的 ❌＝停止這一輪，拿掉「放棄整組」**。這是**寫明的例外**：dsh 的取消是放棄後這一輪繼續，我們表達得出來，是 demian 選擇不讓模型接著猜。停止後那張提問工具卡直接展開、列出題目與選項，標「已停止，請直接打字回覆」。
 - **答完**：`ask_user_question` 的工具卡上列「問題 → 回答」（按 id 配對，配不起來退成「已回答 N 題」）；拿掉 `features/transcript/transcript.tsx` 的 `answerSummary`，重寫 `app/App.tsx` 的 `stuck` 邏輯（它的「解鎖輸入框」本來就是假出口）。
 - **計劃審核**（[#654](https://github.com/DemianLi/nexus-agent/issues/654)，harness 那一半是 #652）：見下一節。
-- **`questionnaire` 要補**：自由作答列、單選自動跳、中文進度（primitive 寫死 `Question ${n} of ${total}`）、真的渲染 `QuestionnaireError` 並給中文訊息、數字快捷鍵、❌ 的位置、跨面板進度、收起／展開、legend 前的 sr-only 題號。
+- **`questionnaire` 要補**：自由作答列、單選自動跳、中文進度（primitive 寫死 `Question ${n} of ${total}`；看得到的是一題一格，進度條的中文只在 `aria-valuetext`，#3035）、真的渲染 `QuestionnaireError` 並給中文訊息、數字快捷鍵、❌ 的位置、跨面板進度、收起／展開、legend 前的 sr-only 題號。
 
 #### 計劃審核
 
@@ -283,7 +283,7 @@
 - **單選自動跳只認指標選取**（滑鼠、觸控、VoiceOver 點兩下）；鍵盤改選取不跳，要按 Enter。說明補一句告知（WCAG 3.2.2）。
 
 **螢幕閱讀器**
-- 面板出現不另開 live region，由狀態列（`role="status"`）唸；面板名稱＝報讀內容，例如「等待核准：edit_file（1／2）」「有 3 個問題要你回答（2／2）」「計劃待審」。
+- 面板出現不另開 live region，由狀態列（`role="status"`）唸；**面板的 `aria-label`＝狀態列唸的那一句**，例如「等待核准：edit_file（1／2）」「有 3 個問題要你回答（2／2）」「計劃待審」。面板看得到的名稱列是它的縮寫（「等待核准 `edit_file`（1／2）」「3 個問題（2／2）」），不必一字不差；狀態列在待決與就緒時只給讀屏（[#3035](https://github.com/DemianLi/nexus-agent/issues/3035)）。
 - **`role="status"` 只有狀態列**（[#1290](https://github.com/DemianLi/nexus-agent/issues/1290)，`apps/web/src/styles/live-region.test.ts` 守著）：代理的現況（待決、串流、失敗、連線）只由它唸。別處要唸，先看能不能不唸——背景變化（用量、目標、待辦、工具卡）不唸；讀取中不唸（只唸得出「開始讀」，讀完的內容不唸）；背景失敗掛在相關按鈕的 `aria-describedby`。例外只有兩格，都是**人自己的動作、焦點沒有地方落的結果**：
   - 側欄搜尋的結果（`features/threads/list.tsx`）：焦點留在搜尋框，「沒有結果」不唸就不知道（WCAG 4.1.3 的例子）。
   - 觀測分頁「看這一輪」與定位的結果（`features/trace/panel.tsx`）：找不到、還在拉的時候焦點沒有地方落。
