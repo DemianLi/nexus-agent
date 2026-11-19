@@ -185,6 +185,29 @@ describe('跑完沒看', () => {
     const state = run('here', listed(item('a', true)), status('a', false), listed(item('b')));
     expect(rowStatus(state, item('a'))).toBeUndefined();
   });
+
+  it('只回前幾頁的列表（#725）：沒列到的不清，跑完沒看與在跑都留著', () => {
+    const partial: ThreadStatusAction = { type: 'listed', items: [item('b')], complete: false };
+    const state = run(
+      'here',
+      listed(item('a', true), item('c', true)),
+      status('a', false),
+      partial,
+    );
+    expect(rowStatus(state, item('a'))).toBe('completed');
+    expect(rowStatus(state, item('c'))).toBe('running');
+  });
+
+  it('多載一頁（#725）：只當新列的基線，不清別的', () => {
+    const paged = (...items: ThreadSummary[]): ThreadStatusAction => ({ type: 'paged', items });
+    let state = run('here', listed(item('a', true)), status('a', false));
+    state = reduceThreadStatus(state, paged(item('z', true)));
+    expect(rowStatus(state, item('a'))).toBe('completed');
+    expect(rowStatus(state, item('z'))).toBe('running');
+    // 先前就知道在跑、這一頁說閒著：跟列表一樣當成一次翻轉。
+    state = reduceThreadStatus(state, paged(item('z', false)));
+    expect(rowStatus(state, item('z'))).toBe('completed');
+  });
 });
 
 /**

@@ -502,6 +502,29 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     );
   }, 180_000);
 
+  it('列表讀前台的索引（#725）：日誌是對話行程寫的，講完、改名之後立刻列就看得到', async () => {
+    const running = await start([{ content: '回覆。' }]);
+    const client = await clientOf(await running.loginUrl(1));
+    const listed = async () => {
+      const outcome = await client.listThreads();
+      if (outcome.kind !== 'ok') throw new Error(`列表失敗：${outcome.message}`);
+      return outcome.result.items;
+    };
+    // 不 poll：前台的存放處看不到對話行程的寫入，靠轉送與全域下行標起來、重讀前請對話行程排空。
+    // 漏了其中一環就要等 30 秒的背景重掃，這裡立刻就紅。
+    await turn(client, 'thread-a', '第一條');
+    expect((await listed()).map(({ threadId }) => threadId)).toEqual(['thread-a']);
+    await turn(client, 'thread-b', '第二條');
+    expect((await listed()).map(({ threadId }) => threadId)).toEqual(['thread-b', 'thread-a']);
+    expect(await client.threadRename('thread-a', '改過的名字')).toMatchObject({
+      kind: 'ok',
+      result: { ok: true },
+    });
+    expect((await listed()).find(({ threadId }) => threadId === 'thread-a')?.title).toBe(
+      '改過的名字',
+    );
+  }, 180_000);
+
   it('plugin 對照快照：前台列出對話行程裡活著的 thread（只看過歷史的也算），行程收掉就拿掉', async () => {
     const running = await start([{ content: '回覆。' }], '', undefined, [
       '--read-only-idle-ms',

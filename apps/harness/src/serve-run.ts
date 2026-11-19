@@ -77,10 +77,10 @@ import { createColdChildStore } from './background-cold.js';
 import {
   isListedThread,
   isSubagentSessionHeader,
-  listStoredThreads,
   readStoredSubagentSession,
 } from './session-list.js';
 import { ThreadFeed } from './thread-feed.js';
+import { createThreadIndex, THREAD_INDEX_REVALIDATE_MS, touchingIndex } from './thread-index.js';
 import { ThreadOrganization } from './thread-organization.js';
 import {
   attachSessionPersistence,
@@ -1443,7 +1443,31 @@ async function startServer(
           warn: (message) => {
             warn(`[會話日誌] ${message}`);
           },
+          onWritten: (id) => threadIndex?.touch(id),
         });
+  // 會話列表讀記憶體裡的索引（#725）。這個行程寫過的（上面那一行）、刪除與復原（`touchingIndex`）、per-thread 對話行程有動靜的
+  // 與轉送過去的（下面前台的 `ThreadFeed` 與 `onForwarded`）都標起來，下一次列表先重讀；其餘靠背景重掃。
+  const threadIndex =
+    sessionStore === undefined
+      ? undefined
+      : createThreadIndex(sessionStore, {
+          cwd,
+          title: threadTitle,
+          revalidateAfterMs: THREAD_INDEX_REVALIDATE_MS,
+          warn: (message, error) => {
+            warn(`[列表] ${message}：${errorChain(error)}`);
+          },
+          // per-thread 的前台：標起來的那幾條在對話行程的批次窗口裡，重讀之前請它們先排空（同搜尋，#2689）。
+          ...(options.front !== undefined && {
+            beforeReread: flushLiveThreadsOverSocket(
+              options.front.supervisor,
+              options.front.forwarder,
+              warn,
+            ),
+          }),
+        });
+  // 對話行程（per-thread）不先建：列表由前台回，它只在真的被問到時才建。
+  if (options.conversation === undefined) threadIndex?.warm();
   // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
   if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
   // **每條新 thread 的私有可寫根與唯讀共用區**（#1775）。「thread（連同它的 header）→ 放在哪裡」整台一份：新 thread 在基底底下配一個目錄，
@@ -1636,7 +1660,12 @@ async function startServer(
   const frontThreadFeed =
     options.front === undefined
       ? undefined
-      : new ThreadFeed({ maxQueuedBytes: downlink.maxQueuedBytes, warn });
+      : new ThreadFeed({
+          maxQueuedBytes: downlink.maxQueuedBytes,
+          warn,
+          // 寫日誌的是對話行程，這個行程的存放處看不到；它們講的每一件都讓列表下一次重讀那一條（#725）。
+          onActivity: (threadId) => threadIndex?.touch(threadId),
+        });
   if (frontThreadFeed !== undefined) options.front?.feed.connect(frontThreadFeed);
   const handler = createWireHandler({
     // 刪除會話的閘門（#2957）：刪除中或已刪的不組起來、不觀察。
@@ -1651,7 +1680,7 @@ async function startServer(
     threadDeletion:
       threadDeletions === undefined
         ? undefined
-        : threadDeletionPortFor(threadDeletions, projectKey(cwd)),
+        : touchingIndex(threadDeletionPortFor(threadDeletions, projectKey(cwd)), threadIndex),
     auth,
     trustedHosts: invocation.trustedHosts,
     // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。
@@ -1709,8 +1738,7 @@ async function startServer(
     ...(sessionStore === undefined
       ? {}
       : {
-          listThreads: (signal: AbortSignal) =>
-            listStoredThreads(sessionStore, { cwd, title: threadTitle, signal }),
+          listThreads: (signal: AbortSignal) => threadIndex!.list(signal),
           // 冷讀一條 thread（#1580 分叉的來源）：中斷的那一輪在記憶體補平（`readColdSession`，#1598），可見規則同列表（`isListedThread`）。
           // 只有「找不到」是 `undefined`；壞檔、版本太新照拋。
           readStoredThread: async (threadId: string) => {
@@ -2270,7 +2298,11 @@ async function startServer(
         : createFrontWireHandler({
             local: handler,
             ...options.front,
-            onForwarded: (threadId) => options.front?.plugins.touched(threadId),
+            // 轉送拿到回應時對話行程已經寫完（改名、分叉）：列表下一次重讀那一條（#725）。
+            onForwarded: (threadId) => {
+              options.front?.plugins.touched(threadId);
+              threadIndex?.touch(threadId);
+            },
             auth,
             ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
             warn,
@@ -2324,6 +2356,7 @@ async function startServer(
     }
     // 等已接受的搜尋靜止才關（#1552 N0836）；它不 reject，蓋不掉原本的錯。
     await threadSearch?.close();
+    await threadIndex?.close();
     try {
       await embedAudit?.close();
     } catch (closeError: unknown) {
@@ -2517,6 +2550,7 @@ async function startServer(
       await attempt(() => server.close());
       await attempt(() => servedHandler.close());
       await attempt(() => threadSearch?.close());
+      await attempt(() => threadIndex?.close());
       // 背景還在寫的 `failed`：收完再回，不然關掉之後（測試刪暫存目錄）才落地。不 reject。
       await attempt(() => failureRecorder.flush());
       // 換票的稽核最後關：server 關掉之後不會再有換票，合併中的計數這時才寫得完整。

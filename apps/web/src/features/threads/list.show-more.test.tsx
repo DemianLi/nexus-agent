@@ -39,6 +39,10 @@ function directory(
     placeholders: [],
     addPlaceholder: () => undefined,
     pushedSets: {},
+    loadMore: () => undefined,
+    loadingMore: false,
+    ensureRows: () => undefined,
+    findTitles: () => Promise.resolve(undefined),
     removals: 0,
   };
 }
@@ -203,5 +207,59 @@ describe('搜尋、封存、釘選', () => {
     const pinned = screen.getByTestId('thread-pinned');
     expect(titlesIn(pinned)).toHaveLength(35);
     expect(moreIn(pinned)).toBeNull();
+  });
+});
+
+describe('server 上還有沒載的（#725）', () => {
+  function renderPaged(overrides: Partial<ThreadDirectory>) {
+    const items = threads(5);
+    return render(
+      <SidebarProvider>
+        <ThreadList
+          directory={{
+            ...directory(items),
+            listing: { kind: 'ok', result: { items, unreadable: 0, nextCursor: 'c' } },
+            ...overrides,
+          }}
+          currentThreadId="none"
+          currentTitle={null}
+          onPick={() => undefined}
+        />
+      </SidebarProvider>,
+    );
+  }
+  const loadMore = () => screen.queryByTestId('thread-load-more');
+
+  it('時間組最後有「載入更多會話」，按了叫 loadMore；載入中按不了', () => {
+    let calls = 0;
+    const first = renderPaged({ loadMore: () => void (calls += 1) });
+    fireEvent.click(loadMore()!);
+    expect(calls).toBe(1);
+    first.unmount();
+
+    renderPaged({ loadingMore: true });
+    expect(loadMore()?.textContent).toBe('載入中…');
+    expect(loadMore()).toHaveProperty('disabled', true);
+  });
+
+  it('搜尋時不畫按鈕，標題改問 server，問到的併進清單', async () => {
+    const asked: string[] = [];
+    renderPaged({
+      findTitles: async (query) => {
+        asked.push(query);
+        return [{ ...thread(99), title: '很舊的會話 99' }];
+      },
+    });
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜尋以前的會話' }), {
+      target: { value: '會話' },
+    });
+    expect(loadMore()).toBeNull();
+    expect(await screen.findByText('很舊的會話 99')).toBeTruthy();
+    expect(asked).toEqual(['會話']);
+  });
+
+  it('全部載完：沒有按鈕', () => {
+    renderList({ items: threads(5) });
+    expect(loadMore()).toBeNull();
   });
 });

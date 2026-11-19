@@ -195,14 +195,13 @@ describe('仍在用舊版插件的 thread', () => {
     expect(await usersOf(V1)).toEqual(['old-busy', 'old-idle']);
     expect(await usersOf(V2)).toEqual(['new']);
 
-    // 線上的那一條：`running` 是這台 server 自己的、列的卻是整個會話根——a 列得出 b 的 `new`，
-    // 而且一格講插件的欄位都沒有。要回答「哪些**活著**的 thread 在用 v1」得自己把兩邊對起來。
+    // 線上的那一條：`running` 是這台 server 自己的；列的是這台的記憶體索引（#725），b 剛寫的 `new` 要等 a 的背景重掃
+    // （離上一次重掃開始滿 30 秒、又有人列表時才起，那一次請求不等）才列得出來。一格講插件的欄位都沒有。要回答「哪些**活著**的 thread 在用 v1」得自己把兩邊對起來。
     const listed = await (await serveClient(a)).listThreads();
     expect(listed.kind).toBe('ok');
     const items = listed.kind === 'ok' ? listed.result.items : [];
-    expect(items.map((item) => item.threadId).sort()).toEqual(['new', 'old-busy', 'old-idle']);
+    expect(items.map((item) => item.threadId).sort()).toEqual(['old-busy', 'old-idle']);
     expect(items.find((item) => item.threadId === 'old-busy')?.running).toBe(true);
-    expect(items.find((item) => item.threadId === 'new')?.running).toBe(false);
     for (const item of items) {
       expect(Object.keys(item).filter((key) => /plugin|version/i.test(key))).toEqual([]);
     }
