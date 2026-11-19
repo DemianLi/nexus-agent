@@ -10,7 +10,7 @@
  * 由 `mcp.test.ts` 以 `node --import tsx <這個檔>` 啟動。
  */
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -129,6 +129,19 @@ if (SLOW_LOG !== undefined) {
       return { contents: [{ uri: uri.href, text: '報表產好了' }] };
     },
   );
+}
+
+/**
+ * 停機整條路的驗收用（#3000 甲）：量的是 **宿主收機時有沒有送 SIGTERM 給這個子行程、它有沒有走完**。`FIXTURE_TERM_DIR` 指一個目錄：
+ * 起來時把 pid 寫進 `pid`，收到 SIGTERM 時寫 `term` 再結束。沒設就不掛。
+ */
+const TERM_DIR = process.env['FIXTURE_TERM_DIR'];
+if (TERM_DIR !== undefined) {
+  writeFileSync(`${TERM_DIR}/pid`, String(process.pid));
+  process.on('SIGTERM', () => {
+    writeFileSync(`${TERM_DIR}/term`, 'SIGTERM');
+    process.exit(0);
+  });
 }
 
 await server.connect(new StdioServerTransport());

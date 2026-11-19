@@ -1045,7 +1045,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     { content: '收工' },
   ];
 
-  const rowFor = (marker: string): string =>
+  const rowFor = (marker: string, env?: Record<string, string>): string =>
     [
       '- insert:',
       '    - id: mcp-crm',
@@ -1057,6 +1057,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
           transport: 'stdio',
           command: process.execPath,
           args: ['--import', TSX, FIXTURE, marker],
+          ...(env !== undefined && { env }),
         },
       })}`,
       '',
@@ -1121,6 +1122,33 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
         { cause: error },
       );
     }
+  }, 180_000);
+
+  it('停機整條路：對監督行程送 SIGTERM，整台結束碼 0、宿主結束碼 0，server 收到 SIGTERM 且已不在，稽核裡沒有送過 SIGKILL 的 sweep', async () => {
+    const termDir = await mkdtemp(join(tmpdir(), 'nexus-mcp-term-'));
+    roots.push(termDir);
+    const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const running = await start(callOnce(), rowFor(marker, { FIXTURE_TERM_DIR: termDir }));
+    const exit = new Promise<number | null>((resolve) => {
+      running.child.once('exit', (code) => {
+        resolve(code);
+      });
+    });
+    const client = await clientOf(await running.loginUrl(1));
+    expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
+    const serverPid = Number(await readFile(join(termDir, 'pid'), 'utf8'));
+    running.child.kill('SIGTERM');
+    expect(await exit).toBe(0);
+    const audit = (await readFile(join(running.home, SUPERVISOR_AUDIT_FILE), 'utf8'))
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const host = audit.find((line) => line['role'] === 'host' && line['event'] === undefined);
+    expect(host).toMatchObject({ exit_code: 0, signal: null });
+    expect(await readFile(join(termDir, 'term'), 'utf8')).toBe('SIGTERM');
+    expect(() => process.kill(serverPid, 0)).toThrow();
+    const swept = audit.filter((line) => line['event'] === 'sweep');
+    expect(swept.every((line) => (line['signalled'] as number[]).length === 0)).toBe(true);
   }, 180_000);
 });
 
