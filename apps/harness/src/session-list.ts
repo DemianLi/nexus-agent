@@ -13,8 +13,9 @@
  * 握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。檔名與 header 的規則只在後端
  * （`jsonl-session-store.ts`），這裡一個都不認。
  *
- * **本文整份讀、整份解析**，不再逐行篩：dsh 的冷列讀投影快取，我們沒有那一層（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
- * 讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
+ * **本文整份讀、整份解析**，讀的是日誌本身：整份解析不比逐行篩慢（#665 量測），標題規則因此只剩一份（{@link threadTitleOf}）。
+ * serve 的 `GET /threads` 不每次叫 {@link listStoredThreads}，讀 `thread-index.ts` 的記憶體索引（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
+ * 每一列同樣經 {@link summarizeStoredThread} 算。
  *
  * ## 分段讓出不採用，中止採用（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）
  *
@@ -25,8 +26,8 @@
  *   `await readFile`，事件圈每讀完一份就回得去，本來就沒有「整次列表佔住事件圈」這件事。2026-10-04 實測
  *   （`measure/thread-list-cli.ts`，M3 Pro、Node 25）：1000 份 × 1 MB 一次列表約 2.6 秒，事件圈延遲最大 9–16 ms、
  *   p99 約 2.6 ms；停頓的上限是**單一份**的解析，約 1.7 ms／MB（50、200 份 × 10 MB 最大 17–33 ms，一份 100 MB 的最大
- *   約 170 ms）。分段讓出切不進一份裡面，對這個上限沒有幫助；要降它得讓列表不讀本文，那是
- *   [#725](https://github.com/DemianLi/nexus-agent/issues/725)（投影快取）的題目。
+ *   約 170 ms）。分段讓出切不進一份裡面，對這個上限沒有幫助。serve 的列表走
+ *   [#725](https://github.com/DemianLi/nexus-agent/issues/725) 的索引之後，只在某一份變了時讀它，上限仍是那一份的解析。
  * - **中止採用。** 沒有它的話，客戶端放棄的請求照樣把整份掃完：放棄之後 2.6 秒的窗口內伺服器用掉 2.59 秒 CPU
  *   （200 份 × 1 MB：0.52 秒窗口用掉 0.46 秒）。`listStoredThreads` 現在每份之前看一次 `signal`；`GET /threads`
  *   把那個請求的 `request.signal` 交下來（`wire-handler.ts` 的 `listThreads(signal)`），同 `searchThreads`。
@@ -221,46 +222,66 @@ export async function listStoredThreads(
   for (const { header } of visible.items) {
     // 每份之前看一次：被放棄的請求不再多讀一份（#983）。
     signal?.throwIfAborted();
-    let events: readonly SessionEvent[];
-    try {
-      events = await (await store.open(header.id, 'read')).read({ salvage: true });
-    } catch (error: unknown) {
-      if (error instanceof SessionNotFoundError) continue;
-      // 這個行程現在讀不進來（#2115：太大，或額度被開著的 thread 佔滿）：不是壞了，照樣列，只是不讀本文——沒有標題、
-      // `updatedAt` 退回建立時間；打開時才講為什麼開不了。
-      if (error instanceof SessionLogTooLargeError) {
-        items.push({
-          threadId: header.id,
-          updatedAt: header.createdAt,
-          blank: false,
-          ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
-        });
-        continue;
-      }
-      if (
-        error instanceof SessionCorruptionError ||
-        error instanceof SessionFormatUnsupportedError
-      ) {
-        unreadable += 1;
-        continue;
-      }
-      throw error;
-    }
-    const scan = scanPrompts(events, options.title);
-    items.push({
-      threadId: header.id,
-      updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
-      blank: scan.blank,
-      ...(scan.title !== undefined && { title: scan.title }),
-      // 分叉的來源（#1580），照 dsh 列表的 `listFields`（`session-controller/src/list.ts:353-362`，`687f282e`）：header 有就帶。
-      // 列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
-      ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
-    });
+    const outcome = await summarizeStoredThread(store, header, options.title);
+    if (outcome === 'gone') continue;
+    if (outcome === 'unreadable') unreadable += 1;
+    else items.push(outcome === 'too-large' ? tooLargeSummary(header) : outcome);
   }
+  sortThreadSummaries(items);
+  return { items, unreadable };
+}
+
+/**
+ * 本文讀不進來的那一份照樣列，只是不讀本文：沒有標題、`updatedAt` 退回建立時間；打開時才講為什麼開不了。
+ */
+export function tooLargeSummary(header: StoredSessionHeader): StoredThreadSummary {
+  return {
+    threadId: header.id,
+    updatedAt: header.createdAt,
+    blank: false,
+    ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+  };
+}
+
+/** 列表的順序：`updatedAt` 由新到舊，一樣時照 id。原地排。 */
+export function sortThreadSummaries(items: StoredThreadSummary[]): void {
   items.sort(
     (left, right) =>
       right.updatedAt - left.updatedAt ||
       (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0),
   );
-  return { items, unreadable };
+}
+
+/**
+ * 一份列得出來的會話在列表上那一列：讀整份本文再 {@link scanPrompts}。`header` 由呼叫端讀好，可見規則（{@link isListedThread}）也由它判。
+ *
+ * @returns 那一列；`'gone'` 是讀之前被刪了；`'unreadable'` 是本文讀不懂或版本太新；`'too-large'` 是這個行程現在讀不進來
+ *   （#2115：太大，或額度被開著的 thread 佔滿），不是壞了，列的話用 {@link tooLargeSummary}。
+ * @throws 其餘讀檔失敗。
+ */
+export async function summarizeStoredThread(
+  store: SessionStore,
+  header: StoredSessionHeader,
+  title: ThreadTitleLimits,
+): Promise<StoredThreadSummary | 'gone' | 'unreadable' | 'too-large'> {
+  let events: readonly SessionEvent[];
+  try {
+    events = await (await store.open(header.id, 'read')).read({ salvage: true });
+  } catch (error: unknown) {
+    if (error instanceof SessionNotFoundError) return 'gone';
+    if (error instanceof SessionLogTooLargeError) return 'too-large';
+    if (error instanceof SessionCorruptionError || error instanceof SessionFormatUnsupportedError) {
+      return 'unreadable';
+    }
+    throw error;
+  }
+  const scan = scanPrompts(events, title);
+  return {
+    threadId: header.id,
+    updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
+    blank: scan.blank,
+    ...(scan.title !== undefined && { title: scan.title }),
+    // 分叉的來源（#1580）：header 有就帶。列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
+    ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+  };
 }
