@@ -11,6 +11,12 @@
 
 import { HostClient, createHostBridge, type HostBridgeHandle } from '@nexus/host-bridge';
 
+/**
+ * 對話行程重連宿主的等待上限（毫秒）。宿主重起之後，MCP 呼叫在這段空窗裡等連線回來；預設的 5 秒會讓一次重起就吃掉整個等待額度，
+ * 降到 1 秒，空窗只剩宿主自己起來的那一段。
+ */
+export const HOST_RECONNECT_MAX_MS = 1_000;
+
 /** 拆出 `--host-socket <path>`，其餘原樣回傳；沒帶就是沒有宿主。帶了卻少了路徑（或下一個是旗標）就拋。 */
 export function parseHostSocketArg(argv: readonly string[]): {
   readonly hostSocket: string | undefined;
@@ -47,6 +53,7 @@ export function connectHost(options: ConnectHostOptions): HostClient | undefined
     socketPath: options.hostSocket,
     token: options.token,
     log: options.log,
+    backoffMaxMs: HOST_RECONNECT_MAX_MS,
   });
   options.bridge?.attach(client);
   return client;
