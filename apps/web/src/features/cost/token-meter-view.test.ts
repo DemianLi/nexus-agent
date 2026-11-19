@@ -26,7 +26,6 @@ import {
   withTrajectory,
 } from '@/test/trajectory-fixtures';
 import {
-  COST_STRUCTURED_LIMITS,
   DERIVED_CALIBER,
   METER_END_LABEL,
   caliberOf,
@@ -760,9 +759,7 @@ describe('失敗、生摘要、依模型也列三桶（#724）', () => {
     expect(legacy.models[0]?.[1]).toBe('2 次・輸入 1,000／輸出 10');
   });
 
-  it('口徑兩句不再說輸入含快取讀取', () => {
-    expect(COST_STRUCTURED_LIMITS.scope).toContain('輸入只算未快取');
-    expect(COST_STRUCTURED_LIMITS.scope).not.toContain('含失敗與中止的呼叫、含快取讀取');
+  it('合計的口徑講明舊 server 的輸入已含快取讀取', () => {
     expect(DERIVED_CALIBER.tokensTotal).toContain('舊 server');
   });
 });

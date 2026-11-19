@@ -544,7 +544,7 @@ describe('以前的會話', () => {
     expect(rows[1]).not.toContain('執行中');
     // **#313 翻過來的那一條**：以前空白那條列在第三列；目前這條是新生的 id，所以別條空白的不列（照 dsh `sessionVisible`）。
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
-    expect(list.textContent).toContain('另有 1 份');
+    expect(list.textContent).toContain('1 份無法顯示');
     expect(reads).toBe(1);
 
     fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
@@ -834,7 +834,8 @@ describe('以前的會話', () => {
       await menuOf(list, '幫我改登入頁');
       choose('封存');
       const dialog = await screen.findByRole('alertdialog');
-      expect(within(dialog).getByText(/「幫我改登入頁」正在回答。要停掉再封存嗎？/u)).toBeTruthy();
+      expect(within(dialog).getByRole('heading').textContent).toBe('封存「幫我改登入頁」？');
+      expect(within(dialog).getByText('正在回答。可從「已封存」取消封存。')).toBeTruthy();
       fireEvent.click(within(dialog).getByRole('button', { name: '先不要' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
       expect(server.calls.filter((call) => call.startsWith('archive'))).toEqual([
@@ -1093,7 +1094,7 @@ describe('以前的會話', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it('目前這條在清單上標出來，按不下去', async () => {
+  it('目前這條在清單上按不下去（靠高亮與停用，不另寫字）', async () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '目標那條' }));
     const fake = fakeClient([]);
@@ -1102,7 +1103,7 @@ describe('以前的會話', () => {
     const current = (await within(list).findByRole('button', {
       name: new RegExp(UNTITLED_THREAD_LABEL.replace(/[()（）]/g, '.')),
     })) as HTMLButtonElement;
-    expect(current.textContent).toContain('目前這條');
+    expect(current.textContent).not.toContain('目前這條');
     expect(current.disabled).toBe(true);
   });
 
@@ -1128,9 +1129,9 @@ describe('以前的會話', () => {
     const fake = fakeClient([]);
     render(<App client={listing(fake, listThreads)} />);
     const list = await openList();
-    await waitFor(() => expect(list.textContent).toContain('列不出來'));
-    expect(list.textContent).toContain(reason);
-    expect(list.textContent).not.toContain('還沒有以前的會話');
+    await waitFor(() => expect(list.textContent).toContain(reason));
+    expect(list.textContent).not.toContain('列不出來：');
+    expect(list.textContent).not.toContain('還沒有會話');
   });
 
   it('一條都沒有：講「還沒有」', async () => {
@@ -1142,7 +1143,7 @@ describe('以前的會話', () => {
       />,
     );
     const list = await openList();
-    await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
+    await waitFor(() => expect(list.textContent).toContain('還沒有會話'));
   });
 
   it('目前這條是空白、已落盤：照列，標「新會話」、不帶時間', async () => {
@@ -1154,7 +1155,7 @@ describe('以前的會話', () => {
 
     await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
     const current = within(list).getByRole('button', { name: new RegExp(BLANK_THREAD_LABEL) });
-    expect(current.textContent).toBe(`${BLANK_THREAD_LABEL}目前這條`);
+    expect(current.textContent).toBe(BLANK_THREAD_LABEL);
   });
 
   it('磁碟上只剩別條空白的：照講「還沒有」', async () => {
@@ -1167,7 +1168,7 @@ describe('以前的會話', () => {
     render(<App client={listing(fake, async () => ({ kind: 'ok', result: blanks }))} />);
     const list = await openList();
 
-    await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
+    await waitFor(() => expect(list.textContent).toContain('還沒有會話'));
     expect(within(list).queryAllByRole('button')).toHaveLength(0);
     // 沒有列就沒有東西可搜。
     expect(within(list).queryByRole('searchbox')).toBeNull();
@@ -1249,8 +1250,8 @@ describe('以前的會話', () => {
       const list = await rendered();
       fireEvent.change(within(list).getByRole('searchbox'), { target: { value: '部署' } });
       expect(threadRows(list)).toHaveLength(0);
-      expect(within(list).getByRole('status').textContent).toBe('沒有標題含「部署」的會話。');
-      expect(list.textContent).not.toContain('還沒有以前的會話');
+      expect(within(list).getByRole('status').textContent).toBe('沒有符合「部署」的會話');
+      expect(list.textContent).not.toContain('還沒有會話');
     });
 
     it('按內容搜（#760）：問的是伺服器，內容才對得上的那一列帶著片段接在後面', async () => {
@@ -1384,7 +1385,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
   const statusOf = (element: HTMLElement) =>
     within(element).queryByTestId('thread-status')?.getAttribute('data-status') ?? null;
 
-  it('沒打開的那條停在核准：那一列寫「等待核准」、不帶時間；撤回就回到在跑', async () => {
+  it('沒打開的那條停在核准：那一列報讀「等待核准」、照樣帶時間；撤回就回到在跑', async () => {
     const feed = rendered(async () => ok(row('a', '改登入頁', true)));
     const target = await rowOf('改登入頁');
     await waitFor(() => expect(statusOf(target)).toBe('running'));
@@ -1396,7 +1397,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     });
     await waitFor(() => expect(statusOf(target)).toBe('approval'));
     expect(within(target).getByTestId('thread-status').textContent).toBe('等待核准');
-    expect(target.textContent).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(within(target).getByTestId('thread-time').textContent).toMatch(/\d{1,2}:\d{2}/);
 
     feed.line().push({ type: 'input-withdrawn', threadId: 'a', interruptId: 'int-1' });
     await waitFor(() => expect(statusOf(target)).toBe('running'));
@@ -1437,7 +1438,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
 
     fireEvent.click(target);
     const current = await rowOf('寫測試');
-    await waitFor(() => expect(current.textContent).toContain('目前這條'));
+    await waitFor(() => expect(current).toHaveProperty('disabled', true));
     expect(statusOf(current)).toBeNull();
 
     feed.line().push({ type: 'status', threadId: 'b', running: true });
@@ -1458,7 +1459,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     const opened = feed.opened();
 
     fireEvent.click(await rowOf('寫測試'));
-    await waitFor(async () => expect((await rowOf('寫測試')).textContent).toContain('目前這條'));
+    await waitFor(async () => expect(await rowOf('寫測試')).toHaveProperty('disabled', true));
     expect(statusOf(await rowOf('跑腿'))).toBe('completed');
     expect(feed.opened()).toBe(opened);
   });
@@ -2226,7 +2227,7 @@ describe('會話標題（#655）', () => {
     // 分頁標題在 effect 裡設，比標頭晚一拍。
     await waitFor(() => expect(document.title).toBe('幫我修登入 — nexus-agent'));
     const current = within(list).getByRole('button', { name: /幫我修登入/ });
-    expect(current.textContent).toContain('目前這條');
+    expect(current).toHaveProperty('disabled', true);
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
 
     // #650：模型產生的標題可能在這一輪收完、閒著的時候才推來，照樣換；搜尋吃得到新標題。
@@ -2288,8 +2289,9 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
 
     await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
-        '目前這條',
+      expect(within(list).getByRole('button', { name: /幫我修登入/ })).toHaveProperty(
+        'disabled',
+        true,
       ),
     );
   });
@@ -2388,8 +2390,9 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
 
     await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
-        '目前這條',
+      expect(within(list).getByRole('button', { name: /幫我修登入/ })).toHaveProperty(
+        'disabled',
+        true,
       ),
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -2560,7 +2563,7 @@ describe('背景子代理的輸入框接線（#869）', () => {
     expect(input.placeholder).toBe('連線中…');
   });
 
-  it('用量鈕的「看明細」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
+  it('用量鈕的「到成本分頁」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
     setSeq(0);
     const fake = fakeClient([
       ...delegated([{ runId: 'bg-1', status: 'idle' }]),

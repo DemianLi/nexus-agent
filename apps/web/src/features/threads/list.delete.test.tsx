@@ -150,6 +150,10 @@ describe('刪除（#2958 第二項）', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: '刪除' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).queryByRole('button', { name: /^刪除$/u })).toBeNull();
+    // 會先停掉由按鈕講，內文只講後果（#3045 第 5 項）。
+    expect(
+      within(dialog).getByText('會移到「最近刪除」，到期前可復原；從它分支出去的會話不受影響。'),
+    ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: '停掉並刪除' }));
     await waitFor(() => expect(calls).toEqual(['delete b']));
   });
@@ -217,7 +221,7 @@ describe('最近刪除（#2958 第三項）', () => {
 
   it('清單一條都不剩時照樣看得到最近刪除', () => {
     renderList(managed({ deleted: DELETED }).management, { directory: directory([]) });
-    expect(screen.getByText('這個專案還沒有以前的會話。')).toBeTruthy();
+    expect(screen.getByText('還沒有會話')).toBeTruthy();
     expect(screen.getByRole('button', { name: '最近刪除（2）' })).toBeTruthy();
   });
 });
