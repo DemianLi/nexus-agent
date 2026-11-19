@@ -16,10 +16,12 @@ description: "`per-thread` 下宿主連 HTTPS 的 MCP server 只信 `NODE_EXTRA_
 
 受影響的：`per-thread`、而且已經把 `NODE_EXTRA_CA_CERTS` 指到「只有企業 CA」的檔，同時又連公開 HTTPS MCP server 的部署：切換之後那些 server 會因為憑證驗不過而連不上。
 
+另一群：`per-thread`、http 的 MCP server 要走 `https://` 的代理，而 `NODE_EXTRA_CA_CERTS` 沒設、或那個檔裡沒有簽代理憑證的根的部署：切換之後連那些 server 會被拒。
+
 ## 遷移
 
 1. 看啟動 serve 的環境有沒有 `NODE_EXTRA_CA_CERTS`：`env | grep NODE_EXTRA_CA_CERTS`。
 2. 有設的：把要連的公開 server 的根（例如系統的 CA 套件 `/etc/ssl/certs/ca-certificates.crt`）接在企業 CA 後面，併成同一個 pem 檔，再把 `NODE_EXTRA_CA_CERTS` 指向它。Node 本身也讀這個檔，併進去的根只會多信，不會少信。
 3. 沒設、要連 HTTPS 的 MCP server 的：設 `NODE_EXTRA_CA_CERTS` 指向包含那些 server 根的 pem 檔。
-4. 代理網址是 `https://` 的：簽代理憑證的根也要在這個 pem 檔裡。
+4. 代理網址是 `https://` 的：簽代理憑證的根也要在 `NODE_EXTRA_CA_CERTS` 指的 pem 檔裡；沒設的照第 3 步設一個，只連 http 的 server 也一樣。
 5. 重啟 serve，確認：`<home>/host-plugins.json` 有 `mcp` 那一列，`roots` 指向併好的檔；從 `per-thread` 的對話叫一次 HTTPS MCP 工具，成功。

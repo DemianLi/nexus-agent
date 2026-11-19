@@ -137,7 +137,7 @@ struct Request {
 /// 過橋的服務：`open`／`call` 對到橋上的綁定與請求。
 pub struct Client {
     bridge: Bridge,
-    /// https 的 server 能不能連：根憑證有沒有設、設了能不能用。
+    /// 要驗 https 憑證的連線（server 或代理）能不能連：根憑證有沒有設、設了能不能用。
     trust: HttpsTrust,
     /// server 走哪個代理：代理網址是 https 的，跟代理那一段也要驗憑證。
     proxy: ProxyPolicy,
@@ -431,7 +431,7 @@ pub const NO_ROOTS: &str = "沒設 NODE_EXTRA_CA_CERTS：宿主只信這個檔�
 /// 沒設根憑證時，http 的 server 走 https 代理的拒絕訊息。
 pub const NO_ROOTS_PROXY: &str = "沒設 NODE_EXTRA_CA_CERTS：宿主只信這個檔裡的根憑證，沒設就不信任任何 https 憑證，這台 server 要走的代理網址是 https，連不了；要連就設好根憑證檔再重啟，或改用 http 的代理";
 
-/// https 的 server 能不能連。
+/// 要驗 https 憑證的連線（https 的 server，或 https 的代理）能不能連。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HttpsTrust {
     /// 設了根憑證檔、讀得進來。
@@ -442,7 +442,7 @@ pub enum HttpsTrust {
     Unusable(String),
 }
 
-/// 依 `roots` 建 TLS 設定與 https 的信任狀態。檔有問題**不讓插件起不來**（stdio 與 http 的 server 不需要根），改用空信任庫、記下原因，
+/// 依 `roots` 建 TLS 設定與 https 的信任狀態。檔有問題**不讓插件起不來**（stdio，以及直連或走 http 代理的 http server 不經 TLS，不需要根），改用空信任庫、記下原因，
 /// 由 [`refuse_https`] 在 `open` 時對要驗 https 憑證的 server 回指名原因的錯。
 fn trust_of(roots: Option<&Path>) -> Result<(ClientConfig, HttpsTrust), String> {
     match roots {

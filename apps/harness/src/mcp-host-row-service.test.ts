@@ -177,7 +177,7 @@ describe('mcpHostRow', () => {
 });
 
 /**
- * 跟宿主共用的樣本：同一份檔 Rust 那邊餵給 `Server::parse`（`native/sandbox-spawner/host/tests/mcp_stdio.rs`）。
+ * 跟宿主共用的樣本：同一份檔裡每個案例的 `server`，Rust 那邊餵給 `Server::parse`（`native/sandbox-spawner/host/tests/mcp_stdio.rs`）。
  * 這裡守 TS 這一半：`mcpHostRow` 在樣本指定的工作目錄與環境下，產出要等於樣本裡的 `server`。
  */
 describe('mcpHostRow 與宿主共用的樣本', () => {

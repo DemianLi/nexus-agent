@@ -1961,7 +1961,7 @@ mod calls {
         #[test]
         fn 反問_一次呼叫問一題_答完拿到結果() {
             let fake = asking();
-            let (_host, socket) = host("mcp-r5");
+            let (_host, socket) = host("mcp-ask");
             let mut stream = connect(&socket);
             let listed = open_with(&mut stream, 1, &asking_server(fake.port, true));
             assert_eq!(listed["tools"][0]["name"], "ask", "{listed}");
@@ -2041,7 +2041,7 @@ mod calls {
         #[test]
         fn 反問_等答時宿主被殺_補起後第二輪經新的綁定送到() {
             let fake = asking();
-            let (old, socket) = host("mcp-r6-old");
+            let (old, socket) = host("mcp-ask-old");
             let mut stream = connect(&socket);
             open_with(&mut stream, 1, &asking_server(fake.port, true));
             call_params(
@@ -2055,7 +2055,7 @@ mod calls {
             drop(old);
             assert_eq!(read_message(&mut stream), None, "宿主被殺，舊連線要斷");
 
-            let (_new, socket) = host("mcp-r6-new");
+            let (_new, socket) = host("mcp-ask-new");
             let mut stream = connect(&socket);
             let second = json!({
                 "name": "ask",
