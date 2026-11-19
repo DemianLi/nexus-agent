@@ -59,6 +59,10 @@ function setup(client: Partial<Record<keyof WireClient, unknown>>, first: Listin
   }: Props): ThreadDirectory => ({
     listing,
     refresh,
+    loadMore: () => undefined,
+    loadingMore: false,
+    ensureRows: () => undefined,
+    findTitles: () => Promise.resolve(undefined),
     statusOf: () => 'idle' as never,
     blankOf: (item) => item.blank,
     placeholders: [],

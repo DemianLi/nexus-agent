@@ -31,6 +31,10 @@ function directory(
     placeholders: [],
     addPlaceholder: () => undefined,
     pushedSets: {},
+    loadMore: () => undefined,
+    loadingMore: false,
+    ensureRows: () => undefined,
+    findTitles: () => Promise.resolve(undefined),
     removals: 0,
   };
 }
