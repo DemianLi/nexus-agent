@@ -175,7 +175,7 @@
         "elicitation": true,
         "connection": {
           "transport": "stdio",
-          "command": "/work/b/bin/server",
+          "command": "/work/b/bin/other",
           "args": [],
           "cwd": "/work/b",
           "env": {
