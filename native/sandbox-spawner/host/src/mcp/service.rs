@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::RawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::bridge::{Bridge, Command, Opened, Outcome, REQUEST_METHODS};
@@ -36,6 +36,7 @@ use crate::kernel::{
 };
 use crate::proxy::ProxyPolicy;
 use crate::tls::{client_config, empty_client_config, http_client};
+use rustls::ClientConfig;
 
 pub static SPEC: Spec = Spec {
     name: "mcp",
@@ -135,8 +136,8 @@ struct Request {
 /// 過橋的服務：`open`／`call` 對到橋上的綁定與請求。
 pub struct Client {
     bridge: Bridge,
-    /// 有沒有設根憑證；沒有就拒絕 https 的 server。
-    trusts_https: bool,
+    /// https 的 server 能不能連：根憑證有沒有設、設了能不能用。
+    trust: HttpsTrust,
     next: u64,
     opens: HashMap<CallKey, Open>,
     requests: HashMap<CallKey, Request>,
@@ -149,10 +150,10 @@ impl Service for Client {
 }
 
 impl Client {
-    fn new(bridge: Bridge, trusts_https: bool) -> Client {
+    fn new(bridge: Bridge, trust: HttpsTrust) -> Client {
         Client {
             bridge,
-            trusts_https,
+            trust,
             next: 0,
             opens: HashMap::new(),
             requests: HashMap::new(),
@@ -182,7 +183,7 @@ impl Client {
             Ok(server) => Box::new(server),
             Err(error) => return Progress::Err(Fault::BadPayload, error),
         };
-        if let Some(refusal) = refuse_https(&server, self.trusts_https) {
+        if let Some(refusal) = refuse_https(&server, &self.trust) {
             return Progress::Err(Fault::Failed, refusal);
         }
         let open = self.next_id(key);
@@ -423,13 +424,43 @@ impl Remote for Client {
 /// 沒設根憑證（`NODE_EXTRA_CA_CERTS`）時 https 的 server 的拒絕訊息。
 pub const NO_ROOTS: &str = "沒設 NODE_EXTRA_CA_CERTS：宿主只信這個檔裡的根憑證，沒設就不信任任何 https 憑證，這台 server 的網址是 https，連不了；要連就設好根憑證檔再重啟，或改用 http／stdio";
 
-/// 沒設根憑證時，網址是 https 的 server 要拒絕；回拒絕的訊息，不用拒絕就回 `None`。
-fn refuse_https(server: &Server, trusts_https: bool) -> Option<String> {
-    match &server.connection {
-        Connection::Http { url, .. } if !trusts_https && url.scheme() == "https" => {
-            Some(NO_ROOTS.to_string())
-        }
-        _ => None,
+/// https 的 server 能不能連。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HttpsTrust {
+    /// 設了根憑證檔、讀得進來。
+    Trusted,
+    /// 沒設根憑證檔：信任庫是空的。
+    NotConfigured,
+    /// 設了，但讀不了、空檔或認不得其中的憑證：信任庫是空的。帶原因（含檔案路徑）。
+    Unusable(String),
+}
+
+/// 依 `roots` 建 TLS 設定與 https 的信任狀態。檔有問題**不讓插件起不來**（stdio 與 http 的 server 不需要根），改用空信任庫、記下原因，
+/// 由 [`refuse_https`] 在 `open` 時對 https 的 server 回指名原因的錯。
+fn trust_of(roots: Option<&Path>) -> Result<(ClientConfig, HttpsTrust), String> {
+    match roots {
+        None => Ok((empty_client_config()?, HttpsTrust::NotConfigured)),
+        Some(path) => match client_config(path) {
+            Ok(config) => Ok((config, HttpsTrust::Trusted)),
+            Err(reason) => Ok((empty_client_config()?, HttpsTrust::Unusable(reason))),
+        },
+    }
+}
+
+/// 網址是 https 的 server 在信任庫是空的時要拒絕；回拒絕的訊息（沒設與設了不能用的訊息不同，免得管理者往錯的方向查），不用拒絕就回 `None`。
+fn refuse_https(server: &Server, trust: &HttpsTrust) -> Option<String> {
+    let Connection::Http { url, .. } = &server.connection else {
+        return None;
+    };
+    if url.scheme() != "https" {
+        return None;
+    }
+    match trust {
+        HttpsTrust::Trusted => None,
+        HttpsTrust::NotConfigured => Some(NO_ROOTS.to_string()),
+        HttpsTrust::Unusable(reason) => Some(format!(
+            "NODE_EXTRA_CA_CERTS 指的根憑證檔不能用，宿主不信任任何 https 憑證，這台 server 的網址是 https，連不了：{reason}；改好那個檔再重啟，或改用 http／stdio"
+        )),
     }
 }
 
@@ -451,15 +482,14 @@ fn build(value: &Value) -> Result<Box<dyn Plugin>, ConfigError> {
 
 impl Plugin for Plug {
     fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
-        let config = match &self.roots {
-            Some(roots) => client_config(roots),
-            None => empty_client_config(),
+        let (config, trust) = trust_of(self.roots.as_deref()).map_err(PluginError)?;
+        if let HttpsTrust::Unusable(reason) = &trust {
+            eprintln!("nexus-host: mcp 警告：NODE_EXTRA_CA_CERTS 指的根憑證檔不能用，https 的 MCP server 會連不上（http 與 stdio 照常）：{reason}");
         }
-        .map_err(PluginError)?;
         let http = http_client(config, &self.proxy).map_err(PluginError)?;
         let bridge = Bridge::start(http, self.proxy.secrets())
             .map_err(|error| PluginError(format!("MCP 的橋起不來：{error}")))?;
-        cx.expose(Client::new(bridge, self.roots.is_some()))?;
+        cx.expose(Client::new(bridge, trust))?;
         Ok(Applied::Done)
     }
 }
@@ -473,22 +503,60 @@ mod tests {
         Server::parse(&value).expect("設定")
     }
 
+    fn three_servers() -> (Server, Server, Server) {
+        (
+            server(
+                r#"{"serverName":"a","connection":{"transport":"http","url":"https://example.test/mcp"}}"#,
+            ),
+            server(
+                r#"{"serverName":"b","connection":{"transport":"http","url":"http://example.test/mcp"}}"#,
+            ),
+            server(
+                r#"{"serverName":"c","connection":{"transport":"stdio","command":"/bin/true","env":{},"credentialEnv":[]}}"#,
+            ),
+        )
+    }
+
     #[test]
-    fn 沒設根憑證時_https_被拒_http_與_stdio_照常() {
-        let https = server(
-            r#"{"serverName":"a","connection":{"transport":"http","url":"https://example.test/mcp"}}"#,
-        );
-        let http = server(
-            r#"{"serverName":"b","connection":{"transport":"http","url":"http://example.test/mcp"}}"#,
-        );
-        let stdio = server(
-            r#"{"serverName":"c","connection":{"transport":"stdio","command":"/bin/true","env":{},"credentialEnv":[]}}"#,
-        );
-        let refusal = refuse_https(&https, false).expect("https 要被拒");
-        assert!(refusal.contains("NODE_EXTRA_CA_CERTS"), "{refusal}");
-        assert_eq!(refuse_https(&http, false), None);
-        assert_eq!(refuse_https(&stdio, false), None);
-        assert_eq!(refuse_https(&https, true), None);
+    fn 沒設根憑證時_https_被拒_訊息提示設定_http_與_stdio_照常() {
+        let (https, http, stdio) = three_servers();
+        let (_, trust) = trust_of(None).expect("建得起來");
+        assert_eq!(trust, HttpsTrust::NotConfigured);
+        let refusal = refuse_https(&https, &trust).expect("https 要被拒");
+        assert!(refusal.contains("沒設 NODE_EXTRA_CA_CERTS"), "{refusal}");
+        assert_eq!(refuse_https(&http, &trust), None);
+        assert_eq!(refuse_https(&stdio, &trust), None);
+        assert_eq!(refuse_https(&https, &HttpsTrust::Trusted), None);
+    }
+
+    #[test]
+    fn 設了但根憑證檔不能用_插件照常起來_https_被拒並指名檔案與原因_http_與_stdio_照常() {
+        let (https, http, stdio) = three_servers();
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let missing = dir.join(format!("nexus-roots-missing-{pid}.pem"));
+        let empty = dir.join(format!("nexus-roots-empty-{pid}.pem"));
+        let junk = dir.join(format!("nexus-roots-junk-{pid}.pem"));
+        std::fs::write(&empty, "").expect("寫檔");
+        std::fs::write(&junk, "not a pem\n").expect("寫檔");
+        for path in [&missing, &empty, &junk] {
+            let shown = path.display().to_string();
+            let (_, trust) = trust_of(Some(path)).expect("檔有問題也建得起來（空信任庫）");
+            assert!(
+                matches!(trust, HttpsTrust::Unusable(_)),
+                "{shown}：{trust:?}"
+            );
+            let refusal = refuse_https(&https, &trust).expect("https 要被拒");
+            assert!(refusal.contains(&shown), "訊息要指名檔案：{refusal}");
+            assert!(
+                !refusal.contains("沒設 NODE_EXTRA_CA_CERTS"),
+                "設了的不能說成沒設：{refusal}"
+            );
+            assert_eq!(refuse_https(&http, &trust), None, "{shown}");
+            assert_eq!(refuse_https(&stdio, &trust), None, "{shown}");
+        }
+        let _ = std::fs::remove_file(&empty);
+        let _ = std::fs::remove_file(&junk);
     }
 
     #[test]

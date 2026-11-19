@@ -16,7 +16,7 @@ description: "`per-thread` 啟動時 `<home>/host-plugins.json` 由 harness 整�
   - 舊檔裡的列（包括手寫的）不保留。
 - **代理也看 home 的 `.env`。** 宿主連 MCP 用的代理，解的環境與模型請求同一份：帶 `--live` 時是行程環境加上兩層 `.env`（目前資料夾、harness home；行程環境優先，其次目前資料夾，最後 home），沒帶 `--live` 只有行程環境。寫在 home `.env` 裡的 `HTTP_PROXY` 等，模型請求與宿主連 MCP 都會走（目前資料夾的 `.env` 不能設代理，設了本來就拒絕啟動）。
 - **壞的 `.env` 更早報錯。** 帶 `--live`、而任何一份 `.env`（目前資料夾或 home）設了只有啟動環境能設的名字（例如 `NODE_OPTIONS`）時，錯誤在啟動器就丟（訊息與以前相同），不是等前台起來才丟。
-- **根檔讀不了的錯誤訊息。** `NODE_EXTRA_CA_CERTS` 指的檔不存在、讀不了或裡面沒有憑證時，宿主照常起來，標準錯誤記一行 `插件 mcp apply 失敗：…`（訊息指名那個檔），`mcp` 沒掛。
+- **根檔讀不了的處理。** `NODE_EXTRA_CA_CERTS` 指的檔不存在、讀不了、是空檔或裡面有認不得的憑證時，`mcp` 插件照常掛上、改用空信任庫，標準錯誤記一行 `nexus-host: mcp 警告：…`（指名那個檔與原因）；https 的 MCP server 被拒並指名同一個原因，http 與 stdio 的 server 照常。
 
 受影響的：`per-thread` 部署裡手寫過 `host-plugins.json` 的；任何一份 `.env` 設了壞值、又用 `--live` 起 `per-thread` 的（錯誤出現的位置提早）。
 
