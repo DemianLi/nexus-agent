@@ -30,6 +30,8 @@ import type { McpCredentials, ResolvedCredentials } from './credentials.js';
 import type { Generation, RequestOptions, SdkClient } from './connection.js';
 import type { Redactor } from './redact.js';
 import { asAbort, ensureHub } from './hub.js';
+import { HostMcpClient } from './host-pool.js';
+import type { HostCaller } from './host-pool.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -43,6 +45,13 @@ export { approvalReason, mcpApprovalSchema } from './approval.js';
 export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
 export { FIRST_CONNECT_WAIT_MS, MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
+export {
+  DEFAULT_REBIND_WAIT_MS,
+  HOST_CODES,
+  HostMcpClient,
+  MCP_HOST_SERVICE,
+} from './host-pool.js';
+export type { HostCaller, HostOpenOptions } from './host-pool.js';
 export type { Acquired, McpConnectionPoolOptions, SharedConnection } from './pool.js';
 export {
   AUTHORIZATION_HEADER_NAMES,
@@ -64,6 +73,22 @@ export const DEFAULT_LIVENESS_TIMEOUT_MS = 15_000;
 
 /** {@link McpConfig.livenessTimeoutMs} 的上限：SDK 直接交給 `setTimeout`，超過就溢位成約 1 毫秒，呼叫一逾時就判定卡死。 */
 export const MAX_LIVENESS_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * 宿主給的 host 服務：把一列設定換成 Rust 宿主 `mcp/client` 的 `open` 收的 `server`（HTTP 的 headers 代入、`credentialHeaders`；
+ * stdio 的 command 絕對路徑、整份 env、`credentialEnv`），不能換就拋。有它、又有 {@link MCP_HOST_BRIDGE_SERVICE}，這條 thread 的 MCP 連線走宿主，
+ * 不自己連、也不用 {@link MCP_POOL_SERVICE}。
+ */
+export const MCP_HOST_ROW_SERVICE = 'mcpHostRow';
+
+/** {@link MCP_HOST_ROW_SERVICE} 收到的東西：連線之前已經照沙箱包過的設定，與解析好的憑證。 */
+export type McpHostRowBuilder = (
+  config: McpConfig,
+  credentials: ResolvedCredentials,
+) => { readonly serverName: string } & Readonly<Record<string, unknown>>;
+
+/** 宿主門面在插件服務表上的名字，同 `@nexus/host-bridge` 的 `HOST_BRIDGE_SERVICE`（harness 有一支測試釘住兩邊相等；外掛不相依那個套件）。 */
+export const MCP_HOST_BRIDGE_SERVICE = 'hostBridge';
 
 /** 宿主給的 host 服務：把宣告了 `sandbox` 的 stdio 設定換成包過的 command 與 args。不能套就拋。 */
 export const MCP_SANDBOX_SERVICE = 'mcpSandbox';
@@ -311,13 +336,36 @@ export async function mountServer(thread: ToolThread, declared: McpConfig): Prom
     unreachable(thread, config, error);
     return;
   }
-  // 宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
-  const pool = thread.services.get(MCP_POOL_SERVICE) as McpConnectionPool | undefined;
+  // 對話行程有宿主（per-thread，#3000）：連線在宿主那邊，整台一份；這一側向宿主 `open` 一份綁定，其餘（工具、核准、資源）照舊。
+  const hostRow = thread.services.get(MCP_HOST_ROW_SERVICE) as McpHostRowBuilder | undefined;
+  const hostBridge = thread.services.get(MCP_HOST_BRIDGE_SERVICE) as HostCaller | undefined;
+  const throughHost = hostRow !== undefined && hostBridge !== undefined;
+  // 沒走宿主時：宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
+  const pool = throughHost
+    ? undefined
+    : (thread.services.get(MCP_POOL_SERVICE) as McpConnectionPool | undefined);
   if (pool !== undefined) {
     await applyShared(thread, config, await pool.acquire(config, elicitation, credentials));
     return;
   }
-  const attempts = attemptsOn(config, elicitation, credentials);
+  const attempts = attemptsOn(
+    config,
+    elicitation,
+    credentials,
+    throughHost
+      ? async (track) => {
+          const client = await HostMcpClient.open(hostBridge, {
+            server: hostRow(config, credentials),
+            elicitation,
+            log: (message) => {
+              thread.logger.warn(message);
+            },
+          });
+          track(client as never);
+          return client as never;
+        }
+      : undefined,
+  );
   const label = `mcp-client(${serverName})`;
   const registered: (() => void)[] = [];
   let supervisor: Supervisor<Generation> | undefined;
@@ -589,6 +637,8 @@ export const manifest = defineManifest({
 const HOST_SERVICES = [
   CHANNEL_SERVICE,
   MCP_POOL_SERVICE,
+  MCP_HOST_ROW_SERVICE,
+  MCP_HOST_BRIDGE_SERVICE,
   MCP_CREDENTIALS_SERVICE,
   MCP_SANDBOX_SERVICE,
   MCP_GUARD_SERVICE,

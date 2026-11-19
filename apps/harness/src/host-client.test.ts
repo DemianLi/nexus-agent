@@ -79,4 +79,30 @@ describe('connectHost', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('宿主晚起：重連等待到 1 秒封頂，不是 5 秒', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'host-client-'));
+    const path = join(dir, 'host.sock');
+    const server = createServer((socket) => {
+      const reader = new FrameReader();
+      socket.on('data', (chunk: Buffer) => {
+        for (const _ of reader.push(chunk)) {
+          socket.write(
+            frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))),
+          );
+        }
+      });
+    });
+    const client = connectHost({ hostSocket: path, token: 'tok', log: () => undefined });
+    try {
+      // 連不上的等待是 200、400、800 …：0、0.2、0.6、1.4 秒各試一次，1.5 秒時已失敗四次，下一次在 2.4 秒（封頂 1 秒）而不是 3.0 秒（封頂 5 秒）。
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await new Promise<void>((resolve) => server.listen(path, resolve));
+      expect(await client?.waitReady(1_200)).toBe(true);
+    } finally {
+      client?.close();
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

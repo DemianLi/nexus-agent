@@ -31,6 +31,7 @@ import { EMBED_AUDIT_FILE } from './embed-audit.js';
 import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
+import { CREDENTIALS_FILE } from './credentials.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
 import {
   fakeEndpoint,
@@ -1053,6 +1054,149 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', 
     expect(code).not.toBe(0);
     expect(running.log()).toContain('寫不了宿主的插件清單');
     expect(running.log()).toContain(HOST_PLUGINS_FILE);
+  }, 180_000);
+});
+
+/**
+ * per-thread 下 MCP 連線在宿主那邊（#3000）。**這是 CI 上唯一證明對話行程走宿主的測試**：其他 per-thread 測試都沒掛 MCP，綠燈說明不了這件事。
+ *
+ * 量在行程樹上：stdio server 的子行程只有一個（兩條 thread 共用），它的父行程是宿主，不是任何一個對話行程。
+ */
+describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () => {
+  const FIXTURE = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
+  const callOnce = (): ScriptedTurn[] => [
+    { content: '', toolCalls: [{ name: 'mcp__crm__record_order', args: { item: 'x' } }] },
+    { content: '收工' },
+  ];
+
+  const rowFor = (marker: string, env?: Record<string, unknown>): string =>
+    [
+      '- insert:',
+      '    - id: mcp-crm',
+      "      name: '@nexus/plugin-mcp'",
+      `      config: ${JSON.stringify({
+        serverName: 'crm',
+        approval: { default: 'allow' },
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', TSX, FIXTURE, marker],
+          ...(env !== undefined && { env }),
+        },
+      })}`,
+      '',
+    ].join('\n');
+
+  const toolText = (state: ConversationState): string =>
+    JSON.stringify(state.entries.filter((entry) => entry.kind === 'tool'));
+
+  /** 命令列含記號的行程，與它們的父行程。 */
+  function withMarker(marker: string): { pid: number; ppid: number }[] {
+    const found: { pid: number; ppid: number }[] = [];
+    for (const name of readdirSync('/proc')) {
+      if (!/^\d+$/u.test(name)) continue;
+      try {
+        if (!readFileSync(`/proc/${name}/cmdline`, 'utf8').includes(marker)) continue;
+        const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+        found.push({
+          pid: Number(name),
+          ppid: Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]),
+        });
+      } catch {
+        // 行程已經結束。
+      }
+    }
+    return found;
+  }
+
+  it('兩條 thread 叫同一列：只有一個 server 子行程，它是宿主的子行程；宿主被殺重起後，同一條 thread 還叫得到', async () => {
+    const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const running = await start([...callOnce(), ...callOnce(), ...callOnce()], rowFor(marker));
+    try {
+      const supervisor = running.child.pid!;
+      const client = await clientOf(await running.loginUrl(1));
+      expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
+      expect(toolText(await turn(client, 'thread-m2', '動手'))).toContain('已登記：x');
+      const [host] = childrenRunning(supervisor, 'nexus-host');
+      expect(host).toBeDefined();
+      const servers = withMarker(marker).filter((item) => item.ppid === host);
+      expect(servers).toHaveLength(1);
+      const conversations = childrenRunning(supervisor, 'conversation-process');
+      expect(withMarker(marker).filter((item) => conversations.includes(item.ppid))).toEqual([]);
+      expect(childrenRunning(supervisor, 'conversation-process')).not.toContain(servers[0]?.ppid);
+
+      signalPid(host!, 'SIGKILL');
+      await expect
+        .poll(
+          () => childrenRunning(supervisor, 'nexus-host').filter((pid) => pid !== host).length,
+          {
+            timeout: 30_000,
+          },
+        )
+        .toBe(1);
+      // 宿主重起：對話行程重連、重新 open；同一條 thread 再叫一次拿得到結果。
+      expect(toolText(await turn(client, 'thread-m1', '再動手'))).toContain('已登記：x');
+    } catch (error) {
+      // 對話行程起不來時，原因只記在監督行程的稽核檔與對話行程的 stderr：失敗訊息帶出來，不然只看得到「crash」。
+      const audit = await readFile(join(running.home, SUPERVISOR_AUDIT_FILE), 'utf8').catch(
+        () => '（沒有稽核檔）',
+      );
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\n--- serve 輸出 ---\n${running.log()}\n--- 監督行程稽核 ---\n${audit}`,
+        { cause: error },
+      );
+    }
+  }, 180_000);
+
+  it('憑證值出現在工具結果裡時被遮：受管憑證經宿主起的 server 環境交進去，成功結果回出來時不含原值', async () => {
+    const secret = 'zq8t7-managed-0123456789';
+    const termMarker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const row = rowFor(termMarker, { MCP_TOKEN: { credential: 'NEXUS_TEST_T7' } });
+    const running = await start(
+      [
+        {
+          content: '',
+          toolCalls: [{ name: 'mcp__crm__read_env', args: { names: ['MCP_TOKEN'] } }],
+        },
+        { content: '收工' },
+      ],
+      row,
+      async (home) => {
+        const file = join(home, CREDENTIALS_FILE);
+        await writeFile(file, `version: 1\nrefs:\n  NEXUS_TEST_T7: ${secret}\n`, { mode: 0o600 });
+      },
+    );
+    const client = await clientOf(await running.loginUrl(1));
+    const text = toolText(await turn(client, 'thread-m1', '動手'));
+    expect(text).toContain('MCP_TOKEN=[redacted]');
+    expect(text).not.toContain(secret);
+  }, 180_000);
+
+  it('停機整條路：對監督行程送 SIGTERM，整台結束碼 0、宿主結束碼 0，server 收到 SIGTERM 且已不在，稽核裡沒有送過 SIGKILL 的 sweep', async () => {
+    const termDir = await mkdtemp(join(tmpdir(), 'nexus-mcp-term-'));
+    roots.push(termDir);
+    const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const running = await start(callOnce(), rowFor(marker, { FIXTURE_TERM_DIR: termDir }));
+    const exit = new Promise<number | null>((resolve) => {
+      running.child.once('exit', (code) => {
+        resolve(code);
+      });
+    });
+    const client = await clientOf(await running.loginUrl(1));
+    expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
+    const serverPid = Number(await readFile(join(termDir, 'pid'), 'utf8'));
+    running.child.kill('SIGTERM');
+    expect(await exit).toBe(0);
+    const audit = (await readFile(join(running.home, SUPERVISOR_AUDIT_FILE), 'utf8'))
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const host = audit.find((line) => line['role'] === 'host' && line['event'] === undefined);
+    expect(host).toMatchObject({ exit_code: 0, signal: null });
+    expect(await readFile(join(termDir, 'term'), 'utf8')).toBe('SIGTERM');
+    expect(() => process.kill(serverPid, 0)).toThrow();
+    const swept = audit.filter((line) => line['event'] === 'sweep');
+    expect(swept.every((line) => (line['signalled'] as number[]).length === 0)).toBe(true);
   }, 180_000);
 });
 

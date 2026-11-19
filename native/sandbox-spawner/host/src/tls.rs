@@ -23,6 +23,16 @@ pub fn client_config(roots: &Path) -> Result<ClientConfig, String> {
     if store.is_empty() {
         return Err(format!("根憑證檔 {shown} 裡沒有憑證"));
     }
+    with_roots(store)
+}
+
+/// 沒設根憑證（`NODE_EXTRA_CA_CERTS` 沒設）時用的 TLS 設定：信任庫是空的，任何 HTTPS 伺服器都驗不過。純 HTTP 與 stdio 不經 TLS，不受影響。
+/// 設了卻讀不了、空檔、認不得的，[`client_config`] 回錯；呼叫端（`mcp` 插件）把它降成這一份空信任庫並記下原因，不讓整個插件起不來。
+pub fn empty_client_config() -> Result<ClientConfig, String> {
+    with_roots(RootCertStore::empty())
+}
+
+fn with_roots(store: RootCertStore) -> Result<ClientConfig, String> {
     ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
         .with_safe_default_protocol_versions()
         .map_err(|err| format!("TLS 設定建不起來：{err}"))

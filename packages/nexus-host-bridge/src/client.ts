@@ -50,6 +50,11 @@ export interface HostCallOptions {
    * 單次的方法不推塊。
    */
   readonly onChunk?: (payload: Json) => void;
+  /**
+   * 呼叫編號配好、框送出之前叫一次（同一條連線上，編號在呼叫結算前不會再配給別的呼叫）。串流方法的後續呼叫要指到前一個呼叫（例如 `mcp/client` 的
+   * `call` 指向 `open`）時，靠它拿到編號。丟出的錯讓這個呼叫以那個錯結算，框不送出。
+   */
+  readonly onId?: (id: number) => void;
 }
 
 /** 宿主主動推的事件。 */
@@ -174,6 +179,7 @@ export class HostClient {
           }
         },
       };
+      options.onId?.(id);
       this.#calls.set(id, call);
       signal?.addEventListener('abort', onAbort, { once: true });
       socket.write(bytes);

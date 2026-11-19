@@ -183,6 +183,25 @@ describe('HostClient.call', () => {
     expect(host.received.some((m) => m.type === 'call')).toBe(false);
   });
 
+  it('onId：送框之前拿到編號，就是宿主收到的那一個；丟錯則呼叫以那個錯結算、框不送出', async () => {
+    const { client, host } = await readyHost(echoHost);
+    const ids: number[] = [];
+    await client.call('s', 'echo', 1, { onId: (id) => ids.push(id) });
+    await client.call('s', 'echo', 2, { onId: (id) => ids.push(id) });
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(host.received.filter((m) => m.type === 'call').map((m) => m.id)).toEqual(ids);
+    const boom = new Error('不要送');
+    await expect(
+      client.call('s', 'echo', 3, {
+        onId: () => {
+          throw boom;
+        },
+      }),
+    ).rejects.toBe(boom);
+    expect(host.received.filter((m) => m.type === 'call')).toHaveLength(2);
+  });
+
   it('onChunk 丟錯：呼叫以那個錯結算，並送 cancel', async () => {
     const { client, host } = await readyHost(echoHost);
     const boom = new Error('收不下');

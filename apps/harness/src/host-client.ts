@@ -11,6 +11,12 @@
 
 import { HostClient, createHostBridge, type HostBridgeHandle } from '@nexus/host-bridge';
 
+/**
+ * 對話行程重連宿主的間隔上限（毫秒）：連不上時的等待從 200 毫秒起加倍，封頂在這裡，所以宿主回來之後最多晚這麼久連上。
+ * `HostClient` 預設的封頂是 5 秒，一次重起就可能吃掉整個 MCP 等待額度 W（見 `docs/host-mcp.md`）。
+ */
+export const HOST_RECONNECT_MAX_MS = 1_000;
+
 /** 拆出 `--host-socket <path>`，其餘原樣回傳；沒帶就是沒有宿主。帶了卻少了路徑（或下一個是旗標）就拋。 */
 export function parseHostSocketArg(argv: readonly string[]): {
   readonly hostSocket: string | undefined;
@@ -47,6 +53,7 @@ export function connectHost(options: ConnectHostOptions): HostClient | undefined
     socketPath: options.hostSocket,
     token: options.token,
     log: options.log,
+    backoffMaxMs: HOST_RECONNECT_MAX_MS,
   });
   options.bridge?.attach(client);
   return client;

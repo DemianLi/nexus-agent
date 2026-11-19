@@ -2,9 +2,10 @@
  * 宿主的插件清單 `host-plugins.json`（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) E4a）：整份由 harness 在
  * 啟動器換成監督行程之前產生，管理者不手改。宿主只在起來時讀它，所以每次啟動都照當下的環境重寫。
  *
- * - **只有一列 `mcp`，環境有設才有**：`NODE_EXTRA_CA_CERTS` 指的檔是宿主唯一信任的根（宿主不讀系統根，也不讀別的來源）。
- *   沒設就沒有那一列，檔案寫成 `[]`，宿主不掛 MCP 插件。`NODE_EXTRA_CA_CERTS` 是 `launch-env.ts` 的 bootstrap 名字，`.env`
- *   本來就設不了，所以只看行程環境不會漏掉哪一層。
+ * - **一律一列 `mcp`**：`NODE_EXTRA_CA_CERTS` 指的檔是宿主唯一信任的根（宿主不讀系統根，也不讀別的來源），有設才帶 `roots`。
+ *   沒設也要有這一列：stdio 與 http 的 MCP server 不需要根，宿主沒掛插件，per-thread 就整條沒有 MCP。沒帶 `roots` 時宿主不信任任何
+ *   https 憑證，網址是 https 的 server 連不上、錯誤訊息點名 `NODE_EXTRA_CA_CERTS`。`NODE_EXTRA_CA_CERTS` 是 `launch-env.ts` 的
+ *   bootstrap 名字，`.env` 本來就設不了，所以只看行程環境不會漏掉哪一層。
  * - **代理跟著那一列**：用 TS 那邊同一個 `resolveProxyPolicy` 解，有代理才寫 `proxy`。解的是啟動器交來的分層啟動環境
  *   （行程環境、home 的 `.env`；帶 `--live` 才讀 `.env`），跟 serve 為模型請求裝代理時看的是同一份（D364）。
  * - **整份覆寫**：舊檔裡的列（包括管理者手寫的）不保留；原子替換，權限 0600（代理網址可能帶帳密）。
@@ -29,14 +30,14 @@ export interface HostProxyConfig {
 /** 清單的一列：宿主 `host/plugins.rs` 收的形狀。 */
 export interface HostPluginRow {
   readonly name: 'mcp';
-  readonly config: { readonly roots: string; readonly proxy?: HostProxyConfig };
+  readonly config: { readonly roots?: string; readonly proxy?: HostProxyConfig };
 }
 
 /**
  * @param env - 啟動器看到的行程環境；`NODE_EXTRA_CA_CERTS` 只看這裡。
  * @param cwd - 相對路徑照它解成絕對路徑：宿主的工作目錄不是啟動器的。
  * @param launchEnv - 解代理用的分層啟動環境；省略是只有 `env` 那一層。
- * @returns 要寫進清單的列；`NODE_EXTRA_CA_CERTS` 沒設（或只有空白）是空陣列。
+ * @returns 要寫進清單的列：一列 `mcp`；`NODE_EXTRA_CA_CERTS` 沒設（或只有空白）就不帶 `roots`。
  */
 export function hostPluginRows(
   env: NodeJS.ProcessEnv,
@@ -44,7 +45,6 @@ export function hostPluginRows(
   launchEnv: LaunchEnvironment = processLaunchEnv(env),
 ): readonly HostPluginRow[] {
   const roots = env.NODE_EXTRA_CA_CERTS?.trim();
-  if (roots === undefined || roots === '') return [];
   const { policy } = resolveProxyPolicy(launchEnv);
   const proxy: HostProxyConfig | undefined =
     policy.source === 'none'
@@ -55,7 +55,13 @@ export function hostPluginRows(
           noProxy: policy.noProxy,
         };
   return [
-    { name: 'mcp', config: { roots: resolve(cwd, roots), ...(proxy !== undefined && { proxy }) } },
+    {
+      name: 'mcp',
+      config: {
+        ...(roots !== undefined && roots !== '' && { roots: resolve(cwd, roots) }),
+        ...(proxy !== undefined && { proxy }),
+      },
+    },
   ];
 }
 
