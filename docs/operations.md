@@ -1827,9 +1827,9 @@ nexus-agent serve --process-model per-thread
   - 宿主推來的事件用 `onEvent(listener)` 收，只會送到服務指名的那條連線。宿主那邊的登記跟著連線走，斷線重連之後要重新登記的，放在 `bridge.onReady(listener)` 裡：每次連上（包括重連）叫一次，登記時已經連上的話當下也叫一次。listener 丟的錯記一行 log，不影響其他 listener。
 - **插件清單**：宿主照 `--plugins <檔>` 掛主機級的插件。harness 起監督行程時一律帶 `--plugins <home>/host-plugins.json`。
   - **這個檔整份由 harness 產生，不要手改**：每次啟動 serve（`per-thread`）時，在換成監督行程之前照當下的環境重寫，舊檔裡的列（包括手寫的）都不保留。權限 0600（代理網址可能帶帳密）。出貨的宿主只有 `mcp` 一個插件，也只有 harness 會寫它：
-    - 啟動環境有設 `NODE_EXTRA_CA_CERTS`：寫一列 `mcp`，`roots` 是那個檔的絕對路徑（相對路徑照啟動時的工作目錄解）。宿主只信這個檔裡的根，不讀系統根。
+    - 一律寫一列 `mcp`。啟動環境有設 `NODE_EXTRA_CA_CERTS` 就帶 `roots`，是那個檔的絕對路徑（相對路徑照啟動時的工作目錄解）。宿主只信這個檔裡的根，不讀系統根。
     - 同一份環境解得出代理（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`，解法與模型請求那條相同）：那一列多一個 `proxy`。解的環境與模型請求看的是同一份：帶 `--live` 時是行程環境加上兩層 `.env`（目前資料夾、harness home；行程環境優先，其次目前資料夾，最後 home），沒帶 `--live` 只有行程環境。`.env` 的值不會進行程環境，監督行程與子行程繼承的環境不變。任何一份 `.env` 壞了（設了只有啟動環境能設的名字，目前資料夾那份設代理也算），啟動器就丟錯，不再等前台起來才丟。
-    - 沒設 `NODE_EXTRA_CA_CERTS`：不寫那一列，檔案是 `[]`，宿主不掛 `mcp`。只設代理、沒設根，一樣沒有那一列。
+    - 沒設 `NODE_EXTRA_CA_CERTS`：那一列不帶 `roots`，宿主不信任任何 https 憑證：網址是 https 的 MCP server 連不上，錯誤訊息指名 `NODE_EXTRA_CA_CERTS`；http 與 stdio 的 server 照常。只設代理、沒設根，那一列只帶 `proxy`。
     - `NODE_EXTRA_CA_CERTS` 指的檔讀不了或裡面沒有憑證：宿主照常起來，標準錯誤記一行 `插件 mcp apply 失敗：…`，`mcp` 沒掛。
     - **per-thread 的對話行程連 MCP 一律走宿主**（`mcp` 沒掛上時，工具連不上，不退回 TS 自己連）：每條對話向宿主 `open` 一份綁定，同一份設定整台共用一份連線。單行程（`single`）、CLI 與前台的試組不經宿主，照舊由 TS 自己連。
     - 宿主重起（崩潰、被監督行程重起）時，對話行程自己重連宿主（等待上限 1 秒），執行中的 MCP 工具呼叫回「結果不明」、不自動重送；呼叫進來時綁定還沒回來的，最多等 5 秒，到了回 `server is disconnected`。

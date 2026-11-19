@@ -1,6 +1,7 @@
 //! 插件 `mcp`：apply 時起一座 [`Bridge`]，expose 過橋的服務 [`SERVICE`]，讓對話行程經宿主連線用 HTTP 與 stdio 的 MCP server。
 //!
-//! 設定：`{ "roots": <PEM 檔路徑>, "proxy"?: <ProxyPolicy> }`。根憑證只信這個檔（[`crate::tls`]），代理照 [`crate::proxy`]。
+//! 設定：`{ "roots"?: <PEM 檔路徑>, "proxy"?: <ProxyPolicy> }`。根憑證只信這個檔（[`crate::tls`]），代理照 [`crate::proxy`]。
+//! `roots` 不給就是沒有信任庫：網址是 https 的 server 一律連不上（[`NO_ROOTS`]），http 與 stdio 照常。給了卻讀不了、空檔、認不得，插件起不來。
 //!
 //! | 方法 | 種類 | payload | 做什麼 |
 //! | --- | --- | --- | --- |
@@ -26,7 +27,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use super::bridge::{Bridge, Command, Opened, Outcome, REQUEST_METHODS};
-use super::config::Server;
+use super::config::{Connection, Server};
 use super::connection::MAX_RESPONSE_BYTES;
 use crate::json::Value;
 use crate::kernel::{
@@ -34,7 +35,7 @@ use crate::kernel::{
     Remote, Service, Spec,
 };
 use crate::proxy::ProxyPolicy;
-use crate::tls::{client_config, http_client};
+use crate::tls::{client_config, empty_client_config, http_client};
 
 pub static SPEC: Spec = Spec {
     name: "mcp",
@@ -134,6 +135,8 @@ struct Request {
 /// 過橋的服務：`open`／`call` 對到橋上的綁定與請求。
 pub struct Client {
     bridge: Bridge,
+    /// 有沒有設根憑證；沒有就拒絕 https 的 server。
+    trusts_https: bool,
     next: u64,
     opens: HashMap<CallKey, Open>,
     requests: HashMap<CallKey, Request>,
@@ -146,9 +149,10 @@ impl Service for Client {
 }
 
 impl Client {
-    fn new(bridge: Bridge) -> Client {
+    fn new(bridge: Bridge, trusts_https: bool) -> Client {
         Client {
             bridge,
+            trusts_https,
             next: 0,
             opens: HashMap::new(),
             requests: HashMap::new(),
@@ -178,6 +182,9 @@ impl Client {
             Ok(server) => Box::new(server),
             Err(error) => return Progress::Err(Fault::BadPayload, error),
         };
+        if let Some(refusal) = refuse_https(&server, self.trusts_https) {
+            return Progress::Err(Fault::Failed, refusal);
+        }
         let open = self.next_id(key);
         self.bridge.send(Command::Open {
             open,
@@ -413,14 +420,27 @@ impl Remote for Client {
     }
 }
 
+/// 沒設根憑證（`NODE_EXTRA_CA_CERTS`）時 https 的 server 的拒絕訊息。
+pub const NO_ROOTS: &str = "沒設 NODE_EXTRA_CA_CERTS：宿主只信這個檔裡的根憑證，沒設就不信任任何 https 憑證，這台 server 的網址是 https，連不了；要連就設好根憑證檔再重啟，或改用 http／stdio";
+
+/// 沒設根憑證時，網址是 https 的 server 要拒絕；回拒絕的訊息，不用拒絕就回 `None`。
+fn refuse_https(server: &Server, trusts_https: bool) -> Option<String> {
+    match &server.connection {
+        Connection::Http { url, .. } if !trusts_https && url.scheme() == "https" => {
+            Some(NO_ROOTS.to_string())
+        }
+        _ => None,
+    }
+}
+
 struct Plug {
-    roots: PathBuf,
+    roots: Option<PathBuf>,
     proxy: ProxyPolicy,
 }
 
 fn build(value: &Value) -> Result<Box<dyn Plugin>, ConfigError> {
     let mut fields = Fields::new(value)?;
-    let roots = PathBuf::from(fields.str("roots")?);
+    let roots = fields.opt_str("roots")?.map(PathBuf::from);
     let proxy = match fields.value("proxy") {
         None => ProxyPolicy::direct(),
         Some(proxy) => ProxyPolicy::parse(proxy).map_err(ConfigError)?,
@@ -431,11 +451,15 @@ fn build(value: &Value) -> Result<Box<dyn Plugin>, ConfigError> {
 
 impl Plugin for Plug {
     fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
-        let config = client_config(&self.roots).map_err(PluginError)?;
+        let config = match &self.roots {
+            Some(roots) => client_config(roots),
+            None => empty_client_config(),
+        }
+        .map_err(PluginError)?;
         let http = http_client(config, &self.proxy).map_err(PluginError)?;
         let bridge = Bridge::start(http, self.proxy.secrets())
             .map_err(|error| PluginError(format!("MCP 的橋起不來：{error}")))?;
-        cx.expose(Client::new(bridge))?;
+        cx.expose(Client::new(bridge, self.roots.is_some()))?;
         Ok(Applied::Done)
     }
 }
@@ -443,6 +467,29 @@ impl Plugin for Plug {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn server(json: &str) -> Server {
+        let value: Value = serde_json::from_str(json).expect("JSON");
+        Server::parse(&value).expect("設定")
+    }
+
+    #[test]
+    fn 沒設根憑證時_https_被拒_http_與_stdio_照常() {
+        let https = server(
+            r#"{"serverName":"a","connection":{"transport":"http","url":"https://example.test/mcp"}}"#,
+        );
+        let http = server(
+            r#"{"serverName":"b","connection":{"transport":"http","url":"http://example.test/mcp"}}"#,
+        );
+        let stdio = server(
+            r#"{"serverName":"c","connection":{"transport":"stdio","command":"/bin/true"}}"#,
+        );
+        let refusal = refuse_https(&https, false).expect("https 要被拒");
+        assert!(refusal.contains("NODE_EXTRA_CA_CERTS"), "{refusal}");
+        assert_eq!(refuse_https(&http, false), None);
+        assert_eq!(refuse_https(&stdio, false), None);
+        assert_eq!(refuse_https(&https, true), None);
+    }
 
     #[test]
     fn 切在字元邊界上_接回來不變() {

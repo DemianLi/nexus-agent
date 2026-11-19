@@ -9,7 +9,7 @@ mod common;
 use common::{fixture, ConnectProxy, ProxyMode, Response, TlsServer};
 use nexus_host::json::Value;
 use nexus_host::proxy::ProxyPolicy;
-use nexus_host::tls::{client_config, http_client};
+use nexus_host::tls::{client_config, empty_client_config, http_client};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -100,6 +100,22 @@ fn 只信設定的根() {
     );
     let err = get("ca-b.pem", &ProxyPolicy::direct(), &url).expect_err("CA b 不該驗過");
     assert!(err.contains("UnknownIssuer"), "{err}");
+}
+
+#[test]
+fn 沒設根憑證時信任庫是空的_連不上任何_https() {
+    let server = ok_server();
+    let url = format!("https://localhost:{}/", server.port);
+    let client =
+        http_client(empty_client_config().expect("建得起來"), &ProxyPolicy::direct()).expect("客戶端");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let err = runtime
+        .block_on(client.get(&url).send())
+        .expect_err("空信任庫不該驗過");
+    assert!(chain(&err).contains("UnknownIssuer"), "{}", chain(&err));
 }
 
 #[test]

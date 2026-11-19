@@ -20,13 +20,15 @@ async function tempDir(): Promise<string> {
 }
 
 describe('hostPluginRows', () => {
-  it('NODE_EXTRA_CA_CERTS 沒設或只有空白：沒有 mcp 那一列', () => {
-    expect(hostPluginRows({})).toEqual([]);
-    expect(hostPluginRows({ NODE_EXTRA_CA_CERTS: '   ' })).toEqual([]);
+  it('NODE_EXTRA_CA_CERTS 沒設或只有空白：仍有 mcp 那一列，不帶 roots（stdio 與 http 的 server 照常）', () => {
+    expect(hostPluginRows({})).toEqual([{ name: 'mcp', config: {} }]);
+    expect(hostPluginRows({ NODE_EXTRA_CA_CERTS: '   ' })).toEqual([{ name: 'mcp', config: {} }]);
   });
 
-  it('只設代理、沒設根：不產生那一列（宿主只信 NODE_EXTRA_CA_CERTS 指的檔）', () => {
-    expect(hostPluginRows({ HTTPS_PROXY: 'http://proxy.example:3128' })).toEqual([]);
+  it('只設代理、沒設根：那一列帶 proxy、不帶 roots', () => {
+    const [row] = hostPluginRows({ HTTPS_PROXY: 'http://proxy.example:3128' });
+    expect(row?.config.roots).toBeUndefined();
+    expect(row?.config.proxy?.httpsProxy).toBe('http://proxy.example:3128');
   });
 
   it('有根沒代理：只有 roots，相對路徑照 cwd 解成絕對路徑', () => {
@@ -112,12 +114,12 @@ describe('writeHostPluginsFile', () => {
     expect(await readdir(dir)).toEqual(['host-plugins.json']);
   });
 
-  it('整份取代：舊檔裡的列（含手寫的）不保留；環境沒設就寫成空陣列', async () => {
+  it('整份取代：舊檔裡的列（含手寫的）不保留；環境沒設根就寫成不帶 roots 的那一列', async () => {
     const dir = await tempDir();
     const path = join(dir, 'host-plugins.json');
     await writeFile(path, JSON.stringify([{ name: 'mcp', config: { roots: '/old.pem' } }]));
     writeHostPluginsFile(path, hostPluginRows({}));
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual([]);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual([{ name: 'mcp', config: {} }]);
   });
 
   it('寫不進去就丟錯，不留暫存檔', async () => {
