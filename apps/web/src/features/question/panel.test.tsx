@@ -361,11 +361,23 @@ describe('MCP 反問（#1098）', () => {
 
   it('最上面講是哪台 server 的哪支工具在問，參數原文照畫（排版過的 JSON）', () => {
     renderAsked();
-    const block = screen.getByTestId('question-origin');
-    expect(block.textContent).toContain('MCP 伺服器「files」的工具「delete_dir」在問你');
-    expect(screen.getByTestId('question-origin-arguments').textContent).toBe(
-      JSON.stringify(ORIGIN.arguments, null, 2),
-    );
+    // 報讀名稱是全句，看得到的是圖示＋兩個 code 標籤（#3039）。
+    const block = screen.getByRole('group', {
+      name: 'MCP 伺服器「files」的工具「delete_dir」在問你',
+    });
+    expect(block).toBe(screen.getByTestId('question-origin'));
+    const source = screen.getByTestId('question-origin-source');
+    expect([...source.querySelectorAll('code')].map((code) => code.textContent)).toEqual([
+      'files',
+      'delete_dir',
+    ]);
+    expect(source.textContent).toBe('files›delete_dir');
+    // 參數區塊常駐、沒有看得到的小標，名稱在 aria-label；來源區塊裡沒有說明句，拒絕與取消的差別在按鈕的 tooltip。
+    const args = screen.getByTestId('question-origin-arguments');
+    expect(args.getAttribute('aria-label')).toBe('呼叫參數');
+    expect(args.textContent).toBe(JSON.stringify(ORIGIN.arguments, null, 2));
+    expect(block.textContent).not.toContain('呼叫參數');
+    expect(block.textContent).not.toContain('外部伺服器');
     // 在題目之前。
     expect(
       block.compareDocumentPosition(document.querySelector('fieldset')!) &
@@ -386,10 +398,10 @@ describe('MCP 反問（#1098）', () => {
         onDismiss={onDismiss}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: '拒絕' }));
+    fireEvent.click(screen.getByRole('button', { name: /^拒絕/ }));
     expect(onDecline).toHaveBeenCalledTimes(1);
     expect(onDismiss).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: /^取消/ }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(answers).toEqual([]);
     fireEvent.click(radio('週一'));
@@ -397,17 +409,24 @@ describe('MCP 反問（#1098）', () => {
     expect(answers).toEqual([[{ id: 'day', selected: ['週一'] }]]);
   });
 
+  it('拒絕與取消的差別寫在 tooltip，按鈕名稱帶同一句（tooltip 報讀器聽不到，§8）', () => {
+    renderAsked({ onDecline: () => {}, onDismiss: () => {} });
+    const decline = screen.getByRole('button', { name: '拒絕：明確不給，這一輪繼續' });
+    const dismiss = screen.getByRole('button', { name: '取消：先不回答，這一輪繼續' });
+    expect([decline.textContent, dismiss.textContent]).toEqual(['拒絕', '取消']);
+  });
+
   it('連線斷了（busy）：拒絕與取消都停用', () => {
     renderAsked({ onDecline: () => {}, onDismiss: () => {}, busy: true });
-    expect(screen.getByRole('button', { name: '拒絕' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: '取消' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: /^拒絕/ }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: /^取消/ }).hasAttribute('disabled')).toBe(true);
   });
 
   it('模型自己問的（沒有 origin）：沒有來源區塊，就算給了處理函式也沒有拒絕與取消；操作列照舊釘在底部', () => {
     renderAsked({ pending: question([DAY]), onDecline: () => {}, onDismiss: () => {} });
     expect(screen.queryByTestId('question-origin')).toBeNull();
-    expect(screen.queryByRole('button', { name: '拒絕' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '取消' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^拒絕/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^取消/ })).toBeNull();
     expect(document.querySelector('[data-slot="questionnaire-actions"]')?.className).toContain(
       'sticky',
     );
