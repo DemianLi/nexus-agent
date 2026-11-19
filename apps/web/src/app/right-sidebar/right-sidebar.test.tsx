@@ -452,9 +452,7 @@ describe('單例面板：觀測與成本（#1031）', () => {
     const tab = screen.getByRole('tab', { name: '觀測' });
     expect(tab.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(tab);
-    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe(
-      TRACE_EMPTY_TEXT,
-    );
+    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe(TRACE_EMPTY_TEXT);
     // 有分頁之後空狀態讓位。
     expect(screen.queryByText(RIGHT_SIDEBAR_EMPTY_TEXT)).toBeNull();
     expect(saved()?.tabs).toEqual([{ kind: 'trace' }]);

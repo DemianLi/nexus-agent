@@ -231,7 +231,6 @@ describe('compactionCount', () => {
   });
 });
 
-
 describe('contextSectionRows', () => {
   it('摘要關掉時只剩壓縮次數那一列，不會整段消失', () => {
     expect(contextSectionRows(null, 2)).toEqual([['已載入的壓縮次數', '2 次']]);

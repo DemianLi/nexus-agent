@@ -153,7 +153,6 @@ describe('成本分頁：快取命中率（#724）', () => {
     expect(text('cost-totals')).toContain('5,500 token');
     expect(text('cost-totals')).not.toContain('快取命中率');
   });
-
 });
 
 describe('成本分頁：主對話', () => {

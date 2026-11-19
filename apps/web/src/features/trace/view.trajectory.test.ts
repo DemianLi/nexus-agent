@@ -21,12 +21,7 @@ import {
   view,
   withTrajectory,
 } from '@/test/trajectory-fixtures';
-import {
-  sameRow,
-  traceModel,
-  traceTurns,
-  turnSeqOfMessage,
-} from '@/features/trace/view';
+import { sameRow, traceModel, traceTurns, turnSeqOfMessage } from '@/features/trace/view';
 import type { TraceRow } from '@/features/trace/view';
 
 const kinds = (rows: readonly TraceRow[]) => rows.map((row) => row.kind);

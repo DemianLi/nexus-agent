@@ -18,11 +18,7 @@ import { MAX_TOKENS_NOTICE } from '@/features/tool/max-tokens-view';
 import { PLAN_REVIEW_DISMISSED_TEXT } from '@/features/plan/review-view';
 import { SETTLED_NOTICE_TIMED_OUT_TEXT } from '@/features/queue/view';
 import { Script } from '@/test/conversation-frames';
-import {
-  ENDING_LABEL,
-  TRACE_TARGET_MISSING_TEXT,
-  traceTurns,
-} from '@/features/trace/view';
+import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, traceTurns } from '@/features/trace/view';
 import type { TraceRow } from '@/features/trace/view';
 
 const kinds = (rows: readonly TraceRow[]) => rows.map((row) => row.kind);

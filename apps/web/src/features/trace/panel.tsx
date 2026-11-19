@@ -34,12 +34,7 @@ import { Digests, TurnGroup, mainTurnSelector } from '@/features/trace/groups';
 import { TRACE_PULL_FAILED_TEXT, TRACE_PULL_LOADING_TEXT } from '@/features/trace/pull-control';
 import { SubagentSourceContext } from '@/features/trace/subagent';
 import { Button } from '@/components/ui/button';
-import {
-  Empty,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty';
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { focusLost, useFocusHandoff } from '@/shared/lib/use-focus-handoff';
 import { useStableNames } from '@/features/tool';
 import { useTrajectoryPull } from '@/features/trace/use-trajectory-pull';

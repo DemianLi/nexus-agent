@@ -12,11 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TRACE_TAB } from './sidebar-tab';
 import type { TabBodyProps } from '@/shared/right-sidebar/tab';
-import {
-  REANNOUNCE_MS,
-  TRACE_EMPTY_TEXT,
-  TRACE_LOCATED_TEXT,
-} from '@/features/trace/panel';
+import { REANNOUNCE_MS, TRACE_EMPTY_TEXT, TRACE_LOCATED_TEXT } from '@/features/trace/panel';
 import { TRACE_LOCATE_LABEL } from '@/features/trace/row';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';

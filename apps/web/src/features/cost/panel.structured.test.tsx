@@ -15,9 +15,7 @@ import { createConversationStore } from '@/shared/connection/conversation-store'
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
-import {
-  caliberOf,
-} from '@/features/cost/token-meter-view';
+import { caliberOf } from '@/features/cost/token-meter-view';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
