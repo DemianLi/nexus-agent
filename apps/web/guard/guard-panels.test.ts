@@ -520,15 +520,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 
     try {
       expectTexts(
         await collectTexts(page),
-        [
-          'retry-text',
-          'pager-idle',
-          'pager-loading',
-          'pager-fail',
-          'pager-error',
-          'empty-title',
-          'empty-description',
-        ],
+        ['retry-text', 'pager-idle', 'pager-loading', 'pager-fail', 'pager-error', 'empty-title'],
         `transcript-rows:${theme}`,
       );
       const focus = await collectFocus(page);
@@ -910,15 +902,14 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A�
     }
   });
 
-  test('T1：空狀態的標題與說明過 4.5', async () => {
+  test('T1：空狀態的標題過 4.5', async () => {
     const page = await openOverlay('trace-empty', theme, {
       marks: {
         '[data-slot="empty-title"]': { 'data-guard-text': 'empty-title' },
-        '[data-slot="empty-description"]': { 'data-guard-text': 'empty-hint' },
       },
     });
     try {
-      expectTexts(await collectTexts(page), ['empty-title', 'empty-hint'], `trace-empty:${theme}`);
+      expectTexts(await collectTexts(page), ['empty-title'], `trace-empty:${theme}`);
     } finally {
       await page.close();
     }

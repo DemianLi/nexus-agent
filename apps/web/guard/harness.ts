@@ -65,7 +65,7 @@
  *    「退出」、「查看全文」、審核兩顆 44px 高，頁面不橫向溢出。
  * 23. **觀測分頁**（#1690 PR A，`?overlay=trace-*`）：一輪標頭的狀態膠囊九種收法的色調與字過 4.5、圓角是 `rounded-4xl`，完成與停在中斷點
  *    字前面的圓點對膠囊底過 3，只有進行中帶 `DotLoader`；
- *    空狀態的標題與說明過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
+ *    空狀態的標題過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
  *    鈕是 `rounded-sm`、有焦點外框，讀取中是一顆停用的鈕（`aria-disabled`，#2009）、畫成 `DotLoader` 加待命那一句、不覆寫名稱，只有摘要的組、
  *    更早的摘要、子代理三處都量，分頁只有一格
  *    `role=status`；375 寬時重試鈕與讀取中的鈕 44px 高、頁面不橫向溢出。
@@ -1515,7 +1515,6 @@ export const transcriptRowMarks: Record<string, Record<string, string>> = {
   },
   '[data-guard-pager="fail"] p': { 'data-guard-text': 'pager-error' },
   '[data-slot="empty-title"]': { 'data-guard-text': 'empty-title' },
-  '[data-slot="empty-description"]': { 'data-guard-text': 'empty-description' },
 };
 
 /**

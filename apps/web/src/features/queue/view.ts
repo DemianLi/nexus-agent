@@ -27,7 +27,7 @@ export const QUEUE_SETTLE_MS = 200;
 export const QUEUE_LEAVE_MS = 150;
 
 /** 停住時表頭多講的那一句（Q6）。 */
-export const QUEUE_PARKED_TEXT = '停止後這些不會自己跑，送出下一句時會先照順序跑它們';
+export const QUEUE_PARKED_TEXT = '已停住，送出下一句時才會跑';
 
 /** 改、刪沒收下而那一件已經不在隊裡（Q7）。 */
 export const QUEUE_GONE_TEXT = '這一則可能已經開始跑了';
@@ -131,7 +131,7 @@ export function queuedAgentText(item: Pick<WireQueuedInput, 'source'>): string |
   return undefined;
 }
 
-/** 表頭：件數。 */
+/** 表頭的無障礙名稱；畫面上只有 `ListEnd` 圖示加件數。 */
 export function queueHeading(count: number): string {
   return `${count} 則排著的訊息`;
 }

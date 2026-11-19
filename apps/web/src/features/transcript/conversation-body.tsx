@@ -23,7 +23,6 @@ import { refusalText } from '@/shared/connection/refusal-text';
  * @param hasSteers - 有排著的插話（#710）：就算這一輪是從還沒有任何一則的地方跑起來的，也有東西可畫。
  * @param fork - 分支鈕（#1581）。沒給就不畫。
  * @param changes - 改動卡從哪裡讀（#443）。沒給就不畫改動卡。
- * @param fileDrop - 空白頁提不提「把檔案拖進來」，見 {@link EmptyHero}。
  * @param replayEnd - 重播結尾那條線畫哪一種（`replay-end.tsx`）。沒給就不畫。
  */
 export function ConversationBody({
@@ -37,7 +36,6 @@ export function ConversationBody({
   changes,
   deliverableDownload,
   fork,
-  fileDrop,
   replayEnd,
 }: {
   readonly conversation: Pick<
@@ -54,7 +52,6 @@ export function ConversationBody({
   readonly changes?: ChangesStores;
   readonly deliverableDownload: DeliverableDownloader;
   readonly fork?: TranscriptFork;
-  readonly fileDrop?: boolean;
   readonly replayEnd?: ReplayEnd;
 }) {
   const replayed = useReplayedIds(conversation.history !== undefined, conversation.state.entries);
@@ -68,7 +65,7 @@ export function ConversationBody({
         {historyError !== undefined && (
           <div className="mx-auto w-full max-w-2xl pt-4">{historyError}</div>
         )}
-        <EmptyHero {...(fileDrop === undefined ? {} : { fileDrop })} />
+        <EmptyHero />
       </div>
     );
   }

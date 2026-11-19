@@ -503,9 +503,11 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     expect(paths.some((path) => path.startsWith('/embed/threads/'))).toBe(true);
   });
 
-  test('空白畫面：元件不提拖檔，獨立頁面會提（#2384）', async () => {
+  test('空白畫面：兩邊都只有標題，元件不提拖檔（#2384、#3050）', async () => {
     const page = await openDemo([{ content: '不會用到。' }], undefined, async (standalone) => {
-      await expect.poll(() => standalone.getByText('在下面打字，或把檔案拖進來。').count()).toBe(1);
+      await expect
+        .poll(() => standalone.getByRole('heading', { level: 2, name: '今天要做什麼？' }).count())
+        .toBe(1);
       await expect
         .poll(() => standalone.getByRole('main').getByRole('status').first().textContent(), {
           timeout: 30_000,
@@ -513,7 +515,9 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
         .toBe('就緒');
       await shot(standalone, 'empty-standalone');
     });
-    await expect.poll(() => chat(page).getByText('在下面打字。', { exact: true }).count()).toBe(1);
+    await expect
+      .poll(() => chat(page).getByRole('heading', { level: 2, name: '今天要做什麼？' }).count())
+      .toBe(1);
     expect(await chat(page).getByText(/拖/u).count()).toBe(0);
     await settled(page);
     await shot(page, 'empty-embedded');

@@ -338,7 +338,7 @@ describe('對話介面', () => {
       expect(within(dock).getByText('下一句')).toBeTruthy();
     });
 
-    it('這一輪停了、插話還沒被領走：泡泡留著，底下改說下一輪才送進模型', async () => {
+    it('這一輪停了、插話還沒被領走：泡泡留著，底下說下一輪', async () => {
       setSeq(0);
       const { fake, client } = steeringClient([
         frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
@@ -373,7 +373,11 @@ describe('對話介面', () => {
       // 新進來的一件要撐過 200ms 才畫（`QUEUE_SETTLE_MS`）：兩件以上等表頭寫到全部，全套件負載重時第二件會晚到。
       const dock = await screen.findByTestId('queue-dock');
       if (lines.length > 1) {
-        await waitFor(() => expect(dock.textContent).toContain(`${lines.length} 則排著的訊息`));
+        await waitFor(() =>
+          expect(
+            within(dock).getByRole('button', { name: `${lines.length} 則排著的訊息` }),
+          ).toBeTruthy(),
+        );
       }
       return { ...made, input };
     }
@@ -457,7 +461,7 @@ describe('對話介面', () => {
       const { fake, input } = await runningWithQueue(['第一句']);
       fake.downlink.acceptGoal(fake.opened[0]!, 'Continue working toward the goal.');
       const dock = screen.getByTestId('queue-dock');
-      await waitFor(() => expect(dock.textContent).toContain('2 則排著的訊息'));
+      await within(dock).findByRole('button', { name: '2 則排著的訊息' });
       fireEvent.click(within(dock).getByRole('button', { name: '2 則排著的訊息' }));
       expect(await within(dock).findByTestId('queue-goal-label')).toBeTruthy();
       expect(within(dock).queryByRole('button', { name: /^插話：目標續行/u })).toBeNull();
@@ -480,7 +484,7 @@ describe('對話介面', () => {
       const { fake, input } = await runningWithQueue(['第一句']);
       fake.downlink.acceptUnknownSource(fake.opened[0]!, 'future instruction', 'future-kind');
       const dock = screen.getByTestId('queue-dock');
-      await waitFor(() => expect(dock.textContent).toContain('2 則排著的訊息'));
+      await within(dock).findByRole('button', { name: '2 則排著的訊息' });
       fireEvent.click(within(dock).getByRole('button', { name: '2 則排著的訊息' }));
       expect(await within(dock).findByTestId('queue-generic-label')).toBeTruthy();
       expect(within(dock).getByText('第一句')).toBeTruthy();
@@ -545,7 +549,9 @@ describe('對話介面', () => {
       // sonner 的 toast 是全域的、跨測試留著：斷言這一條才有的那句。
       expect(await screen.findByText('這一輪已經不收插話了，那一則照舊排著')).toBeTruthy();
       // 兩件以上預設收合：表頭還寫著兩則。
-      expect(screen.getByTestId('queue-dock').textContent).toContain('2 則排著的訊息');
+      expect(
+        within(screen.getByTestId('queue-dock')).getByRole('button', { name: '2 則排著的訊息' }),
+      ).toBeTruthy();
       expect(document.querySelector('[data-pending-steer]')).toBeNull();
     });
 
