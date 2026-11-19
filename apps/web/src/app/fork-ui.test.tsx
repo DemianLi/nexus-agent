@@ -20,8 +20,8 @@ import {
   FORK_LABEL,
   FORK_RENAME_FAILED_TEXT,
   FORK_UNAVAILABLE_TEXT,
-  FORKED_THREAD_NOTICE,
 } from '@/features/threads/fork';
+import { ONE_TURN_HISTORY } from '@/test/app-harness.fixture';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
@@ -153,10 +153,14 @@ function fakeClient(
       if (options.list !== undefined) return options.list();
       return { kind: 'ok', result: { ...listed, items: [...forked, ...listed.items] } };
     },
-    threadHistory: async () => ({
-      kind: 'ok',
-      result: { events: [], firstSeq: 0, throughSeq: -1, hasMore: false, legacy: false },
-    }),
+    // 子對話帶著分叉前的內容：重播結尾那條線要有重播的條目才畫。
+    threadHistory: async (threadId) =>
+      threadId === '子'
+        ? ONE_TURN_HISTORY(threadId)
+        : {
+            kind: 'ok',
+            result: { events: [], firstSeq: 0, throughSeq: -1, hasMore: false, legacy: false },
+          },
     threadFork: async (threadId, messageId) => {
       calls.push(`fork ${threadId} ${messageId}`);
       if (options.fork !== undefined) return options.fork();
@@ -317,7 +321,7 @@ describe('分支鈕放哪、能不能按', () => {
 });
 
 describe('分出去之後', () => {
-  it('依序：送分叉 → 清單先出現新的一列 → 改成遞增的名字 → 切到子對話，講是分出來的', async () => {
+  it('依序：送分叉 → 清單先出現新的一列 → 改成遞增的名字 → 切到子對話，重播結尾連回來源', async () => {
     const renamed = deferred<CommandOutcome<ThreadRenameResult>>();
     const fake = fakeClient({ rename: () => renamed.promise });
     render(<App client={fake.client} />);
@@ -340,7 +344,15 @@ describe('分出去之後', () => {
     await act(async () => renamed.resolve(ok({ title: '計劃（2）', seq: 9 })));
     await waitFor(() => expect(fake.calls).toContain('open 子'));
     expect(remembered()).toBe('子');
-    expect(await screen.findByText(FORKED_THREAD_NOTICE)).toBeTruthy();
+    const divider = await screen.findByTestId('replay-end');
+    expect(divider.textContent).toBe('從計劃（1）分出');
+    fireEvent.click(within(divider).getByRole('button', { name: '計劃（1）' }));
+    await waitFor(() => expect(remembered()).toBe('來源'));
+    expect(fake.calls.filter((call) => call.startsWith('open'))).toEqual([
+      'open 來源',
+      'open 子',
+      'open 來源',
+    ]);
   });
 
   it('途中人自己從清單換到別條：佔位與改名照做，但不把人拉回子對話（後按的贏）', async () => {

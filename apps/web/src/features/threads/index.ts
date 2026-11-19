@@ -2,7 +2,6 @@ export { AppSidebar } from './app-sidebar';
 export { ArchivedBanner } from './archived-banner';
 export { BLOCKED_HINT_TEXT, isArchivedThread } from './archived-view';
 export {
-  FORKED_THREAD_NOTICE,
   FORK_FAILED_TEXT,
   FORK_LABEL,
   FORK_RENAME_FAILED_TEXT,
