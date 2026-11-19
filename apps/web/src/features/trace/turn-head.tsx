@@ -145,9 +145,8 @@ export function TurnHeader({ head }: { head: TurnHead }) {
       </p>
       {head.elidedCalls !== undefined && (
         <p className="text-muted-foreground text-tip" data-testid="trace-elided">
-          另有 {head.elidedCalls} 次呼叫已摺掉
-          {head.elidedTools !== undefined && `、${head.elidedTools} 個工具已摺掉`}
-          ，上面的計數仍包含它們。
+          另摺掉 {head.elidedCalls} 次呼叫
+          {head.elidedTools !== undefined && `、${head.elidedTools} 個工具`}
         </p>
       )}
     </header>

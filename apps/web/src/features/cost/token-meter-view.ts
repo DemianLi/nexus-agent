@@ -84,21 +84,6 @@ export function tokenMeterOf(projections: Projections): TokenMeterView | undefin
   return view as TokenMeterView;
 }
 
-/** 分頁頂上那一句（有用量投影時）。 */
-export const COST_STRUCTURED_HEADLINE =
-  '第 1 版：逐輪用量，數字都來自用量投影，不畫金額、不畫完成率';
-
-export const COST_STRUCTURED_LIMITS = {
-  scope:
-    '這裡的 token 是供應商報的：含失敗與中止的呼叫；輸入只算未快取的，快取讀、快取寫另列（完整的輸入是三項相加，舊 server 的輸入則已含快取讀取）；不含生摘要的那一次（另列）、不含產生會話標題的那一次。供應商沒報用量的呼叫不是 0，有這種呼叫時 token 是下限（還沒收尾的輪先標還沒定案）。',
-  time: '時間分三段加一格殘差：模型（扣掉重試退避）、工具（平行的取聯集）、等待（重試退避加核准等待）；殘差是三段都沒覆蓋到的，可能是負的，那代表前提被破壞。',
-  window:
-    '逐輪只列最近的幾輪，更早的併成一列；每一輪的「在觀測分頁看這一輪」只在觀測分頁還有那一輪的資料時能按。',
-  subagent:
-    '子代理的 token 可以和主對話相加，時間不行：前景子代理跑的時間已經在派它的那顆工具的耗時裡。數字是即時的，它還在跑就會繼續增加。',
-  absent: '沒有金額（端點不回報單價）、沒有完成率（沒有任務成功的判準）。',
-} as const;
-
 /** 畫面上有、但投影的口徑表沒有的欄位（由其他欄位算出來的）。 */
 export const DERIVED_CALIBER: Readonly<Record<string, string>> = {
   tokensTotal:
@@ -108,7 +93,9 @@ export const DERIVED_CALIBER: Readonly<Record<string, string>> = {
   cacheHitRate:
     '快取讀 ÷（未快取＋快取讀＋快取寫），這一段加起來算，不是各次呼叫比例的平均；有一個快取桶沒記就寫「沒記」，不寫 0%。',
   subagentTokens:
-    '主對話加上每個列得出來的子代理的 token 加總；有子代理還沒有數字、或有呼叫沒報用量時是下限。',
+    '主對話加上每個列得出來的子代理的 token 加總；有子代理還沒有數字、更早派出的子代理沒有逐個列出、有呼叫沒報用量、或快取桶沒記時是下限。',
+  foregroundSubagentTime:
+    '前景子代理跑的時間已經在派它的那顆工具的耗時裡，不要和主對話的時間相加。',
 };
 
 /** 欄位的口徑句；兩張表都沒有就是 `undefined`（測試會抓到）。 */
