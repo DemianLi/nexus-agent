@@ -1034,6 +1034,83 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', 
 });
 
 /**
+ * per-thread 下 MCP 連線在宿主那邊（#3000）。**這是 CI 上唯一證明對話行程走宿主的測試**：其他 per-thread 測試都沒掛 MCP，綠燈說明不了這件事。
+ *
+ * 量在行程樹上：stdio server 的子行程只有一個（兩條 thread 共用），它的父行程是宿主，不是任何一個對話行程。
+ */
+describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () => {
+  const FIXTURE = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
+  const callOnce = (): ScriptedTurn[] => [
+    { content: '', toolCalls: [{ name: 'mcp__crm__record_order', args: { item: 'x' } }] },
+    { content: '收工' },
+  ];
+
+  const rowFor = (marker: string): string =>
+    [
+      '- insert:',
+      '    - id: mcp-crm',
+      "      name: '@nexus/plugin-mcp'",
+      `      config: ${JSON.stringify({
+        serverName: 'crm',
+        approval: { default: 'allow' },
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', TSX, FIXTURE, marker],
+        },
+      })}`,
+      '',
+    ].join('\n');
+
+  const toolText = (state: ConversationState): string =>
+    JSON.stringify(state.entries.filter((entry) => entry.kind === 'tool'));
+
+  /** 命令列含記號的行程，與它們的父行程。 */
+  function withMarker(marker: string): { pid: number; ppid: number }[] {
+    const found: { pid: number; ppid: number }[] = [];
+    for (const name of readdirSync('/proc')) {
+      if (!/^\d+$/u.test(name)) continue;
+      try {
+        if (!readFileSync(`/proc/${name}/cmdline`, 'utf8').includes(marker)) continue;
+        const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+        found.push({
+          pid: Number(name),
+          ppid: Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]),
+        });
+      } catch {
+        // 行程已經結束。
+      }
+    }
+    return found;
+  }
+
+  it('兩條 thread 叫同一列：只有一個 server 子行程，它是宿主的子行程；宿主被殺重起後，同一條 thread 還叫得到', async () => {
+    const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const running = await start([...callOnce(), ...callOnce(), ...callOnce()], rowFor(marker));
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
+    expect(toolText(await turn(client, 'thread-m2', '動手'))).toContain('已登記：x');
+    const [host] = childrenRunning(supervisor, 'nexus-host');
+    expect(host).toBeDefined();
+    const servers = withMarker(marker).filter((item) => item.ppid === host);
+    expect(servers).toHaveLength(1);
+    const conversations = childrenRunning(supervisor, 'conversation-process');
+    expect(withMarker(marker).filter((item) => conversations.includes(item.ppid))).toEqual([]);
+    expect(childrenRunning(supervisor, 'conversation-process')).not.toContain(servers[0]?.ppid);
+
+    signalPid(host!, 'SIGKILL');
+    await expect
+      .poll(() => childrenRunning(supervisor, 'nexus-host').filter((pid) => pid !== host).length, {
+        timeout: 30_000,
+      })
+      .toBe(1);
+    // 宿主重起：對話行程重連、重新 open；同一條 thread 再叫一次拿得到結果。
+    expect(toolText(await turn(client, 'thread-m1', '再動手'))).toContain('已登記：x');
+  }, 180_000);
+});
+
+/**
  * native 下對話只從日誌推（[#2360](https://github.com/DemianLi/nexus-agent/issues/2360)），per-thread 那一半：single 的在 `native-log-restore.test.ts`。
  *
  * 對話行程換了一個（pid 不同），行程內的快取就一定是空的；下一輪模型收到的請求帶著前一個行程那一輪的人話（那一輪答完了的連同回覆），就是從日誌灌回的。
