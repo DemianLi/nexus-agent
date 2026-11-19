@@ -1542,7 +1542,9 @@ mod calls {
         use crate::tls_common::{
             fixture, ConnectProxy, PlainServer, ProxyMode, Request, Response, TlsServer,
         };
-        use nexus_host::mcp::service::{NO_ROOTS, PIECES_PER_STEP, PIECE_BYTES, SERVICE};
+        use nexus_host::mcp::service::{
+            NO_ROOTS, NO_ROOTS_PROXY, PIECES_PER_STEP, PIECE_BYTES, SERVICE,
+        };
         use serde_json::json;
         use std::sync::{Arc, Mutex};
 
@@ -2226,16 +2228,88 @@ done
             assert!(proxy.seen().is_empty(), "被拒的 open 不該連代理");
         }
 
-        /// 代理的網址是 https、又沒設根憑證：http 的 server 也要先跟代理做 TLS，空信任庫驗不過，連不上。
-        /// 釘現況：錯誤只說送不出請求，沒有提代理、TLS 或根憑證。
-        #[test]
-        fn http_的_server_走_https_的代理_沒設根憑證_連不上() {
-            let proxy = TlsServer::start(Arc::new(|_| Response::empty(502)));
-            let policy = json!({
+        /// 代理的網址是 https、信任庫是空的：http 的 server 也要先跟代理做 TLS，驗不過。在 `open` 當場拒絕並指名原因，不去連代理。
+        fn tls_proxy_policy(proxy: &TlsServer, no_proxy: &str) -> Value {
+            json!({
                 "httpProxy": format!("https://localhost:{}", proxy.port),
+                "noProxy": no_proxy,
+            })
+        }
+
+        #[test]
+        fn http_的_server_走_https_的代理_沒設根憑證_當場被拒_指名代理是_https() {
+            let proxy = TlsServer::start(Arc::new(|_| Response::empty(502)));
+            let config = json!({ "proxy": tls_proxy_policy(&proxy, "") });
+            let (_host, socket) = host_with("mcp-tls-proxy-no-roots", config);
+            let mut stream = connect(&socket);
+            let refused = open_refused(&mut stream, 1, &at("http://mcp.nexus.test/mcp", json!({})));
+            assert_eq!(refused.code, ErrorCode::ServiceError);
+            assert_eq!(refused.message, NO_ROOTS_PROXY);
+        }
+
+        #[test]
+        fn http_的_server_走_https_的代理_根憑證檔不能用_當場被拒_指名檔案與代理是_https() {
+            let proxy = TlsServer::start(Arc::new(|_| Response::empty(502)));
+            let roots = std::env::temp_dir().join(format!(
+                "nexus-host-test-{}-tls-proxy-missing.pem",
+                std::process::id()
+            ));
+            let config = json!({
+                "roots": roots.to_str().expect("路徑"),
+                "proxy": tls_proxy_policy(&proxy, ""),
+            });
+            let (_host, socket) = host_with("mcp-tls-proxy-bad-roots", config);
+            let mut stream = connect(&socket);
+            let refused = open_refused(&mut stream, 1, &at("http://mcp.nexus.test/mcp", json!({})));
+            assert_eq!(refused.code, ErrorCode::ServiceError);
+            let message = &refused.message;
+            assert!(message.contains(roots.to_str().expect("路徑")), "{message}");
+            assert!(message.contains("代理網址是 https"), "{message}");
+            assert!(!message.contains("沒設 NODE_EXTRA_CA_CERTS"), "{message}");
+        }
+
+        /// 放行清單裡的 server 直連，不經那個 https 代理，所以不拒：`open` 真的去連（這個主機名解析不到，錯在連線，不在根憑證）。沒被排除的照樣當場拒。
+        #[test]
+        fn http_的_server_被_no_proxy_排除_沒設根憑證_不拒_直連() {
+            let proxy = TlsServer::start(Arc::new(|_| Response::empty(502)));
+            let config = json!({ "proxy": tls_proxy_policy(&proxy, "direct.nexus.test") });
+            let (_host, socket) = host_with("mcp-tls-proxy-excluded", config);
+            let mut stream = connect(&socket);
+            let direct = open_refused(
+                &mut stream,
+                1,
+                &at(
+                    "http://direct.nexus.test/mcp",
+                    json!({ "failOnStartupError": true }),
+                ),
+            );
+            assert!(
+                !direct.message.contains("NODE_EXTRA_CA_CERTS"),
+                "{}",
+                direct.message
+            );
+            assert!(
+                direct.message.contains("direct.nexus.test"),
+                "{}",
+                direct.message
+            );
+            let other = open_refused(
+                &mut stream,
+                2,
+                &at("http://other.nexus.test/mcp", json!({})),
+            );
+            assert_eq!(other.message, NO_ROOTS_PROXY);
+        }
+
+        /// 代理的網址是 http 時不經 TLS：沒設根憑證也照常經代理連。
+        #[test]
+        fn http_的_server_走_http_的代理_沒設根憑證_照常經代理連() {
+            let proxy = ConnectProxy::start(ProxyMode::Reject);
+            let policy = json!({
+                "httpProxy": format!("http://127.0.0.1:{}", proxy.port),
                 "noProxy": "",
             });
-            let (_host, socket) = host_with("mcp-tls-proxy-no-roots", json!({ "proxy": policy }));
+            let (_host, socket) = host_with("mcp-http-proxy-no-roots", json!({ "proxy": policy }));
             let mut stream = connect(&socket);
             let refused = open_refused(
                 &mut stream,
@@ -2245,17 +2319,12 @@ done
                     json!({ "failOnStartupError": true }),
                 ),
             );
-            assert_eq!(refused.code, ErrorCode::ServiceError);
-            assert!(
-                refused.message.contains("error sending request"),
-                "{}",
-                refused.message
-            );
             assert!(
                 !refused.message.contains("NODE_EXTRA_CA_CERTS"),
                 "{}",
                 refused.message
             );
+            assert!(!proxy.seen().is_empty(), "請求要送到代理");
         }
     }
 }

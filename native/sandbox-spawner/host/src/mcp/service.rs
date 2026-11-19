@@ -1,7 +1,8 @@
 //! 插件 `mcp`：apply 時起一座 [`Bridge`]，expose 過橋的服務 [`SERVICE`]，讓對話行程經宿主連線用 HTTP 與 stdio 的 MCP server。
 //!
 //! 設定：`{ "roots"?: <PEM 檔路徑>, "proxy"?: <ProxyPolicy> }`。根憑證只信這個檔（[`crate::tls`]），代理照 [`crate::proxy`]。
-//! `roots` 不給就是沒有信任庫：網址是 https 的 server 一律連不上（[`NO_ROOTS`]），http 與 stdio 照常。給了卻讀不了、空檔、認不得，插件起不來。
+//! `roots` 不給就是沒有信任庫：要驗 https 憑證的 server（網址是 https，或網址是 http 而走的代理網址是 https）在 `open` 時被拒（[`NO_ROOTS`]、[`NO_ROOTS_PROXY`]），其餘的 http 與 stdio 照常。
+//! 給了卻讀不了、空檔、認不得也一樣，訊息指名那個檔，啟動時另印一行警告；插件照常起來。
 //!
 //! | 方法 | 種類 | payload | 做什麼 |
 //! | --- | --- | --- | --- |
@@ -138,6 +139,8 @@ pub struct Client {
     bridge: Bridge,
     /// https 的 server 能不能連：根憑證有沒有設、設了能不能用。
     trust: HttpsTrust,
+    /// server 走哪個代理：代理網址是 https 的，跟代理那一段也要驗憑證。
+    proxy: ProxyPolicy,
     next: u64,
     opens: HashMap<CallKey, Open>,
     requests: HashMap<CallKey, Request>,
@@ -150,10 +153,11 @@ impl Service for Client {
 }
 
 impl Client {
-    fn new(bridge: Bridge, trust: HttpsTrust) -> Client {
+    fn new(bridge: Bridge, trust: HttpsTrust, proxy: ProxyPolicy) -> Client {
         Client {
             bridge,
             trust,
+            proxy,
             next: 0,
             opens: HashMap::new(),
             requests: HashMap::new(),
@@ -183,7 +187,7 @@ impl Client {
             Ok(server) => Box::new(server),
             Err(error) => return Progress::Err(Fault::BadPayload, error),
         };
-        if let Some(refusal) = refuse_https(&server, &self.trust) {
+        if let Some(refusal) = refuse_https(&server, &self.trust, &self.proxy) {
             return Progress::Err(Fault::Failed, refusal);
         }
         let open = self.next_id(key);
@@ -424,6 +428,9 @@ impl Remote for Client {
 /// 沒設根憑證（`NODE_EXTRA_CA_CERTS`）時 https 的 server 的拒絕訊息。
 pub const NO_ROOTS: &str = "沒設 NODE_EXTRA_CA_CERTS：宿主只信這個檔裡的根憑證，沒設就不信任任何 https 憑證，這台 server 的網址是 https，連不了；要連就設好根憑證檔再重啟，或改用 http／stdio";
 
+/// 沒設根憑證時，http 的 server 走 https 代理的拒絕訊息。
+pub const NO_ROOTS_PROXY: &str = "沒設 NODE_EXTRA_CA_CERTS：宿主只信這個檔裡的根憑證，沒設就不信任任何 https 憑證，這台 server 要走的代理網址是 https，連不了；要連就設好根憑證檔再重啟，或改用 http 的代理";
+
 /// https 的 server 能不能連。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HttpsTrust {
@@ -436,7 +443,7 @@ pub enum HttpsTrust {
 }
 
 /// 依 `roots` 建 TLS 設定與 https 的信任狀態。檔有問題**不讓插件起不來**（stdio 與 http 的 server 不需要根），改用空信任庫、記下原因，
-/// 由 [`refuse_https`] 在 `open` 時對 https 的 server 回指名原因的錯。
+/// 由 [`refuse_https`] 在 `open` 時對要驗 https 憑證的 server 回指名原因的錯。
 fn trust_of(roots: Option<&Path>) -> Result<(ClientConfig, HttpsTrust), String> {
     match roots {
         None => Ok((empty_client_config()?, HttpsTrust::NotConfigured)),
@@ -447,19 +454,54 @@ fn trust_of(roots: Option<&Path>) -> Result<(ClientConfig, HttpsTrust), String> 
     }
 }
 
-/// 網址是 https 的 server 在信任庫是空的時要拒絕；回拒絕的訊息（沒設與設了不能用的訊息不同，免得管理者往錯的方向查），不用拒絕就回 `None`。
-fn refuse_https(server: &Server, trust: &HttpsTrust) -> Option<String> {
-    let Connection::Http { url, .. } = &server.connection else {
-        return None;
-    };
-    if url.scheme() != "https" {
-        return None;
+/// 連這台 server 時哪一段要驗 https 憑證。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TlsHop {
+    /// server 的網址是 https。
+    Server,
+    /// server 的網址是 http，但它走的代理網址是 https。
+    Proxy,
+}
+
+impl TlsHop {
+    /// stdio、以及直連或走 http 代理的 http server 不經 TLS，回 `None`。照 `proxy` 直連的（迴圈位址、放行清單裡的）不算走代理。
+    fn of(server: &Server, proxy: &ProxyPolicy) -> Option<TlsHop> {
+        let Connection::Http { url, .. } = &server.connection else {
+            return None;
+        };
+        if url.scheme() == "https" {
+            return Some(TlsHop::Server);
+        }
+        (proxy.proxy_for(url)?.scheme() == "https").then_some(TlsHop::Proxy)
     }
-    match trust {
-        HttpsTrust::Trusted => None,
-        HttpsTrust::NotConfigured => Some(NO_ROOTS.to_string()),
-        HttpsTrust::Unusable(reason) => Some(format!(
-            "NODE_EXTRA_CA_CERTS 指的根憑證檔不能用，宿主不信任任何 https 憑證，這台 server 的網址是 https，連不了：{reason}；改好那個檔再重啟，或改用 http／stdio"
+
+    fn subject(self) -> &'static str {
+        match self {
+            TlsHop::Server => "這台 server 的網址是 https",
+            TlsHop::Proxy => "這台 server 要走的代理網址是 https",
+        }
+    }
+
+    fn way_out(self) -> &'static str {
+        match self {
+            TlsHop::Server => "改用 http／stdio",
+            TlsHop::Proxy => "改用 http 的代理",
+        }
+    }
+}
+
+/// 信任庫是空的時，要驗 https 憑證的 server（[`TlsHop`]）一律拒絕；回拒絕的訊息（沒設與設了不能用的訊息不同，免得管理者往錯的方向查），不用拒絕就回 `None`。
+/// 訊息不帶代理網址：它可能帶帳密。
+fn refuse_https(server: &Server, trust: &HttpsTrust, proxy: &ProxyPolicy) -> Option<String> {
+    let hop = TlsHop::of(server, proxy)?;
+    match (trust, hop) {
+        (HttpsTrust::Trusted, _) => None,
+        (HttpsTrust::NotConfigured, TlsHop::Server) => Some(NO_ROOTS.to_string()),
+        (HttpsTrust::NotConfigured, TlsHop::Proxy) => Some(NO_ROOTS_PROXY.to_string()),
+        (HttpsTrust::Unusable(reason), hop) => Some(format!(
+            "NODE_EXTRA_CA_CERTS 指的根憑證檔不能用，宿主不信任任何 https 憑證，{}，連不了：{reason}；改好那個檔再重啟，或{}",
+            hop.subject(),
+            hop.way_out()
         )),
     }
 }
@@ -484,12 +526,12 @@ impl Plugin for Plug {
     fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
         let (config, trust) = trust_of(self.roots.as_deref()).map_err(PluginError)?;
         if let HttpsTrust::Unusable(reason) = &trust {
-            eprintln!("nexus-host: mcp 警告：NODE_EXTRA_CA_CERTS 指的根憑證檔不能用，https 的 MCP server 會連不上（http 與 stdio 照常）：{reason}");
+            eprintln!("nexus-host: mcp 警告：NODE_EXTRA_CA_CERTS 指的根憑證檔不能用，https 的 MCP server、走 https 代理的 MCP server 會連不上（其餘的 http 與 stdio 照常）：{reason}");
         }
         let http = http_client(config, &self.proxy).map_err(PluginError)?;
         let bridge = Bridge::start(http, self.proxy.secrets())
             .map_err(|error| PluginError(format!("MCP 的橋起不來：{error}")))?;
-        cx.expose(Client::new(bridge, trust))?;
+        cx.expose(Client::new(bridge, trust, self.proxy.clone()))?;
         Ok(Applied::Done)
     }
 }
@@ -522,11 +564,14 @@ mod tests {
         let (https, http, stdio) = three_servers();
         let (_, trust) = trust_of(None).expect("建得起來");
         assert_eq!(trust, HttpsTrust::NotConfigured);
-        let refusal = refuse_https(&https, &trust).expect("https 要被拒");
+        let refusal = refuse_https(&https, &trust, &ProxyPolicy::direct()).expect("https 要被拒");
         assert!(refusal.contains("沒設 NODE_EXTRA_CA_CERTS"), "{refusal}");
-        assert_eq!(refuse_https(&http, &trust), None);
-        assert_eq!(refuse_https(&stdio, &trust), None);
-        assert_eq!(refuse_https(&https, &HttpsTrust::Trusted), None);
+        assert_eq!(refuse_https(&http, &trust, &ProxyPolicy::direct()), None);
+        assert_eq!(refuse_https(&stdio, &trust, &ProxyPolicy::direct()), None);
+        assert_eq!(
+            refuse_https(&https, &HttpsTrust::Trusted, &ProxyPolicy::direct()),
+            None
+        );
     }
 
     #[test]
@@ -553,18 +598,87 @@ mod tests {
                 matches!(trust, HttpsTrust::Unusable(_)),
                 "{shown}：{trust:?}"
             );
-            let refusal = refuse_https(&https, &trust).expect("https 要被拒");
+            let refusal =
+                refuse_https(&https, &trust, &ProxyPolicy::direct()).expect("https 要被拒");
             assert!(refusal.contains(&shown), "訊息要指名檔案：{refusal}");
             assert!(
                 !refusal.contains("沒設 NODE_EXTRA_CA_CERTS"),
                 "設了的不能說成沒設：{refusal}"
             );
-            assert_eq!(refuse_https(&http, &trust), None, "{shown}");
-            assert_eq!(refuse_https(&stdio, &trust), None, "{shown}");
+            assert_eq!(
+                refuse_https(&http, &trust, &ProxyPolicy::direct()),
+                None,
+                "{shown}"
+            );
+            assert_eq!(
+                refuse_https(&stdio, &trust, &ProxyPolicy::direct()),
+                None,
+                "{shown}"
+            );
         }
         let _ = std::fs::remove_file(&empty);
         let _ = std::fs::remove_file(&broken);
         let _ = std::fs::remove_file(&junk);
+    }
+
+    fn policy(json: &str) -> ProxyPolicy {
+        ProxyPolicy::parse(&serde_json::from_str(json).expect("JSON")).expect("代理政策")
+    }
+
+    #[test]
+    fn http_的_server_走_https_的代理_信任庫是空的就被拒_訊息指名代理是_https_與根憑證的狀況() {
+        let (_, http, stdio) = three_servers();
+        let proxy =
+            policy(r#"{"httpProxy":"https://user:s3cret@proxy.corp.test:8443","noProxy":""}"#);
+        assert_eq!(
+            refuse_https(&http, &HttpsTrust::NotConfigured, &proxy).as_deref(),
+            Some(NO_ROOTS_PROXY)
+        );
+        assert!(NO_ROOTS_PROXY.contains("沒設 NODE_EXTRA_CA_CERTS"));
+        assert!(NO_ROOTS_PROXY.contains("代理網址是 https"));
+        let unusable = HttpsTrust::Unusable("讀不了根憑證檔 /etc/roots.pem：沒有這個檔".into());
+        let refusal = refuse_https(&http, &unusable, &proxy).expect("要被拒");
+        assert!(refusal.contains("/etc/roots.pem"), "{refusal}");
+        assert!(refusal.contains("代理網址是 https"), "{refusal}");
+        assert!(!refusal.contains("沒設 NODE_EXTRA_CA_CERTS"), "{refusal}");
+        for text in [NO_ROOTS_PROXY, refusal.as_str()] {
+            assert!(!text.contains("s3cret"), "訊息不帶代理的帳密：{text}");
+            assert!(
+                !text.contains("proxy.corp.test"),
+                "訊息不帶代理網址：{text}"
+            );
+        }
+        assert_eq!(refuse_https(&http, &HttpsTrust::Trusted, &proxy), None);
+        assert_eq!(
+            refuse_https(&stdio, &HttpsTrust::NotConfigured, &proxy),
+            None
+        );
+    }
+
+    #[test]
+    fn 信任庫是空的_不走_https_代理的_http_server_不拒() {
+        let (_, http, _) = three_servers();
+        let loopback = server(
+            r#"{"serverName":"l","connection":{"transport":"http","url":"http://127.0.0.1:9/mcp"}}"#,
+        );
+        let trust = HttpsTrust::NotConfigured;
+        let plain = policy(r#"{"httpProxy":"http://proxy.corp.test:8080","noProxy":""}"#);
+        assert_eq!(refuse_https(&http, &trust, &plain), None, "http 的代理");
+        let other = policy(r#"{"httpsProxy":"https://proxy.corp.test:8443","noProxy":""}"#);
+        assert_eq!(
+            refuse_https(&http, &trust, &other),
+            None,
+            "https 的代理只給 https 的網址用，http 的 server 直連"
+        );
+        let excluded =
+            policy(r#"{"httpProxy":"https://proxy.corp.test:8443","noProxy":"example.test"}"#);
+        assert_eq!(
+            refuse_https(&http, &trust, &excluded),
+            None,
+            "放行清單裡的直連"
+        );
+        let tls = policy(r#"{"httpProxy":"https://proxy.corp.test:8443","noProxy":""}"#);
+        assert_eq!(refuse_https(&loopback, &trust, &tls), None, "迴圈位址直連");
     }
 
     #[test]
