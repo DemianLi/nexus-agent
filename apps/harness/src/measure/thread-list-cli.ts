@@ -22,27 +22,20 @@
 
 import { createReadStream } from 'node:fs';
 import { request as httpRequest } from 'node:http';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { arch, cpus, platform, release, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import { parseArgs } from 'node:util';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
 import { createWireClient, THREADS_PATH } from '@nexus/wire';
-import { openJsonlSessionStore, projectKey, sessionPathsIn } from '../jsonl-session-store.js';
+import { openJsonlSessionStore, projectKey } from '../jsonl-session-store.js';
 import { runServe } from '../serve-run.js';
 import { listStoredThreads } from '../session-list.js';
+import { generate } from './thread-list-data.js';
+import type { Cell } from './thread-list-data.js';
 
 const LIMITS = { maxWords: 5, maxBytes: 40 };
-/** 一行工具輸出的大小。#812 之後單則工具結果進日誌最多約 56 KB，這裡取 32 KB 上下的長行。 */
-const LINE_BYTES = 32 * 1024;
-
-interface Cell {
-  readonly count: number;
-  readonly fileBytes: number;
-}
 
 /** 一組量測期間事件圈的延遲（毫秒）：每 1 ms 排一次計時器，看實際晚了多少。 */
 interface LoopDelay {
@@ -166,87 +159,6 @@ function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
-}
-
-/** 一份日誌的內容：`turn/start` 與 `session/title` 夾在長行之間，總大小約 `fileBytes`。 */
-function buildBody(index: number, fileBytes: number, cwd: string): { body: string; id: string } {
-  void cwd;
-  const lines: string[] = [];
-  const base = 1_700_000_000_000 + index * 60_000;
-  let seq = 0;
-  const push = (type: string, data: unknown, time: number): void => {
-    lines.push(JSON.stringify({ type, seq, time, data }));
-    seq += 1;
-  };
-  push(
-    'turn/start',
-    { kind: 'message', text: `第 ${index} 份的第一句話 ${randomBytes(4).toString('hex')}` },
-    base,
-  );
-  push('session/title', { title: `會話 ${index}` }, base + 1);
-  let bytes = lines.join('\n').length;
-  let t = base + 2;
-  let round = 0;
-  while (bytes < fileBytes) {
-    const room = fileBytes - bytes;
-    const size = Math.min(LINE_BYTES, Math.max(64, room - 200));
-    // base64 每 3 位元組變 4 字元，先取 3/4 再轉；每行都是新的隨機位元組。
-    const payload = randomBytes(Math.ceil((size * 3) / 4))
-      .toString('base64')
-      .slice(0, size);
-    round += 1;
-    // 每十行工具輸出夾一則人打的話與一顆 turn/end，其餘是 tool 事件。
-    if (round % 10 === 0) {
-      push('turn/end', {}, t);
-      t += 1;
-      push('turn/start', { kind: 'message', text: `第 ${round} 輪的問題` }, t);
-    } else {
-      push('message', { role: 'tool', content: payload }, t);
-    }
-    t += 1;
-    bytes += size + 80;
-  }
-  return { body: `${lines.join('\n')}\n`, id: `m742-${String(index).padStart(5, '0')}` };
-}
-
-/** 造一格的資料。第 0 份走 `openJsonlSessionStore`，其餘直接寫同格式。 */
-async function generate(dir: string, cell: Cell, cwd: string): Promise<number> {
-  await rm(dir, { recursive: true, force: true });
-  await mkdir(dir, { recursive: true });
-  const store = openJsonlSessionStore({ directory: dir });
-  let total = 0;
-  for (let index = 0; index < cell.count; index += 1) {
-    const { body, id } = buildBody(index, cell.fileBytes, cwd);
-    if (index === 0) {
-      const session = store.create({
-        version: SESSION_LOG_FORMAT_VERSION,
-        id,
-        createdAt: 1_700_000_000_000,
-        cwd,
-      });
-      const events = body
-        .split('\n')
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line) as SessionEvent);
-      await session.append(events);
-      await session.close();
-    } else {
-      const header = {
-        version: SESSION_LOG_FORMAT_VERSION,
-        id,
-        createdAt: 1_700_000_000_000 + index * 60_000,
-        cwd,
-      };
-      // 寫方的佈局（#1594 ③）：會話目錄裡的世代檔，第一行是 header 行；舊路徑留墓碑，列表要多讀的那一項也量進去。
-      const paths = sessionPathsIn(dir, id);
-      const headerLine = `${JSON.stringify({ type: 'session', ...header })}\n`;
-      await mkdir(paths.sessionDirectory, { recursive: true });
-      await writeFile(paths.log, `${headerLine}${body}`);
-      await writeFile(paths.tombstone, headerLine);
-    }
-    total += body.length;
-  }
-  return total;
 }
 
 /** 讀一遍墊檔，把頁面快取擠掉。 */
