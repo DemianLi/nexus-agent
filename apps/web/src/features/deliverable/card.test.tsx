@@ -19,7 +19,7 @@ const toastSpy = vi.hoisted(() => {
 });
 vi.mock('sonner', () => ({ toast: toastSpy }));
 
-/** 交付卡片（#441 第二刀）：檔名、說明、完整路徑、複製路徑；超過四個先收起。 */
+/** 交付卡片（#441 第二刀）：檔名、同一行的目錄、有給才畫的說明、複製路徑；超過四個先收起。 */
 
 afterEach(() => {
   cleanup();

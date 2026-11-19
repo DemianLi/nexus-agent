@@ -1327,7 +1327,7 @@ describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
     ['同一類共用標題', 'read_file'],
     ['MCP 工具', 'mcp__files__stat'],
     ['宿主頁工具', 'page__pick_date'],
-  ])('標題只講到類別（%s）：工具名在列上（sm 以上）', (_, name) => {
+  ])('標題不是專屬的（%s）：工具名在列上（sm 以上）', (_, name) => {
     render(<ToolCard entry={tool({ name })} />);
     const code = within(trigger()).getByText(name);
     expect(code.tagName).toBe('CODE');

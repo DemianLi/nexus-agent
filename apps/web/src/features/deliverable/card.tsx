@@ -2,8 +2,7 @@
  * 一輪尾端的交付卡片（[#441](https://github.com/DemianLi/nexus-agent/issues/441) 第二刀）：這一輪 `present` 成功
  * 宣告交付的檔案。
  *
- * 資料只來自 harness 在成功時才送的交付事件，不從工具卡推（#441 決議 2）。面向參考 dsh `Deliverables`／
- * `PresentedFileCard`（`packages/client/ui-deliverables/src/client/`，`ddefc45`）：檔案圖示、檔名、說明、一顆動作；
+ * 資料只來自 harness 在成功時才送的交付事件，不從工具卡推（#441 決議 2）。每列是檔案圖示、檔名、說明、一顆動作；
  * 超過 {@link COLLAPSED_COUNT} 個先收起。說明只在 agent 給了才畫，目錄放在檔名同一行（#3040 第 5 項）。
  *
  * **不做「在 Host 上開啟」**（#441 決議 3）：dsh 有那顆，我們沒有——部署在多人共用的遠端主機、經 SSH 轉 port

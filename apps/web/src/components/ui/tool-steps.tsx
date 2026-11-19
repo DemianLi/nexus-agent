@@ -2,7 +2,7 @@
  * nexus 層（#1682）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/tool-steps.tsx`），外觀照 SG（#1468 Q8）。
  * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 60 條）：
  *
- * - 預設的字換成中文（§8）：明細框的標題（vendor 是 "Input"／"Output"／"Error"）與群組收著那一列（vendor 是
+ * - 預設的字換成中文（§8）：明細框的名稱（vendor 是 "Input"／"Output"／"Error"）與群組收著那一列（vendor 是
  *   "Running N steps"／"Ran N steps"）。只補預設值、不必複製上游標記，所以走包裝層（同第 26、45 條）；呼叫端給了就照用。
  *   群組那一列不用「·」接：它是純字串、會被報讀。
  *

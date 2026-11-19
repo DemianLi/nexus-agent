@@ -301,7 +301,7 @@ describe.each(
         'diff-review-picker',
       ];
       // 量具自檢：頁面上 1 顆、段收著那一列的合計 1 顆、段裡寫檔那張 1 顆、改動卡標頭 1 顆加兩列（二進位那列寫字）、
-      // 審查頁這個檔 1 顆（頁首的合計 #3049 拿掉了，總數在卡片與分頁標題）、選檔器兩列；每顆兩個 span。
+      // 審查頁只有這個檔 1 顆（沒有全部檔的合計，總數在改動卡與分頁標題，#3049）、選檔器兩列；每顆兩個 span。
       expect(
         Object.fromEntries(
           names.map((name) => [name, texts.filter((t) => t.name === name).length]),

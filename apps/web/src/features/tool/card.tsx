@@ -160,7 +160,7 @@ export function ToolCard({
         onOpenChange={setOpen}
         trailing={
           <>
-            {/* 標題只講到類別時才補工具名；手機寬度讓給摘要（#625 實機）。 */}
+            {/* 標題不是這支工具專屬的（{@link hasOwnTitle}）才補工具名；手機寬度讓給摘要（#625 實機）。 */}
             {!hasOwnTitle(entry.name) && (
               <code className="hidden shrink-0 font-mono text-tip sm:inline">{entry.name}</code>
             )}
