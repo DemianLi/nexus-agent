@@ -100,9 +100,19 @@ describe('MCP 連線走宿主', () => {
 
   it('只有門面、沒有 row 服務：不走宿主（沒有宿主的行程把門面掛成一律 host_absent）', async () => {
     const host = fakeHost();
-    const { registry } = await mounted({ [MCP_HOST_BRIDGE_SERVICE]: host.caller });
-    expect(registry.tools.resolve('mcp__srv__echo')).toBeUndefined();
+    let acquired = 0;
+    const pool = {
+      acquire: () => {
+        acquired += 1;
+        return Promise.reject(new Error('池在這裡被叫到，代表走的是沒有宿主的路'));
+      },
+    };
+    // 池被叫到而拒絕，這一列的 apply 就失敗、掛載整個丟錯：這是「走的是沒有宿主的那條」的可見證據。
+    await expect(
+      mounted({ [MCP_HOST_BRIDGE_SERVICE]: host.caller, [MCP_POOL_SERVICE]: pool }),
+    ).rejects.toThrow('池在這裡被叫到');
     expect(host.seen).toEqual([]);
+    expect(acquired).toBe(1);
   });
 
   it('row 服務拋（例如 command 不是絕對路徑）：這一列連不上，不碰宿主', async () => {
