@@ -1448,6 +1448,14 @@ async function startServer(
           warn: (message, error) => {
             warn(`[列表] ${message}：${errorChain(error)}`);
           },
+          // per-thread 的前台：標起來的那幾條在對話行程的批次窗口裡，重讀之前請它們先排空（同搜尋，#2689）。
+          ...(options.front !== undefined && {
+            beforeReread: flushLiveThreadsOverSocket(
+              options.front.supervisor,
+              options.front.forwarder,
+              warn,
+            ),
+          }),
         });
   // 對話行程（per-thread）不先建：列表由前台回，它只在真的被問到時才建。
   if (options.conversation === undefined) threadIndex?.warm();

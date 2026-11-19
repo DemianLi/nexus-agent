@@ -22,7 +22,12 @@ import {
 } from '@nexus/core';
 import type { SessionStore, StoredSessionHeader } from '@nexus/core';
 
-import { isListedThread, sortThreadSummaries, summarizeStoredThread } from './session-list.js';
+import {
+  isListedThread,
+  sortThreadSummaries,
+  summarizeStoredThread,
+  tooLargeSummary,
+} from './session-list.js';
 import type { StoredThreadList, StoredThreadSummary } from './session-list.js';
 import { assertThreadTitleLimits } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
@@ -50,6 +55,11 @@ export interface ThreadIndexOptions {
   /** 背景的建置或重掃失敗時講一行。 */
   readonly warn: (message: string, error: unknown) => void;
   readonly now?: () => number;
+  /**
+   * 重讀標起來的那幾條之前叫一次。per-thread 的前台用它請對話行程把批次窗口裡的日誌排空，不然讀到的是還沒落盤之前的那一份。
+   * 不拋；`signal` 是那一次請求的。
+   */
+  readonly beforeReread?: (signal?: AbortSignal) => Promise<void>;
 }
 
 type Row = StoredThreadSummary | 'unreadable';
@@ -95,8 +105,7 @@ export function createThreadIndex(store: SessionStore, options: ThreadIndexOptio
       signal.throwIfAborted();
       const row = await summarizeStoredThread(store, header, options.title);
       if (!fresh(header.id)) continue;
-      if (row === 'gone') entries.delete(header.id);
-      else entries.set(header.id, { revision, row });
+      settle(header, row, revision);
     }
     for (const id of entries.keys()) {
       if (!seen.has(id) && fresh(id)) entries.delete(id);
@@ -119,8 +128,27 @@ export function createThreadIndex(store: SessionStore, options: ThreadIndexOptio
       return;
     }
     const row = await summarizeStoredThread(store, header, options.title);
-    if (row === 'gone') entries.delete(id);
-    else entries.set(id, { revision: undefined, row });
+    settle(header, row, undefined);
+    // 讀不進來是暫時的（額度被佔著）：下一次列表再試。
+    if (row === 'too-large') dirty.add(id);
+  }
+
+  /**
+   * 記下讀到的那一列。讀不進來的那一份留著上一次讀到的（沒有才用 {@link tooLargeSummary}），revision 留空，下一次重掃一定重讀。
+   */
+  function settle(
+    header: StoredSessionHeader,
+    row: Awaited<ReturnType<typeof summarizeStoredThread>>,
+    revision: string | undefined,
+  ): void {
+    if (row === 'gone') {
+      entries.delete(header.id);
+    } else if (row === 'too-large') {
+      const kept = entries.get(header.id)?.row;
+      entries.set(header.id, { revision: undefined, row: kept ?? tooLargeSummary(header) });
+    } else {
+      entries.set(header.id, { revision, row });
+    }
   }
 
   function build(): Promise<void> {
@@ -145,23 +173,28 @@ export function createThreadIndex(store: SessionStore, options: ThreadIndexOptio
       });
   }
 
+  /**
+   * 這一次請求開始時標著的每一條，回之前都有一次**在這次請求開始之後才起跑**的重讀：別的請求早先起的那一次可能早於最後一次寫入，
+   * 等它完、還被標著就自己再讀一次。每條最多等一次、讀一次：一直在寫的那一條不會把請求卡住。
+   */
   async function drainDirty(signal: AbortSignal | undefined): Promise<void> {
+    if (dirty.size === 0) return;
+    await options.beforeReread?.(signal);
     for (const id of [...dirty]) {
-      for (;;) {
-        signal?.throwIfAborted();
-        const running = rereading.get(id);
-        if (running !== undefined) {
-          // 別的請求起的那一次可能早於最後一次寫入：等它完再看還有沒有被標著。
-          await running;
-          continue;
-        }
-        if (!dirty.has(id)) break;
-        dirty.delete(id);
-        const pending = reread(id).finally(() => rereading.delete(id));
-        pending.catch(() => dirty.add(id));
-        rereading.set(id, pending);
-        await pending;
+      signal?.throwIfAborted();
+      await rereading.get(id)?.catch(() => {});
+      if (!dirty.has(id)) continue;
+      const started = rereading.get(id);
+      if (started !== undefined) {
+        // 等的時候另一個請求先起了一次：它也是在這次請求開始之後才起跑的。
+        await started;
+        continue;
       }
+      dirty.delete(id);
+      const pending = reread(id).finally(() => rereading.delete(id));
+      pending.catch(() => dirty.add(id));
+      rereading.set(id, pending);
+      await pending;
     }
   }
 
@@ -181,6 +214,8 @@ export function createThreadIndex(store: SessionStore, options: ThreadIndexOptio
       return { items, unreadable };
     },
     touch(threadId) {
+      // 還沒開始建：建置本身會讀到現在的磁碟，不用記（對話行程永遠不建，標記也就不會一直長）。
+      if (built === undefined) return;
       tick += 1;
       touchedAt.set(threadId, tick);
       dirty.add(threadId);

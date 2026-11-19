@@ -8,7 +8,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SESSION_LOG_FORMAT_VERSION, SessionSeq } from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, SessionLogTooLargeError, SessionSeq } from '@nexus/core';
 import type { SessionStore } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -221,6 +221,72 @@ describe('會話列表索引', () => {
 
     await first;
     expect((await second).items[0]?.updatedAt).toBe(5_000);
+  });
+
+  it('一直在寫的那一條不會把請求卡住：每條最多讀一次', async () => {
+    const directory = await tempDir();
+    const backend = openJsonlSessionStore({ directory });
+    await writeThread(backend, 'x', '一直在寫', 1_000);
+    const ref: { index?: ThreadIndex } = {};
+    let reads = 0;
+    // 每讀完一次就又被寫一次、又被標一次，像一條正在串流的 thread。
+    const busy: SessionStore = {
+      create: (header) => backend.create(header),
+      resume: (id) => backend.resume(id),
+      list: (options) => backend.list(options),
+      open: async (id, access) => {
+        const handle = await backend.open(id, access);
+        return {
+          header: handle.header,
+          storedFormatVersion: handle.storedFormatVersion,
+          read: async (options) => {
+            const events = await handle.read(options);
+            reads += 1;
+            ref.index?.touch(id);
+            return events;
+          },
+        };
+      },
+    };
+    const index = indexOver(busy, Number.POSITIVE_INFINITY);
+    ref.index = index;
+    await index.list();
+    const before = reads;
+    index.touch('x');
+    expect((await index.list()).items.map(({ threadId }) => threadId)).toEqual(['x']);
+    expect(reads - before).toBe(1);
+  });
+
+  it('重讀時讀不進來（額度被佔著）：留著上一次的那一列，下一次再試', async () => {
+    const directory = await tempDir();
+    const backend = openJsonlSessionStore({ directory });
+    await writeThread(backend, 'x', '有標題的一條', 1_000);
+    let refuse = false;
+    const tight: SessionStore = {
+      create: (header) => backend.create(header),
+      resume: (id) => backend.resume(id),
+      list: (options) => backend.list(options),
+      open: async (id, access) => {
+        const handle = await backend.open(id, access);
+        return {
+          header: handle.header,
+          storedFormatVersion: handle.storedFormatVersion,
+          read: (options) =>
+            refuse
+              ? Promise.reject(new SessionLogTooLargeError(id, 'busy', 10, 10, 10))
+              : handle.read(options),
+        };
+      },
+    };
+    const index = indexOver(tight, Number.POSITIVE_INFINITY);
+    const [first] = (await index.list()).items;
+    expect(first?.title).toBeDefined();
+
+    refuse = true;
+    index.touch('x');
+    expect((await index.list()).items).toEqual([first]);
+    refuse = false;
+    expect((await index.list()).items).toEqual([first]);
   });
 
   it('建置失敗不留下來：下一個請求重建', async () => {

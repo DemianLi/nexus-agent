@@ -225,10 +225,22 @@ export async function listStoredThreads(
     const outcome = await summarizeStoredThread(store, header, options.title);
     if (outcome === 'gone') continue;
     if (outcome === 'unreadable') unreadable += 1;
-    else items.push(outcome);
+    else items.push(outcome === 'too-large' ? tooLargeSummary(header) : outcome);
   }
   sortThreadSummaries(items);
   return { items, unreadable };
+}
+
+/**
+ * 本文讀不進來的那一份照樣列，只是不讀本文：沒有標題、`updatedAt` 退回建立時間；打開時才講為什麼開不了。
+ */
+export function tooLargeSummary(header: StoredSessionHeader): StoredThreadSummary {
+  return {
+    threadId: header.id,
+    updatedAt: header.createdAt,
+    blank: false,
+    ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+  };
 }
 
 /** 列表的順序：`updatedAt` 由新到舊，一樣時照 id。原地排。 */
@@ -243,29 +255,21 @@ export function sortThreadSummaries(items: StoredThreadSummary[]): void {
 /**
  * 一份列得出來的會話在列表上那一列：讀整份本文再 {@link scanPrompts}。`header` 由呼叫端讀好，可見規則（{@link isListedThread}）也由它判。
  *
- * @returns 那一列；`'gone'` 是讀之前被刪了；`'unreadable'` 是本文讀不懂或版本太新。
+ * @returns 那一列；`'gone'` 是讀之前被刪了；`'unreadable'` 是本文讀不懂或版本太新；`'too-large'` 是這個行程現在讀不進來
+ *   （#2115：太大，或額度被開著的 thread 佔滿），不是壞了，列的話用 {@link tooLargeSummary}。
  * @throws 其餘讀檔失敗。
  */
 export async function summarizeStoredThread(
   store: SessionStore,
   header: StoredSessionHeader,
   title: ThreadTitleLimits,
-): Promise<StoredThreadSummary | 'gone' | 'unreadable'> {
+): Promise<StoredThreadSummary | 'gone' | 'unreadable' | 'too-large'> {
   let events: readonly SessionEvent[];
   try {
     events = await (await store.open(header.id, 'read')).read({ salvage: true });
   } catch (error: unknown) {
     if (error instanceof SessionNotFoundError) return 'gone';
-    // 這個行程現在讀不進來（#2115：太大，或額度被開著的 thread 佔滿）：不是壞了，照樣列，只是不讀本文——沒有標題、
-    // `updatedAt` 退回建立時間；打開時才講為什麼開不了。
-    if (error instanceof SessionLogTooLargeError) {
-      return {
-        threadId: header.id,
-        updatedAt: header.createdAt,
-        blank: false,
-        ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
-      };
-    }
+    if (error instanceof SessionLogTooLargeError) return 'too-large';
     if (error instanceof SessionCorruptionError || error instanceof SessionFormatUnsupportedError) {
       return 'unreadable';
     }
