@@ -1087,26 +1087,40 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
   it('兩條 thread 叫同一列：只有一個 server 子行程，它是宿主的子行程；宿主被殺重起後，同一條 thread 還叫得到', async () => {
     const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
     const running = await start([...callOnce(), ...callOnce(), ...callOnce()], rowFor(marker));
-    const supervisor = running.child.pid!;
-    const client = await clientOf(await running.loginUrl(1));
-    expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
-    expect(toolText(await turn(client, 'thread-m2', '動手'))).toContain('已登記：x');
-    const [host] = childrenRunning(supervisor, 'nexus-host');
-    expect(host).toBeDefined();
-    const servers = withMarker(marker).filter((item) => item.ppid === host);
-    expect(servers).toHaveLength(1);
-    const conversations = childrenRunning(supervisor, 'conversation-process');
-    expect(withMarker(marker).filter((item) => conversations.includes(item.ppid))).toEqual([]);
-    expect(childrenRunning(supervisor, 'conversation-process')).not.toContain(servers[0]?.ppid);
+    try {
+      const supervisor = running.child.pid!;
+      const client = await clientOf(await running.loginUrl(1));
+      expect(toolText(await turn(client, 'thread-m1', '動手'))).toContain('已登記：x');
+      expect(toolText(await turn(client, 'thread-m2', '動手'))).toContain('已登記：x');
+      const [host] = childrenRunning(supervisor, 'nexus-host');
+      expect(host).toBeDefined();
+      const servers = withMarker(marker).filter((item) => item.ppid === host);
+      expect(servers).toHaveLength(1);
+      const conversations = childrenRunning(supervisor, 'conversation-process');
+      expect(withMarker(marker).filter((item) => conversations.includes(item.ppid))).toEqual([]);
+      expect(childrenRunning(supervisor, 'conversation-process')).not.toContain(servers[0]?.ppid);
 
-    signalPid(host!, 'SIGKILL');
-    await expect
-      .poll(() => childrenRunning(supervisor, 'nexus-host').filter((pid) => pid !== host).length, {
-        timeout: 30_000,
-      })
-      .toBe(1);
-    // 宿主重起：對話行程重連、重新 open；同一條 thread 再叫一次拿得到結果。
-    expect(toolText(await turn(client, 'thread-m1', '再動手'))).toContain('已登記：x');
+      signalPid(host!, 'SIGKILL');
+      await expect
+        .poll(
+          () => childrenRunning(supervisor, 'nexus-host').filter((pid) => pid !== host).length,
+          {
+            timeout: 30_000,
+          },
+        )
+        .toBe(1);
+      // 宿主重起：對話行程重連、重新 open；同一條 thread 再叫一次拿得到結果。
+      expect(toolText(await turn(client, 'thread-m1', '再動手'))).toContain('已登記：x');
+    } catch (error) {
+      // 對話行程起不來時，原因只記在監督行程的稽核檔與對話行程的 stderr：失敗訊息帶出來，不然只看得到「crash」。
+      const audit = await readFile(join(running.home, SUPERVISOR_AUDIT_FILE), 'utf8').catch(
+        () => '（沒有稽核檔）',
+      );
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\n--- serve 輸出 ---\n${running.log()}\n--- 監督行程稽核 ---\n${audit}`,
+        { cause: error },
+      );
+    }
   }, 180_000);
 });
 

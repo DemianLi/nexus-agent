@@ -95,6 +95,7 @@ import {
 import type { StoredSessionHeader } from '@nexus/core';
 import type { HostBridge } from '@nexus/host-bridge';
 import { assertSameCwd } from './resume-guards.js';
+import { TRIAL_HOST_BRIDGE } from './mcp-trial-host-bridge.js';
 import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
@@ -1232,12 +1233,12 @@ async function startServer(
         threadTitleLlm,
         optionalEntries,
       },
-      // 對話行程的試組也走宿主（#3000）：不在這一個行程裡自己連一次 MCP server。
+      // 對話行程的試組不在這一個行程裡自己連 MCP server（#3000），也不等還沒接上的宿主：用試組專用的門面，見 `mcp-trial-host-bridge.ts`。
       {
         session: {
           mcpPool,
           ...(options.conversation?.hostBridge !== undefined && {
-            hostBridge: options.conversation.hostBridge,
+            hostBridge: TRIAL_HOST_BRIDGE,
           }),
         },
       },
