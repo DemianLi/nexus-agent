@@ -3,7 +3,13 @@ import { Pause, Target } from 'lucide-react';
 import { useId, useState } from 'react';
 
 import { Surface } from '@/shared/blocks/surface';
-import { GOAL_PAUSE_LABEL, GOAL_PAUSE_OFFLINE_HINT, goalBarView } from '@/features/goal/bar-view';
+import {
+  GOAL_PAUSE_LABEL,
+  GOAL_PAUSE_OFFLINE_HINT,
+  GOAL_RESUME_COMMAND,
+  GOAL_RESUME_VERB,
+  goalBarView,
+} from '@/features/goal/bar-view';
 
 /**
  * 輸入框上方的目標列（[#945](https://github.com/DemianLi/nexus-agent/issues/945)，對應 dsh 的 `GoalBar`）。判斷在
@@ -12,8 +18,8 @@ import { GOAL_PAUSE_LABEL, GOAL_PAUSE_OFFLINE_HINT, goalBarView } from '@/featur
  * - **只做暫停**（[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)，送 #1516 的 `goal.pause`）：恢復、編輯、清除
  *   不在這條上，建立目標在 `/goal` 斜線命令。暫停鈕在相位是 `active` 時才有（PM 定，不看 activation；
  *   [#1608](https://github.com/DemianLi/nexus-agent/issues/1608) Q1 (a) 沿用）。
- * - **看得出會不會自己續行**（#1608）：`active` 時階段字依 activation 分「進行中」「沒有在跑」，沒有在跑時列上多一行下一步
- *   （`/goal resume`，同 `blocked` 理由的寫法）；activation 還沒收到照中性的寫。判斷在 `goalBarView`。
+ * - **看得出會不會自己續行**（#1608）：`active` 時只有 `disarmed` 寫階段字「沒有在跑」，列上多一行下一步
+ *   （`/goal resume`，同 `blocked` 理由的寫法）；`armed` 與還沒收到不寫，由暫停鈕講（#3052）。判斷在 `goalBarView`。
  * - **不是樂觀更新**：按下去送出，成功了也不自己改相位，等下行把目標翻成 `paused`，鈕自己消失；一輪跑著時停下來的樣子
  *   也走下行（跟按停止同一條，#1516）。送出期間停用、防連按；斷線時停用，原因放 `title`。
  * - **失敗時列留著**，列下面一句帶原因的字（目標剛被改過、已經不在進行、伺服器不支援）。下一次按再試時先收掉上一句。
@@ -64,7 +70,7 @@ export function GoalBar({
     >
       <div className="flex min-w-0 items-center gap-2">
         <Target aria-hidden className="size-4 shrink-0" />
-        <span className="shrink-0 font-medium">{view.phase}</span>
+        {view.phase !== undefined && <span className="shrink-0 font-medium">{view.phase}</span>}
         <span className="min-w-0 flex-1 truncate" title={view.objective}>
           {view.objective}
         </span>
@@ -94,9 +100,9 @@ export function GoalBar({
           {view.blockedReason}
         </p>
       )}
-      {view.resumeHint !== undefined && (
+      {view.resumable && (
         <p className="mt-1 pl-6" data-testid="goal-resume-hint">
-          {view.resumeHint}
+          <code className="font-mono">{GOAL_RESUME_COMMAND}</code> {GOAL_RESUME_VERB}
         </p>
       )}
       {failure !== undefined && (
