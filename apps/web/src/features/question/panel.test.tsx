@@ -60,9 +60,18 @@ describe('questionnaire 的補件', () => {
     renderPanel(question([DAY, NAME]));
     const progress = screen.getByRole('progressbar');
     expect(progress.getAttribute('aria-live')).toBe('off');
-    expect(progress.textContent).toBe('第 1 題，共 2 題');
     expect(progress.getAttribute('aria-valuetext')).toBe('第 1 題，共 2 題');
     expect(progress.getAttribute('aria-label')).toBe('問題進度');
+  });
+
+  it('看得到的題號是一題一格，目前這題標出來；格子本身不唸（#3035）', () => {
+    renderPanel(question([DAY, NAME]));
+    const progress = screen.getByRole('progressbar');
+    expect(progress.textContent).toBe('');
+    const cells = [...progress.children];
+    expect(cells).toHaveLength(2);
+    expect(cells.every((cell) => cell.getAttribute('aria-hidden') === 'true')).toBe(true);
+    expect(cells.map((cell) => cell.hasAttribute('data-current'))).toEqual([true, false]);
   });
 
   it('legend 前有 sr-only 的題號：焦點落到 fieldset 時一次唸「第 n 題，共 m 題：題目」', () => {

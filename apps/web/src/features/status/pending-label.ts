@@ -10,9 +10,9 @@ export interface PendingPosition {
 }
 
 /**
- * 待決面板的名稱（規格 §8）：**面板的 `aria-label` 與狀態列唸的是同一句**，所以只寫在這裡。
- * 只有一個待決時不帶進度；兩個以上帶「（1／2）」。計劃審核（#654）叫「計劃待審」，同側欄那一列的狀態字。
- * 沙箱升級（#1292）不露工具名，叫「{@link ESCALATION_TITLE}」；其他工具照舊是工具名。
+ * 待決的那一句（規格 §8）：**狀態列唸的與面板的 `aria-label` 是同一句**，所以只寫在這裡；面板看得到的名稱列是它的縮寫
+ * （{@link pendingHead}）。只有一個待決時不帶進度；兩個以上帶「（1／2）」。計劃審核（#654）叫「計劃待審」，同側欄那一列的狀態字。
+ * 沙箱升級（#1292）不露工具名，叫「{@link ESCALATION_TITLE}」；其他工具是工具名。
  */
 export function pendingLabel(
   pending: PendingInput,
@@ -30,5 +30,47 @@ export function pendingLabel(
       : isPlanReview(pending.questions)
         ? '計劃待審'
         : `有 ${pending.questions.length} 個問題要你回答`;
-  return position.total > 1 ? `${base}（${position.index + 1}／${position.total}）` : base;
+  return base + positionText(position);
+}
+
+/** 面板名稱列看得到的那幾段（#3035 結論 D）：種類、核准的工具、哪個子代理要的、跨面板進度，畫法歸 `pending-swap.tsx`。 */
+export interface PendingHead {
+  /** 「等待核准」「N 個問題」「計劃待審」。 */
+  readonly kind: string;
+  /** 要核准的工具；`code` 是工具名，沙箱升級是 {@link ESCALATION_TITLE} 這句話，不是工具名。 */
+  readonly tools: readonly { readonly text: string; readonly code: boolean }[];
+  /** 哪個前景子代理要的（畫成「・…」）；只有核准有。 */
+  readonly asker?: string;
+  /** 「（1／2）」；只有一個待決時是空字串。 */
+  readonly position: string;
+}
+
+/** 面板名稱列看得到的那幾段，是 {@link pendingLabel} 那一句的縮寫。`asker` 只有核准會帶，提問與計劃審核不帶。 */
+export function pendingHead(
+  pending: PendingInput,
+  position: PendingPosition,
+  asker?: string,
+): PendingHead {
+  const head = {
+    kind:
+      pending.kind === 'approval'
+        ? '等待核准'
+        : isPlanReview(pending.questions)
+          ? '計劃待審'
+          : `${pending.questions.length} 個問題`,
+    tools:
+      pending.kind === 'approval'
+        ? pending.actions.map((action) =>
+            action.name === SANDBOX_ESCALATION_TOOL
+              ? { text: ESCALATION_TITLE, code: false }
+              : { text: action.name, code: true },
+          )
+        : [],
+    position: positionText(position),
+  };
+  return asker === undefined || pending.kind !== 'approval' ? head : { ...head, asker };
+}
+
+function positionText(position: PendingPosition): string {
+  return position.total > 1 ? `（${position.index + 1}／${position.total}）` : '';
 }
