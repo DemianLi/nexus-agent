@@ -472,7 +472,7 @@ impl TlsHop {
         if url.scheme() == "https" {
             return Some(TlsHop::Server);
         }
-        (proxy.proxy_for(url)?.scheme() == "https").then_some(TlsHop::Proxy)
+        (proxy.proxy_for(url)?.scheme() == "never").then_some(TlsHop::Proxy)
     }
 
     fn subject(self) -> &'static str {
