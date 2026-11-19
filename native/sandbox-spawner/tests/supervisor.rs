@@ -2913,6 +2913,52 @@ fn a_host_that_never_gets_ready_is_killed_and_counts_as_a_failure() {
     );
 }
 
+/// 停機輪到宿主：監督行程關它的 stdin，宿主關掉 stdout 再自己收尾 1 秒。監督行程讀到那頭的 EOF 不動作：不起第二個宿主、不殺它，
+/// 等它自己以 0 結束，稽核裡宿主那一行排在前台那一行前面。寬限用預設的 6000：預設的 300 ms 比宿主收尾的 1 秒短，測到的會是 SIGTERM 那一步。
+#[test]
+fn a_host_that_closes_its_stdout_while_winding_down_is_waited_for_not_killed() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--close-stdout-on-eof"]),
+        eof_grace_ms: 6000,
+        ..Options::default()
+    });
+    h.up("a");
+    assert!(
+        wait_until(|| host_log(&h)
+            .iter()
+            .any(|line| line.starts_with("grant ") && line.ends_with(" conversation a"))),
+        "{:?}",
+        host_log(&h)
+    );
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    assert_eq!(h.next_event(), None);
+    assert!(h.wait_exit().success());
+
+    let log = host_log(&h);
+    assert!(log.contains(&"eof".to_string()), "{log:?}");
+    assert_eq!(
+        log.iter().filter(|line| line.starts_with("start ")).count(),
+        1,
+        "{log:?}"
+    );
+    let stderr = supervisor_stderr(&h);
+    assert!(!stderr.contains("殺掉宿主"), "{stderr}");
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 1, "{hosts:?}");
+    assert!(
+        hosts[0].contains("\"exit_code\":0") && hosts[0].contains("\"signal\":null"),
+        "{hosts:?}"
+    );
+    let audit = h.audit();
+    let index = |needle: &str| audit.iter().position(|line| line.contains(needle));
+    let (host, front) = (index("\"role\":\"host\""), index("\"role\":\"front\""));
+    assert!(
+        host.is_some() && front.is_some() && host < front,
+        "{audit:?}"
+    );
+}
+
 #[test]
 fn a_host_with_the_wrong_version_stops_everything_with_3() {
     for version in ["99".to_string(), (PROTOCOL_VERSION - 1).to_string()] {
