@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { HostMcpClient, Reassembly } from './host-pool.js';
 import type { HostCallOptionsLike, HostCaller } from './host-pool.js';
 import { isRequestTimeout } from './connection.js';
+import { isConnectionLost } from './index.js';
 
 /** 照 `docs/host-mcp.md` 切塊：字串塊加摘要。 */
 function pieces(
@@ -38,6 +39,8 @@ function fakeHost(options: {
   onCall?: (call: Call) => Promise<unknown> | undefined;
 }) {
   const calls: Call[] = [];
+  const state = { holdOpens: false };
+  const held: (() => void)[] = [];
   const readyListeners = new Set<() => void>();
   let nextId = 10;
   const doc = options.doc ?? { tools: [], instructions: '', warning: null };
@@ -58,9 +61,13 @@ function fakeHost(options: {
           reject(new HostError('cancelled', '取消了'));
         });
         if (method === 'open') {
-          const { chunks, summary } = pieces(JSON.stringify(doc));
-          for (const chunk of chunks) callOptions.onChunk?.(chunk);
-          callOptions.onChunk?.({ ready: summary });
+          const complete = (): void => {
+            const { chunks, summary } = pieces(JSON.stringify(doc));
+            for (const chunk of chunks) callOptions.onChunk?.(chunk);
+            callOptions.onChunk?.({ ready: summary });
+          };
+          if (state.holdOpens) held.push(complete);
+          else complete();
           return;
         }
         const handled = options.onCall?.(call);
@@ -75,6 +82,14 @@ function fakeHost(options: {
   return {
     caller,
     calls,
+    /** 之後的 `open` 不回 ready，等 `releaseOpens`（宿主還沒回來）。 */
+    holdOpens: () => {
+      state.holdOpens = true;
+    },
+    releaseOpens: () => {
+      state.holdOpens = false;
+      for (const complete of held.splice(0)) complete();
+    },
     fireReady: () => {
       for (const listener of [...readyListeners]) listener();
     },
@@ -169,16 +184,6 @@ describe('HostMcpClient 的呼叫', () => {
     expect(methods).toEqual(['resources/list', 'resources/templates/list', 'resources/read']);
   });
 
-  it('逾時：送取消、丟 REQUEST_TIMEOUT（逾時不算掉線）', async () => {
-    const host = fakeHost({ onCall: () => new Promise(() => undefined) });
-    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
-    const error = await client
-      .callTool({ name: 'slow', arguments: {} }, { timeout: 20 })
-      .catch((e: unknown) => e);
-    expect(isRequestTimeout(error)).toBe(true);
-    expect(host.calls.at(-1)?.options.signal?.aborted).toBe(true);
-  });
-
   it('呼叫端的 signal 中止就送取消', async () => {
     const host = fakeHost({ onCall: () => new Promise(() => undefined) });
     const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
@@ -253,38 +258,172 @@ describe('宿主連線斷了又連上', () => {
       },
     });
     const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
-    await expect(client.callTool({ name: 'pay', arguments: {} })).rejects.toThrow('result is unknown');
+    await expect(client.callTool({ name: 'pay', arguments: {} })).rejects.toThrow(
+      'result is unknown',
+    );
     expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(1);
   });
 
-  it('空窗裡的呼叫等 onReady 之後重新 open 的綁定，用新的編號送（M3）', async () => {
+  it('空窗裡的呼叫等重新 open 的綁定，用新的編號送（M3）', async () => {
     const host = fakeHost({ onCall: (call) => answer(call, { ok: true }) });
     const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
-    // 宿主斷線：舊的 open 呼叫以 host_lost 結算。
+    host.holdOpens();
     host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
     await new Promise((resolve) => setTimeout(resolve, 5));
     const pending = client.callTool({ name: 'echo', arguments: {} });
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(0);
-    host.fireReady();
+    host.releaseOpens();
     await expect(pending).resolves.toEqual({ ok: true });
     const second = host.opens()[1];
     expect(second).toBeDefined();
     expect(host.calls.find((c) => c.method === 'call')?.payload.open).toBe(second?.id);
   });
 
-  it('等到期限還沒有綁定：回 server is disconnected', async () => {
+  it('等到期限（W）還沒有綁定：回 server is disconnected，不送出，之後綁定回來又能呼叫', async () => {
     const host = fakeHost({ onCall: (call) => answer(call, { ok: true }) });
+    const client = await HostMcpClient.open(host.caller, {
+      server,
+      elicitation: false,
+      rebindWaitMs: 30,
+    });
+    host.holdOpens();
+    host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const started = Date.now();
+    await expect(client.callTool({ name: 'echo', arguments: {} })).rejects.toThrow(
+      'server is disconnected',
+    );
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(0);
+    host.releaseOpens();
+    await expect(client.callTool({ name: 'echo', arguments: {} })).resolves.toEqual({ ok: true });
+  });
+
+  it('重新 open 單飛：等綁定的多個呼叫與 onReady 只發一次 open', async () => {
+    const host = fakeHost({ onCall: (call) => answer(call, { ok: true }) });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    host.holdOpens();
+    host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const calls = [1, 2, 3].map(() => client.callTool({ name: 'echo', arguments: {} }));
+    host.fireReady();
+    host.fireReady();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(host.opens()).toHaveLength(2);
+    host.releaseOpens();
+    await Promise.all(calls);
+    expect(host.opens()).toHaveLength(2);
+  });
+
+  it('重新 open 被宿主回錯：綁定留空，下一次呼叫再經同一入口試；舊清單不被蓋掉', async () => {
+    const host = fakeHost({
+      doc: {
+        tools: [{ name: 'echo', inputSchema: { type: 'object' } }],
+        instructions: '',
+        warning: null,
+      },
+      onCall: (call) => answer(call, { ok: true }),
+    });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    host.holdOpens();
+    const first = client.callTool({ name: 'echo', arguments: {} }, {});
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    host.opens()[1]?.reject(new HostError('service', '宿主拒絕'));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(host.opens()).toHaveLength(3);
+    host.releaseOpens();
+    await expect(first).resolves.toEqual({ ok: true });
+    expect(await client.listTools()).toMatchObject({ tools: [{ name: 'echo' }] });
+  });
+
+  it('宿主對已失效的編號回 BadPayload：當作沒送出，改送新綁定（舊編號不重送）', async () => {
+    let attempts = 0;
+    const host: ReturnType<typeof fakeHost> = fakeHost({
+      onCall: (call) => {
+        attempts += 1;
+        if (attempts > 1) return answer(call, { ok: true });
+        // 呼叫帶著舊編號出去之後、宿主的回覆到之前：宿主連線重起，舊綁定結算、新綁定 ready；宿主對舊編號回「沒有已經 ready 的綁定」。
+        return (async () => {
+          host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          host.fireReady();
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          throw new HostError('BadPayload', '沒有已經 ready 的綁定');
+        })();
+      },
+    });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    const oldId = host.opens()[0]?.id;
+    await expect(client.callTool({ name: 'echo', arguments: {} })).resolves.toEqual({ ok: true });
+    const sent = host.calls.filter((c) => c.method === 'call').map((c) => c.payload.open);
+    expect(sent).toEqual([oldId, host.opens()[1]?.id]);
+  });
+
+  it('宿主對當前編號回 BadPayload：照真錯回出去，不重送', async () => {
+    const host = fakeHost({
+      onCall: (call) => {
+        call.reject(new HostError('BadPayload', 'params 不合法'));
+        return undefined;
+      },
+    });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    await expect(client.callTool({ name: 'echo', arguments: {} })).rejects.toThrow('params 不合法');
+    expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(1);
+  });
+
+  it('宿主路徑上不送 _meta（由宿主一家帶）', async () => {
+    const host = fakeHost({ onCall: (call) => answer(call, { ok: true }) });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: true });
+    await client.callTool({ name: 'echo', arguments: {}, _meta: { capabilities: 1 } });
+    const params = JSON.parse(
+      String(host.calls.find((c) => c.method === 'call')?.payload.params),
+    ) as Record<string, unknown>;
+    expect(params).toEqual({ name: 'echo', arguments: {} });
+  });
+
+  it('server 層的連線字樣不被 isConnectionLost 認成掉線；逾時不算掉線', async () => {
+    const host = fakeHost({
+      onCall: (call) => {
+        call.reject(new HostError('service', 'MCP error -32000: Connection closed'));
+        return undefined;
+      },
+    });
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    const error = await client.callTool({ name: 'echo', arguments: {} }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(isConnectionLost(error)).toBe(false);
+    expect((error as Error).message).toContain('Connection closed'.toLowerCase());
+    const waited = fakeHost({});
+    const idle = await HostMcpClient.open(waited.caller, {
+      server,
+      elicitation: false,
+      rebindWaitMs: 10,
+    });
+    waited.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+    waited.holdOpens();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const disconnected = await idle.callTool({ name: 'x', arguments: {} }).catch((e: unknown) => e);
+    expect(isConnectionLost(disconnected)).toBe(false);
+    expect(isRequestTimeout(disconnected)).toBe(false);
+  });
+
+  it('逾時由宿主算；門面只留一個比它晚 W 的保險計時，到了送取消並丟 REQUEST_TIMEOUT', async () => {
+    const host = fakeHost({ onCall: () => new Promise(() => undefined) });
     const client = await HostMcpClient.open(host.caller, {
       server,
       elicitation: false,
       rebindWaitMs: 20,
     });
-    host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await expect(client.callTool({ name: 'echo', arguments: {} })).rejects.toThrow(
-      'server is disconnected',
-    );
+    const started = Date.now();
+    const error = await client
+      .callTool({ name: 'slow', arguments: {} }, { timeout: 20 })
+      .catch((e: unknown) => e);
+    expect(isRequestTimeout(error)).toBe(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(35);
+    expect(host.calls.at(-1)?.options.signal?.aborted).toBe(true);
   });
 
   it('從不叫 onclose：宿主重起不是 server 掉線，TS 的監督者不重連', async () => {

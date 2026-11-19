@@ -29,6 +29,9 @@ export const MCP_HOST_SERVICE = 'mcp/client';
 /** 重新 `open` 之前的呼叫最多等多久（毫秒）。對話行程重連宿主的上限是 1 秒，重起一次空窗通常在這之內。 */
 export const DEFAULT_REBIND_WAIT_MS = 5_000;
 
+/** 重新 `open` 失敗之後，等綁定的呼叫隔多久再試（毫秒）。 */
+const REBIND_RETRY_MS = 50;
+
 /** 一份宿主的 `open`／`call` 呼叫選項。 */
 export interface HostCallOptionsLike {
   readonly signal?: AbortSignal;
@@ -112,11 +115,11 @@ function rawInstructions(attributed: string, serverName: string): string | undef
 
 /** {@link HostMcpClient.open} 的選項。 */
 export interface HostOpenOptions {
-  /** 宿主 `open` 收的 `server`：{@link McpHostRow} 的成品。 */
+  /** 宿主 `open` 收的 `server`：{@link McpHostRowBuilder} 的成品。 */
   readonly server: { readonly serverName: string } & Readonly<Record<string, unknown>>;
-  /** 要宣告反問能力的旗標，原樣給宿主。 */
+  /** 要宣告反問能力的旗標，原樣給宿主；宿主路徑上反問的 `_meta` 由宿主一家帶，這一側不送。 */
   readonly elicitation: boolean;
-  /** 重新 `open` 之前的呼叫最多等多久，預設 {@link DEFAULT_REBIND_WAIT_MS}。 */
+  /** 一次呼叫送出之前最多等多久（毫秒，單一期限，等綁定與等宿主連線都算在裡面），預設 {@link DEFAULT_REBIND_WAIT_MS}。 */
   readonly rebindWaitMs?: number;
   /** 重新 `open` 失敗等記錄。 */
   readonly log?: (message: string) => void;
@@ -130,6 +133,25 @@ interface CallOptions {
   readonly allowInputRequired?: boolean;
 }
 
+/** 等不到綁定（到期、或關了）的錯。不含 `Not connected` 之類 {@link isConnectionLost} 認的字：宿主那邊的 server 照舊由宿主重連，這一側不算掉線。 */
+const DEADLINE = Symbol('rebind-deadline');
+
+/**
+ * 宿主回的錯文字裡 {@link isConnectionLost} 會認成「這一代斷了」的幾句（server 層的 JSON-RPC 錯誤原樣帶來），換成認不得的寫法：
+ * 連線在宿主那邊，這一側的監督者不該為它重連。
+ */
+function neutralized(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  const message = error.message
+    .replace(/\bNot connected\b/gu, 'not connected')
+    .replace(/\bConnection closed\b/gu, 'connection closed')
+    .replace(/MCP error -32000/gu, 'MCP error (-32000)');
+  if (message === error.message) return error;
+  return Object.assign(new Error(message, { cause: error.cause }), {
+    ...(codeOf(error) !== undefined && { code: codeOf(error) }),
+  });
+}
+
 /** 長得像 SDK `Client`、底下是宿主綁定的連線。結構上夠 {@link attemptsOn} 與 {@link toolCallOf} 用。 */
 export class HostMcpClient {
   /** 從不叫：宿主自己重連，這一側的重新 `open` 不算掉線。 */
@@ -140,18 +162,23 @@ export class HostMcpClient {
   readonly #abort = new AbortController();
   readonly #unsubscribe: () => void;
   readonly #waiters = new Set<() => void>();
+  /** 第一次 `open` 的清單；之後重新 `open` 回的不蓋它（宿主可能回空清單加 `warning`）。 */
   #document: OpenDocument | undefined;
   /** 當前綁定的呼叫編號；空窗（還沒綁、宿主斷線）是 `undefined`。 */
   #bound: number | undefined;
-  #opening = false;
+  /** 已經失效的綁定編號：宿主對它們回「沒有已經 ready 的綁定」時，當作沒送出、改送新的。 */
+  readonly #stale = new Set<number>();
+  /** 重新 `open` 的單飛：同一時間只有一個。 */
+  #rebinding: Promise<void> | undefined;
+  #attempts = 0;
   #closed = false;
 
   private constructor(caller: HostCaller, options: HostOpenOptions) {
     this.#caller = caller;
     this.#options = options;
     this.#unsubscribe = caller.onReady(() => {
-      // 第一次的 open 由 `open` 自己發；這裡只管之後宿主重連回來的重新 open。
-      if (this.#document !== undefined) this.#rebind();
+      // 第一次的 open 由 `open` 自己發；這裡只管之後宿主重連回來。
+      if (this.#document !== undefined) this.#ensureBinding();
     });
   }
 
@@ -176,13 +203,29 @@ export class HostMcpClient {
     return client;
   }
 
-  /** 發一次 `open`，回清單；`ready` 之後的結局（斷線、取消）在背景處理。 */
+  /** 發一次 `open`，ready 時回清單；ready 之後的結局（斷線、取消）在背景處理，只清自己那一次的綁定。 */
   #openOnce(): Promise<OpenDocument> {
-    this.#opening = true;
+    const attempt = ++this.#attempts;
     return new Promise<OpenDocument>((resolve, reject) => {
       const text = new Reassembly();
       let id: number | undefined;
       let ready = false;
+      const lose = (error: unknown): void => {
+        if (this.#bound !== undefined && this.#bound === id) {
+          this.#stale.add(this.#bound);
+          this.#bound = undefined;
+        }
+        if (!ready) {
+          reject(error);
+          return;
+        }
+        // ready 之後綁定沒了：下一次呼叫或宿主連線回來（onReady）會經 `#ensureBinding` 重新 open。自己關的不記。
+        if (!this.#closed) {
+          this.#options.log?.(
+            `宿主的綁定沒了：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      };
       this.#caller
         .call(
           MCP_HOST_SERVICE,
@@ -202,8 +245,10 @@ export class HostMcpClient {
               if (!isSummary(summary)) throw new Error('宿主 open 送來認不得的塊');
               const document = JSON.parse(text.text(summary)) as OpenDocument;
               ready = true;
-              this.#bound = id;
-              this.#opening = false;
+              if (attempt === this.#attempts) {
+                if (this.#bound !== undefined) this.#stale.add(this.#bound);
+                this.#bound = id;
+              }
               this.#wake();
               resolve(document);
             },
@@ -212,119 +257,138 @@ export class HostMcpClient {
         .then(
           () => {
             // open 不收尾；收尾了就是綁定沒了。
-            this.#lose(ready, reject, new Error('宿主的 open 呼叫結束了'));
+            lose(new Error('宿主的 open 呼叫結束了'));
           },
           (error: unknown) => {
-            this.#lose(ready, reject, error);
+            lose(error);
           },
         );
     });
   }
 
-  #lose(ready: boolean, reject: (error: unknown) => void, error: unknown): void {
-    this.#bound = undefined;
-    this.#opening = false;
-    if (!ready) {
-      reject(error);
-      return;
-    }
-    // ready 之後綁定沒了：等宿主連線回來（onReady）再重新 open。取消是自己關的，不用記。
-    if (!this.#closed) {
-      this.#options.log?.(
-        `宿主的綁定沒了：${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  #rebind(): void {
-    if (this.#closed || this.#opening || this.#bound !== undefined) return;
-    this.#openOnce().then(
+  /** 重新 `open` 的唯一入口，單飛。失敗只記錄、綁定留空，下一次呼叫再經這裡試一次。 */
+  #ensureBinding(): void {
+    if (this.#closed || this.#bound !== undefined || this.#rebinding !== undefined) return;
+    const flight: Promise<void> = this.#openOnce().then(
       () => undefined,
       (error: unknown) => {
-        // 重新 open 失敗（宿主那邊 server 還沒好、取用錯誤）：等下一次 onReady，空窗裡的呼叫到期回斷線。
         this.#options.log?.(
           `重新向宿主 open 失敗：${error instanceof Error ? error.message : String(error)}`,
         );
+        // 還在等綁定的呼叫過一會兒經同一個入口再試一次（算在它自己的 W 裡）；隔一下，不在失敗得很快時空轉。
+        setTimeout(() => {
+          this.#wake();
+        }, REBIND_RETRY_MS).unref();
       },
     );
+    this.#rebinding = flight;
+    void flight.finally(() => {
+      if (this.#rebinding === flight) this.#rebinding = undefined;
+    });
   }
 
   #wake(): void {
     for (const waiter of [...this.#waiters]) waiter();
   }
 
-  /** 等到有綁定；到 `waitMs` 或 `signal` 中止回 `undefined`。 */
-  #awaitBound(signal: AbortSignal | undefined): Promise<number | undefined> {
+  /** 等到有綁定；`signal` 中止或關了回 `undefined`。 */
+  #awaitBound(signal: AbortSignal): Promise<number | undefined> {
+    this.#ensureBinding();
     if (this.#bound !== undefined) return Promise.resolve(this.#bound);
     return new Promise((resolve) => {
       const finish = (): void => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', finish);
+        signal.removeEventListener('abort', finish);
         this.#waiters.delete(check);
         resolve(this.#bound);
       };
       const check = (): void => {
         if (this.#bound !== undefined || this.#closed) finish();
+        else this.#ensureBinding();
       };
-      const timer = setTimeout(finish, this.#options.rebindWaitMs ?? DEFAULT_REBIND_WAIT_MS);
-      timer.unref();
       this.#waiters.add(check);
-      signal?.addEventListener('abort', finish, { once: true });
+      signal.addEventListener('abort', finish, { once: true });
+      if (signal.aborted) finish();
     });
   }
 
-  /** 送一次請求到宿主那一份連線，拼回結果。 */
+  /**
+   * 送一次請求到宿主那一份連線，拼回結果。
+   *
+   * 單一期限 W 從呼叫進來算一次：等綁定、等宿主連線（門面自己的 5 秒）都在裡面，到了就以自己的 `signal` 中止、不送出，回 `server is disconnected`。
+   * 送出之後（`onId` 叫過）W 不再計，工具逾時由宿主算（`toolCallTimeoutMs`），這裡只留一個比它晚 W 的保險計時。
+   */
   async #request(method: string, params: unknown, options: CallOptions = {}): Promise<unknown> {
+    const waitMs = this.#options.rebindWaitMs ?? DEFAULT_REBIND_WAIT_MS;
     const abort = new AbortController();
     const forward = (): void => {
       abort.abort(options.signal?.reason);
     };
     if (options.signal?.aborted === true) forward();
     options.signal?.addEventListener('abort', forward, { once: true });
-    let timedOut = false;
-    const timer =
-      options.timeout === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true;
-            abort.abort();
-          }, options.timeout);
+    const deadline = setTimeout(() => {
+      abort.abort(DEADLINE);
+    }, waitMs);
+    let safety: NodeJS.Timeout | undefined;
+    let safetyFired = false;
+    const sent = (): void => {
+      clearTimeout(deadline);
+      if (options.timeout !== undefined) {
+        safety = setTimeout(() => {
+          safetyFired = true;
+          abort.abort();
+        }, options.timeout + waitMs);
+      }
+    };
+    const disconnected = (): Error => new Error(`${this.#label()}: server is disconnected`);
     try {
       for (;;) {
         const open = await this.#awaitBound(abort.signal);
-        if (abort.signal.aborted)
-          throw timedOut ? timeoutError(options.timeout ?? 0) : abortError(options.signal);
-        if (open === undefined) throw new Error(`${this.#label()}: server is disconnected`);
+        if (abort.signal.aborted) {
+          if (abort.signal.reason === DEADLINE) throw disconnected();
+          throw safetyFired ? timeoutError(options.timeout ?? 0) : abortError(options.signal);
+        }
+        if (open === undefined) throw disconnected();
+        // 編號在送出的這一刻才取、之後到 `call` 之間沒有 await：綁定結算過的編號不會被送出去。
+        const current = this.#bound;
+        if (current === undefined) continue;
         const text = new Reassembly();
         let summary: unknown;
         try {
           summary = await this.#caller.call(
             MCP_HOST_SERVICE,
             'call',
-            { open, method, params: JSON.stringify(params) },
-            { signal: abort.signal, onChunk: (chunk) => text.push(chunk) },
+            { open: current, method, params: JSON.stringify(params) },
+            { signal: abort.signal, onChunk: (chunk) => text.push(chunk), onId: sent },
           );
         } catch (error) {
-          if (abort.signal.aborted)
-            throw timedOut ? timeoutError(options.timeout ?? 0) : abortError(options.signal);
-          // 沒送出去（宿主還沒連上）：照等待額度重試；送出去之後斷線不重送。
-          if (codeOf(error) === 'host_unavailable') {
-            this.#bound = undefined;
+          if (abort.signal.aborted) {
+            if (abort.signal.reason === DEADLINE) throw disconnected();
+            throw safetyFired ? timeoutError(options.timeout ?? 0) : abortError(options.signal);
+          }
+          const code = codeOf(error);
+          // 沒送出去（宿主還沒連上）：在 W 內重試。
+          if (code === 'host_unavailable') {
+            await new Promise((resolve) => setTimeout(resolve, 20));
             continue;
           }
-          if (codeOf(error) === 'host_lost') {
+          // 對已失效的編號回「沒有已經 ready 的綁定」：沒送進 server，改送新綁定；對當前編號的是真錯。
+          if (code === 'BadPayload' && this.#stale.has(current) && this.#bound !== current)
+            continue;
+          if (code === 'host_lost') {
             throw new Error(
               `${this.#label()}: the host connection dropped while this call was running; the result is unknown and the call was not retried`,
               { cause: error },
             );
           }
-          throw error;
+          throw neutralized(error);
         }
         if (!isSummary(summary)) throw new Error('宿主 call 的收尾不是塊數與位元組數');
-        return JSON.parse(text.text(summary));
+        const result = JSON.parse(text.text(summary)) as unknown;
+        return result;
       }
     } finally {
-      clearTimeout(timer);
+      clearTimeout(deadline);
+      clearTimeout(safety);
       options.signal?.removeEventListener('abort', forward);
     }
   }
@@ -337,7 +401,7 @@ export class HostMcpClient {
     return rawInstructions(this.#document?.instructions ?? '', this.#options.server.serverName);
   }
 
-  /** 宿主不告訴這一側協定世代：有反問旗標就照新協定帶 `_meta`（宿主對舊協定不加，這一側帶了的 server 照舊忽略）。 */
+  /** 宿主不告訴這一側協定世代：inBand 只決定怎麼收結果（多輪反問），用的是送給 `open` 的那個 `elicitation`。 */
   getProtocolEra(): 'modern' | 'legacy' {
     return this.#options.elicitation ? 'modern' : 'legacy';
   }
@@ -356,7 +420,12 @@ export class HostMcpClient {
   }
 
   async callTool(params: unknown, options: CallOptions = {}): Promise<unknown> {
-    const result = (await this.#request('tools/call', params, options)) as Record<string, unknown>;
+    // 宿主路徑上 `_meta`（反問能力）由宿主一家帶；`toolCallOf` 照舊寫的，這裡拿掉。
+    const { _meta: _ignored, ...forwarded } = (params ?? {}) as Record<string, unknown>;
+    const result = (await this.#request('tools/call', forwarded, options)) as Record<
+      string,
+      unknown
+    >;
     return await validatedOutput(result, options);
   }
 
@@ -372,7 +441,7 @@ export class HostMcpClient {
     return this.#request('resources/read', params, options);
   }
 
-  /** 放掉綁定（取消 open 呼叫，宿主那邊放掉綁定、連線留在池裡）。冪等，不拋。 */
+  /** 放掉綁定：取消 open 呼叫（宿主放掉綁定、連線留在池裡）、取消 `onReady` 登記、等綁定的呼叫立刻結算。冪等，不拋。 */
   close(): Promise<void> {
     if (!this.#closed) {
       this.#closed = true;
