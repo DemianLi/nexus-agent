@@ -132,6 +132,22 @@ if (SLOW_LOG !== undefined) {
 }
 
 /**
+ * 憑證遮蔽的驗收用（#3000 T7）：把子行程環境裡指名的變數原樣回出來，驗成功結果裡的憑證值有沒有被遮。
+ */
+server.registerTool(
+  'read_env',
+  {
+    description: '回出環境變數的值。',
+    inputSchema: { names: z.array(z.string()).describe('變數名') },
+  },
+  ({ names }) => ({
+    content: [
+      { type: 'text', text: names.map((name) => `${name}=${process.env[name] ?? ''}`).join('\n') },
+    ],
+  }),
+);
+
+/**
  * 停機整條路的驗收用（#3000 甲）：量的是 **宿主收機時有沒有送 SIGTERM 給這個子行程、它有沒有走完**。`FIXTURE_TERM_DIR` 指一個目錄：
  * 起來時把 pid 寫進 `pid`，收到 SIGTERM 時寫 `term` 再結束。沒設就不掛。
  */

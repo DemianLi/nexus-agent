@@ -31,6 +31,7 @@ import { EMBED_AUDIT_FILE } from './embed-audit.js';
 import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
+import { CREDENTIALS_FILE } from './credentials.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
 import {
   fakeEndpoint,
@@ -1045,7 +1046,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     { content: '收工' },
   ];
 
-  const rowFor = (marker: string, env?: Record<string, string>): string =>
+  const rowFor = (marker: string, env?: Record<string, unknown>): string =>
     [
       '- insert:',
       '    - id: mcp-crm',
@@ -1122,6 +1123,30 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
         { cause: error },
       );
     }
+  }, 180_000);
+
+  it('憑證值出現在工具結果裡時被遮：受管憑證經宿主起的 server 環境交進去，成功結果回出來時不含原值', async () => {
+    const secret = 'zq8t7-managed-0123456789';
+    const termMarker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const row = rowFor(termMarker, { MCP_TOKEN: { credential: 'NEXUS_TEST_T7' } });
+    const running = await start(
+      [
+        {
+          content: '',
+          toolCalls: [{ name: 'mcp__crm__read_env', args: { names: ['MCP_TOKEN'] } }],
+        },
+        { content: '收工' },
+      ],
+      row,
+      async (home) => {
+        const file = join(home, CREDENTIALS_FILE);
+        await writeFile(file, `version: 1\nrefs:\n  NEXUS_TEST_T7: ${secret}\n`, { mode: 0o600 });
+      },
+    );
+    const client = await clientOf(await running.loginUrl(1));
+    const text = toolText(await turn(client, 'thread-m1', '動手'));
+    expect(text).toContain('MCP_TOKEN=');
+    expect(text).not.toContain(secret);
   }, 180_000);
 
   it('停機整條路：對監督行程送 SIGTERM，整台結束碼 0、宿主結束碼 0，server 收到 SIGTERM 且已不在，稽核裡沒有送過 SIGKILL 的 sweep', async () => {
