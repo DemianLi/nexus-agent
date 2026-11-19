@@ -181,6 +181,40 @@ export const UNWIRED_THREAD_LIST: Pick<WireClient, 'listThreads' | 'threadHistor
   }),
 };
 
+/**
+ * 歷史回一輪（人說一句、模型回一句）：重播結尾那條線要有重播的條目才畫（`replay-end.tsx`），要驗那條線的測試換上這一格。
+ * frame 不帶 `seq`，同 server 那側。
+ */
+export const ONE_TURN_HISTORY: WireClient['threadHistory'] = async () => {
+  const frame = (method: string, data: unknown): Event =>
+    ({ type: 'event', method, params: { namespace: [], timestamp: 0, data } }) as Event;
+  const said = (role: 'human' | 'ai', id: string, text: string): Event[] => [
+    frame('messages', { event: 'message-start', role, id }),
+    frame('messages', {
+      event: 'content-block-delta',
+      index: 0,
+      delta: { type: 'text-delta', text },
+      id,
+    }),
+    frame('messages', { event: 'message-finish', reason: 'stop', id }),
+  ];
+  return {
+    kind: 'ok',
+    result: {
+      events: [
+        frame('lifecycle', { event: 'running', graph_name: 'root' }),
+        ...said('human', 'history-0', '之前問的'),
+        ...said('ai', 'history-1', '之前答的'),
+        frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+      ],
+      firstSeq: 0,
+      throughSeq: 10,
+      hasMore: false,
+      legacy: false,
+    },
+  };
+};
+
 /** 一個可以隨時推 frame 進去的假 client。 */
 export function fakeClient(
   events: readonly Event[],

@@ -32,8 +32,8 @@ export const PARTIAL_OUTPUT_HEADING = 'Partial output before the run ended:';
 /** 認出來時卡上換成的那一句。 */
 export const SUBAGENT_MAX_TOKENS_TEXT = '子代理寫到輸出上限，沒寫完。';
 
-/** 有寫到一半的內容時，接在 {@link SUBAGENT_MAX_TOKENS_TEXT} 後面的那一句。 */
-export const SUBAGENT_PARTIAL_TEXT = '以下是它寫到一半的內容：';
+/** 有寫到一半的內容時用這一句取代 {@link SUBAGENT_MAX_TOKENS_TEXT}，後面接著引用框裡的那段。 */
+export const SUBAGENT_MAX_TOKENS_PARTIAL_TEXT = '子代理寫到輸出上限，沒寫完：';
 
 /**
  * 這張卡是不是子代理撞到輸出上限而失敗的委派工具（`task` 或 `subagent`，名單來自 wire 的 `DELEGATION_TOOL_NAMES`）。

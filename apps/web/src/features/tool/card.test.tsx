@@ -12,7 +12,7 @@ import {
   PARTIAL_OUTPUT_HEADING,
   SUBAGENT_MAX_TOKENS_REASON,
   SUBAGENT_MAX_TOKENS_TEXT,
-  SUBAGENT_PARTIAL_TEXT,
+  SUBAGENT_MAX_TOKENS_PARTIAL_TEXT,
 } from '@/features/tool/max-tokens-view';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
 import { Transcript } from '@/features/transcript/transcript';
@@ -1204,20 +1204,22 @@ describe('子代理撞到輸出上限的 task（#608）', () => {
     fireEvent.click(screen.getAllByRole('button')[0]!);
   }
 
-  it('英文那句換成中文，寫到一半的那段照結果畫', () => {
+  it('英文那句換成中文，寫到一半的那段放進引用框', () => {
     showTask(`${HEADLINE}\n${PARTIAL_OUTPUT_HEADING}\n報告\n寫到一半`);
-    expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_TEXT + SUBAGENT_PARTIAL_TEXT);
-    expect(within(screen.getByTestId('tool-output')).getByLabelText('工具結果').textContent).toBe(
+    expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_PARTIAL_TEXT);
+    expect(document.body.textContent).not.toContain('以下是');
+    expect(screen.getByTestId('partial-quote').tagName).toBe('BLOCKQUOTE');
+    expect(within(screen.getByTestId('partial-quote')).getByLabelText('工具結果').textContent).toBe(
       '報告\n寫到一半',
     );
     expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_REASON);
     expect(document.body.textContent).not.toContain(PARTIAL_OUTPUT_HEADING);
   });
 
-  it('一個字都沒寫：只講沒寫完，沒有「以下是」也沒有結果', () => {
+  it('一個字都沒寫：只講沒寫完，沒有引用框也沒有結果', () => {
     showTask(HEADLINE);
     expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_TEXT);
-    expect(document.body.textContent).not.toContain(SUBAGENT_PARTIAL_TEXT);
+    expect(screen.queryByTestId('partial-quote')).toBeNull();
     expect(screen.queryByTestId('tool-output')).toBeNull();
     expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_REASON);
   });
