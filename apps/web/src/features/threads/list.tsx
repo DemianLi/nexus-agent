@@ -1,7 +1,6 @@
 import type { DeletedThread, ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
-import { X } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import {
-  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -24,9 +23,9 @@ import {
 import type { RowMenuActions, RowMenuHandle } from '@/features/threads/row-menu';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { DotLoader } from '@/components/ui/dot-loader';
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
@@ -35,6 +34,7 @@ import {
 import type { ThreadDirectory } from '@/features/threads/use-directory';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BUCKET_LABEL, groupThreads } from '@/features/threads/groups';
+import type { ThreadBucket } from '@/features/threads/groups';
 import { showMore, shownCount } from '@/features/threads/show-more';
 import {
   highlightMatches,
@@ -75,7 +75,9 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  *
  * **狀態**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
  * `features/threads/status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種：左邊一條該狀態顏色的
- * 色條，第二行寫出狀態字，報讀器從列上的字唸、只唸一次。等人回答的三種不帶時間、標題加粗（#1696）。
+ * 色條，等人回答的三種標題加粗（#1696）。狀態字只給報讀器（sr-only），畫面上靠色條（#3038 第 2 項）。
+ *
+ * **時間只寫分組講不完的部分**（#3038 第 3 項）：今天、昨天只寫時刻，過去 7 天加星期，更早只寫日期；已釘選與已封存不分時間組，寫完整的日期時刻。
  *
  * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
  * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
@@ -108,10 +110,24 @@ function labelOf(item: ThreadSummary): string {
   return threadLabel(item.title, item.blank);
 }
 
-const TIME_FORMAT = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+const FULL_FORMAT = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+const CLOCK_FORMAT = new Intl.DateTimeFormat('zh-TW', { timeStyle: 'short' });
+const WEEKDAY_FORMAT = new Intl.DateTimeFormat('zh-TW', { weekday: 'short' });
+const DATE_FORMAT = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short' });
 
-function formatTime(updatedAt: number): string {
-  return TIME_FORMAT.format(updatedAt);
+/** 列上的時間；`bucket` 是那一列所在的時間組，不在時間組裡（已釘選、已封存）的寫完整日期時刻。 */
+function formatTime(updatedAt: number, bucket: ThreadBucket | undefined): string {
+  switch (bucket) {
+    case 'today':
+    case 'yesterday':
+      return CLOCK_FORMAT.format(updatedAt);
+    case 'week':
+      return `${WEEKDAY_FORMAT.format(updatedAt)} ${CLOCK_FORMAT.format(updatedAt)}`;
+    case 'older':
+      return DATE_FORMAT.format(updatedAt);
+    case undefined:
+      return FULL_FORMAT.format(updatedAt);
+  }
 }
 
 export function ThreadList({
@@ -253,8 +269,6 @@ export function ThreadList({
     needle,
     current === undefined || 'fallback' in current ? undefined : current,
   );
-  // 只比了標題：沒接、被拒、失敗，或還不知道開沒開。
-  const titleOnly = !searching || fellBack || !on;
   // 沒有 `management` 時全部歸「其餘」：畫面跟以前一樣。
   const sections =
     management === undefined
@@ -306,30 +320,46 @@ export function ThreadList({
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-body">
-      <SidebarGroupLabel id={labelId}>以前的會話</SidebarGroupLabel>
-      {listing.kind === 'loading' && <p className="text-muted-foreground px-2">讀取中…</p>}
-      {/* 列不出來與「沒有」是兩件事：關掉落盤的 server（清單上 `session-persistence` 那一列，#613）走這一格，原因照 server 講的印。
-          前綴留著，其他失敗（例如讀取拋錯）也走這一格；server 的訊息自己也寫「列不出來」時會重複一次，措辭歸 server 那側（#620）。 */}
-      {listing.kind === 'failed' && (
-        <p className="text-destructive px-2">列不出來：{listing.message}</p>
+      {/* 群組的名稱只給報讀器：它就是整個側欄的清單，畫面上的標題只重述面板（#3038 第 4 項）。 */}
+      <span id={labelId} className="sr-only">
+        以前的會話
+      </span>
+      {/* 讀取中畫骨架、不唸（§8「讀取中不唸」）。 */}
+      {listing.kind === 'loading' && (
+        <div aria-hidden className="px-2 pt-1" data-testid="thread-list-loading">
+          {[0, 1, 2].map((index) => (
+            <div key={index} className="flex flex-col gap-1.5 py-1.5">
+              <Skeleton className="h-3.5 w-3/5" />
+              <Skeleton className="h-3 w-2/5" />
+            </div>
+          ))}
+        </div>
       )}
+      {/* 列不出來與「沒有」是兩件事：關掉落盤的 server（清單上 `session-persistence` 那一列，#613）走這一格，原因照 server 講的印，
+          警示色已經講了是失敗，不加前綴。 */}
+      {listing.kind === 'failed' && <p className="text-destructive px-2">{listing.message}</p>}
       {listing.kind === 'ok' && (
         <>
           {/*
            **判的是藏過之後的**：磁碟上只剩別條空白會話時，列表一列都不畫——那些不是以前的會話，所以照講「還沒有」。
            */}
           {visible.length === 0 ? (
-            <p className="text-muted-foreground px-2">這個專案還沒有以前的會話。</p>
+            <p className="text-muted-foreground px-2">還沒有會話</p>
           ) : (
             <>
               {/* 有字才有 ×（#1307，比對文件 C6）：按下清空、焦點留在搜尋框，接著打字。Esc 照舊也是清空。
                   瀏覽器自己的 search 清除鈕藏起來：它沒有名字、Tab 走不到，兩顆 × 並排也不對。 */}
+              {/* 放大鏡講「這是搜尋」，提示字只在範圍縮小（只比標題）時多講一次（#3038 第 6 項）；圖示同 SG `command` 的搜尋框。 */}
               <div className="relative mb-1">
+                <Search
+                  aria-hidden
+                  className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 opacity-50"
+                />
                 <SidebarInput
                   ref={searchRef}
                   type="search"
                   aria-label="搜尋以前的會話"
-                  placeholder={on ? '搜尋會話' : '搜尋標題'}
+                  placeholder={on ? '搜尋' : '搜尋標題'}
                   value={query}
                   onChange={(event) => setQuery(sanitizeSearchQuery(event.target.value))}
                   onKeyDown={(event) => {
@@ -339,7 +369,7 @@ export function ThreadList({
                     }
                   }}
                   className={cn(
-                    'h-11 lg:h-8 [&::-webkit-search-cancel-button]:appearance-none',
+                    'h-11 pl-8 lg:h-8 [&::-webkit-search-cancel-button]:appearance-none',
                     query !== '' && 'pr-11 lg:pr-8',
                   )}
                 />
@@ -367,13 +397,14 @@ export function ThreadList({
                   mustShow={mustShow}
                   expanded={expanded}
                   onExpand={expand}
-                  row={(item) => {
+                  row={(item, bucket) => {
                     const snippet = view.snippets.get(item.threadId);
                     const id = item.threadId;
                     return (
                       <ThreadRow
                         key={id}
                         item={item}
+                        bucket={bucket}
                         snippet={snippet}
                         // 只有帶摘要的列用得到搜尋字：其餘的列打字時不必重畫。
                         query={snippet === undefined ? '' : needle}
@@ -429,23 +460,20 @@ export function ThreadList({
                   ? '正在搜內容…'
                   : view.items.length > 0
                     ? ''
-                    : titleOnly
-                      ? `沒有標題含「${needle}」的會話。`
-                      : `沒有標題或內容含「${needle}」的會話。`}
+                    : `沒有符合「${needle}」的會話`}
               </p>
               {view.hasMore && (
-                <p className="text-muted-foreground px-2 pt-1 text-tip">
-                  還有更多沒列出來，多打幾個字可以縮小範圍。
-                </p>
+                <p className="text-muted-foreground px-2 pt-1 text-tip">還有更多，請縮小搜尋</p>
               )}
               {fallback !== null && (
                 <p className="text-muted-foreground px-2 pt-1 text-tip">{fallback}</p>
               )}
             </>
           )}
+          {/* 原因（讀不懂或格式比這台 server 新）寫在 `docs/operations.md`〈會話日誌〉，畫面上只講數量。 */}
           {listing.result.unreadable > 0 && (
             <p className="text-muted-foreground px-2 text-tip">
-              另有 {listing.result.unreadable} 份讀不懂、或格式比這台 server 新，沒有列出來。
+              {listing.result.unreadable} 份無法顯示
             </p>
           )}
         </>
@@ -493,7 +521,8 @@ function ThreadGroupList({
   /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`、最近刪除是 `deleted`）。 */
   readonly expanded: ReadonlyMap<string, number>;
   readonly onExpand: (group: string, count: number) => void;
-  readonly row: (item: ThreadSummary) => ReactNode;
+  /** `bucket` 是那一列所在的時間組；已釘選、已封存與空白那一列沒有。 */
+  readonly row: (item: ThreadSummary, bucket?: ThreadBucket) => ReactNode;
   readonly archivedOpen: boolean;
   readonly onArchivedOpenChange: (open: boolean) => void;
   /** server 上還有沒載的（#725）：時間組最後多一顆「載入更多」。 */
@@ -504,10 +533,10 @@ function ThreadGroupList({
     <>
       {sections.pinned.length > 0 && (
         <BucketGroup label="已釘選" testId="thread-pinned">
-          <SidebarMenu>{sections.pinned.map(row)}</SidebarMenu>
+          <SidebarMenu>{sections.pinned.map((item) => row(item))}</SidebarMenu>
         </BucketGroup>
       )}
-      {blank.length > 0 && <SidebarMenu>{blank.map(row)}</SidebarMenu>}
+      {blank.length > 0 && <SidebarMenu>{blank.map((item) => row(item))}</SidebarMenu>}
       {groups.map(({ bucket, items: members }) => (
         <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
           <LimitedRows
@@ -515,7 +544,7 @@ function ThreadGroupList({
             mustShow={mustShow}
             expanded={expanded.get(bucket)}
             onExpand={(count) => onExpand(bucket, count)}
-            row={row}
+            row={(item) => row(item, bucket)}
           />
         </BucketGroup>
       ))}
@@ -528,7 +557,9 @@ function ThreadGroupList({
           onClick={more.onLoad}
           data-testid="thread-load-more"
         >
-          {more.loading ? '載入中…' : '載入更多會話'}
+          載入更多
+          {/* 載入中不換字：停用的鈕加旁邊的點表達（§8，`DotLoader` 沒有名稱）。 */}
+          {more.loading && <DotLoader className="shrink-0" />}
         </Button>
       )}
       {sections.archived.length > 0 && (
@@ -741,6 +772,8 @@ interface RowManagement {
 
 interface ThreadRowProps {
   readonly item: ThreadSummary;
+  /** 所在的時間組，決定時間寫多少；`undefined` 寫完整日期時刻。 */
+  readonly bucket: ThreadBucket | undefined;
   readonly snippet: string | undefined;
   readonly query: string;
   readonly status: RowStatus;
@@ -751,6 +784,7 @@ interface ThreadRowProps {
 
 const ThreadRow = memo(function ThreadRow({
   item,
+  bucket,
   snippet,
   query,
   status,
@@ -786,7 +820,7 @@ const ThreadRow = memo(function ThreadRow({
           management !== undefined && 'pr-10 lg:pr-8',
         )}
       >
-        {/* 狀態是左邊 3px 色條＋第二行的字（#1696 S1-C）；沒有狀態的列也留這條空位，標題才對齊。 */}
+        {/* 狀態是左邊 3px 色條（#1696 S1-C），字只給報讀器；沒有狀態的列也留這條空位，標題才對齊。 */}
         <span
           aria-hidden
           className={cn('w-0.75 shrink-0 rounded-xs', status !== undefined && BAR_CLASS[status])}
@@ -800,25 +834,18 @@ const ThreadRow = memo(function ThreadRow({
           >
             {label}
           </span>
-          {(current || !item.blank || text !== undefined) && (
-            <span className="text-muted-foreground w-full truncate text-tip">
-              {[
-                current && '目前這條',
-                text !== undefined && (
-                  <span data-testid="thread-status" data-status={status}>
-                    {text.label}
-                  </span>
-                ),
-                // 空白的那一列不帶時間：它的時間是建立時間，不是誰說過話。等人回答時也不帶。
-                !item.blank && text?.waiting !== true && formatTime(item.updatedAt),
-              ]
-                .filter((part) => part !== false)
-                .map((part, index) => (
-                  <Fragment key={index}>
-                    {index > 0 && ' · '}
-                    {part}
-                  </Fragment>
-                ))}
+          {text !== undefined && (
+            <span className="sr-only" data-testid="thread-status" data-status={status}>
+              {text.label}
+            </span>
+          )}
+          {/* 目前這一列靠高亮與停用表達，不另寫字。空白的那一列不帶時間：它的時間是建立時間，不是誰說過話。 */}
+          {!item.blank && (
+            <span
+              className="text-muted-foreground w-full truncate text-tip"
+              data-testid="thread-time"
+            >
+              {formatTime(item.updatedAt, bucket)}
             </span>
           )}
           {snippet !== undefined && (
@@ -874,6 +901,7 @@ function sameRow(before: ThreadRowProps, after: ThreadRowProps): boolean {
   return (
     sameManagement &&
     before.item === after.item &&
+    before.bucket === after.bucket &&
     before.snippet === after.snippet &&
     before.query === after.query &&
     before.status === after.status &&

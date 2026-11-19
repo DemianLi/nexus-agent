@@ -193,7 +193,7 @@ describe('有開內容搜尋', () => {
     expect(rows()).toEqual([expect.stringContaining('整理部署腳本')]);
     await wait(SEARCH_DEBOUNCE_MS);
     await fake.answer(0, [['b', '…規格裡講部署的那一段…']]);
-    expect(box().placeholder).toBe('搜尋會話');
+    expect(box().placeholder).toBe('搜尋');
     expect(rows()).toEqual([
       expect.stringContaining('整理部署腳本'),
       expect.stringContaining('讀規格'),
@@ -242,13 +242,13 @@ describe('有開內容搜尋', () => {
     expect(live.textContent).toBe('');
   });
 
-  it('兩邊都沒有：講「標題或內容」', async () => {
+  it('兩邊都沒有：講一聲，帶搜尋字', async () => {
     const fake = searcher();
     renderList(fake.search);
     type('沒這個字');
     await wait(SEARCH_DEBOUNCE_MS);
     await fake.answer(0, []);
-    expect(screen.getByRole('status').textContent).toBe('沒有標題或內容含「沒這個字」的會話。');
+    expect(screen.getByRole('status').textContent).toBe('沒有符合「沒這個字」的會話');
   });
 
   it('伺服器說還有：講一聲', async () => {
@@ -257,7 +257,7 @@ describe('有開內容搜尋', () => {
     type('規格');
     await wait(SEARCH_DEBOUNCE_MS);
     await fake.answer(0, [], true);
-    expect(screen.getByText('還有更多沒列出來，多打幾個字可以縮小範圍。')).toBeTruthy();
+    expect(screen.getByText('還有更多，請縮小搜尋')).toBeTruthy();
   });
 
   it('過 axe', async () => {
@@ -286,7 +286,7 @@ describe('退回只比標題', () => {
     // 沒回過「有」：不畫骨架，「搜不到」照 #610 馬上講——填進早就掛著的那一格（#1290）。
     expect(skeleton()).toBeNull();
     expect(screen.getByRole('status')).toBe(live);
-    expect(live.textContent).toBe('沒有標題含「沒這個字」的會話。');
+    expect(live.textContent).toBe('沒有符合「沒這個字」的會話');
     await wait(SEARCH_DEBOUNCE_MS);
     expect(fake.calls).toHaveLength(2);
   });
@@ -564,7 +564,8 @@ describe('列上的狀態（#1696 S1-C）', () => {
     ['跑完沒看的', 'completed'],
     ['沒事的', undefined],
   ];
-  const TIME = new Date(NOW).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+  // 都在今天那一組：只寫時刻。
+  const TIME = new Date(NOW).toLocaleTimeString('zh-TW', { timeStyle: 'short' });
 
   function renderStatuses() {
     const items = STATUSES.map(([title], index) => thread(`s${index}`, title));
@@ -587,7 +588,7 @@ describe('列上的狀態（#1696 S1-C）', () => {
   }
   const rowOf = (title: string) => screen.getByRole('button', { name: new RegExp(`^${title}`) });
 
-  it('每種狀態都寫出字，報讀只唸一次；在跑與跑完沒看的字不一樣', () => {
+  it('狀態字只給報讀器（sr-only），只唸一次；在跑與跑完沒看的字不一樣（#3038 第 2 項）', () => {
     renderStatuses();
     for (const [title, status] of STATUSES) {
       const row = rowOf(title);
@@ -599,26 +600,77 @@ describe('列上的狀態（#1696 S1-C）', () => {
       const { label } = ROW_STATUS_TEXT[status];
       expect(status_!.textContent).toBe(label);
       expect(status_!.getAttribute('data-status')).toBe(status);
-      // 列的報讀名稱來自列上的字：狀態字只出現一次，沒有另外藏一句給報讀器。
+      expect(status_!.className).toBe('sr-only');
       expect(row.textContent!.split(label)).toHaveLength(2);
-      expect(row.querySelector('.sr-only')).toBeNull();
     }
     expect(within(rowOf('在跑的')).getByTestId('thread-status').textContent).not.toBe(
       within(rowOf('跑完沒看的')).getByTestId('thread-status').textContent,
     );
   });
 
-  it('等人回答的三種不帶時間、標題加粗；在跑、跑完沒看、沒事的帶時間、標題不加粗', () => {
+  it('每一列都帶時間；等人回答的三種標題加粗，其餘不加粗', () => {
     renderStatuses();
     for (const [title, status] of STATUSES) {
       const row = rowOf(title);
       const waiting = status !== undefined && ROW_STATUS_TEXT[status].waiting;
-      expect(row.textContent!.includes(TIME)).toBe(!waiting);
+      expect(within(row).getByTestId('thread-time').textContent).toBe(TIME);
       expect(within(row).getByTestId('thread-title-text').className.includes('font-medium')).toBe(
         waiting,
       );
     }
-    expect(rowOf('在跑的').textContent).toBe(`在跑的執行中 · ${TIME}`);
-    expect(rowOf('等核准的').textContent).toBe('等核准的等待核准');
+    expect(rowOf('在跑的').textContent).toBe(`在跑的執行中${TIME}`);
+    expect(rowOf('等核准的').textContent).toBe(`等核准的等待核准${TIME}`);
+  });
+});
+
+describe('清單還沒回來', () => {
+  it('畫骨架列、讀屏看不到，不寫「讀取中」（#3038 第 11 項）', () => {
+    render(
+      <SidebarProvider>
+        <ThreadList
+          directory={{ ...DIRECTORY, listing: { kind: 'loading' } }}
+          currentThreadId="now"
+          currentTitle={null}
+          onPick={() => undefined}
+        />
+      </SidebarProvider>,
+    );
+    expect(screen.getByTestId('thread-list-loading').getAttribute('aria-hidden')).toBe('true');
+    expect(document.body.textContent).not.toContain('讀取中');
+  });
+});
+
+describe('列上的時間只寫分組講不完的部分（#3038 第 3 項）', () => {
+  const at = (day: number, hour: number, minute: number) =>
+    new Date(2026, 10, day, hour, minute).getTime();
+
+  it('今天、昨天只寫時刻；過去 7 天加星期；更早只寫日期；空白那一列不帶時間', () => {
+    vi.setSystemTime(at(20, 12, 0));
+    const items: ThreadSummary[] = [
+      { ...thread('t', '今天的'), updatedAt: at(20, 10, 30) },
+      { ...thread('y', '昨天的'), updatedAt: at(19, 16, 40) },
+      { ...thread('w', '這週的'), updatedAt: at(18, 10, 30) },
+      { ...thread('o', '更早的'), updatedAt: at(3, 14, 30) },
+      { ...thread('now', ''), updatedAt: at(20, 11, 0), blank: true, title: undefined },
+    ];
+    render(
+      <SidebarProvider>
+        <ThreadList
+          directory={{ ...DIRECTORY, listing: { kind: 'ok', result: { items, unreadable: 0 } } }}
+          currentThreadId="now"
+          currentTitle={null}
+          onPick={() => undefined}
+        />
+      </SidebarProvider>,
+    );
+    const timeOf = (title: string) =>
+      within(screen.getByRole('button', { name: new RegExp(`^${title}`) })).queryByTestId(
+        'thread-time',
+      )?.textContent;
+    expect(timeOf('今天的')).toBe('上午10:30');
+    expect(timeOf('昨天的')).toBe('下午4:40');
+    expect(timeOf('這週的')).toBe('週三 上午10:30');
+    expect(timeOf('更早的')).toBe('2026/11/3');
+    expect(timeOf('新會話')).toBeUndefined();
   });
 });

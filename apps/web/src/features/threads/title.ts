@@ -14,8 +14,8 @@ export const PRODUCT_TITLE = 'nexus-agent';
 /** 還是空白的會話。照 dsh 的 `session.new`（「新会话」），不帶時間。 */
 export const BLANK_THREAD_LABEL = '新會話';
 
-/** 有輪次，但沒有人打過字——全是目標排的。 */
-export const UNTITLED_THREAD_LABEL = '（沒有人打過字：只有目標排的輪次）';
+/** 有輪次，但沒有人打過字——全是目標排的。這是名字，一路用到分頁標題與會話標頭，所以寫成名詞不寫成句子。 */
+export const UNTITLED_THREAD_LABEL = '（目標排程）';
 
 /**
  * 畫面上寫的名字：有標題寫標題；沒有的話分空白與「有輪次但沒人打過字」兩種，照講。
