@@ -301,7 +301,7 @@ describe.each(
         'diff-review-picker',
       ];
       // 量具自檢：頁面上 1 顆、段收著那一列的合計 1 顆、段裡寫檔那張 1 顆、改動卡標頭 1 顆加兩列（二進位那列寫字）、
-      // 審查頁標頭的合計與這個檔各 1 顆、選檔器兩列；每顆兩個 span。
+      // 審查頁這個檔 1 顆（頁首的合計 #3049 拿掉了，總數在卡片與分頁標題）、選檔器兩列；每顆兩個 span。
       expect(
         Object.fromEntries(
           names.map((name) => [name, texts.filter((t) => t.name === name).length]),
@@ -311,7 +311,7 @@ describe.each(
         'diff-group': 2,
         'diff-panel': 2,
         'diff-changes': 6,
-        'diff-review': 4,
+        'diff-review': 2,
         'diff-review-picker': 4,
       });
       expectTexts(texts, names, `diff-stats:${mode}:${theme}`);
@@ -350,7 +350,7 @@ describe.each(
         };
       });
       report[`diff-stats:${mode}:${theme}:colors`] = colors;
-      expect(colors.count).toBe(10);
+      expect(colors.count).toBe(9);
       expect(colors.wrong).toEqual([]);
     } finally {
       await page.close();
@@ -388,8 +388,8 @@ test('第 76 條：375 寬時包裝層不被擠，寬度跟 vendor 那顆單獨�
       }),
     );
     report['diff-stats:375-width'] = measured;
-    // 量具自檢：十顆都量到了，而且單獨放著的寬度不是 0。
-    expect(measured).toHaveLength(10);
+    // 量具自檢：九顆都量到了，而且單獨放著的寬度不是 0。
+    expect(measured).toHaveLength(9);
     expect(measured.every((m) => m.natural > 0)).toBe(true);
     expect(
       measured
