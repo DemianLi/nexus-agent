@@ -1,15 +1,16 @@
 /**
- * serve 的會話列表索引（[#725](https://github.com/DemianLi/nexus-agent/issues/725)）：`GET /threads` 讀記憶體，不再每次把每一份本文讀一遍。
+ * serve 的會話列表索引（[#725](https://github.com/DemianLi/nexus-agent/issues/725)）：`GET /threads` 讀記憶體裡的索引，只在某一列可能變了時重讀那一份。
  *
  * 每一列怎麼算（可見規則、標題、`updatedAt`、讀不懂的怎麼數）跟冷讀的 {@link listStoredThreads} 是同一支
  * {@link summarizeStoredThread}，這裡只管**什麼時候重算哪一列**：
  *
  * - **建置**：serve 起來就開始（{@link ThreadIndex.warm}），整個行程一次；第一個請求等它。失敗就丟掉，下一個請求重建。
- * - **這個行程寫過的**：存放處寫完叫 {@link ThreadIndex.touch}（`JsonlSessionStoreOptions.onWritten`），刪除與復原由處理它的
- *   一方叫。下一個請求先把這幾條重讀完才回，所以這個行程自己做的事，下一次列表一定看得到。
- * - **別的行程寫的**（per-thread 的對話行程、同一格的另一台 serve、手動搬檔）：請求進來時，上一次重掃已經是
- *   `revalidateAfterMs` 之前的事，就在背景重掃一次，**這個請求不等它**。重掃只重讀 revision 變了的那幾份。
- *   所以別的行程的改動，最晚是「上一次重掃之後的第二個請求」才看得到。
+ * - **標起來的**：存放處寫完（`JsonlSessionStoreOptions.onWritten`）、刪除與復原（{@link touchingIndex}）、per-thread 前台聽到
+ *   那條 thread 接上、有動靜或轉送完一個請求，都叫 {@link ThreadIndex.touch}。下一個請求先把這幾條重讀完才回；同一條正有一次重讀在跑，
+ *   等它跑完還被標著（重讀開始之後又寫過）就再讀一次。所以標起來的改動，下一次列表一定看得到。
+ * - **沒標到的**（同一格的另一台 serve、手動搬檔、對話行程落盤但沒在線上講的）：請求進來時，離上一次重掃開始已經
+ *   `revalidateAfterMs`，就在背景重掃一次，**這個請求不等它**。重掃只重讀 revision 變了、或重讀後沒記 revision 的那幾份。
+ *   所以最晚是「寫入之後才開始的那一次重掃跑完」之後的第一個請求才看得到。
  *
  * @module
  */
@@ -21,11 +22,7 @@ import {
 } from '@nexus/core';
 import type { SessionStore, StoredSessionHeader } from '@nexus/core';
 
-import {
-  isListedThread,
-  sortThreadSummaries,
-  summarizeStoredThread,
-} from './session-list.js';
+import { isListedThread, sortThreadSummaries, summarizeStoredThread } from './session-list.js';
 import type { StoredThreadList, StoredThreadSummary } from './session-list.js';
 import { assertThreadTitleLimits } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
@@ -63,6 +60,11 @@ interface Entry {
   readonly row: Row;
 }
 
+/**
+ * 建一個空的索引，不讀檔；建置由 {@link ThreadIndex.warm} 或第一次 {@link ThreadIndex.list} 開始。
+ *
+ * @throws `options.title` 不合法（`assertThreadTitleLimits`）。
+ */
 export function createThreadIndex(store: SessionStore, options: ThreadIndexOptions): ThreadIndex {
   assertThreadTitleLimits(options.title);
   const now = options.now ?? Date.now;
@@ -145,15 +147,21 @@ export function createThreadIndex(store: SessionStore, options: ThreadIndexOptio
 
   async function drainDirty(signal: AbortSignal | undefined): Promise<void> {
     for (const id of [...dirty]) {
-      signal?.throwIfAborted();
-      let pending = rereading.get(id);
-      if (pending === undefined) {
+      for (;;) {
+        signal?.throwIfAborted();
+        const running = rereading.get(id);
+        if (running !== undefined) {
+          // 別的請求起的那一次可能早於最後一次寫入：等它完再看還有沒有被標著。
+          await running;
+          continue;
+        }
+        if (!dirty.has(id)) break;
         dirty.delete(id);
-        pending = reread(id).finally(() => rereading.delete(id));
+        const pending = reread(id).finally(() => rereading.delete(id));
         pending.catch(() => dirty.add(id));
         rereading.set(id, pending);
+        await pending;
       }
-      await pending;
     }
   }
 
@@ -211,7 +219,7 @@ function abandonable<T>(work: Promise<T>, signal: AbortSignal | undefined): Prom
 
 /**
  * serve 的 {@link ThreadIndexOptions.revalidateAfterMs}：兩次背景重掃之間至少隔這麼久。重掃只是補漏（這個行程寫的與 per-thread 對話行程講過話的都會 touch），
- * 一次要讀過每一份的 header：10k 份約 2.4 秒 CPU（含讀檔執行緒），隔 2 秒的話持續有人列表時一直在掃（#725 量測）。
+ * 一次要讀過每一份的 header：10k 份約 2.4 秒 CPU（含讀檔執行緒），隔 2 秒的話持續有人列表時一直在掃（量測見 #725 的留言）。
  */
 export const THREAD_INDEX_REVALIDATE_MS = 30_000;
 

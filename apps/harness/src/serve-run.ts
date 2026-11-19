@@ -1436,7 +1436,8 @@ async function startServer(
           },
           onWritten: (id) => threadIndex?.touch(id),
         });
-  // 會話列表讀記憶體裡的索引（#725）。這個行程寫過的由上面那一行標起來，下一次列表先重讀；別的行程寫的靠背景重掃。
+  // 會話列表讀記憶體裡的索引（#725）。這個行程寫過的（上面那一行）、刪除與復原（`touchingIndex`）、per-thread 對話行程有動靜的
+  // 與轉送過去的（下面前台的 `ThreadFeed` 與 `onForwarded`）都標起來，下一次列表先重讀；其餘靠背景重掃。
   const threadIndex =
     sessionStore === undefined
       ? undefined
@@ -2280,7 +2281,11 @@ async function startServer(
         : createFrontWireHandler({
             local: handler,
             ...options.front,
-            onForwarded: (threadId) => options.front?.plugins.touched(threadId),
+            // 轉送拿到回應時對話行程已經寫完（改名、分叉）：列表下一次重讀那一條（#725）。
+            onForwarded: (threadId) => {
+              options.front?.plugins.touched(threadId);
+              threadIndex?.touch(threadId);
+            },
             auth,
             ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
             warn,

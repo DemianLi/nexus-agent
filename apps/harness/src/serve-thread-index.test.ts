@@ -36,7 +36,11 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-const TURNS: readonly ScriptedTurn[] = [{ content: '回一' }, { content: '回二' }, { content: '回三' }];
+const TURNS: readonly ScriptedTurn[] = [
+  { content: '回一' },
+  { content: '回二' },
+  { content: '回三' },
+];
 
 async function say(client: WireClient, threadId: string, text: string): Promise<void> {
   const events = await client.openEvents(threadId);
@@ -99,6 +103,7 @@ describe('會話列表索引接在 serve 上', () => {
   }, 60_000);
 
   it('重啟前刪掉的，重啟後復原：立刻列得出來', async () => {
+    // 重啟後建的索引裡本來就沒有這一列：復原的 touch 要補回一條索引從沒見過的（刪除時那一條靠藏起來的集合，測不到這一點）。
     const root = await tempDir('nexus-thread-index-log-');
     const deleted = await tempDir('nexus-thread-index-store-');
     const start = async () => {

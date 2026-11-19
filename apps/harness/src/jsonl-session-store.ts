@@ -2817,7 +2817,7 @@ export interface JsonlSessionStoreOptions {
    */
   readonly logBudget?: SessionLogBudget;
   /**
-   * 這個後端寫過某一份之後叫它（#725）：`append` 與 `flush` 落盤之後，成敗都叫，失敗時檔案可能已截回。只給 id，
+   * 這個後端寫過某一份之後叫它（#725）：`append` 落盤與 `flush` 第一次實體化之後，成敗都叫，失敗時檔案可能已截回。只給 id，
    * 要什麼自己讀；serve 的會話索引靠它知道哪幾條要重讀。不能拋。
    */
   readonly onWritten?: (id: string) => void;

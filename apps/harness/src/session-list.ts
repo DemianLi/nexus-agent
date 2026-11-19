@@ -13,7 +13,7 @@
  * 握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。檔名與 header 的規則只在後端
  * （`jsonl-session-store.ts`），這裡一個都不認。
  *
- * **本文整份讀、整份解析**，不再逐行篩：讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
+ * **本文整份讀、整份解析**，讀的是日誌本身：整份解析不比逐行篩慢（#665 量測），標題規則因此只剩一份（{@link threadTitleOf}）。
  * serve 的 `GET /threads` 不每次叫 {@link listStoredThreads}，讀 `thread-index.ts` 的記憶體索引（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
  * 每一列同樣經 {@link summarizeStoredThread} 算。
  *
@@ -26,8 +26,8 @@
  *   `await readFile`，事件圈每讀完一份就回得去，本來就沒有「整次列表佔住事件圈」這件事。2026-10-04 實測
  *   （`measure/thread-list-cli.ts`，M3 Pro、Node 25）：1000 份 × 1 MB 一次列表約 2.6 秒，事件圈延遲最大 9–16 ms、
  *   p99 約 2.6 ms；停頓的上限是**單一份**的解析，約 1.7 ms／MB（50、200 份 × 10 MB 最大 17–33 ms，一份 100 MB 的最大
- *   約 170 ms）。分段讓出切不進一份裡面，對這個上限沒有幫助；要降它得讓列表不讀本文，那是
- *   [#725](https://github.com/DemianLi/nexus-agent/issues/725)（投影快取）的題目。
+ *   約 170 ms）。分段讓出切不進一份裡面，對這個上限沒有幫助。serve 的列表走
+ *   [#725](https://github.com/DemianLi/nexus-agent/issues/725) 的索引之後，只在某一份變了時讀它，上限仍是那一份的解析。
  * - **中止採用。** 沒有它的話，客戶端放棄的請求照樣把整份掃完：放棄之後 2.6 秒的窗口內伺服器用掉 2.59 秒 CPU
  *   （200 份 × 1 MB：0.52 秒窗口用掉 0.46 秒）。`listStoredThreads` 現在每份之前看一次 `signal`；`GET /threads`
  *   把那個請求的 `request.signal` 交下來（`wire-handler.ts` 的 `listThreads(signal)`），同 `searchThreads`。
@@ -277,8 +277,7 @@ export async function summarizeStoredThread(
     updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
     blank: scan.blank,
     ...(scan.title !== undefined && { title: scan.title }),
-    // 分叉的來源（#1580），照 dsh 列表的 `listFields`（`session-controller/src/list.ts:353-362`，`687f282e`）：header 有就帶。
-    // 列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
+    // 分叉的來源（#1580）：header 有就帶。列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
     ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
   };
 }

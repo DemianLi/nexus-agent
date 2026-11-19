@@ -2,8 +2,8 @@
  * 量會話列表的延遲——[#742](https://github.com/DemianLi/nexus-agent/issues/742)。
  *
  * 冷讀的 `listStoredThreads` 每次都把專案下每一份日誌整個讀進來（#665），成本正比於「份數 × 每份大小」；serve 的 `GET /threads`
- * 讀記憶體裡的索引（`thread-index.ts`，[#725](https://github.com/DemianLi/nexus-agent/issues/725)），第一次要等起動時開始的建置。
- * 這支腳本造一批假日誌，量兩者各要多久、回應多大、持續列表時背景重掃吃多少 CPU，
+ * 讀記憶體裡的索引（`thread-index.ts`，[#725](https://github.com/DemianLi/nexus-agent/issues/725)），第一次要等啟動時開始的建置。
+ * 這支腳本造一批假日誌，量兩者各要多久、回應多大、持續列表時整個行程吃多少 CPU，
  * **以及列表進行中事件圈最長被佔住多久**（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）。
  * **只量、不改產品程式**；不進 vitest、不進 CI（要寫幾 GB 的檔）。
  *
@@ -68,7 +68,7 @@ interface CellResult {
   readonly abandonSocket: AbandonCost;
   /** `GET /threads` 回應本文的位元組數。 */
   readonly payloadBytes: number;
-  /** 每 100 ms 列一次、連續 {@link STEADY_MS} 的期間每秒用掉的 CPU 毫秒（#725：背景重掃的代價）。 */
+  /** 每 100 ms 列一次、連續 {@link STEADY_MS}，整個行程（serve 與量具同一個行程）每秒用掉的 CPU 毫秒，含每次列表本身與背景重掃（#725）。 */
   readonly steadyCpuPerSecond: number;
   readonly valid: boolean;
   readonly problems: readonly string[];

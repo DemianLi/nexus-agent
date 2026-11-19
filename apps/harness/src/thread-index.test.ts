@@ -168,6 +168,61 @@ describe('會話列表索引', () => {
     expect(calls.list).toBe(1);
   });
 
+  it('另一個請求起的重讀早於最後一次寫入：等它完之後再讀一次，不沿用舊的', async () => {
+    const directory = await tempDir();
+    const backend = openJsonlSessionStore({ directory });
+    await writeThread(backend, 'x', '舊的一句', 1_000);
+    // 下一次 `read` 讀完本文之後停在這裡：讓第一個請求的重讀拿著寫入之前的內容。
+    let hold: Promise<void> | undefined;
+    const gated: SessionStore = {
+      create: (header) => backend.create(header),
+      resume: (id) => backend.resume(id),
+      list: (options) => backend.list(options),
+      open: async (id, access) => {
+        const handle = await backend.open(id, access);
+        return {
+          header: handle.header,
+          storedFormatVersion: handle.storedFormatVersion,
+          read: async (options) => {
+            const events = await handle.read(options);
+            const gate = hold;
+            hold = undefined;
+            await gate;
+            return events;
+          },
+        };
+      },
+    };
+    const index = indexOver(gated, Number.POSITIVE_INFINITY);
+    expect((await index.list()).items[0]?.updatedAt).toBe(1_000);
+
+    let release!: () => void;
+    hold = new Promise((resolve) => (release = resolve));
+    index.touch('x');
+    const first = index.list();
+    // `hold` 是一顆 promise，poll 會等它：比的是有沒有被拿走。
+    await expect.poll(() => hold === undefined).toBe(true);
+
+    const resumed = await openJsonlSessionStore({ directory }).resume('x');
+    const next = resumed.events.length;
+    await resumed.stored.append([
+      {
+        type: 'turn/start',
+        seq: SessionSeq(next),
+        time: 5_000,
+        data: { kind: 'message', text: '新的一句' },
+      },
+      { type: 'turn/end', seq: SessionSeq(next + 1), time: 5_001, data: {} },
+    ]);
+    await resumed.stored.close();
+    index.touch('x');
+    const second = index.list();
+    release();
+
+    await first;
+    expect((await second).items[0]?.updatedAt).toBe(5_000);
+  });
+
   it('建置失敗不留下來：下一個請求重建', async () => {
     const directory = await tempDir();
     const backend = openJsonlSessionStore({ directory });
@@ -191,4 +246,3 @@ describe('會話列表索引', () => {
     expect((await index.list()).items.map(({ threadId }) => threadId)).toEqual(['a']);
   });
 });
-
