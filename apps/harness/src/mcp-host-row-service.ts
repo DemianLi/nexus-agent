@@ -20,14 +20,16 @@ import { hostHttpConnection } from './mcp-host-http-row.js';
 import { hostStdioConnection } from './mcp-host-stdio-row.js';
 
 /**
- * 沿 `PATH` 找可執行檔；有斜線的相對路徑照對話行程的 cwd 解成絕對（TS 自己連時 SDK 的 spawn 也是這樣解，宿主的 cwd 不同，不解會指到別處）；
+ * 沿 `PATH` 找可執行檔；有斜線的相對路徑照子行程的 cwd 解成絕對：設定寫了 `cwd` 就是它（相對的 `cwd` 再照對話行程的 cwd 解），沒寫就是對話行程的 cwd。
+ * TS 自己連時 SDK 的 spawn 照設定的 cwd 解，宿主的 cwd 不同，不解會指到別處；
  * 找不到的原樣（讓 {@link hostStdioConnection} 以「要絕對路徑」拒絕並指名它）。
  */
 export function resolveOnPath(
   command: string,
   pathVar: string | undefined = process.env.PATH,
+  childCwd: string = process.cwd(),
 ): string {
-  if (command.includes('/')) return isAbsolute(command) ? command : resolve(command);
+  if (command.includes('/')) return isAbsolute(command) ? command : resolve(childCwd, command);
   for (const dir of (pathVar ?? '').split(delimiter)) {
     if (dir === '' || !dir.startsWith('/')) continue;
     const candidate = join(dir, command);
@@ -95,7 +97,11 @@ export function mcpHostRow(
   return {
     ...common,
     connection: hostStdioConnection({
-      command: resolveOnPath(connection.command, env.PATH),
+      command: resolveOnPath(
+        connection.command,
+        env.PATH,
+        connection.cwd === undefined ? process.cwd() : resolve(connection.cwd),
+      ),
       args: connection.args ?? [],
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
       env,

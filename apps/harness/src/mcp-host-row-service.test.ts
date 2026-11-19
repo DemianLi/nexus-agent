@@ -46,6 +46,10 @@ describe('resolveOnPath', () => {
     expect(resolveOnPath('/opt/x/server', '/usr/bin')).toBe('/opt/x/server');
   });
 
+  it('給了子行程的 cwd 就照它解，不看對話行程的 cwd', () => {
+    expect(resolveOnPath('./bin/server', '/usr/bin', '/work/b')).toBe('/work/b/bin/server');
+  });
+
   it('找不到的原樣（交給宿主列拒絕並指名）；不可執行的跳過', () => {
     expect(resolveOnPath('nope-nope-nope', '/usr/bin')).toBe('nope-nope-nope');
     const dir = binDir('plain', 0o644);
@@ -86,6 +90,27 @@ describe('mcpHostRow', () => {
       },
     });
     expect(row).not.toHaveProperty('approval');
+  });
+
+  it('stdio：相對 command 照設定的 cwd 解（對話行程在別處時），沒設 cwd 才照對話行程的', () => {
+    const parse = (cwd?: string) =>
+      mcpConfigSchema.parse({
+        serverName: 'rel',
+        connection: {
+          transport: 'stdio',
+          command: './bin/server',
+          ...(cwd !== undefined && { cwd }),
+        },
+      });
+    const connectionOf = (row: ReturnType<typeof mcpHostRow>) =>
+      row.connection as { command: string; cwd: string };
+    const withCwd = connectionOf(mcpHostRow(parse('/work/b'), new Map()));
+    expect(withCwd.command).toBe('/work/b/bin/server');
+    expect(withCwd.cwd).toBe('/work/b');
+    const relativeCwd = connectionOf(mcpHostRow(parse('sub/b'), new Map()));
+    expect(relativeCwd.command).toBe(join(process.cwd(), 'sub/b/bin/server'));
+    const noCwd = connectionOf(mcpHostRow(parse(), new Map()));
+    expect(noCwd.command).toBe(join(process.cwd(), 'bin/server'));
   });
 
   it('stdio：command 沿 PATH 解成絕對路徑，env 的憑證引用進 credentialEnv（值修過頭尾）', () => {

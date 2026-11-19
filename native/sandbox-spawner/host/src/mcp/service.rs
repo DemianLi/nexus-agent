@@ -537,9 +537,16 @@ mod tests {
         let missing = dir.join(format!("nexus-roots-missing-{pid}.pem"));
         let empty = dir.join(format!("nexus-roots-empty-{pid}.pem"));
         let junk = dir.join(format!("nexus-roots-junk-{pid}.pem"));
+        let broken = dir.join(format!("nexus-roots-broken-{pid}.pem"));
         std::fs::write(&empty, "").expect("寫檔");
         std::fs::write(&junk, "not a pem\n").expect("寫檔");
-        for path in [&missing, &empty, &junk] {
+        // 有 PEM 框、內容卻不是憑證：走的是「第 N 張認不得」那條，跟上面三種不是同一條分支。
+        std::fs::write(
+            &broken,
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        )
+        .expect("寫檔");
+        for path in [&missing, &empty, &junk, &broken] {
             let shown = path.display().to_string();
             let (_, trust) = trust_of(Some(path)).expect("檔有問題也建得起來（空信任庫）");
             assert!(
@@ -556,6 +563,7 @@ mod tests {
             assert_eq!(refuse_https(&stdio, &trust), None, "{shown}");
         }
         let _ = std::fs::remove_file(&empty);
+        let _ = std::fs::remove_file(&broken);
         let _ = std::fs::remove_file(&junk);
     }
 
