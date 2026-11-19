@@ -99,7 +99,7 @@ const rows = () =>
 describe('打開審查頁', () => {
   it('點標頭：從第一個檔打開', async () => {
     const { asked } = await renderCard(() => json(textDiff())());
-    await click(screen.getByRole('button', { name: /5 個檔案有改動/ }));
+    await click(screen.getByRole('button', { name: /5 個檔案/ }));
     // 分頁標題光靠摘要算：第一個檔名＋總數（#640 決定 11）。
     const tab = screen.getByRole('tab', { name: '改動 · f0.ts 等 5 個' });
     expect(tab.getAttribute('aria-selected')).toBe('true');

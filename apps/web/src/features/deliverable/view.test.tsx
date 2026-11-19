@@ -269,7 +269,7 @@ describe('交付卡片歸到輪尾', () => {
     const reply1 = screen.getByTestId('ai-entry');
     expect(reply1.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(card).getByTestId('deliverable').textContent).toBe(
-      'report.pdf季報out/report.pdf',
+      'report.pdfout季報',
     );
   });
 

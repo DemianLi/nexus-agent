@@ -3,8 +3,8 @@
  * 宣告交付的檔案。
  *
  * 資料只來自 harness 在成功時才送的交付事件，不從工具卡推（#441 決議 2）。面向參考 dsh `Deliverables`／
- * `PresentedFileCard`（`packages/client/ui-deliverables/src/client/`，`ddefc45`）：檔案圖示、檔名、說明（沒給就退回
- * 副檔名）、一顆動作；超過 {@link COLLAPSED_COUNT} 個先收起。
+ * `PresentedFileCard`（`packages/client/ui-deliverables/src/client/`，`ddefc45`）：檔案圖示、檔名、說明、一顆動作；
+ * 超過 {@link COLLAPSED_COUNT} 個先收起。說明只在 agent 給了才畫，目錄放在檔名同一行（#3040 第 5 項）。
  *
  * **不做「在 Host 上開啟」**（#441 決議 3）：dsh 有那顆，我們沒有——部署在多人共用的遠端主機、經 SSH 轉 port
  * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。
@@ -26,7 +26,7 @@ import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { Button } from '@/components/ui/button';
 import type { DeliverableDownloader } from '@/features/deliverable/download';
 import type { LocatedFile } from '@/shared/lib/located-file';
-import { basename } from '@/features/deliverable/present-view';
+import { basename, dirname } from '@/features/deliverable/present-view';
 
 /** 收起時先列幾個（dsh `COLLAPSED_PRESENTED_COUNT`）。 */
 export const COLLAPSED_COUNT = 4;
@@ -38,13 +38,6 @@ export const DELIVERABLE_ROW =
 /** 三顆鈕那一組：窄時在文字那一欄的下一行，往左縮 8px 讓圖示對齊文字；寬時回到第一行的第三欄。 */
 export const DELIVERABLE_ACTIONS =
   'col-start-2 -ms-2 flex items-center gap-3 @sm/deliverable:col-start-3 @sm/deliverable:row-start-1 @sm/deliverable:ms-0';
-
-/** 沒給說明時的那一行：副檔名大寫，沒有副檔名就寫「檔案」。 */
-export function fallbackDescription(path: string): string {
-  const name = basename(path);
-  const dot = name.lastIndexOf('.');
-  return dot > 0 && dot < name.length - 1 ? `${name.slice(dot + 1).toUpperCase()} 檔` : '檔案';
-}
 
 function CopyPathButton({ path }: { path: string }) {
   return (
@@ -84,51 +77,68 @@ export function DeliverablesCard({
       {/* 兩欄看的是會話區多寬，不是視窗多寬：右側欄打開時寬視窗裡的會話區可能只剩 480（#640）。
           只有一個檔就不切兩欄：切了只佔半欄、檔名被截半，右半邊卻是空的（#1364）。 */}
       <ul className={shown.length > 1 ? 'grid gap-2 @xl:grid-cols-2' : 'grid gap-2'}>
-        {shown.map((file) => (
-          <Surface
-            as="li"
-            tone="stage"
-            // **用座標當 key，不用列表位置**：同一輪可能宣告兩次同一個路徑，而 `(seq, index)` 本來就唯一
-            // ——`seq` 是日誌位置，一顆事件一個（#452）。列表位置在合併之後不再對應宣告當下的位置。
-            key={`${file.seq}:${file.index}`}
-            className="@container/deliverable min-w-0 p-3"
-            data-testid="deliverable"
-          >
-            {/* 鈕放右邊要的列寬：內距＋圖示＋三顆鈕＋間距固定 188px，加上約 20 字元的檔名（真字型量 149～205px）。
+        {shown.map((file) => {
+          const dir = dirname(file.path);
+          return (
+            <Surface
+              as="li"
+              tone="stage"
+              // **用座標當 key，不用列表位置**：同一輪可能宣告兩次同一個路徑，而 `(seq, index)` 本來就唯一
+              // ——`seq` 是日誌位置，一顆事件一個（#452）。列表位置在合併之後不再對應宣告當下的位置。
+              key={`${file.seq}:${file.index}`}
+              className="@container/deliverable min-w-0 p-3"
+              data-testid="deliverable"
+            >
+              {/* 鈕放右邊要的列寬：內距＋圖示＋三顆鈕＋間距固定 188px，加上約 20 字元的檔名（真字型量 149～205px）。
                 `@sm` 量的是內距裡的寬（384），換成列寬是 408：剛好切到右邊時檔名還有 220px；更窄（兩欄各 308、
                 375 寬的 316）就移到檔名下面，檔名有 252px 以上（#1367）。
                 只換格位，不換 DOM 順序：Tab 順序與每顆鈕的名稱不變。container query 只管子孫，所以多包這一層。 */}
-            <div className={DELIVERABLE_ROW}>
-              <FileText className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="truncate font-medium">{basename(file.path)}</span>
-                <span className="text-muted-foreground text-tip">
-                  {file.description ?? fallbackDescription(file.path)}
-                </span>
-                <span className="text-muted-foreground font-mono text-tip break-all">
-                  {file.path}
-                </span>
+              <div className={DELIVERABLE_ROW}>
+                <FileText className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <span className="max-w-full shrink-0 truncate font-medium">
+                      {basename(file.path)}
+                    </span>
+                    {dir !== undefined && (
+                      // 位置不夠時先吃目錄，而且從頭截：留下的是離檔名最近的那幾層。rtl 只為了把省略號放到開頭，路徑本身包在 ltr 裡，
+                      // 開頭的 `/`、`~`、`../` 才不會被重排到尾巴。
+                      <span
+                        dir="rtl"
+                        className="text-muted-foreground min-w-0 truncate font-mono text-tip"
+                        data-testid="deliverable-dir"
+                      >
+                        <bdi dir="ltr">{dir}</bdi>
+                      </span>
+                    )}
+                  </div>
+                  {file.description !== undefined && file.description !== '' && (
+                    <span className="text-muted-foreground text-tip">{file.description}</span>
+                  )}
+                </div>
+                <div className={DELIVERABLE_ACTIONS}>
+                  {preview !== undefined && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 shrink-0"
+                      title={`預覽：${file.path}`}
+                      aria-label={`預覽：${file.path}`}
+                      onClick={() => preview(file)}
+                    >
+                      <Eye />
+                    </Button>
+                  )}
+                  {download !== undefined && (
+                    <DownloadIconButton file={file} downloader={download} />
+                  )}
+                  <CopyPathButton path={file.path} />
+                </div>
               </div>
-              <div className={DELIVERABLE_ACTIONS}>
-                {preview !== undefined && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 shrink-0"
-                    title={`預覽：${file.path}`}
-                    aria-label={`預覽：${file.path}`}
-                    onClick={() => preview(file)}
-                  >
-                    <Eye />
-                  </Button>
-                )}
-                {download !== undefined && <DownloadIconButton file={file} downloader={download} />}
-                <CopyPathButton path={file.path} />
-              </div>
-            </div>
-          </Surface>
-        ))}
+            </Surface>
+          );
+        })}
       </ul>
       {collapsible && (
         <Button

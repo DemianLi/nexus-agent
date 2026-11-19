@@ -6,7 +6,8 @@
  *   "Running N steps"／"Ran N steps"）。只補預設值、不必複製上游標記，所以走包裝層（同第 26、45 條）；呼叫端給了就照用。
  *   群組那一列不用「·」接：它是純字串、會被報讀。
  *
- * 改 vendor 檔的有四條（第 56–59 條：`0016` strict-index、`0017` controlled-open、`0018` slots、`0019` output-focus），
+ * 改 vendor 檔的有五條（第 56–59 條：`0016` strict-index、`0017` controlled-open、`0018` slots、`0019` output-focus；
+ * 第 87 條：`0028` hide-label，參數框與結果框不畫可見標題），
  * 覆寫檔另有六條（第 61–66 條：執行中不閃、結果框的焦點外框、1024 以下 44px、減少動態時箭頭不轉場、清單裡的結果框不再 blur、
  * 工具段裡空的那一格不留空格）。
  */
@@ -21,7 +22,7 @@ import {
 export { OutputBlock } from '@/vendor/solid-glass/components/ui/tool-steps';
 export type { Step } from '@/vendor/solid-glass/components/ui/tool-steps';
 
-/** 明細框的標題：呼叫端只給一部分時，其餘照這裡的。 */
+/** 明細框的名稱：呼叫端只給一部分時，其餘照這裡的。參數、結果兩框只當 `pre` 的名稱，畫在畫面上的只有「錯誤」（第 87 條）。 */
 export const STEP_LABELS = { detail: '參數', output: '結果', error: '錯誤' } as const;
 
 /** 群組收著那一列的預設字。 */

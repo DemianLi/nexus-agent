@@ -2,13 +2,19 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { useState } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { StepGroup, StepList, StepRow, stepGroupSummary } from '@/components/ui/tool-steps';
+import {
+  OutputBlock,
+  StepGroup,
+  StepList,
+  StepRow,
+  stepGroupSummary,
+} from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
 
 afterEach(cleanup);
 
 /**
- * SG 的 tool-steps（#1682 PR A）。vendor 檔套了四個 patch（README「本地修改」第 56–59 條），包裝層補中文預設字（第 60 條）。
+ * SG 的 tool-steps（#1682 PR A）。vendor 檔套了五個 patch（README「本地修改」第 56–59、87 條），包裝層補中文預設字（第 60 條）。
  * 這裡只驗元件本身；接到工具卡與工具段之後的行為在 PR B。畫出來的樣子（執行中不閃、焦點外框、44px、減少動態、疊在清單裡的結果框不 blur）
  * 在 `guard/` 量。
  */
@@ -59,6 +65,30 @@ describe('包裝層：預設字是中文（第 60 條）', () => {
     fireEvent.click(screen.getByRole('button', { name: /讀取 src\/App\.tsx/ }));
     expect(screen.getByLabelText('參數')).toBeTruthy();
     expect(screen.getByLabelText('結果')).toBeTruthy();
+  });
+});
+
+describe('0028：參數框與結果框不畫可見標題', () => {
+  test('參數、結果兩框沒有標題列，名稱照舊；錯誤框標題照畫', () => {
+    const { container } = render(
+      <>
+        <StepRow step={done} />
+        <StepRow step={failed} />
+      </>,
+    );
+    for (const button of screen.getAllByRole('button')) fireEvent.click(button);
+    const blocks = [...container.querySelectorAll('[data-slot="output-block"]')];
+    expect(blocks.map((block) => block.firstElementChild?.tagName)).toEqual(['PRE', 'PRE', 'DIV']);
+    expect(blocks[2]?.firstElementChild?.textContent).toBe('錯誤');
+    expect(screen.getByLabelText('參數')).toBeTruthy();
+    expect(screen.getByLabelText('結果')).toBeTruthy();
+  });
+
+  test('單獨用的 OutputBlock 沒給 hideLabel：標題照畫', () => {
+    const { container } = render(<OutputBlock label="系統提示詞全文" text="你是助理" />);
+    expect(container.querySelector('[data-slot="output-block"] > div')?.textContent).toBe(
+      '系統提示詞全文',
+    );
   });
 });
 
