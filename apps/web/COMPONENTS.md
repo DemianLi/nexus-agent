@@ -253,7 +253,7 @@ node apps/web/visual/compare.ts <上一個的截圖> <這一個的截圖> <輸�
 
 ## 工具卡（SG tool-steps）
 
-#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66、87 條；diff 是第 77–80 條）。寫呼叫端時：
+#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66 條；diff 是第 77–80 條）。寫呼叫端時：
 
 - **`ToolEntry` 只經 `features/tool/step.ts` 轉成 `Step`**：狀態收成 SG 的三態（`running`／`done`／`error`），四格狀態的字由卡放在 `trailing` 的 `Badge`。
 - **寫檔／改檔給 `step.patch`**（#1685 B）：字串只從 `shared/lib/tool-diff.ts` 的 `toolDiffView` 拿（全樹組 unified patch 的只有那裡的 `toolPatch`），卡與段才拿到同一份、nexus 層的 `patchStats` 快取才查得到。上限在 nexus 層的 `DiffView`，不要在轉接層截 patch：vendor 從 patch 算列與段的 `+N −M`，截過就少報。
