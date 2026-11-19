@@ -1,8 +1,9 @@
 /**
  * 量會話列表的延遲——[#742](https://github.com/DemianLi/nexus-agent/issues/742)。
  *
- * 列表每次都把專案下每一份日誌整個讀進來（`listStoredThreads`，#665），成本正比於「份數 × 每份大小」。
- * 這支腳本造一批假日誌，量 serve 的 `GET /threads` 與直接呼叫 `listStoredThreads` 各要多久，
+ * 冷讀的 `listStoredThreads` 每次都把專案下每一份日誌整個讀進來（#665），成本正比於「份數 × 每份大小」；serve 的 `GET /threads`
+ * 讀記憶體裡的索引（`thread-index.ts`，[#725](https://github.com/DemianLi/nexus-agent/issues/725)），第一次要等起動時開始的建置。
+ * 這支腳本造一批假日誌，量兩者各要多久、回應多大、持續列表時背景重掃吃多少 CPU，
  * **以及列表進行中事件圈最長被佔住多久**（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）。
  * **只量、不改產品程式**；不進 vitest、不進 CI（要寫幾 GB 的檔）。
  *
@@ -65,8 +66,25 @@ interface CellResult {
   readonly abandon: AbandonCost;
   /** 同上，但客戶端是直接砍 socket（對照 `fetch` 的中止）。 */
   readonly abandonSocket: AbandonCost;
+  /** `GET /threads` 回應本文的位元組數。 */
+  readonly payloadBytes: number;
+  /** 每 100 ms 列一次、連續 {@link STEADY_MS} 的期間每秒用掉的 CPU 毫秒（#725：背景重掃的代價）。 */
+  readonly steadyCpuPerSecond: number;
   readonly valid: boolean;
   readonly problems: readonly string[];
+}
+
+const STEADY_MS = 60_000;
+
+/** 每 100 ms 打一次列表、打 {@link STEADY_MS}，每秒用掉的 CPU 毫秒。 */
+async function steadyCpu(list: () => Promise<unknown>): Promise<number> {
+  const start = process.cpuUsage();
+  const began = performance.now();
+  while (performance.now() - began < STEADY_MS) {
+    await list();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return cpuMs(start) / ((performance.now() - began) / 1000);
 }
 
 function ms(value: number): string {
@@ -256,6 +274,12 @@ async function measureCell(
       }
     });
 
+    const payload = await fetch(`${running.url}${THREADS_PATH}`, {
+      headers: { cookie, 'content-type': 'application/json' },
+    });
+    const payloadBytes = (await payload.arrayBuffer()).byteLength;
+    const steadyCpuPerSecond = await steadyCpu(() => client.listThreads());
+
     const direct: number[] = [];
     const store = openJsonlSessionStore({ directory: dir });
     if (filler !== undefined) await flush(filler);
@@ -284,6 +308,8 @@ async function measureCell(
         runs,
         'socket',
       ),
+      payloadBytes,
+      steadyCpuPerSecond,
       valid: problems.length === 0,
       problems: [...new Set(problems)],
     };
@@ -309,6 +335,7 @@ function report(result: CellResult): string {
     `${cell.count} 份 × ${(cell.fileBytes / 1024).toFixed(0)} KB（實寫 ${(result.totalBytes / 1024 ** 2).toFixed(0)} MB）${result.valid ? '' : ' ⚠ 作廢：' + result.problems.join('；')}`,
     `  GET /threads      ${fmt(http)}`,
     `    事件圈延遲 ${loopText(result.httpLoop)}`,
+    `    回應 ${(result.payloadBytes / 1024).toFixed(0)} KB｜每 100 ms 列一次時每秒 CPU ${ms(result.steadyCpuPerSecond)} ms`,
     `  listStoredThreads ${fmt(direct)}`,
     `    事件圈延遲 ${loopText(result.directLoop)}`,
     `  放棄請求之後（fetch 中止）${abandonText(result.abandon)}`,

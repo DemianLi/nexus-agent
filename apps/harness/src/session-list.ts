@@ -13,8 +13,9 @@
  * 握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。檔名與 header 的規則只在後端
  * （`jsonl-session-store.ts`），這裡一個都不認。
  *
- * **本文整份讀、整份解析**，不再逐行篩：dsh 的冷列讀投影快取，我們沒有那一層（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
- * 讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
+ * **本文整份讀、整份解析**，不再逐行篩：讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
+ * serve 的 `GET /threads` 不每次叫 {@link listStoredThreads}，讀 `thread-index.ts` 的記憶體索引（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
+ * 每一列同樣經 {@link summarizeStoredThread} 算。
  *
  * ## 分段讓出不採用，中止採用（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）
  *
@@ -221,46 +222,63 @@ export async function listStoredThreads(
   for (const { header } of visible.items) {
     // 每份之前看一次：被放棄的請求不再多讀一份（#983）。
     signal?.throwIfAborted();
-    let events: readonly SessionEvent[];
-    try {
-      events = await (await store.open(header.id, 'read')).read({ salvage: true });
-    } catch (error: unknown) {
-      if (error instanceof SessionNotFoundError) continue;
-      // 這個行程現在讀不進來（#2115：太大，或額度被開著的 thread 佔滿）：不是壞了，照樣列，只是不讀本文——沒有標題、
-      // `updatedAt` 退回建立時間；打開時才講為什麼開不了。
-      if (error instanceof SessionLogTooLargeError) {
-        items.push({
-          threadId: header.id,
-          updatedAt: header.createdAt,
-          blank: false,
-          ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
-        });
-        continue;
-      }
-      if (
-        error instanceof SessionCorruptionError ||
-        error instanceof SessionFormatUnsupportedError
-      ) {
-        unreadable += 1;
-        continue;
-      }
-      throw error;
-    }
-    const scan = scanPrompts(events, options.title);
-    items.push({
-      threadId: header.id,
-      updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
-      blank: scan.blank,
-      ...(scan.title !== undefined && { title: scan.title }),
-      // 分叉的來源（#1580），照 dsh 列表的 `listFields`（`session-controller/src/list.ts:353-362`，`687f282e`）：header 有就帶。
-      // 列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
-      ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
-    });
+    const outcome = await summarizeStoredThread(store, header, options.title);
+    if (outcome === 'gone') continue;
+    if (outcome === 'unreadable') unreadable += 1;
+    else items.push(outcome);
   }
+  sortThreadSummaries(items);
+  return { items, unreadable };
+}
+
+/** 列表的順序：`updatedAt` 由新到舊，一樣時照 id。原地排。 */
+export function sortThreadSummaries(items: StoredThreadSummary[]): void {
   items.sort(
     (left, right) =>
       right.updatedAt - left.updatedAt ||
       (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0),
   );
-  return { items, unreadable };
+}
+
+/**
+ * 一份列得出來的會話在列表上那一列：讀整份本文再 {@link scanPrompts}。`header` 由呼叫端讀好，可見規則（{@link isListedThread}）也由它判。
+ *
+ * @returns 那一列；`'gone'` 是讀之前被刪了；`'unreadable'` 是本文讀不懂或版本太新。
+ * @throws 其餘讀檔失敗。
+ */
+export async function summarizeStoredThread(
+  store: SessionStore,
+  header: StoredSessionHeader,
+  title: ThreadTitleLimits,
+): Promise<StoredThreadSummary | 'gone' | 'unreadable'> {
+  let events: readonly SessionEvent[];
+  try {
+    events = await (await store.open(header.id, 'read')).read({ salvage: true });
+  } catch (error: unknown) {
+    if (error instanceof SessionNotFoundError) return 'gone';
+    // 這個行程現在讀不進來（#2115：太大，或額度被開著的 thread 佔滿）：不是壞了，照樣列，只是不讀本文——沒有標題、
+    // `updatedAt` 退回建立時間；打開時才講為什麼開不了。
+    if (error instanceof SessionLogTooLargeError) {
+      return {
+        threadId: header.id,
+        updatedAt: header.createdAt,
+        blank: false,
+        ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+      };
+    }
+    if (error instanceof SessionCorruptionError || error instanceof SessionFormatUnsupportedError) {
+      return 'unreadable';
+    }
+    throw error;
+  }
+  const scan = scanPrompts(events, title);
+  return {
+    threadId: header.id,
+    updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
+    blank: scan.blank,
+    ...(scan.title !== undefined && { title: scan.title }),
+    // 分叉的來源（#1580），照 dsh 列表的 `listFields`（`session-controller/src/list.ts:353-362`，`687f282e`）：header 有就帶。
+    // 列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
+    ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+  };
 }

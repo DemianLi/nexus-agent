@@ -1,0 +1,245 @@
+/**
+ * serve 的會話列表索引（[#725](https://github.com/DemianLi/nexus-agent/issues/725)）：`GET /threads` 讀記憶體，不再每次把每一份本文讀一遍。
+ *
+ * 每一列怎麼算（可見規則、標題、`updatedAt`、讀不懂的怎麼數）跟冷讀的 {@link listStoredThreads} 是同一支
+ * {@link summarizeStoredThread}，這裡只管**什麼時候重算哪一列**：
+ *
+ * - **建置**：serve 起來就開始（{@link ThreadIndex.warm}），整個行程一次；第一個請求等它。失敗就丟掉，下一個請求重建。
+ * - **這個行程寫過的**：存放處寫完叫 {@link ThreadIndex.touch}（`JsonlSessionStoreOptions.onWritten`），刪除與復原由處理它的
+ *   一方叫。下一個請求先把這幾條重讀完才回，所以這個行程自己做的事，下一次列表一定看得到。
+ * - **別的行程寫的**（per-thread 的對話行程、同一格的另一台 serve、手動搬檔）：請求進來時，上一次重掃已經是
+ *   `revalidateAfterMs` 之前的事，就在背景重掃一次，**這個請求不等它**。重掃只重讀 revision 變了的那幾份。
+ *   所以別的行程的改動，最晚是「上一次重掃之後的第二個請求」才看得到。
+ *
+ * @module
+ */
+
+import {
+  SessionCorruptionError,
+  SessionFormatUnsupportedError,
+  SessionNotFoundError,
+} from '@nexus/core';
+import type { SessionStore, StoredSessionHeader } from '@nexus/core';
+
+import {
+  isListedThread,
+  sortThreadSummaries,
+  summarizeStoredThread,
+} from './session-list.js';
+import type { StoredThreadList, StoredThreadSummary } from './session-list.js';
+import { assertThreadTitleLimits } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
+
+export interface ThreadIndex {
+  /**
+   * 現在的列表。建好之前等建置；`signal` 中止只放棄這一次的等待，建置照跑。
+   *
+   * @throws 建置或重讀失敗（下一次再試）；`signal` 中止時拋它的 `reason`。
+   */
+  list(signal?: AbortSignal): Promise<StoredThreadList>;
+  /** 這一條寫過了（或被刪、被復原了）：下一次 {@link list} 回之前重讀它。不讀檔，叫幾次都一樣。 */
+  touch(threadId: string): void;
+  /** 開始建置（已經在建或建好就什麼都不做）。失敗交給 `warn`，下一次 {@link list} 重建。 */
+  warm(): void;
+  /** 停掉還在跑的建置或重掃，等它們停下來。之後的 {@link list} 拋錯。不 reject。 */
+  close(): Promise<void>;
+}
+
+export interface ThreadIndexOptions {
+  readonly cwd: string;
+  readonly title: ThreadTitleLimits;
+  /** 上一次重掃開始多久之後，下一個請求要在背景再掃一次。 */
+  readonly revalidateAfterMs: number;
+  /** 背景的建置或重掃失敗時講一行。 */
+  readonly warn: (message: string, error: unknown) => void;
+  readonly now?: () => number;
+}
+
+type Row = StoredThreadSummary | 'unreadable';
+
+interface Entry {
+  /** 讀這一列時那一份的 revision；重讀 touch 過的那條時拿不到，留空，下一次重掃一定重讀。 */
+  readonly revision: string | undefined;
+  readonly row: Row;
+}
+
+export function createThreadIndex(store: SessionStore, options: ThreadIndexOptions): ThreadIndex {
+  assertThreadTitleLimits(options.title);
+  const now = options.now ?? Date.now;
+  const entries = new Map<string, Entry>();
+  /** `store.list` 自己數的讀不懂（header 那一層）。 */
+  let headerUnreadable = 0;
+  const dirty = new Set<string>();
+  const rereading = new Map<string, Promise<void>>();
+  /** 每條最後一次被 touch 的序號：重掃開始之後 touch 過的，重掃的結果不蓋它。 */
+  const touchedAt = new Map<string, number>();
+  let tick = 0;
+  let built: Promise<void> | undefined;
+  let scanning: Promise<void> | undefined;
+  let lastScanAt = Number.NEGATIVE_INFINITY;
+  const stopped = new AbortController();
+
+  async function scan(): Promise<void> {
+    const signal = stopped.signal;
+    const startTick = tick;
+    lastScanAt = now();
+    const listing = await store.list({ signal });
+    const fresh = (id: string) => (touchedAt.get(id) ?? 0) <= startTick;
+    const seen = new Set<string>();
+    for (const { header, revision } of listing.sessions) {
+      if (!isListedThread(header, options.cwd)) continue;
+      seen.add(header.id);
+      if (entries.get(header.id)?.revision === revision) continue;
+      signal.throwIfAborted();
+      const row = await summarizeStoredThread(store, header, options.title);
+      if (!fresh(header.id)) continue;
+      if (row === 'gone') entries.delete(header.id);
+      else entries.set(header.id, { revision, row });
+    }
+    for (const id of entries.keys()) {
+      if (!seen.has(id) && fresh(id)) entries.delete(id);
+    }
+    headerUnreadable = listing.unreadable;
+  }
+
+  async function reread(id: string): Promise<void> {
+    let header: StoredSessionHeader;
+    try {
+      ({ header } = await store.open(id, 'read'));
+    } catch (error: unknown) {
+      const row = rowAfterOpenFailure(error);
+      if (row === 'gone') entries.delete(id);
+      else entries.set(id, { revision: undefined, row });
+      return;
+    }
+    if (!isListedThread(header, options.cwd)) {
+      entries.delete(id);
+      return;
+    }
+    const row = await summarizeStoredThread(store, header, options.title);
+    if (row === 'gone') entries.delete(id);
+    else entries.set(id, { revision: undefined, row });
+  }
+
+  function build(): Promise<void> {
+    if (built === undefined) {
+      const attempt = scan();
+      built = attempt;
+      attempt.catch(() => {
+        if (built === attempt) built = undefined;
+      });
+    }
+    return built;
+  }
+
+  function revalidate(): void {
+    if (scanning !== undefined || now() - lastScanAt < options.revalidateAfterMs) return;
+    scanning = scan()
+      .catch((error: unknown) => {
+        if (!stopped.signal.aborted) options.warn('背景重掃會話列表失敗', error);
+      })
+      .finally(() => {
+        scanning = undefined;
+      });
+  }
+
+  async function drainDirty(signal: AbortSignal | undefined): Promise<void> {
+    for (const id of [...dirty]) {
+      signal?.throwIfAborted();
+      let pending = rereading.get(id);
+      if (pending === undefined) {
+        dirty.delete(id);
+        pending = reread(id).finally(() => rereading.delete(id));
+        pending.catch(() => dirty.add(id));
+        rereading.set(id, pending);
+      }
+      await pending;
+    }
+  }
+
+  return {
+    async list(signal) {
+      stopped.signal.throwIfAborted();
+      await abandonable(build(), signal);
+      revalidate();
+      await drainDirty(signal);
+      const items: StoredThreadSummary[] = [];
+      let unreadable = headerUnreadable;
+      for (const { row } of entries.values()) {
+        if (row === 'unreadable') unreadable += 1;
+        else items.push(row);
+      }
+      sortThreadSummaries(items);
+      return { items, unreadable };
+    },
+    touch(threadId) {
+      tick += 1;
+      touchedAt.set(threadId, tick);
+      dirty.add(threadId);
+    },
+    warm() {
+      build().catch((error: unknown) => {
+        if (!stopped.signal.aborted) options.warn('建會話列表索引失敗', error);
+      });
+    },
+    async close() {
+      stopped.abort(new Error('會話列表索引已關閉'));
+      await Promise.allSettled([built, scanning, ...rereading.values()]);
+    },
+  };
+}
+
+/** `open` 就失敗的那一條，照 {@link summarizeStoredThread} 的分寸：沒了、讀不懂，其餘照拋。 */
+function rowAfterOpenFailure(error: unknown): 'gone' | 'unreadable' {
+  if (error instanceof SessionNotFoundError) return 'gone';
+  if (error instanceof SessionCorruptionError || error instanceof SessionFormatUnsupportedError) {
+    return 'unreadable';
+  }
+  throw error;
+}
+
+/** 等 `work`，但 `signal` 中止就先拋它的 `reason`；`work` 照跑。 */
+function abandonable<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return work;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+/**
+ * serve 的 {@link ThreadIndexOptions.revalidateAfterMs}：兩次背景重掃之間至少隔這麼久。重掃只是補漏（這個行程寫的與 per-thread 對話行程講過話的都會 touch），
+ * 一次要讀過每一份的 header：10k 份約 2.4 秒 CPU（含讀檔執行緒），隔 2 秒的話持續有人列表時一直在掃（#725 量測）。
+ */
+export const THREAD_INDEX_REVALIDATE_MS = 30_000;
+
+/**
+ * 刪除與復原不經存放處寫入（整個目錄搬進搬出），由這一層在它們之後 touch 那一條：成敗都 touch，失敗時可能搬了一半。
+ */
+export function touchingIndex<
+  Port extends {
+    delete(request: { readonly threadId: string }): Promise<unknown>;
+    restore(request: { readonly threadId: string }): Promise<unknown>;
+  },
+>(port: Port, index: ThreadIndex | undefined): Port {
+  if (index === undefined) return port;
+  return {
+    ...port,
+    delete: async (request: Parameters<Port['delete']>[0]) => {
+      try {
+        return await port.delete(request);
+      } finally {
+        index.touch(request.threadId);
+      }
+    },
+    restore: async (request: Parameters<Port['restore']>[0]) => {
+      try {
+        return await port.restore(request);
+      } finally {
+        index.touch(request.threadId);
+      }
+    },
+  };
+}
