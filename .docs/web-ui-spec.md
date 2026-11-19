@@ -76,7 +76,7 @@
 | 2 | 手機抽屜 | SG `Sheet` | — |
 | 3 | 主題切換 | 自建（§6） | — |
 | 6 | 會話列表 | SG `SidebarMenu*` | `features/threads/list.tsx` 留邏輯、換外殼 |
-| 7 | 空白狀態 hero | SG `Empty`（靜態圖示＋標題＋一句說明，#1695） | — |
+| 7 | 空白狀態 hero | SG `Empty`（靜態圖示＋標題，#1695、#3050） | — |
 | 8 | 會話標頭 | 自建；標題規則在 `features/threads/title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `app/App.tsx` |
 | 9 | 歷史往回捲 | SG `MessageScroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | SG `Message`＋`Bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`features/tool/max-tokens-view.ts`，#608） | `features/transcript/transcript.tsx` 留（歸屬、狀態字面） |
