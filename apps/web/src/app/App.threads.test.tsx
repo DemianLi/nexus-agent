@@ -2574,7 +2574,7 @@ describe('背景子代理的輸入框接線（#869）', () => {
     expect(input.placeholder).toBe('連線中…');
   });
 
-  it('用量鈕的「看明細」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
+  it('用量鈕的「到成本分頁」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
     setSeq(0);
     const fake = fakeClient([
       ...delegated([{ runId: 'bg-1', status: 'idle' }]),
