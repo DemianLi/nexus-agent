@@ -53,7 +53,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - **stdio 的探活**（[#3073](https://github.com/DemianLi/nexus-agent/issues/3073)，同 TS 的 `probeLiveness`）：stdio 的請求逾時或被取消之後，橋在背景對送出那次請求的那一代送一次 `tools/list`，等 `livenessTimeoutMs`，不擋那次請求回去。
   探活等滿 `livenessTimeoutMs` 還沒回應才判卡死（transport 關了的照掉線走）：記 `<label>: server stopped responding; restarting it`（同 TS），那一代照掉線走，監督者收掉子行程（〈stdio〉的收線梯度）、照退避重連；任何回應都算活著，錯誤回應也是。
   同一代一次只探一個；判卡死時那一代已經換掉的不理。HTTP 不探：沒有子行程可收，重連救不了對端。連線整台共用，所以一條對話的逾時觸發的重起，別的對話在那一代上進行中的呼叫會收到連線關閉。
-  **stdin 寫不進時逾時那條路探不到**：server 連 stdin 都不讀、管線積滿（Linux 預設 64 KiB）之後，rmcp 的逾時要先等取消通知寫進 stdin 才回，那次請求自己就回不來，也就走不到探活；被取消的那條路先起探活再送通知，不受影響。
+  **stdin 寫不進時逾時那條路探不到**：server 連 stdin 都不讀、管線積滿（Linux 預設 64 KiB）之後，rmcp 的逾時要先等取消通知寫進 stdin 才回，那次請求自己就回不來，也就走不到探活；被取消的那條路先起探活再送通知，不受影響。見 [#3074](https://github.com/DemianLi/nexus-agent/issues/3074)。
   測試：`host/tests/mcp_stdio.rs` 的 `bridge::卡死的_server_…` 兩支與 `bridge::呼叫逾時但探活有回的_server_不重起`。
 - 一則 JSON 回應超過 16 MiB 時回 `<label>: response exceeded the size limit of 16 MiB — this call failed; the connection stays up`。
 - 一則 SSE 事件超過 16 MiB，跟 server 中途斷掉這一則的串流，宿主分不出來，都只讓這一則失敗，回 `<label>: response stream closed before its final response`。
