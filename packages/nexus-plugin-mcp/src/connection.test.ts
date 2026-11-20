@@ -232,7 +232,7 @@ describe('錯誤訊息裡網址以別的形式出現時也遮掉', () => {
 
 describe('openClient 的 HTTP 連線不退回舊式 SSE（#3001）', () => {
   it.each([404, 405])(
-    'server 回 %i：直接失敗，訊息不提 SSE，也沒有第二條連線嘗試',
+    'server 回 %i：直接失敗，訊息不提 SSE，也沒有打 SSE 的請求',
     async (status) => {
       const paths: string[] = [];
       const server = createServer((request, response) => {
@@ -250,7 +250,8 @@ describe('openClient 的 HTTP 連線不退回舊式 SSE（#3001）', () => {
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain('Failed to connect to streamable HTTP server');
         expect((error as Error).message).not.toMatch(/sse/iu);
-        expect(paths.every((path) => path.endsWith(' /mcp'))).toBe(true);
+        // 版本協商 auto 會對同一網址 POST 兩次（新、舊兩代握手），所以只釘方法與路徑、不釘次數。
+        expect(paths.every((path) => path === 'POST /mcp')).toBe(true);
       } finally {
         await new Promise((resolve) => server.close(resolve));
       }

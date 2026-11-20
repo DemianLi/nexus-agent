@@ -3,8 +3,8 @@
  * 與宿主的連線池（serve，[`pool.ts`](./pool.ts)）**共用這一份**，兩邊開連線的方式因此不會漂移。
  *
  * **一代一個 SDK client**：重連就是收掉上一代的 client、開一個新的（新子行程、新的 HTTP session）。開連線的做法照
- * `@langchain/mcp-adapters@2.0.0`（`dist/connection.js`、`dist/client.js` 的 `_initializeStreamableHTTPConnection`）：版本協商 `auto`，
- * HTTP 只走 Streamable HTTP，沒有 SSE：server 回 404／405 也直接失敗。
+ * `@langchain/mcp-adapters@2.0.0`（`dist/connection.js`、`dist/client.js` 的 `_initializeStreamableHTTPConnection`）：版本協商 `auto`。
+ * HTTP 只走 Streamable HTTP，不退回舊式 SSE：server 回 404／405 也直接失敗。
  *
  * @module
  */
