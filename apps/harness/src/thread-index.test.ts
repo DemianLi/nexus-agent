@@ -223,6 +223,52 @@ describe('會話列表索引', () => {
     expect((await second).items[0]?.updatedAt).toBe(5_000);
   });
 
+  it('請求開始時那一條正被另一個請求重讀：等它讀完，不回少了它的列表（#3022）', async () => {
+    const directory = await tempDir();
+    const backend = openJsonlSessionStore({ directory });
+    await writeThread(backend, 'x', '早就在的', 1_000);
+    // 下一次 `read` 讀完本文之後停在這裡：第一個請求的重讀卡著，第二個請求在這時候進來。
+    let hold: Promise<void> | undefined;
+    const gated: SessionStore = {
+      create: (header) => backend.create(header),
+      resume: (id) => backend.resume(id),
+      list: (options) => backend.list(options),
+      open: async (id, access) => {
+        const handle = await backend.open(id, access);
+        return {
+          header: handle.header,
+          storedFormatVersion: handle.storedFormatVersion,
+          read: async (options) => {
+            const events = await handle.read(options);
+            const gate = hold;
+            hold = undefined;
+            await gate;
+            return events;
+          },
+        };
+      },
+    };
+    const index = indexOver(gated, Number.POSITIVE_INFINITY);
+    await index.list();
+
+    await writeThread(backend, 'y', '剛寫的', 2_000);
+    let release!: () => void;
+    hold = new Promise((resolve) => (release = resolve));
+    index.touch('y');
+    const first = index.list();
+    await expect.poll(() => hold === undefined).toBe(true);
+
+    let secondDone = false;
+    const second = index.list().finally(() => (secondDone = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const doneBeforeRelease = secondDone;
+    release();
+    expect(doneBeforeRelease).toBe(false);
+
+    expect((await second).items.map(({ threadId }) => threadId)).toEqual(['y', 'x']);
+    expect((await first).items.map(({ threadId }) => threadId)).toEqual(['y', 'x']);
+  });
+
   it('一直在寫的那一條不會把請求卡住：每條最多讀一次', async () => {
     const directory = await tempDir();
     const backend = openJsonlSessionStore({ directory });
