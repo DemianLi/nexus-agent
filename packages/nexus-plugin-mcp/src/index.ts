@@ -336,7 +336,8 @@ export async function mountServer(thread: ToolThread, declared: McpConfig): Prom
     unreachable(thread, config, error);
     return;
   }
-  // 對話行程有宿主（per-thread，#3000）：連線在宿主那邊，整台一份；這一側向宿主 `open` 一份綁定，其餘（工具、核准、資源）照舊。
+  // 掛了 `MCP_HOST_ROW_SERVICE`（per-thread，#3000）就經宿主：連線在宿主那邊，整台一份；這一側向宿主門面 `open` 一份綁定，其餘（工具、核准、資源）照舊。
+  // 門面由 harness 給：thread 組裝時是接著宿主的那一個；啟動時的試組（前台與對話行程都有）給的是不連線的門面，`open` 當場回空清單，只驗這一列的設定。
   const hostRow = thread.services.get(MCP_HOST_ROW_SERVICE) as McpHostRowBuilder | undefined;
   const hostBridge = thread.services.get(MCP_HOST_BRIDGE_SERVICE) as HostCaller | undefined;
   const throughHost = hostRow !== undefined && hostBridge !== undefined;

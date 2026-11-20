@@ -52,7 +52,7 @@ export interface HostBridgeOptions {
   readonly waitMs?: number;
 }
 
-/** 沒有宿主的門面：每個呼叫都以 `host_absent` 結算，`onReady` 永遠不叫。組裝點沒拿到門面時交它：單行程 serve、CLI，以及 serve 起動時的試組。 */
+/** 沒有宿主的門面：每個呼叫都以 `host_absent` 結算，`onReady` 永遠不叫。組裝點沒拿到門面時交它：單行程 serve（含它起動時的試組）與 CLI。 */
 export const ABSENT_HOST_BRIDGE: HostBridge = {
   call: () => Promise.reject(new HostCallError('host_absent', '這個行程沒有宿主')),
   onReady: () => () => undefined,
