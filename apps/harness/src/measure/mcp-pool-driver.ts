@@ -834,8 +834,9 @@ async function killOnce(
   await sleep(1500); // 多等一下，抓重複的紀錄
   pick();
   const backoffMatch = [
-    ...readFileSync(logf, 'utf8')
-      .slice(logOffset)
+    ...readFileSync(logf)
+      .subarray(logOffset)
+      .toString('utf8')
       .matchAll(/宿主 (\d+) ms 後重起/gu),
   ];
   const backoffMs =
