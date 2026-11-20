@@ -1456,24 +1456,39 @@ mod http {
             assert!(err.starts_with("Failed to connect"), "{err}");
         }
 
-        /// 綁定還沒落定就放掉（`service.rs` 的 open 被取消）：橋照樣交 `Opened`，service 收到時補送一次放掉；
-        /// 補送的那一次要真的放掉，之後的請求回「沒有這個綁定」。第一次放掉在橋這一側有沒有生效不管。
+        /// 綁定還沒落定就放掉（`service.rs` 的 open 被取消）：交出 `Opened` 之前處理到的放掉是空操作，綁定照樣記下；
+        /// 收到 `Opened` 之後再送的那一次才放掉。假 server 扣住握手的第一個請求；橋照順序處理命令，
+        /// 跟在放掉後面的探測請求回「沒有這個綁定」，就表示放掉已經處理過、取用還沒落定，這時才放行握手。
         #[test]
-        fn 綁定落定之前就放掉_照樣交_opened_補送的放掉生效() {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("綁埠");
-            let port = listener.local_addr().expect("位址").port();
-            drop(listener);
+        fn 綁定落定之前就放掉_是空操作_收到_opened_之後再放掉才生效() {
+            let (go, held) = std::sync::mpsc::channel::<()>();
+            let hold = Mutex::new(Some(held));
+            let inner = handler(FakeMcp::with_tools(false, &["echo"]), Arc::default());
+            let port = TlsServer::start(Arc::new(move |request: &Request| {
+                let first = hold.lock().expect("鎖").take();
+                if let Some(held) = first {
+                    let _ = held.recv();
+                }
+                inner(request)
+            }))
+            .port;
             let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
             bridge.send(Command::Open {
                 open: 1,
-                server: Box::new(server(port, json!({ "reconnect": { "enabled": false } }))),
+                server: Box::new(server(port, json!({}))),
                 elicitation: true,
             });
             bridge.send(Command::Release { open: 1 });
+            call(&bridge, 9, 1, "echo");
+            assert_eq!(done(&bridge, 9), Err("沒有這個綁定（1）".to_string()));
+            go.send(()).expect("放行握手");
             opened(&bridge, 1).expect("放掉之後照樣交 Opened");
-            bridge.send(Command::Release { open: 1 });
             call(&bridge, 1, 1, "echo");
-            assert_eq!(done(&bridge, 1), Err("沒有這個綁定（1）".to_string()));
+            let first = done(&bridge, 1);
+            assert!(first.is_ok(), "第一次放掉是空操作，綁定還在：{first:?}");
+            bridge.send(Command::Release { open: 1 });
+            call(&bridge, 2, 1, "echo");
+            assert_eq!(done(&bridge, 2), Err("沒有這個綁定（1）".to_string()));
         }
 
         #[test]
