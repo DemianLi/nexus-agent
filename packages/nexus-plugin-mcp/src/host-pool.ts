@@ -357,7 +357,7 @@ export class HostMcpClient {
         () => {
           abort.abort(DEADLINE);
         },
-        Math.max(0, waitMs - (Date.now() - started)),
+        Math.max(0, 4 * waitMs - (Date.now() - started)),
       );
     };
     armDeadline();
