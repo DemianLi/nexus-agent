@@ -36,7 +36,11 @@ while IFS= read -r line; do
       if [ -n "$STALL_LIST" ]; then : > "$MARK"; else
       printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}\n' "$id"; fi;;
     *'"method":"tools/call"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"secret=%s plain=%s probe=%s"}],"isError":false}}\n' "$id" "$FAKE_SECRET" "$PLAIN" "${NEXUS_STDIO_TEST_PROBE-unset}";;
+      # 卡死：之後照讀 stdin、什麼都不回（`3>&1` 把宿主讀的 stdout 管線留著，宿主讀不到 EOF）。記號檔在了就不再卡，所以只有第一代卡。
+      if [ -n "$STALL_ONCE" ] && [ ! -e "$STALL_ONCE" ]; then : > "$STALL_ONCE"; exec cat 3>&1 > /dev/null; fi
+      # 只有 `tools/call` 不回，別的照回：慢、但活著。
+      if [ -z "$MUTE_CALLS" ]; then
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"secret=%s plain=%s probe=%s"}],"isError":false}}\n' "$id" "$FAKE_SECRET" "$PLAIN" "${NEXUS_STDIO_TEST_PROBE-unset}"; fi;;
   esac
 done
 # 讀到 EOF 不結束：收到 SIGTERM 才留記號、結束。測「收線走 SIGTERM 梯度」用。
@@ -548,6 +552,170 @@ mod bridge {
             "{warning}"
         );
         assert_reaped(read_pid(&pid_file));
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        let _ = std::fs::remove_file(&pid_file);
+    }
+
+    const STALLED: &str = "mcp-client(fake): server stopped responding; restarting it";
+
+    /// 假 server 的設定：呼叫逾時 `call_ms`、探活期限 300 ms、重連退避從 50 ms 起。
+    fn liveness_config(pid_file: &str, call_ms: u64, extra_env: &[(&str, &str)]) -> Value {
+        let mut config = fake_config_with(pid_file, extra_env);
+        config["toolCallTimeoutMs"] = json!(call_ms);
+        config["livenessTimeoutMs"] = json!(300);
+        config["reconnect"] = json!({ "initialDelayMs": 50 });
+        config
+    }
+
+    fn send_call(bridge: &Bridge, id: u64) {
+        bridge.send(Command::Request {
+            id,
+            open: 1,
+            method: "tools/call".into(),
+            params: json!({ "name": "echo", "arguments": {} }),
+        });
+    }
+
+    fn done(bridge: &Bridge, id: u64) -> Result<String, String> {
+        match wait_for(
+            bridge,
+            |o| matches!(o, Outcome::Done { id: n, .. } if *n == id),
+        ) {
+            Outcome::Done { result, .. } => result,
+            _ => unreachable!(),
+        }
+    }
+
+    /// `within` 之內有沒有記過含 `needle` 的一行日誌。
+    fn logged(bridge: &Bridge, needle: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            let hit = bridge
+                .take()
+                .iter()
+                .any(|o| matches!(o, Outcome::Log { line, .. } if line.contains(needle)));
+            if hit {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// 等 pid 檔換成別的 pid（新的一代起來了）。
+    fn next_pid(pid_file: &str, old: i32) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let pid = read_pid(pid_file);
+            if pid != old {
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "沒有起新的一代");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// 卡死（讀 stdin、不回）的 server（#3073）：呼叫逾時之後探一次活，探活也逾時就判卡死，收掉子行程、重起，之後的呼叫在新的一代成功。
+    #[test]
+    fn 卡死的_server_呼叫逾時後被探出來_收掉並重起() {
+        let pid_file = pid_file("stall");
+        let mark = format!("{pid_file}.stalled");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        let config = liveness_config(&pid_file, 300, &[("STALL_ONCE", &mark)]);
+        open(&bridge, &config).expect("連得上");
+        let stalled_pid = read_pid(&pid_file);
+
+        send_call(&bridge, 10);
+        let error = done(&bridge, 10).expect_err("卡死的 server 不回，呼叫要逾時");
+        assert!(error.contains("request timeout"), "{error}");
+        assert!(
+            logged(&bridge, STALLED, Duration::from_secs(5)),
+            "探活逾時要判卡死並記一句"
+        );
+        assert_reaped(stalled_pid);
+
+        let restarted = next_pid(&pid_file, stalled_pid);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut id = 11;
+        loop {
+            send_call(&bridge, id);
+            match done(&bridge, id) {
+                Ok(text) => {
+                    assert!(text.contains("plain="), "{text}");
+                    break;
+                }
+                Err(error) => {
+                    assert!(
+                        error.contains("server is disconnected"),
+                        "空窗裡只該回斷線：{error}"
+                    );
+                    assert!(Instant::now() < deadline, "新的一代一直沒接上");
+                    std::thread::sleep(Duration::from_millis(20));
+                    id += 1;
+                }
+            }
+        }
+        assert!(!gone(restarted), "新的一代要活著");
+
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+    }
+
+    /// 被取消的呼叫也觸發探活：使用者按停的那一次，往往就是因為 server 卡死。呼叫逾時設成 60 秒，確定不是逾時那條路觸發的。
+    #[test]
+    fn 卡死的_server_呼叫被取消後也被探出來() {
+        let pid_file = pid_file("stall-cancel");
+        let mark = format!("{pid_file}.stalled");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        let config = liveness_config(&pid_file, 60_000, &[("STALL_ONCE", &mark)]);
+        open(&bridge, &config).expect("連得上");
+        let stalled_pid = read_pid(&pid_file);
+
+        send_call(&bridge, 10);
+        wait_exists(&mark);
+        bridge.send(Command::Cancel { id: 10 });
+        assert_eq!(done(&bridge, 10), Err("cancelled".to_string()));
+        assert!(
+            logged(&bridge, STALLED, Duration::from_secs(5)),
+            "取消之後也要探活"
+        );
+        assert_reaped(stalled_pid);
+
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+    }
+
+    /// 只是慢的 server 不重起：`tools/call` 逾時，但探活的 `tools/list` 有回，這一代留著。
+    #[test]
+    fn 呼叫逾時但探活有回的_server_不重起() {
+        let pid_file = pid_file("slow");
+        let _ = std::fs::remove_file(&pid_file);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        let config = liveness_config(&pid_file, 300, &[("MUTE_CALLS", "1")]);
+        open(&bridge, &config).expect("連得上");
+        let pid = read_pid(&pid_file);
+
+        send_call(&bridge, 10);
+        let error = done(&bridge, 10).expect_err("不回的呼叫要逾時");
+        assert!(error.contains("request timeout"), "{error}");
+        assert!(
+            !logged(&bridge, "mcp-client(fake)", Duration::from_millis(1500)),
+            "探活有回就不該判卡死，也不該有重連的日誌"
+        );
+        assert_eq!(read_pid(&pid_file), pid, "沒有起新的一代");
+        assert!(!gone(pid), "原來那一代要活著");
+
         bridge.send(Command::Shutdown);
         wait_for(&bridge, |o| matches!(o, Outcome::Closed));
         let _ = std::fs::remove_file(&pid_file);
