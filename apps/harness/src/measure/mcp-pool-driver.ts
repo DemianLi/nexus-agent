@@ -763,6 +763,7 @@ interface PreloadEvent {
   readonly t: string;
   readonly seq?: number;
   readonly server?: string;
+  readonly pid?: number;
   readonly [k: string]: unknown;
 }
 function preloadEvents(): PreloadEvent[] {
@@ -786,7 +787,12 @@ interface KillRecord {
 }
 
 /** 殺一次宿主：等恢復（onReady 與 open ready 都到），自我檢查各恰好一筆，不過就整筆作廢。 */
-async function killOnce(p: ArmProc, label: string, waitStable: boolean): Promise<KillRecord> {
+async function killOnce(
+  p: ArmProc,
+  label: string,
+  waitStable: boolean,
+  boundPid: number,
+): Promise<KillRecord> {
   let pid = hostPidOf(p);
   for (let i = 0; pid === undefined && i < 600; i++) {
     await sleep(100);
@@ -814,7 +820,8 @@ async function killOnce(p: ArmProc, label: string, waitStable: boolean): Promise
   let ready: PreloadEvent[] = [];
   let open: PreloadEvent[] = [];
   const pick = (): void => {
-    const evs = preloadEvents().filter((e) => BigInt(e.t) > tKill);
+    // 預熱池裡那個對話行程也有自己的 HostClient 與 onReady，不是被量的；只看接了 thread、做過 open 的那一個。
+    const evs = preloadEvents().filter((e) => BigInt(e.t) > tKill && e.pid === boundPid);
     ready = evs.filter((e) => e.ev === 'onReady');
     open = evs.filter((e) => e.ev === 'openReady');
   };
@@ -866,12 +873,17 @@ async function hostKillMain(): Promise<void> {
   if (outcomes.some((o) => o !== 'completed'))
     throw new Error(`建綁定的那一輪沒完成：${outcomes.join(',')}`);
   const loaded = preloadEvents().filter((e) => e.ev === 'loaded');
+  const bound = preloadEvents().filter((e) => e.ev === 'openReady');
+  if (bound.length !== 1 || bound[0]?.pid === undefined) {
+    throw new Error(`建綁定之後 openReady 應該恰好 1 筆，實際 ${String(bound.length)}：停下回報`);
+  }
+  const boundPid = bound[0].pid;
   log('loaded', loaded);
   if (loaded.length === 0)
     throw new Error('預載沒有在對話行程裡動作（沒有 loaded 記錄）：包不到，停下回報');
   const single: KillRecord[] = [];
   for (let i = 1; i <= KILLS; i++) {
-    const rec = await killOnce(p, `single-${String(i)}`, true);
+    const rec = await killOnce(p, `single-${String(i)}`, true, boundPid);
     single.push(rec);
     log('kill', rec);
     results.push({ ...rec, label: `kill single-${String(i)}` });
@@ -882,7 +894,7 @@ async function hostKillMain(): Promise<void> {
   for (let r = 1; r <= CONSEC_ROUNDS; r++) {
     const round: KillRecord[] = [];
     for (let i = 1; i <= CONSEC_KILLS; i++) {
-      const rec = await killOnce(p, `consec-${String(r)}-${String(i)}`, i === 1);
+      const rec = await killOnce(p, `consec-${String(r)}-${String(i)}`, i === 1, boundPid);
       round.push(rec);
       log('kill', rec);
       results.push({ ...rec, label: `kill consec-${String(r)}-${String(i)}` });
