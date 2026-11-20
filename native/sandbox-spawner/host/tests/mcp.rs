@@ -396,6 +396,41 @@ mod pool {
         );
     }
 
+    /// 判卡死只對當下那一代有效：對已經換掉的一代呼叫 `stalled` 不記日誌、不動新的一代；對當下這一代呼叫才記一句並換代。
+    #[tokio::test]
+    async fn 判卡死_已換掉的一代不理_當下這一代才收掉重連() {
+        let fake = Fake::default();
+        let (pool, lines) = pool(&fake);
+        let s = server(json!({ "reconnect": { "initialDelayMs": 5 } }));
+        let shared = pool.acquire(&s, false).await.expect("取得到").shared;
+        let stalls = || {
+            let lines = lines.lock().expect("鎖");
+            lines
+                .iter()
+                .filter(|l| l.ends_with("server stopped responding; restarting it"))
+                .count()
+        };
+        let old = shared.current().expect("第一代");
+        old.lost();
+        until("第二代連上", || {
+            shared.current().is_some_and(|now| now.peer == 2)
+        })
+        .await;
+
+        shared.stalled(&old);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(stalls(), 0, "換掉的一代不該記卡死");
+        assert_eq!(fake.attempts(), 2, "新的一代不該被收掉");
+
+        let now = shared.current().expect("第二代");
+        shared.stalled(&now);
+        assert_eq!(stalls(), 1, "當下這一代要記一句");
+        until("第三代連上", || {
+            shared.current().is_some_and(|now| now.peer == 3)
+        })
+        .await;
+    }
+
     #[tokio::test]
     async fn 同一份設定共用一條_旗標不同就分開() {
         let fake = Fake::default();

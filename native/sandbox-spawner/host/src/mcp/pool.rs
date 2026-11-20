@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -72,12 +73,23 @@ pub struct Live<G: Generation> {
     pub peer: G::Peer,
     pub listed: Arc<G::Listed>,
     lost: Arc<Notify>,
+    probing: AtomicBool,
 }
 
 impl<G: Generation> Live<G> {
     /// 呼叫判斷這一代斷線了。
     pub fn lost(&self) {
         self.lost.notify_one();
+    }
+
+    /// 佔下這一代的探活；已經有一次在跑就回 `false`。同一代一次只探一個：卡死時不往讀不動的 stdin 再塞。
+    pub fn begin_probe(&self) -> bool {
+        !self.probing.swap(true, Ordering::AcqRel)
+    }
+
+    /// 探活落定，放掉 [`Live::begin_probe`] 佔的。
+    pub fn end_probe(&self) {
+        self.probing.store(false, Ordering::Release);
     }
 }
 
@@ -104,6 +116,7 @@ pub struct Shared<G: Generation> {
     ready: watch::Receiver<Ready>,
     stop: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
+    log: Log,
 }
 
 impl<G: Generation> Shared<G> {
@@ -142,6 +155,22 @@ impl<G: Generation> Shared<G> {
     /// instructions 這類單獨的一段文字，規則同 [`Shared::redact_json`]。
     pub fn redact_text(&self, text: &str) -> String {
         self.redactor.redact_text(text)
+    }
+
+    /// 判 `live` 那一代卡死（transport 還開著、server 不回）：記一句，再照掉線走，監督者收掉它、重連。
+    /// 那一代已經不是當下這一代就不理。訊息同 TS `supervisor.ts` 的 `stalled`。
+    pub fn stalled(&self, live: &Live<G>) {
+        if !self
+            .current()
+            .is_some_and(|now| now.generation == live.generation)
+        {
+            return;
+        }
+        (self.log.info)(&format!(
+            "{}: server stopped responding; restarting it",
+            self.label
+        ));
+        live.lost();
     }
 
     /// 監督者停了，見 [`State::Stopped`]。
@@ -237,6 +266,7 @@ impl<C: Connector> Hooks for PoolHooks<C> {
             peer: gen.peer(),
             listed,
             lost: gen.lost_signal(),
+            probing: AtomicBool::new(false),
         })));
     }
 
@@ -428,6 +458,7 @@ impl<C: Connector> Pool<C> {
             ready,
             stop,
             task: Mutex::new(Some(task)),
+            log: self.log.clone(),
         });
         if let Ok(mut opened) = self.opened.lock() {
             opened.push(Arc::clone(&shared));
