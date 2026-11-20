@@ -48,8 +48,13 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 `bridge.rs`：連線池、監督者與每一次請求跑在自己的執行緒（tokio current_thread）。宿主那一側送命令不會卡；結果排進收件匣、
 寫一個位元組到自管道（`wake.rs`，兩端 `O_CLOEXEC`、非阻塞，管道滿了不卡）叫醒宿主，宿主把這個 fd 放進 poll。
 
-- 請求送到那一份當下活著的一代；斷線空窗裡回 `server is disconnected`。逾時照 `toolCallTimeoutMs`，逾時不算掉線。
+- 請求送到那一份當下活著的一代；斷線空窗裡回 `server is disconnected`。逾時照 `toolCallTimeoutMs`，逾時不算掉線（stdio 另見下面的探活）。
 - 單次請求失敗（server 回非 2xx、回應太大、連不上）只是這一次失敗，連線不斷，同 TS 只認 transport 關了才算掉線。
+- **stdio 的探活**（[#3073](https://github.com/DemianLi/nexus-agent/issues/3073)，同 TS 的 `probeLiveness`）：stdio 的請求逾時或被取消之後，橋在背景對送出那次請求的那一代送一次 `tools/list`，等 `livenessTimeoutMs`，不擋那次請求回去。
+  探活等滿 `livenessTimeoutMs` 還沒回應才判卡死（transport 關了的照掉線走）：記 `<label>: server stopped responding; restarting it`（同 TS），那一代照掉線走，監督者收掉子行程（〈stdio〉的收線梯度）、照退避重連；任何回應都算活著，錯誤回應也是。
+  同一代一次只探一個；判卡死時那一代已經換掉的不理。HTTP 不探：沒有子行程可收，重連救不了對端。連線整台共用，所以一條對話的逾時觸發的重起，別的對話在那一代上進行中的呼叫會收到連線關閉。
+  **stdin 寫不進時逾時那條路探不到**：server 連 stdin 都不讀、管線積滿（Linux 預設 64 KiB）之後，rmcp 的逾時要先等取消通知寫進 stdin 才回，那次請求自己就回不來，也就走不到探活；被取消的那條路先起探活再送通知，不受影響。見 [#3074](https://github.com/DemianLi/nexus-agent/issues/3074)。
+  測試：`host/tests/mcp_stdio.rs` 的 `bridge::卡死的_server_…` 兩支與 `bridge::呼叫逾時但探活有回的_server_不重起`。
 - 一則 JSON 回應超過 16 MiB 時回 `<label>: response exceeded the size limit of 16 MiB — this call failed; the connection stays up`。
 - 一則 SSE 事件超過 16 MiB，跟 server 中途斷掉這一則的串流，宿主分不出來，都只讓這一則失敗，回 `<label>: response stream closed before its final response`。
   rmcp 對這兩種都回 `TransportClosed`，超限的原因只寫進它自己的 tracing 日誌；transport 本身還開著（`Peer::is_transport_closed` 是假），所以不判掉線。
@@ -73,7 +78,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 | `serverName` | 必填，1 到 32 個 `[A-Za-z0-9_-]`。 |
 | `connection` | 必填。HTTP：`{ transport: "http", url, headers?, credentialHeaders? }`，`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）；`headers` 的值只收 TS 代入之後的字串，憑證引用物件整列拒絕。`credentialHeaders` 是 header 名（不分大小寫）→ prefix（沒有就 `""`），標出 `headers` 裡哪幾個值來自憑證：`headers` 不是空的時候它一定要在（沒有憑證就給 `{}`，漏送會變成起不來，不是憑證靜靜沒被遮）；`headers` 裡的 `authorization`／`proxy-authorization` 一定要列；每個鍵在 `headers` 裡剛好一個（大小寫不同的同名 header 對到兩個就拒）、值以 prefix 開頭、prefix 之後那一段要過 `check_value`（`Header`：非空、至少 8 個 code point、沒有 U+00FF 之後的字元與控制字元，tab 除外）且與它回的值完全相同（頭尾有空白就拒，同 stdio 的 `credentialEnv`）。池的鍵含它，空的與沒給是同一把。stdio：`{ transport: "stdio", command, args?, cwd?, env, credentialEnv }`，見下面〈stdio〉。 |
 | `toolCallTimeoutMs` | 正整數（不大於 2^53−1，`60000.0` 也收，同 zod 的 `int`），預設 60000。 |
-| `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。照收、不用（宿主沒有存活探測，見〈跟 TS 的差距〉），只進池的鍵。 |
+| `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。stdio 的探活等多久（見〈橋〉）；HTTP 照收、不用。兩種都進池的鍵。 |
 | `failOnStartupError` | 預設 `false`。 |
 | `maxInstructionBytes` | 正整數（同 `toolCallTimeoutMs`），預設 32768。 |
 | `reconnect` | `{ enabled?, initialDelayMs?, maxDelayMs?, maxAttempts? }`，預設 `true`／500／30000／10；`initialDelayMs` 不能大於 `maxDelayMs`。 |
@@ -188,15 +193,14 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 
 ## 跟 TS 的差距
 
-- stdio 的存活探測（`livenessTimeoutMs` 的用處）沒有：掉線只認 transport 關了（子行程結束或管線斷），子行程活著但卡死的探不出來。
-- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
+- stdio 的探活在宿主做（〈橋〉），TS 那一側的 `probeLiveness` 在宿主路徑上沒有作用：它探的是門面的 `listTools`，回 open 當下的清單，不送到 server。
+- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 也直接失敗，沒有 SSE 可退，`packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
 - 對話行程那一側的列由 harness 的 `mcp-host-row-service.ts` 產生（`MCP_HOST_ROW_SERVICE`，包 `hostHttpConnection`／`hostStdioConnection`，沒有斜線的 `command` 照 `PATH` 解成絕對路徑）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
 - 連線之後的錯誤：TS 的工具呼叫錯誤、`tools/list` 錯誤與重連日誌也遮網址的 query（`withUrlScrubbing`）：query 的整串與每個值（原樣、解碼後）進遮蔽器，同宿主 `secrets()`，只差不到 8 個 code point 的值不收（整串、原樣、解碼後各自算，細節與後果見 `docs/credentials-file.md`〈收集〉）。宿主收 query 值讀碼可見（`config.rs` 的 `secrets()`）；沒量的是宿主每一條錯誤出口是否都過 `scrub`。TS 這邊 resources 的錯誤（`read_mcp_resource`、`list_mcp_resources`）還沒遮。
-- 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 - `tools/list` 拿不到工具的 `execution.taskSupport`：rmcp 的工具型別沒有這一欄，解析時丟掉。所以 TS 對 `taskSupport: 'required'` 的工具在呼叫前先擋，宿主做不到；
   新協定本來就沒有 `execution`，影響只在舊協定。
 - rmcp 把回應解成自己的型別再序列化，認得的形狀會丟掉規格外的欄位：`tools/call` 的結果丟掉內容區塊多出的欄位與不認得的頂層欄位。

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { HostMcpClient, Reassembly } from './host-pool.js';
+import { DEFAULT_REBIND_WAIT_MS, HostMcpClient, Reassembly } from './host-pool.js';
 import type { HostCallOptionsLike, HostCaller } from './host-pool.js';
 import { isRequestTimeout, probeLiveness } from './connection.js';
 import { isConnectionLost } from './index.js';
@@ -298,6 +298,28 @@ describe('宿主連線斷了又連上', () => {
     expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(0);
     host.releaseOpens();
     await expect(client.callTool({ name: 'echo', arguments: {} })).resolves.toEqual({ ok: true });
+  });
+
+  it('沒指定 rebindWaitMs 時期限就是 DEFAULT_REBIND_WAIT_MS：差一毫秒還在等，到了才回 server is disconnected', async () => {
+    const host = fakeHost({});
+    const client = await HostMcpClient.open(host.caller, { server, elicitation: false });
+    host.holdOpens();
+    vi.useFakeTimers();
+    try {
+      host.opens()[0]?.reject(new HostError('host_lost', '斷了'));
+      await vi.advanceTimersByTimeAsync(5);
+      let outcome: unknown;
+      void client.callTool({ name: 'echo', arguments: {} }).catch((error: unknown) => {
+        outcome = error;
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_REBIND_WAIT_MS - 1);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(String(outcome)).toContain('server is disconnected');
+      expect(host.calls.filter((c) => c.method === 'call')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('重新 open 單飛：等綁定的多個呼叫與 onReady 只發一次 open', async () => {

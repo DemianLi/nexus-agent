@@ -1,4 +1,4 @@
-//! 整合測試共用的本機 HTTPS 伺服器與 CONNECT 代理。只用 std 與 rustls（ring），不需要別的相依；憑證是 `tests/fixtures/tls/` 的夾具。每支測試只用到其中一部分。
+//! 整合測試共用的本機 HTTPS 伺服器、純 HTTP 伺服器與 CONNECT 代理。只用 std 與 rustls（ring），不需要別的相依；憑證是 `tests/fixtures/tls/` 的夾具。每支測試只用到其中一部分。
 
 #![allow(dead_code)]
 
@@ -157,6 +157,34 @@ impl TlsServer {
             }
         });
         TlsServer { port }
+    }
+}
+
+/// 本機的純 HTTP 伺服器：同 [`TlsServer`]，不經 TLS。
+pub struct PlainServer {
+    pub port: u16,
+}
+
+impl PlainServer {
+    pub fn start(handler: Handler) -> PlainServer {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("綁埠");
+        let port = listener.local_addr().expect("位址").port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let handler = Arc::clone(&handler);
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    while let Some(request) = read_request(&mut reader) {
+                        let response = handler(&request);
+                        if response.write(reader.get_mut()).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        PlainServer { port }
     }
 }
 

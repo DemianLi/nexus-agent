@@ -21,7 +21,7 @@ pub const STDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 帶出處標頭的指引預設上限（UTF-8 位元組），同 `DEFAULT_MAX_INSTRUCTION_BYTES`。
 pub const DEFAULT_MAX_INSTRUCTION_BYTES: usize = 32_768;
-/// `livenessTimeoutMs` 的預設值，同 `DEFAULT_LIVENESS_TIMEOUT_MS`。宿主不用它，只進池的鍵。
+/// `livenessTimeoutMs` 的預設值，同 `DEFAULT_LIVENESS_TIMEOUT_MS`。
 const DEFAULT_LIVENESS_TIMEOUT_MS: u64 = 15_000;
 /// JS 的 `Number.MAX_SAFE_INTEGER`，zod 的 `int()` 收的上限。
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
@@ -76,6 +76,8 @@ pub struct Server {
     pub name: String,
     pub connection: Connection,
     pub tool_call_timeout: Duration,
+    /// 探活等多久；只有 stdio 有，HTTP 是 `None`（不探）。用在 `bridge` 的 `probe`。
+    pub liveness_timeout: Option<Duration>,
     pub max_instruction_bytes: usize,
     pub reconnect: Policy,
     pub fail_on_startup_error: bool,
@@ -453,7 +455,7 @@ impl Server {
         let reconnect = Policy::parse(fields.get("reconnect"))?;
         let fail_on_startup_error = boolean(fields, "failOnStartupError", false)?;
         let elicitation = boolean(fields, "elicitation", true)?;
-        // `livenessTimeoutMs` 只給 stdio；HTTP 照收、不用，型別照樣核。
+        // `livenessTimeoutMs` 只有 stdio 用；HTTP 照收、不用，型別照樣核。
         let liveness_timeout_ms =
             positive_int(fields, "livenessTimeoutMs", MAX_LIVENESS_TIMEOUT_MS)?
                 .unwrap_or(DEFAULT_LIVENESS_TIMEOUT_MS);
@@ -485,10 +487,13 @@ impl Server {
         let canonical = String::from_utf8(crate::json::encode(&Value::Object(key)))
             .map_err(|_| "設定編不成 JSON".to_string())?;
 
+        let liveness_timeout = matches!(parsed, Connection::Stdio(_))
+            .then(|| Duration::from_millis(liveness_timeout_ms));
         Ok(Server {
             name,
             connection: parsed,
             tool_call_timeout: Duration::from_millis(tool_call_timeout_ms),
+            liveness_timeout,
             max_instruction_bytes,
             reconnect,
             fail_on_startup_error,

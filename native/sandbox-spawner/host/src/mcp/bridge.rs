@@ -6,6 +6,7 @@
 //! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `packages/nexus-plugin-mcp/src/index.ts`）；
 //!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連。rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，所以另外認一種：帶著 session id 的請求收到 404（[`session_expired`]，
 //!   #2690）也讓那一代判掉線。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
+//! - stdio 的請求逾時或被取消之後探一次活（[`probe`]）：探活也沒回應才判那一代卡死，收掉子行程、重連。
 //! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。送回對話行程的文字有三條出口，都先遮蔽這一份的秘密（[`super::redact`]）：結果與工具清單在序列化成文字之前走 `outgoing`／`outgoing_tools`，instructions 走 `Shared::redact_text`，錯誤走 `Shared::scrub`。連線診斷在 `connection::connect` 回錯之前就 `scrub` 過。
 //! - [`Command::Shutdown`] 或宿主那一側丟掉 [`Bridge`]：取消還在跑的請求、關池（每一份照監督者的收線期限），最後交一則 [`Outcome::Closed`]。
 //!   丟掉 [`Bridge`] 會等橋收完（最多 [`CLOSE_WAIT`]），宿主才接著結束行程。
@@ -16,14 +17,16 @@ use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
-use rmcp::model::{CancelledNotification, CancelledNotificationParam, ClientRequest};
+use rmcp::model::{
+    CancelledNotification, CancelledNotificationParam, ClientRequest, ListToolsRequest,
+};
 use rmcp::service::{PeerRequestOptions, ServiceError};
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::sync::{mpsc, oneshot};
 
 use super::config::Server;
 use super::connection::{call_meta, describe, Generation, Http, MAX_RESPONSE_BYTES};
-use super::pool::{Log, Pool, Shared, POOL_CLOSE_TIMEOUT};
+use super::pool::{Live, Log, Pool, Shared, POOL_CLOSE_TIMEOUT};
 use super::stdio::REAP_BUDGET;
 use super::supervisor::GENERATION_CLOSE_TIMEOUT;
 use crate::json::Value;
@@ -62,6 +65,10 @@ pub enum Command {
     /// 取消一次還在跑的請求：它照樣交一則 `Done`（`Err("cancelled")`）；已經結束的不理。
     Cancel { id: u64 },
     /// 忘掉 `open`。還在跑的請求照跑完。
+    ///
+    /// 橋交出這個 `open` 的 [`Outcome::Opened`] 之前處理到的是空操作：`Opened` 照樣交出，取用成功的照樣記下綁定。
+    /// 要放掉一個還沒落定的綁定，收到它的 `Opened` 之後再送一次；已經忘掉的編號再送也是空操作
+    /// （[`super::service::Client`] 在 `cancel` 送第一次、在 `deliver` 收到 `Opened` 時補送）。
     Release { open: u64 },
     /// 收掉整座橋。
     Shutdown,
@@ -399,9 +406,45 @@ fn session_expired(err: &ServiceError) -> bool {
     )
 }
 
+/// 一次請求逾時或被取消之後，在背景探一次那一代還活不活著（#3073，同 TS `connection.ts` 的 `probeLiveness`），不擋那次請求回去。
+/// 探的是 `tools/list`：新協定拿掉了 `ping`，而每台 server 都要回 `tools/list`。只有探活本身等滿 `livenessTimeoutMs` 才判卡死
+/// （[`Shared::stalled`]）；任何回應都算活著，錯誤回應也是。transport 關了的失敗由掉線那條路管。同一代一次只探一個。
+/// 只探 stdio：HTTP 沒有子行程可收，重連救不了對端。
+fn probe(shared: &Arc<Shared<Generation>>, live: &Arc<Live<Generation>>) {
+    let Some(limit) = shared.server.liveness_timeout else {
+        return;
+    };
+    if !live.begin_probe() {
+        return;
+    }
+    let (shared, live) = (Arc::clone(shared), Arc::clone(live));
+    tokio::spawn(async move {
+        let asked = async {
+            let request = ClientRequest::ListToolsRequest(ListToolsRequest::default());
+            let options = PeerRequestOptions::with_timeout(limit);
+            let handle = live
+                .peer
+                .peer
+                .send_request_with_option(request, options)
+                .await?;
+            handle.await_response().await
+        };
+        // 外面再套一層同樣的期限：rmcp 的逾時到了之後還要等取消通知寫進 stdin 才回，stdin 寫不進時它回不來。
+        // 外層從送出前就起算，一定先到或同時到。
+        let silent = match tokio::time::timeout(limit, asked).await {
+            Err(_) | Ok(Err(ServiceError::Timeout { .. })) => true,
+            Ok(_) => false,
+        };
+        live.end_probe();
+        if silent {
+            shared.stalled(&live);
+        }
+    });
+}
+
 /// 一次請求：送到當下那一代，結果編成 JSON 文字。
 async fn request(
-    shared: &Shared<Generation>,
+    shared: &Arc<Shared<Generation>>,
     elicitation: bool,
     method: &str,
     params: Value,
@@ -442,6 +485,8 @@ async fn request(
                         Some(request_id),
                         Some("cancelled".into()),
                     ));
+                    // 先起探活再送通知：通知要等寫進 stdin 才回，stdin 寫不進時等不到。
+                    probe(shared, &live);
                     let _ = peer.send_notification(notice.into()).await;
                     return Err("cancelled".into());
                 }
@@ -475,6 +520,9 @@ async fn request(
                     "{}: session expired (HTTP 404) — this call failed; the connection is being re-established, retry the call",
                     shared.label
                 ));
+            }
+            if matches!(err, ServiceError::Timeout { .. }) {
+                probe(shared, &live);
             }
             let text = describe(&err);
             if text.contains(TOO_LARGE) {

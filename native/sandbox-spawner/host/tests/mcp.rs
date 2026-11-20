@@ -191,7 +191,7 @@ mod pool {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use nexus_host::mcp::pool::{Connector, Generation, Log, Pool};
+    use nexus_host::mcp::pool::{Acquired, Connector, Generation, Log, Pool};
     use nexus_host::mcp::supervisor::State;
     use tokio::sync::Notify;
 
@@ -204,6 +204,8 @@ mod pool {
         /// 等 `Notify` 叫了才連上。
         UpAfter(Arc<Notify>, &'static [&'static str]),
         Fail(&'static str),
+        /// 等 `Notify` 叫了才失敗。
+        FailAfter(Arc<Notify>, &'static str),
         /// 握手卡住，直到被丟下。
         Hang,
         /// 連得上，但 `close` 永遠不回。
@@ -260,6 +262,10 @@ mod pool {
                     tools
                 }
                 Step::Fail(error) => return Err(error.to_string()),
+                Step::FailAfter(gate, error) => {
+                    gate.notified().await;
+                    return Err(error.to_string());
+                }
                 Step::Hang => std::future::pending().await,
             };
             Ok(FakeGeneration {
@@ -329,6 +335,32 @@ mod pool {
         Server::parse(&config).expect("設定")
     }
 
+    type Pending = tokio::task::JoinHandle<Result<Acquired<FakeGeneration>, String>>;
+
+    fn spawn_acquire(pool: &Arc<Pool<Fake>>, s: &Server) -> Pending {
+        let (pool, s) = (Arc::clone(pool), s.clone());
+        tokio::spawn(async move { pool.acquire(&s, true).await })
+    }
+
+    /// 起第一個取用，等它的第一次連線開始，再起三個同一份設定的取用，回這四個（建立者在第一個）。
+    /// 呼叫端的假連線要讓第一次連線停在半路（`UpAfter`／`FailAfter` 的 gate，或 `Hang`）；這裡斷言四個都還在等、只連過一次。
+    async fn four_waiting_on_first_connect(
+        pool: &Arc<Pool<Fake>>,
+        fake: &Fake,
+        s: &Server,
+    ) -> Vec<Pending> {
+        let mut all = vec![spawn_acquire(pool, s)];
+        until("第一次連線開始", || fake.attempts() == 1).await;
+        all.extend((0..3).map(|_| spawn_acquire(pool, s)));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            all.iter().all(|h| !h.is_finished()),
+            "第一次連線還沒落定，取用都該等著"
+        );
+        assert_eq!(fake.attempts(), 1, "連線還在半路，後到的不該再連");
+        all
+    }
+
     async fn until(what: &str, mut done: impl FnMut() -> bool) {
         for _ in 0..400 {
             if done() {
@@ -396,6 +428,41 @@ mod pool {
         );
     }
 
+    /// 判卡死只對當下那一代有效：對已經換掉的一代呼叫 `stalled` 不記日誌、不動新的一代；對當下這一代呼叫才記一句並換代。
+    #[tokio::test]
+    async fn 判卡死_已換掉的一代不理_當下這一代才收掉重連() {
+        let fake = Fake::default();
+        let (pool, lines) = pool(&fake);
+        let s = server(json!({ "reconnect": { "initialDelayMs": 5 } }));
+        let shared = pool.acquire(&s, false).await.expect("取得到").shared;
+        let stalls = || {
+            let lines = lines.lock().expect("鎖");
+            lines
+                .iter()
+                .filter(|l| l.ends_with("server stopped responding; restarting it"))
+                .count()
+        };
+        let old = shared.current().expect("第一代");
+        old.lost();
+        until("第二代連上", || {
+            shared.current().is_some_and(|now| now.peer == 2)
+        })
+        .await;
+
+        shared.stalled(&old);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(stalls(), 0, "換掉的一代不該記卡死");
+        assert_eq!(fake.attempts(), 2, "新的一代不該被收掉");
+
+        let now = shared.current().expect("第二代");
+        shared.stalled(&now);
+        assert_eq!(stalls(), 1, "當下這一代要記一句");
+        until("第三代連上", || {
+            shared.current().is_some_and(|now| now.peer == 3)
+        })
+        .await;
+    }
+
     #[tokio::test]
     async fn 同一份設定共用一條_旗標不同就分開() {
         let fake = Fake::default();
@@ -430,6 +497,87 @@ mod pool {
             .acquire(&s, true)
             .await
             .is_err_and(|e| e == "MCP 連線池已經關了"));
+    }
+
+    /// 後到的取用在第一次連線已經開始、卡在半路時進來：確認它們真的在等、不另連，放行之後都拿到同一份。
+    /// `同一份設定共用一條_旗標不同就分開` 的兩個取用在同一次 poll 裡進來，那時連線還沒開始跑，也看不到後到的那個停著。
+    #[tokio::test]
+    async fn 第一次連線還沒落定時並行取用_只連一次_都拿到同一份() {
+        let gate = Arc::new(Notify::new());
+        let fake = Fake::new([Step::UpAfter(Arc::clone(&gate), ONE_TOOL)]);
+        let (pool, _) = pool(&fake);
+        let pool = Arc::new(pool);
+        let s = server(json!({}));
+        let waiting = four_waiting_on_first_connect(&pool, &fake, &s).await;
+        gate.notify_one();
+        let mut got = Vec::new();
+        for handle in waiting {
+            got.push(handle.await.expect("任務").expect("取得到"));
+        }
+        for one in &got {
+            assert!(Arc::ptr_eq(&one.shared, &got[0].shared), "要是同一份");
+            assert!(one.error.is_none(), "{:?}", one.error);
+        }
+        assert_eq!(fake.attempts(), 1);
+        pool.close().await;
+    }
+
+    /// 第一次連線失敗：等著它的每一個取用拿到同一句錯，只連過那一次。寫了 `failOnStartupError` 都回錯；沒寫都照樣回、錯放在 `error`。
+    #[tokio::test]
+    async fn 第一次連線失敗_並行的等待者都拿到同一個錯() {
+        for fail_on_startup in [true, false] {
+            let gate = Arc::new(Notify::new());
+            let fake = Fake::new([Step::FailAfter(Arc::clone(&gate), "refused")]);
+            let (pool, _) = pool(&fake);
+            let pool = Arc::new(pool);
+            let s = server(json!({
+                "failOnStartupError": fail_on_startup,
+                "reconnect": { "enabled": false },
+            }));
+            let waiting = four_waiting_on_first_connect(&pool, &fake, &s).await;
+            gate.notify_one();
+            for handle in waiting {
+                let got = handle.await.expect("任務");
+                let error = match got {
+                    Err(error) if fail_on_startup => error,
+                    Ok(acquired) if !fail_on_startup => acquired.error.expect("要帶錯"),
+                    Err(error) => panic!("沒寫 failOnStartupError 要照樣回：{error}"),
+                    Ok(_) => panic!("寫了 failOnStartupError 要回錯"),
+                };
+                assert_eq!(error, "refused", "failOnStartupError={fail_on_startup}");
+            }
+            assert_eq!(fake.attempts(), 1, "failOnStartupError={fail_on_startup}");
+            pool.close().await;
+        }
+    }
+
+    /// 第一次連線還在半路就關池：等著的取用都回來，`error` 帶 `disposed before the first connection settled`；關池之後的取用回錯、不再連。
+    #[tokio::test]
+    async fn 第一次連線還沒落定就關池_等著的取用都回來_之後不再建() {
+        let fake = Fake::new([Step::Hang]);
+        let (pool, _) = pool(&fake);
+        let pool = Arc::new(pool);
+        let s = server(json!({}));
+        let waiting = four_waiting_on_first_connect(&pool, &fake, &s).await;
+        tokio::time::timeout(Duration::from_secs(2), pool.close())
+            .await
+            .expect("關池不等卡住的握手");
+        for handle in waiting {
+            let got = tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("關池之後等著的取用要回來")
+                .expect("任務")
+                .expect("沒寫 failOnStartupError 照樣回");
+            assert_eq!(
+                got.error.as_deref(),
+                Some("mcp-client(fake): disposed before the first connection settled")
+            );
+        }
+        assert!(pool
+            .acquire(&s, true)
+            .await
+            .is_err_and(|e| e == "MCP 連線池已經關了"));
+        assert_eq!(fake.attempts(), 1);
     }
 
     #[tokio::test]
@@ -1306,6 +1454,41 @@ mod http {
             });
             let err = opened(&bridge, 2).expect_err("要求失敗就回錯");
             assert!(err.starts_with("Failed to connect"), "{err}");
+        }
+
+        /// 綁定還沒落定就放掉（`service.rs` 的 open 被取消）：交出 `Opened` 之前處理到的放掉是空操作，綁定照樣記下；
+        /// 收到 `Opened` 之後再送的那一次才放掉。假 server 扣住握手的第一個請求，放行之前（或 rmcp 版本探測逾時改送
+        /// `initialize` 之前）取用落定不了；橋照順序處理命令，跟在放掉後面的探測請求一回來，就表示放掉已經處理過，這時才放行握手。
+        #[test]
+        fn 綁定落定之前就放掉_是空操作_收到_opened_之後再放掉才生效() {
+            let (go, held) = std::sync::mpsc::channel::<()>();
+            let hold = Mutex::new(Some(held));
+            let inner = handler(FakeMcp::with_tools(false, &["echo"]), Arc::default());
+            let port = TlsServer::start(Arc::new(move |request: &Request| {
+                let first = hold.lock().expect("鎖").take();
+                if let Some(held) = first {
+                    let _ = held.recv();
+                }
+                inner(request)
+            }))
+            .port;
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(port, json!({}))),
+                elicitation: true,
+            });
+            bridge.send(Command::Release { open: 1 });
+            call(&bridge, 9, 1, "echo");
+            assert_eq!(done(&bridge, 9), Err("沒有這個綁定（1）".to_string()));
+            go.send(()).expect("放行握手");
+            opened(&bridge, 1).expect("放掉之後照樣交 Opened");
+            call(&bridge, 1, 1, "echo");
+            let first = done(&bridge, 1);
+            assert!(first.is_ok(), "第一次放掉是空操作，綁定還在：{first:?}");
+            bridge.send(Command::Release { open: 1 });
+            call(&bridge, 2, 1, "echo");
+            assert_eq!(done(&bridge, 2), Err("沒有這個綁定（1）".to_string()));
         }
 
         #[test]
