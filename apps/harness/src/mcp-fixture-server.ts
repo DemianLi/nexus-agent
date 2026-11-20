@@ -150,6 +150,8 @@ server.registerTool(
 /**
  * 停機整條路的驗收用（#3000 甲）：量的是 **宿主收機時有沒有送 SIGTERM 給這個子行程、它有沒有走完**。`FIXTURE_TERM_DIR` 指一個目錄：
  * 起來時把 pid 寫進 `pid`，收到 SIGTERM 時寫 `term` 再結束。沒設就不掛。
+ * 設了的夾具不會因 stdin 關閉而自己結束：宿主收線先關 stdin、等 `STDIN_GRACE` 讓子行程自己走，自己走了就不送 SIGTERM；
+ * 這個夾具要靠宿主的 SIGTERM 才停，量得到的才是那一步。
  */
 const TERM_DIR = process.env['FIXTURE_TERM_DIR'];
 if (TERM_DIR !== undefined) {
@@ -158,6 +160,8 @@ if (TERM_DIR !== undefined) {
     writeFileSync(`${TERM_DIR}/term`, 'SIGTERM');
     process.exit(0);
   });
+  // 掛著一個計時器，stdin EOF 之後事件迴圈也不會清空。
+  setInterval(() => {}, 1 << 30);
 }
 
 await server.connect(new StdioServerTransport());

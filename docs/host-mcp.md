@@ -4,7 +4,11 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio�
 寫給要改這一層、或要對照 TS 的人。管理者怎麼設一列 MCP，看 [`operations.md`](operations.md)，這裡不重寫。
 
 **現況：`process-model: per-thread` 的對話行程連 MCP 一律走這裡**（#3000）：`packages/nexus-plugin-mcp` 在有宿主時用 `host-pool.ts` 的門面（長得像 SDK `Client`）向 `mcp/client` `open` 一份綁定、用 `call` 送請求，
-連線在宿主，整台共用。單行程 serve、CLI 與前台的試組沒有宿主，仍由 TS 自己連。語意照 TS，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
+連線在宿主，整台共用。單行程 serve 與 CLI 沒有宿主，仍由 TS 自己連。
+per-thread 的前台與對話行程啟動時的試組都不連線（`mcp-trial-host-bridge.ts`）：只驗設定與組裝，所以起不來的 server 不會讓那一列在試組掉，連得上連不上到 thread 組裝時才知道。
+寫入口（`plugin enable`、`plugin config set` 等，`plugin-trial.ts`）是另一個行程，拿不到 serve 的 `--process-model` 旗標，不分行程模型，試掛時一律自己連一次、組完就收。
+
+語意照 TS，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
 
 兩層重連，各管各的：宿主自己對 MCP server 退避重連（空窗裡的呼叫回 `server is disconnected`，綁定不變）；綁定沒了之後，對話行程在宿主連線回來或下一次呼叫進來時重新 `open`（單飛、單一期限 W＝5 秒，到了回 `server is disconnected`，不送出）。**W 只保證蓋住第一次宿主重起**：監督行程對宿主重起有退避（第一次等 1 秒，每次加倍到 30 秒，宿主活過 60 秒才歸回 1 秒），每一代都活不到 60 秒就被殺時，第四次重起起，退避（8 秒）就超過 W。正式值待驗收量測（#3032）。
 送出去之後宿主連線斷了的呼叫回「結果不明」，不重送。
