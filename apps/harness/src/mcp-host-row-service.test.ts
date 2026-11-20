@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { HOST_ABSENCE_CODES, HOST_BRIDGE_SERVICE, HOST_ERROR_CODES } from '@nexus/host-bridge';
 import { HOST_CODES, MCP_HOST_BRIDGE_SERVICE, mcpConfigSchema } from '@nexus/plugin-mcp';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mcpHostRow, resolveOnPath } from './mcp-host-row-service.js';
 
@@ -172,5 +173,62 @@ describe('mcpHostRow', () => {
       },
     });
     expect(() => mcpHostRow(config, new Map())).toThrow('GH');
+  });
+});
+
+/**
+ * 跟宿主共用的樣本：同一份檔裡每個案例的 `server`，Rust 那邊餵給 `Server::parse`（`native/sandbox-spawner/host/tests/mcp_stdio.rs`）。
+ * 這裡守 TS 這一半：`mcpHostRow` 在樣本指定的工作目錄與環境下，產出要等於樣本裡的 `server`。
+ */
+describe('mcpHostRow 與宿主共用的樣本', () => {
+  interface Vectors {
+    readonly cwd: string;
+    readonly parentEnv: Record<string, string>;
+    readonly cases: readonly {
+      readonly name: string;
+      readonly relativeCommand?: string;
+      readonly config: unknown;
+      readonly credentials: Record<string, string>;
+      readonly server: {
+        readonly connection: { readonly command?: string; readonly cwd?: string };
+      };
+    }[];
+  }
+  const vectors = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL('../../../native/sandbox-spawner/mcp-host-row-vectors.json', import.meta.url),
+      ),
+      'utf8',
+    ),
+  ) as Vectors;
+
+  const savedEnv = { ...process.env };
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  });
+
+  it.each(vectors.cases)('$name', ({ config, credentials, server, relativeCommand }) => {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, vectors.parentEnv);
+    vi.spyOn(process, 'cwd').mockReturnValue(vectors.cwd);
+
+    const row = mcpHostRow(mcpConfigSchema.parse(config), new Map(Object.entries(credentials)));
+    expect(row).toEqual(server);
+    if (relativeCommand !== undefined) {
+      expect(server.connection.command).toBe(resolve(server.connection.cwd!, relativeCommand));
+    }
+  });
+
+  it('樣本涵蓋 http 與相對 command 的 stdio', () => {
+    const transports = vectors.cases.map(
+      ({ config }) => (config as { connection: { transport: string } }).connection.transport,
+    );
+    expect(transports).toContain('http');
+    expect(
+      vectors.cases.filter((item) => item.relativeCommand !== undefined).length,
+    ).toBeGreaterThan(0);
   });
 });

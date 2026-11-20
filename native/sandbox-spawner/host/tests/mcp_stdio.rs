@@ -1152,3 +1152,78 @@ fn 樣本_授權_header_的名單() {
         .collect();
     assert_eq!(names, AUTHORIZATION_HEADERS);
 }
+
+/// TS 的 `mcpHostRow` 交出的整份 `server`（`mcp-host-row-vectors.json`，TS 的 `mcp-host-row-service.test.ts` 跑同一份），宿主一律收，
+/// 名稱、工具呼叫時限、`failOnStartupError`、指引上限、重連、反問、`url`、`cwd`、`command` 解出來等於樣本寫的。有 `relativeCommand` 的案例：`command` 等於 `cwd` 接上它，也就是宿主起子行程的目錄就是 TS 解相對路徑的基準。
+#[test]
+fn 樣本_host_row_ts_交出的整份_server_宿主收得下_值對得上() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../mcp-host-row-vectors.json");
+    let doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("讀樣本檔")).expect("JSON");
+    let (mut http, mut stdio, mut relative) = (0, 0, 0);
+    for case in doc["cases"].as_array().expect("cases") {
+        let name = case["name"].as_str().expect("name");
+        let row = &case["server"];
+        let server = Server::parse(row).unwrap_or_else(|e| panic!("{name}：{e}"));
+        assert_eq!(server.name, row["serverName"], "{name}");
+        assert_eq!(
+            server.tool_call_timeout.as_millis() as u64,
+            row["toolCallTimeoutMs"]
+                .as_u64()
+                .expect("toolCallTimeoutMs"),
+            "{name}"
+        );
+        assert_eq!(
+            server.max_instruction_bytes as u64,
+            row["maxInstructionBytes"]
+                .as_u64()
+                .expect("maxInstructionBytes"),
+            "{name}"
+        );
+        assert_eq!(
+            server.fail_on_startup_error, row["failOnStartupError"],
+            "{name}"
+        );
+        assert_eq!(server.elicitation, row["elicitation"], "{name}");
+        let reconnect = &row["reconnect"];
+        assert_eq!(server.reconnect.enabled, reconnect["enabled"], "{name}");
+        assert_eq!(
+            server.reconnect.initial_delay_ms, reconnect["initialDelayMs"],
+            "{name}"
+        );
+        assert_eq!(
+            server.reconnect.max_delay_ms, reconnect["maxDelayMs"],
+            "{name}"
+        );
+        assert_eq!(
+            server.reconnect.max_attempts, reconnect["maxAttempts"],
+            "{name}"
+        );
+        match &server.connection {
+            Connection::Http { url, .. } => {
+                assert_eq!(url.as_str(), row["connection"]["url"], "{name}");
+                http += 1;
+            }
+            Connection::Stdio(child) => {
+                let cwd = child
+                    .cwd
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{name}：要有 cwd"));
+                assert_eq!(cwd, row["connection"]["cwd"], "{name}");
+                assert_eq!(child.command, row["connection"]["command"], "{name}");
+                if let Some(written) = case["relativeCommand"].as_str() {
+                    // `components()` 會略過路徑中間的 `.`，`./bin/server` 與 `bin/server` 接出來相同。
+                    let joined: std::path::PathBuf =
+                        Path::new(cwd).join(written).components().collect();
+                    assert_eq!(Path::new(&child.command), joined, "{name}");
+                    relative += 1;
+                }
+                stdio += 1;
+            }
+        }
+    }
+    assert!(
+        http >= 2 && stdio >= 4 && relative >= 3,
+        "樣本太少：http {http}、stdio {stdio}、相對 command {relative}"
+    );
+}
