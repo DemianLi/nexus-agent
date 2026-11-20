@@ -4,16 +4,12 @@
  *
  * **一代一個 SDK client**：重連就是收掉上一代的 client、開一個新的（新子行程、新的 HTTP session）。開連線的做法照
  * `@langchain/mcp-adapters@2.0.0`（`dist/connection.js`、`dist/client.js` 的 `_initializeStreamableHTTPConnection`）：版本協商 `auto`，
- * HTTP 先試 Streamable HTTP，回 404／405 再退回 SSE（先試原網址，再試把結尾的 `mcp` 換成 `sse`），SSE 走舊協議。
+ * HTTP 只走 Streamable HTTP，沒有 SSE：server 回 404／405 也直接失敗。
  *
  * @module
  */
 
-import {
-  Client,
-  SSEClientTransport,
-  StreamableHTTPClientTransport,
-} from '@modelcontextprotocol/client';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { Tool } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { scrubbedParentEnv } from '@nexus/subprocess';
@@ -224,9 +220,9 @@ export async function openClient(
   }
   const url = connection.url;
   const shown = redactedUrl(url);
-  const fail = (message: string, cause: unknown, ...urls: string[]): Error =>
-    new Error(scrubbed(message, [url, ...urls], redactor), {
-      cause: scrubbedCopy(cause, (text) => scrubbed(text, [url, ...urls], redactor)),
+  const fail = (message: string, cause: unknown): Error =>
+    new Error(scrubbed(message, [url], redactor), {
+      cause: scrubbedCopy(cause, (text) => scrubbed(text, [url], redactor)),
     });
   const headers =
     connection.headers === undefined ? undefined : substituted(connection.headers, credentials);
@@ -246,43 +242,10 @@ export async function openClient(
       track,
     );
   } catch (error) {
-    const code = httpErrorCode(error);
-    if (code !== 404 && code !== 405) {
-      throw fail(
-        `Failed to connect to streamable HTTP server "${serverName}, url: ${shown}" in auto mode: ${String(error)}`,
-        error,
-      );
-    }
-    const sse = (target: string): Promise<Client> =>
-      connected(new SSEClientTransport(new URL(target), requestInit), 'legacy', track).catch(
-        (sseError: unknown) => {
-          throw fail(
-            `Failed to create SSE transport for server "${serverName}, url: ${redactedUrl(target)}": ${String(sseError)}`,
-            sseError,
-            target,
-          );
-        },
-      );
-    try {
-      return await sse(url);
-    } catch (firstSseError) {
-      const sseUrl = sseUrlOf(url);
-      if (sseUrl === url) {
-        throw fail(
-          `Failed to connect to streamable HTTP server after trying to fall back to SSE: "${serverName}, url: ${shown}": ${String(error)} (SSE fallback failed with error ${String(firstSseError)})`,
-          firstSseError,
-        );
-      }
-      try {
-        return await sse(sseUrl);
-      } catch (secondSseError) {
-        throw fail(
-          `Failed to connect to streamable HTTP server "${serverName}, url: ${shown}": ${String(error)}. Additionally, tried falling back to SSE at ${shown} and ${redactedUrl(sseUrl)}, but this also failed: ${String(secondSseError)}`,
-          secondSseError,
-          sseUrl,
-        );
-      }
-    }
+    throw fail(
+      `Failed to connect to streamable HTTP server "${serverName}, url: ${shown}" in auto mode: ${String(error)}`,
+      error,
+    );
   }
 }
 
@@ -377,12 +340,12 @@ export function withUrlScrubbing(config: McpConfig, base: Redactor): Redactor {
   };
 }
 
-type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;
+type Transport = StdioClientTransport | StreamableHTTPClientTransport;
 
 /** 開 client、連上 transport；失敗就兩個都收掉再拋。 */
 async function connected(
   transport: Transport,
-  mode: 'auto' | 'legacy',
+  mode: 'auto',
   track: (client: Client) => void,
 ): Promise<Client> {
   const client = new Client(CLIENT_IDENTITY, { versionNegotiation: { mode } });
@@ -408,30 +371,6 @@ async function connected(
     throw error;
   }
   return client;
-}
-
-/** 錯誤上的 HTTP 狀態碼：`status`、`code`，或訊息裡的 `(HTTP 404)`。 */
-function httpErrorCode(error: unknown): number | undefined {
-  const { status, code, message } = (error ?? {}) as {
-    status?: unknown;
-    code?: unknown;
-    message?: unknown;
-  };
-  const valid = (value: unknown): number | undefined =>
-    typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
-      ? value
-      : undefined;
-  const matched = typeof message === 'string' ? /\(HTTP (\d{3})\)/u.exec(message)?.[1] : undefined;
-  return valid(status) ?? valid(code) ?? valid(Number(matched));
-}
-
-/** SSE 的退回網址：路徑結尾是 `mcp` 就換成 `sse`。 */
-function sseUrlOf(url: string): string {
-  const parsed = new URL(url);
-  const parts = parsed.pathname.split('/');
-  if (parts.at(-1) === 'mcp') parts[parts.length - 1] = 'sse';
-  parsed.pathname = parts.join('/');
-  return parsed.toString();
 }
 
 /**
