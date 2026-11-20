@@ -312,3 +312,14 @@ W 是對話行程等宿主重連、重新 `open` 的上限（現值 5 秒，`DEF
 ### 四、W 的量測：不變的部分
 
 殺之前等宿主這一代活過 `--host-stable-ms`、記退避等待、連續殺那組、公式與回報條件，全照「後測的規則」原文，只改成只量 arm64。
+
+### 五、補充（量之前，2026-11-20，寫量測驅動時定下的實作細節）
+
+上一節寫的規則不變，下面是寫驅動時才需要定的細節，都在量任何正式數字之前定：
+
+1. **記時用預載，不另寫入口檔**：第三節說的「包住真的 conversation-process 的量測專用入口」，實作成 `node --import apps/harness/src/measure/host-kill-preload.ts`（驅動把它放進被量 serve 的 `NODE_OPTIONS`，只有 `argv[1]` 是 `conversation-process.js` 時動作）。理由：`conversation-process.js` 靠 `import.meta.main` 才跑 `main()`，被另一個入口 `import` 時不會跑；預載能在不改入口、不改產物的情況下，在產品碼載入之前包住同一個 `@nexus/host-bridge` 模組實例的 `HostClient.prototype.onReady`（包住 listener）與 `call` 的 `open`（包住 `onChunk`，收到 `ready` 塊記一筆）。第三節的證明、自我檢查與「包不到就停下回報」全部照舊；預載起來時另記 `loaded`（被包的模組 URL、實際檔案路徑與 sha256）。
+2. **只掛一列**：W 的量測 patch 只掛 `mcpa` 一台 stdio（規則原文「掛一列 stdio MCP server」），假模型一輪只叫它一次。自我檢查因此是：`open` ready 恰好 1 筆；`onReady` 每個登記序號恰好 1 筆（序號有幾個照實記，不預設）。段 A 的終點取所有 `onReady` 裡最早的一筆。
+3. **百分位用 nearest-rank**：第 p 百分位是排序後第 ⌈p/100 × n⌉ 個，n＝30 時 p95 是第 29 個，寫在 `host-kill-stats.ts`。回報條件「p95 超過 2 秒」，段 A、段 B、兩段相加任何一個超過就觸發。「30 次裡有任何一次沒恢復」包括自我檢查不過而作廢的。綁定 90 秒內沒回來的那一次，驅動不往下殺，直接收尾回報。
+4. **殺之前等宿主活過 stable**：宿主存活毫秒讀 `/proc/<pid>/stat` 的 starttime，不夠 `--host-stable-ms`（60 秒）加 2 秒就補睡；每筆記下殺的那一刻宿主已活多久。連續殺那組只有每輪第一次等穩定，其後每次在上一次恢復（`open` ready）之後立刻殺。
+5. **池的後測過關條件 3 的「每列」**：stdio 兩列各自的 initialize 次數對前測 per-thread 臂「整台 stdio 握手數 ÷ 2」（N＝4、8、16 依序 6、10、18），HTTP 一列對前測 HTTP initialize（6、10、18）。驅動寫的日誌只有「起了幾次、握手幾次」，不分哪一個行程，所以握手次數不拿來核「誰起的」，條件 2 才核父行程。
+6. **池的後測的 per-thread 臂不再有「前台」那 M 台**，所以回合結束的 `mcp-stdio` 個數預期是 2，前測是 2×（N＋2）；這是第一節說的預期，不是判準。
