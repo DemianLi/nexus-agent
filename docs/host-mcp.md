@@ -193,8 +193,8 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 
 ## 跟 TS 的差距
 
-- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 也直接失敗，沒有 SSE 可退，`packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`），
 - stdio 的探活在宿主做（〈橋〉），TS 那一側的 `probeLiveness` 在宿主路徑上沒有作用：它探的是門面的 `listTools`，回 open 當下的清單，不送到 server。
+- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 也直接失敗，沒有 SSE 可退，`packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
 - 對話行程那一側的列由 harness 的 `mcp-host-row-service.ts` 產生（`MCP_HOST_ROW_SERVICE`，包 `hostHttpConnection`／`hostStdioConnection`，沒有斜線的 `command` 照 `PATH` 解成絕對路徑）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。
