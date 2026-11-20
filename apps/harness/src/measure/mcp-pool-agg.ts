@@ -21,9 +21,6 @@ export interface Barrier {
   readonly readErrors: number;
   readonly stdioBefore: number;
   readonly stdioAfter: number;
-  /** 每個 stdio 子行程的父行程角色個數；前測的資料沒有這一欄。 */
-  readonly stdioParentsBefore?: Readonly<Record<string, number>>;
-  readonly stdioParentsAfter?: Readonly<Record<string, number>>;
   readonly outcomes: readonly string[];
   readonly llmReq: number;
   readonly threadWallMs: readonly number[];
@@ -76,19 +73,19 @@ export interface Group {
   readonly results: readonly unknown[];
 }
 
-export function roundsOf(group: Group): Round[] {
+function roundsOf(group: Group): Round[] {
   return group.results.filter((row): row is Round =>
     String((row as { label?: unknown }).label ?? '').startsWith('round'),
   );
 }
 
-export function barriers(r: Round, arm: Arm): readonly Barrier[] {
+function barriers(r: Round, arm: Arm): readonly Barrier[] {
   const b = r.turns[arm];
   if (b === undefined) throw new Error(`第 ${r.round} 回合沒有 ${arm}`);
   return b;
 }
 
-export const measured = (r: Round, arm: Arm): Barrier[] => barriers(r, arm).filter((b) => !b.warm);
+const measured = (r: Round, arm: Arm): Barrier[] => barriers(r, arm).filter((b) => !b.warm);
 
 /** 一道柵欄的每輪 CPU 總和：整棵行程樹的增量 ÷ 這道柵欄完成的輪數。 */
 export function perTurnCpu(b: Barrier, n: number): number {
@@ -99,26 +96,6 @@ export function perTurnCpu(b: Barrier, n: number): number {
 export function conversationMedian(b: Barrier, n: number): number | undefined {
   const top = [...b.conversations].sort((x, y) => y - x).slice(0, n);
   return top.length === 0 ? undefined : median(top);
-}
-
-/**
- * 後測過關條件 2（#3032 補充段一）：量測輪每道柵欄兩端，這一臂行程樹裡活的 mcp-stdio 子行程數＝`expected`，而且父行程全是宿主；沒有父行程資料（前測）算違反。
- * 回違反的描述，空陣列就是成立。只對後測的 per-thread 臂呼叫。
- */
-export function condition2Violations(r: Round, arm: Arm, expected: number): string[] {
-  const out: string[] = [];
-  for (const b of measured(r, arm)) {
-    for (const [side, n, parents] of [
-      ['前', b.stdioBefore, b.stdioParentsBefore],
-      ['後', b.stdioAfter, b.stdioParentsAfter],
-    ] as const) {
-      const hostOnly = parents !== undefined && Object.keys(parents).every((k) => k === 'host');
-      if (n !== expected || !hostOnly) {
-        out.push(`${side}：${String(n)} 個，父行程 ${JSON.stringify(parents ?? '無資料')}`);
-      }
-    }
-  }
-  return out;
 }
 
 /**
@@ -149,7 +126,7 @@ export function roundFlags(r: Round, arms: readonly Arm[]): string[] {
 }
 
 /** 一回合一窗：該窗每道柵欄的值取中位數。 */
-export function windowMedian(
+function windowMedian(
   r: Round,
   a: Arm,
   lo: number,
