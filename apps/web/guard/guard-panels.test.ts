@@ -301,7 +301,7 @@ describe.each(
         'diff-review-picker',
       ];
       // 量具自檢：頁面上 1 顆、段收著那一列的合計 1 顆、段裡寫檔那張 1 顆、改動卡標頭 1 顆加兩列（二進位那列寫字）、
-      // 審查頁標頭的合計與這個檔各 1 顆、選檔器兩列；每顆兩個 span。
+      // 審查頁只有這個檔 1 顆（沒有全部檔的合計，總數在改動卡與分頁標題，#3049）、選檔器兩列；每顆兩個 span。
       expect(
         Object.fromEntries(
           names.map((name) => [name, texts.filter((t) => t.name === name).length]),
@@ -311,7 +311,7 @@ describe.each(
         'diff-group': 2,
         'diff-panel': 2,
         'diff-changes': 6,
-        'diff-review': 4,
+        'diff-review': 2,
         'diff-review-picker': 4,
       });
       expectTexts(texts, names, `diff-stats:${mode}:${theme}`);
@@ -350,7 +350,7 @@ describe.each(
         };
       });
       report[`diff-stats:${mode}:${theme}:colors`] = colors;
-      expect(colors.count).toBe(10);
+      expect(colors.count).toBe(9);
       expect(colors.wrong).toEqual([]);
     } finally {
       await page.close();
@@ -388,8 +388,8 @@ test('第 76 條：375 寬時包裝層不被擠，寬度跟 vendor 那顆單獨�
       }),
     );
     report['diff-stats:375-width'] = measured;
-    // 量具自檢：十顆都量到了，而且單獨放著的寬度不是 0。
-    expect(measured).toHaveLength(10);
+    // 量具自檢：九顆都量到了，而且單獨放著的寬度不是 0。
+    expect(measured).toHaveLength(9);
     expect(measured.every((m) => m.natural > 0)).toBe(true);
     expect(
       measured
@@ -520,15 +520,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 
     try {
       expectTexts(
         await collectTexts(page),
-        [
-          'retry-text',
-          'pager-idle',
-          'pager-loading',
-          'pager-fail',
-          'pager-error',
-          'empty-title',
-          'empty-description',
-        ],
+        ['retry-text', 'pager-idle', 'pager-loading', 'pager-fail', 'pager-error', 'empty-title'],
         `transcript-rows:${theme}`,
       );
       const focus = await collectFocus(page);
@@ -910,15 +902,14 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A�
     }
   });
 
-  test('T1：空狀態的標題與說明過 4.5', async () => {
+  test('T1：空狀態的標題過 4.5', async () => {
     const page = await openOverlay('trace-empty', theme, {
       marks: {
         '[data-slot="empty-title"]': { 'data-guard-text': 'empty-title' },
-        '[data-slot="empty-description"]': { 'data-guard-text': 'empty-hint' },
       },
     });
     try {
-      expectTexts(await collectTexts(page), ['empty-title', 'empty-hint'], `trace-empty:${theme}`);
+      expectTexts(await collectTexts(page), ['empty-title'], `trace-empty:${theme}`);
     } finally {
       await page.close();
     }
@@ -1272,7 +1263,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
     { width: 375, height: 812 },
     { width: 1024, height: 900 },
   ])(
-    'S1（#1696）：$width 寬時字過 4.5、色條是狀態的顏色、報讀只唸一次狀態、標題沒被擠掉',
+    'S1（#1696）：$width 寬時字過 4.5、色條是狀態的顏色、報讀只唸一次狀態、標題沒被擠掉、時間放得下',
     async (viewport) => {
       const page = await openOverlay('thread-statuses', theme, {
         viewport,
@@ -1282,13 +1273,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
           [`${ROW}:not([disabled]) [data-testid="thread-title-text"]`]: {
             'data-guard-text': 'title',
           },
-          [`${ROW}:not([disabled]) [data-testid="thread-status"]`]: { 'data-guard-text': 'status' },
+          [`${ROW}:not([disabled]) [data-testid="thread-time"]`]: { 'data-guard-text': 'time' },
           [`${ROW}:not([disabled])`]: { 'data-guard-focus': 'row' },
         },
       });
       const key = `thread-statuses:${theme}:${viewport.width}`;
       try {
-        expectTexts(await collectTexts(page), ['title', 'status'], key);
+        expectTexts(await collectTexts(page), ['title', 'time'], key);
         const focus = await collectFocus(page);
         expect(focus.map((f) => f.name)).toEqual([
           'row-0',
@@ -1314,7 +1305,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
               const title = button.querySelector<HTMLElement>('[data-testid="thread-title-text"]')!;
               const status = button.querySelector('[data-testid="thread-status"]');
               const kind = status?.getAttribute('data-status') ?? null;
-              const line = title.nextElementSibling as HTMLElement | null;
+              const line = button.querySelector<HTMLElement>('[data-testid="thread-time"]');
               const titleBox = title.getBoundingClientRect();
               return {
                 title: title.textContent,
@@ -1341,10 +1332,8 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
           expect(row.titleWidth).toBeGreaterThanOrEqual(150);
           expect(row.ownLine).toBe(true);
         }
-        // 第二行放不下就截（帶省略號）。在 THREAD_CLOCK 那個時刻只有目前這條會截，其餘每列都放得下。
-        expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([
-          '部署腳本除錯',
-        ]);
+        // 第二行是時間（#3038 第 1–3 項）：在 THREAD_CLOCK 那個時刻每列都放得下。
+        expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([]);
 
         // 報讀名稱用瀏覽器算的（ariaSnapshot）：狀態字只出現一次。
         const buttons = page.locator(ROW);

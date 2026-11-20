@@ -300,11 +300,10 @@ export function ToolOutputBlock({ output }: { output: ToolOutput }) {
   const label = omittedLabel(output);
   return (
     <Surface tone="stage" data-testid="tool-output">
-      <div className="text-muted-foreground px-3 pt-2 text-tip">結果</div>
       <pre
         tabIndex={0}
         aria-label="工具結果"
-        className="max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-tip whitespace-pre-wrap wrap-anywhere"
+        className="max-h-[150px] overflow-auto px-3 py-2 font-mono text-tip whitespace-pre-wrap wrap-anywhere"
       >
         {output.head}
         {label !== undefined && (

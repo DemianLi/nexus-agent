@@ -1,9 +1,9 @@
 /**
- * 對話行程啟動時的試組用的宿主門面（#3000）。
+ * per-thread 的前台與對話行程，啟動時的試組用的宿主門面（#3000、#3031）。
  *
- * 試組在 `runServe` 裡、先於對話行程拿到宿主 token，真的門面此時還沒接上連線；MCP 列若在試組裡向宿主 `open`，會等到門面的期限（5 秒）才以 `host_unavailable` 失敗，
- * 那一列在試組裡就算掉了，之後每條 thread 的組裝都跳過它。試組只驗設定與組裝，不需要連線：`mcp/client` 的 `open` 在這裡當場回一份空清單，
- * 列的設定照樣經 `MCP_HOST_ROW_SERVICE` 驗過；其他服務一律當宿主不在。真正的連線在 thread 組裝時才向真的宿主 `open`。
+ * 試組只驗設定與組裝，不需要連線。沒有這個門面時，試組走連線池、在這個行程裡自己起 MCP server（`per-thread.integration.test.ts`〈per-thread：MCP 經宿主連〉的行程樹斷言抓得到）。
+ * 對話行程的真門面在試組時還沒接上宿主，經它 `open` 會等到時限才回 `host_unavailable`；前台沒有宿主。有了這個門面，`mcp/client` 的 `open` 當場回一份空清單，列的設定照樣經 `MCP_HOST_ROW_SERVICE` 驗過；其他服務一律當宿主不在。
+ * 真正的連線在 thread 組裝時才向真的宿主 `open`。
  *
  * @module
  */

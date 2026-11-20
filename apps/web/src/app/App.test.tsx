@@ -29,7 +29,7 @@ import {
 } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, STOP_QUESTIONS_LABEL } from '@/app/App';
+import { App, inputPlaceholder, STOP_QUESTIONS_LABEL } from '@/app/App';
 import { NO_DECISION_REASON } from '@/features/approval/card';
 import { commandsFailedText } from '@/shared/connection/use-conversation';
 import {
@@ -77,6 +77,7 @@ import {
   setSeq,
   stoppedQuestionFrames,
   textFrames,
+  ONE_TURN_HISTORY,
   toastWith,
 } from '@/test/app-harness.fixture';
 
@@ -337,7 +338,7 @@ describe('對話介面', () => {
       expect(within(dock).getByText('下一句')).toBeTruthy();
     });
 
-    it('這一輪停了、插話還沒被領走：泡泡留著，底下改說下一輪才送進模型', async () => {
+    it('這一輪停了、插話還沒被領走：泡泡留著，底下說下一輪', async () => {
       setSeq(0);
       const { fake, client } = steeringClient([
         frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
@@ -372,7 +373,11 @@ describe('對話介面', () => {
       // 新進來的一件要撐過 200ms 才畫（`QUEUE_SETTLE_MS`）：兩件以上等表頭寫到全部，全套件負載重時第二件會晚到。
       const dock = await screen.findByTestId('queue-dock');
       if (lines.length > 1) {
-        await waitFor(() => expect(dock.textContent).toContain(`${lines.length} 則排著的訊息`));
+        await waitFor(() =>
+          expect(
+            within(dock).getByRole('button', { name: `${lines.length} 則排著的訊息` }),
+          ).toBeTruthy(),
+        );
       }
       return { ...made, input };
     }
@@ -456,7 +461,7 @@ describe('對話介面', () => {
       const { fake, input } = await runningWithQueue(['第一句']);
       fake.downlink.acceptGoal(fake.opened[0]!, 'Continue working toward the goal.');
       const dock = screen.getByTestId('queue-dock');
-      await waitFor(() => expect(dock.textContent).toContain('2 則排著的訊息'));
+      await within(dock).findByRole('button', { name: '2 則排著的訊息' });
       fireEvent.click(within(dock).getByRole('button', { name: '2 則排著的訊息' }));
       expect(await within(dock).findByTestId('queue-goal-label')).toBeTruthy();
       expect(within(dock).queryByRole('button', { name: /^插話：目標續行/u })).toBeNull();
@@ -479,7 +484,7 @@ describe('對話介面', () => {
       const { fake, input } = await runningWithQueue(['第一句']);
       fake.downlink.acceptUnknownSource(fake.opened[0]!, 'future instruction', 'future-kind');
       const dock = screen.getByTestId('queue-dock');
-      await waitFor(() => expect(dock.textContent).toContain('2 則排著的訊息'));
+      await within(dock).findByRole('button', { name: '2 則排著的訊息' });
       fireEvent.click(within(dock).getByRole('button', { name: '2 則排著的訊息' }));
       expect(await within(dock).findByTestId('queue-generic-label')).toBeTruthy();
       expect(within(dock).getByText('第一句')).toBeTruthy();
@@ -544,7 +549,9 @@ describe('對話介面', () => {
       // sonner 的 toast 是全域的、跨測試留著：斷言這一條才有的那句。
       expect(await screen.findByText('這一輪已經不收插話了，那一則照舊排著')).toBeTruthy();
       // 兩件以上預設收合：表頭還寫著兩則。
-      expect(screen.getByTestId('queue-dock').textContent).toContain('2 則排著的訊息');
+      expect(
+        within(screen.getByTestId('queue-dock')).getByRole('button', { name: '2 則排著的訊息' }),
+      ).toBeTruthy();
       expect(document.querySelector('[data-pending-steer]')).toBeNull();
     });
 
@@ -717,17 +724,19 @@ describe('對話介面', () => {
     ]).toEqual([1, 1, 1]);
   });
 
-  it('續開記住的會話被拒（#1483 驗收 E）：不講「接著上一次」；接上之後照舊講', async () => {
+  it('續開記住的會話被拒（#1483 驗收 E）：不畫重播結尾那條線；接上之後照舊畫', async () => {
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '記住的那條' }));
-    render(<App client={refusedOnce(THREAD_AT_CAPACITY)} />);
+    render(
+      <App client={{ ...refusedOnce(THREAD_AT_CAPACITY), threadHistory: ONE_TURN_HISTORY }} />,
+    );
 
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
     );
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
-    expect(await screen.findByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    expect(await screen.findByRole('separator', { name: /^以上是之前的對話/ })).toBeTruthy();
   });
 
   it('記住的是子代理的會話（#1708，localStorage 被改過）：講那一句，沒有重連鈕、不接原文，也不再開', async () => {
@@ -753,7 +762,7 @@ describe('對話介面', () => {
     expect(screen.getByPlaceholderText(REFUSED_PLACEHOLDER)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/subagent\.send|下行被拒/)).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     // 第一次退避最多 500ms：等過去，下行仍只開過一次。
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(openEvents).toHaveBeenCalledOnce();
@@ -781,7 +790,7 @@ describe('對話介面', () => {
     expect(screen.getByPlaceholderText(REFUSED_PLACEHOLDER)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/建不起來|下行被拒|上限 600/)).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     // 第一次退避最多 500ms：等過去，下行仍只開過一次。
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(openEvents).toHaveBeenCalledOnce();
@@ -832,8 +841,11 @@ describe('核准請求', () => {
     render(<App client={client} />);
 
     await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
-    expect(screen.getByText('alpha')).toBeTruthy();
-    expect(screen.getByText('beta')).toBeTruthy();
+    // 多個操作時每段參數上方各有工具名標籤（#3039）。
+    expect(screen.getAllByTestId('approval-tool').map((tool) => tool.textContent)).toEqual([
+      'alpha',
+      'beta',
+    ]);
     // 等核准時送不出下一句話：基座那時會把中斷靜靜丟掉。面板換掉了輸入框（#408），送出鍵不在可及的畫面上，
     // 藏起來的那一顆也照舊是停用的。
     expect(screen.queryByRole('button', { name: '送出' })).toBeNull();
@@ -881,10 +893,10 @@ describe('核准請求', () => {
     const panel = await screen.findByTestId('approval-card');
     expect(within(panel).queryByRole('button', { name: '全部核准' })).toBeNull();
     expect(within(panel).queryByRole('button', { name: '全部拒絕' })).toBeNull();
-    // 原始中斷先摺著。
-    expect(within(panel).queryByText('alpha')).toBeNull();
+    // 原始中斷先摺著；工具名由面板名稱列講（#3035），摺著的是參數。
+    expect(within(panel).queryByText(/"n": "alpha"/)).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: '原始中斷內容' }));
-    expect(await within(panel).findByText('alpha')).toBeTruthy();
+    expect(await within(panel).findByText(/"n": "alpha"/)).toBeTruthy();
 
     fireEvent.click(within(panel).getByRole('button', { name: '停止這一輪' }));
     await waitFor(() => expect(cancels).toHaveLength(1));
@@ -923,7 +935,7 @@ describe('核准請求', () => {
     const first = await findPanel('等待核准：alpha（1／2）');
     expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
     expect(within(first).queryByText('beta')).toBeNull();
-    // 狀態列唸的就是面板名稱。
+    // 狀態列唸的就是面板的 `aria-label`。
     expect(screen.getByRole('status').textContent).toBe('等待核准：alpha（1／2）');
 
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
@@ -1678,13 +1690,14 @@ describe('目標列（#945）', () => {
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
     await waitFor(() => expect(bar()).toBeTruthy());
-    expect(bar()!.textContent).toContain('目標：未完成');
+    expect(bar()!.getAttribute('aria-label')).toBe('目標：未完成，把登入改好');
     expect(bar()!.textContent).toContain('把登入改好');
-    // 只推了目標、沒推 activation（還沒收到，`null`）：照中性的寫，不說進行中（#1608）。
-    expect(bar()!.textContent).not.toMatch(/進行中|正在跑/);
+    // 只推了目標、沒推 activation（還沒收到，`null`）：畫面上不寫階段字，名稱照中性的寫，不說進行中（#1608、#3052）。
+    expect(bar()!.textContent).not.toMatch(/目標|未完成|進行中|正在跑/);
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ phase: 'paused' }))]);
-    await waitFor(() => expect(bar()!.textContent).toContain('目標：已暫停'));
+    await waitFor(() => expect(bar()!.textContent).toContain('已暫停'));
+    expect(bar()!.textContent).not.toContain('目標：');
   });
 
   it('blocked 的理由直接顯示在列上；從有目標變成沒有（清掉）時整列消失', async () => {
@@ -1703,7 +1716,7 @@ describe('目標列（#945）', () => {
     await waitFor(() => expect(bar()).toBeNull());
   });
 
-  it('active 時看 activation（#1608）：disarmed 講沒有在跑並給下一步，armed 寫進行中、那句消失', async () => {
+  it('active 時看 activation（#1608）：disarmed 講沒有在跑並給下一步，armed 不寫階段字、那句消失', async () => {
     const { downlink, opened } = await mounted();
     const activationFrame = (activation: 'armed' | 'disarmed'): Event =>
       downlink.customFrame(GOAL_ACTIVATION, { goal: { id: 'g1', revision: 1, activation } });
@@ -1714,14 +1727,16 @@ describe('目標列（#945）', () => {
     expect(hint()).toBeNull();
 
     downlink.push(opened[0]!, [activationFrame('disarmed')]);
-    await waitFor(() => expect(hint()?.textContent).toBe('輸入 /goal resume 讓它繼續。'));
-    expect(bar()!.textContent).toContain('目標：未完成，沒有在跑');
+    await waitFor(() => expect(hint()?.textContent).toBe('/goal resume 繼續'));
+    expect(hint()!.querySelector('code')?.textContent).toBe('/goal resume');
+    expect(bar()!.textContent).toContain('沒有在跑');
     expect(bar()!.getAttribute('aria-label')).toContain('/goal resume');
     // 暫停鈕照舊只看相位（Q1 (a)）。
     expect(screen.getByRole('button', { name: '暫停目標' })).toBeTruthy();
 
     downlink.push(opened[0]!, [activationFrame('armed')]);
-    await waitFor(() => expect(bar()!.textContent).toContain('目標：進行中'));
+    await waitFor(() => expect(bar()!.getAttribute('aria-label')).toContain('目標：進行中'));
+    expect(bar()!.textContent).not.toMatch(/進行中|沒有在跑/);
     expect(hint()).toBeNull();
     expect(screen.getByRole('button', { name: '暫停目標' })).toBeTruthy();
   });
@@ -1799,11 +1814,11 @@ describe('目標列（#945）', () => {
       expect(paused).toEqual([{ threadId: opened[0], goalId: 'g1', revision: 3 }]),
     );
     // 收下了也不搶先改：相位要等下行。
-    expect(bar()!.textContent).toContain('目標：未完成');
+    expect(bar()!.getAttribute('aria-label')).toContain('目標：未完成');
     expect(screen.queryByTestId('goal-pause-failure')).toBeNull();
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ revision: 4, phase: 'paused' }))]);
-    await waitFor(() => expect(bar()!.textContent).toContain('目標：已暫停'));
+    await waitFor(() => expect(bar()!.textContent).toContain('已暫停'));
     expect(pauseButton()).toBeNull();
   });
 
@@ -2457,9 +2472,9 @@ describe('提問面板', () => {
       const { client } = fakeClient([elicitationFrame()]);
       render(<App client={client} />);
       const panel = await elicitationPanel();
-      expect(within(panel).getByTestId('question-origin').textContent).toContain(
-        'MCP 伺服器「files」的工具「delete_dir」在問你',
-      );
+      expect(
+        within(panel).getByRole('group', { name: 'MCP 伺服器「files」的工具「delete_dir」在問你' }),
+      ).toBe(within(panel).getByTestId('question-origin'));
       expect(within(panel).getByTestId('question-origin-arguments').textContent).toContain(
         '/tmp/x',
       );
@@ -2470,7 +2485,7 @@ describe('提問面板', () => {
       const first = fakeClient([elicitationFrame('q-1')]);
       const view = render(<App client={first.client} />);
       let panel = await elicitationPanel();
-      fireEvent.click(within(panel).getByRole('button', { name: '拒絕' }));
+      fireEvent.click(within(panel).getByRole('button', { name: /^拒絕/ }));
       await waitFor(() => expect(first.responded).toHaveLength(1));
       expect(first.responded[0]).toEqual({
         namespace: ['tools:a'],
@@ -2489,7 +2504,7 @@ describe('提問面板', () => {
       const second = fakeClient([elicitationFrame('q-2')]);
       render(<App client={second.client} />);
       panel = await elicitationPanel();
-      fireEvent.click(within(panel).getByRole('button', { name: '取消' }));
+      fireEvent.click(within(panel).getByRole('button', { name: /^取消/ }));
       await waitFor(() => expect(second.responded).toHaveLength(1));
       expect(second.responded[0]).toEqual({
         namespace: ['tools:a'],
@@ -2516,8 +2531,8 @@ describe('提問面板', () => {
       const plain = fakeClient([questionFrame('q-4')]);
       render(<App client={plain.client} />);
       const plainPanel = await questionPanel();
-      expect(within(plainPanel).queryByRole('button', { name: '拒絕' })).toBeNull();
-      expect(within(plainPanel).queryByRole('button', { name: '取消' })).toBeNull();
+      expect(within(plainPanel).queryByRole('button', { name: /^拒絕/ })).toBeNull();
+      expect(within(plainPanel).queryByRole('button', { name: /^取消/ })).toBeNull();
     });
   });
 
@@ -2551,16 +2566,19 @@ describe('提問面板', () => {
     expect(screen.getByRole('status').textContent).toBe(
       '等待核准：write_file（子代理「explore」要的）（1／2）',
     );
-    expect(within(first).getByTestId('approval-asker').textContent).toBe(
-      '子代理「explore」要執行這個操作，它在做：整理 README',
+    // 誰在問由名稱列講，卡裡只留它在做的事（#3039）。
+    expect(within(first).getByTestId('pending-head').textContent).toBe(
+      '等待核准 write_file・子代理「explore」（1／2）',
     );
+    expect(within(first).getByTestId('approval-asker').textContent).toBe('整理 README');
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded).toHaveLength(1));
     expect(responded[0]).toMatchObject({ namespace: ['tools:u1'], interrupt_id: 'int-1' });
 
     // 第一顆答掉之後才輪到第二顆，講的是另一個子代理。
     const second = await findPanel('等待核准：write_file（子代理「writer」要的）');
-    expect(within(second).getByTestId('approval-asker').textContent).toContain('子代理「writer」');
+    expect(within(second).getByTestId('pending-head').textContent).toContain('子代理「writer」');
+    expect(within(second).getByTestId('approval-asker').textContent).toBe('寫測試');
     fireEvent.click(within(second).getByRole('button', { name: '全部拒絕' }));
     await waitFor(() => expect(responded).toHaveLength(2));
     expect(responded[1]).toMatchObject({ namespace: ['tools:u2'], interrupt_id: 'int-2' });
@@ -2582,7 +2600,10 @@ describe('提問面板', () => {
     render(<App client={client} />);
 
     const panel = await findPanel('等待核准：write_file（子代理要的）');
-    expect(within(panel).getByTestId('approval-asker').textContent).toBe('子代理要執行這個操作');
+    expect(within(panel).getByTestId('pending-head').textContent).toBe(
+      '等待核准 write_file・子代理',
+    );
+    expect(within(panel).queryByTestId('approval-asker')).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded).toHaveLength(1));
     expect(responded[0]).toMatchObject({ namespace: ['tools:gone'], interrupt_id: 'int-9' });

@@ -237,10 +237,9 @@ export function ThreadRowMenus({
       <AlertDialog open={stopOpen} onOpenChange={setStopOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>這條會話還在執行</AlertDialogTitle>
+            <AlertDialogTitle>封存「{confirmStop?.target.label}」？</AlertDialogTitle>
             <AlertDialogDescription>
-              {explainArchiveStop(confirmStop?.target.label ?? '', confirmStop?.activity ?? [])}
-              封存會先停掉它正在做的事，之後可以從「已封存」取消封存。
+              {explainArchiveStop(confirmStop?.activity ?? [])}可從「已封存」取消封存。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -266,8 +265,7 @@ export function ThreadRowMenus({
           <AlertDialogHeader>
             <AlertDialogTitle>刪除「{confirmDelete?.label}」？</AlertDialogTitle>
             <AlertDialogDescription>
-              {confirmDelete?.active === true && '它還在執行，刪除會先停掉它正在做的事。'}
-              刪除後移到「最近刪除」，寬限期內可以復原；從它分支出去的會話不受影響。
+              會移到「最近刪除」，到期前可復原；從它分支出去的會話不受影響。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

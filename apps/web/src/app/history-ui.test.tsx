@@ -10,7 +10,9 @@ import {
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { App, LEGACY_THREAD_NOTICE } from '@/app/App';
+import { App } from '@/app/App';
+import { LEGACY_REPLAY_TEXT } from '@/features/transcript';
+import { REMEMBERED_THREAD_KEY } from '@/features/threads/remembered-thread';
 import {
   EARLIER_EDGE_PX,
   LOAD_EARLIER_LABEL,
@@ -224,7 +226,7 @@ describe('畫面照日誌重播', () => {
     await waitFor(() => expect(screen.getByText('即時的回覆')).toBeTruthy());
     const lines = transcript();
     expect(lines[0]).toBe('記住暗號是藍鯨');
-    expect(lines[1]).toContain('echo');
+    expect(lines[1]).toContain('回聲');
     expect(lines[1]).toContain('完成');
     // 回覆底下的讚踩列旁多了「這一輪的過程」（#1031），所以是「開頭是」而不是「整句是」。
     expect(lines[2]).toMatch(/^記住了。/);
@@ -253,14 +255,16 @@ describe('畫面照日誌重播', () => {
     expect(transcript()[0]).toBe('之前那句');
   });
 
-  it('舊格式：講明模型的回覆沒有保存', async () => {
+  it('舊格式：重播結尾的線講明模型不記得以上內容', async () => {
     const { client } = fakeClient(async () => ({
       kind: 'ok',
       result: page(turn(0, '舊的一句', ''), { legacy: true }),
     }));
     render(<App client={client} />);
 
-    await waitFor(() => expect(screen.getByText(LEGACY_THREAD_NOTICE)).toBeTruthy());
+    const divider = await screen.findByRole('separator', { name: LEGACY_REPLAY_TEXT });
+    expect(transcript()).toEqual(['舊的一句', expect.any(String), LEGACY_REPLAY_TEXT]);
+    expect(divider.textContent).toBe(LEGACY_REPLAY_TEXT);
   });
 
   it('對照：格式 9 的不講', async () => {
@@ -271,7 +275,29 @@ describe('畫面照日誌重播', () => {
     render(<App client={client} />);
 
     await waitFor(() => expect(screen.getByText('回覆')).toBeTruthy());
-    expect(screen.queryByText(LEGACY_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
+  });
+
+  it('接回記住的那條（#3054）：重播的內容結尾畫一條線，之後送的話排在線下面', async () => {
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '記住的那條' }));
+    const { client } = fakeClient(async () => ({
+      kind: 'ok',
+      result: page(turn(0, '之前那句', '之前的回覆')),
+    }));
+    render(<App client={client} />);
+
+    // 清單沒有接：不知道上一次的時間，只畫線。
+    const divider = await screen.findByRole('separator', { name: '以上是之前的對話' });
+    expect(divider.textContent).toBe('');
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '新的一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(transcript().at(-1)).toBe('新的一句'));
+
+    const items = [...document.querySelectorAll('[data-slot="message-scroller-item"]')];
+    const at = items.findIndex((item) => item.contains(divider));
+    expect(items[at - 1]?.textContent).toContain('之前的回覆');
+    expect(items[at + 1]?.textContent).toBe('新的一句');
   });
 
   it('歷史拿不回來：講原因，對話照樣接得下去', async () => {

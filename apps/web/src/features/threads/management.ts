@@ -75,8 +75,8 @@ export interface ArchiveNeedsStop {
 /** 封存的結果：失敗的原因、要多問一句、或成功（`undefined`）。 */
 export type ArchiveAnswer = Promise<string | ArchiveNeedsStop | undefined>;
 
-/** 確認框的內文：講出它在跑什麼，以及停掉的後果。 */
-export function explainArchiveStop(label: string, activity: readonly ThreadActivityKind[]): string {
+/** 確認框內文的第一句：它在跑什麼，也就是封存會停掉哪些事。要不要停由按鈕「停掉並封存」問，不在這裡重述。 */
+export function explainArchiveStop(activity: readonly ThreadActivityKind[]): string {
   const what =
     activity.includes('turn') && activity.includes('subagent')
       ? '正在回答，背景子代理也還在跑'
@@ -85,7 +85,7 @@ export function explainArchiveStop(label: string, activity: readonly ThreadActiv
         : activity.includes('turn')
           ? '正在回答'
           : '正在執行';
-  return `「${label}」${what}。要停掉再封存嗎？`;
+  return `${what}。`;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

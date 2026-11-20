@@ -29,8 +29,14 @@
  * **沙箱升級**（`request_sandbox_escalation`，#1292）畫 harness 送的那句描述（模式、理由、只蓋這一次），不畫工具名與參數 JSON。
  * 沒有描述就照一般的畫（`features/tool/sandbox-escalation.ts`）。
  *
- * **其他工具畫閘門給的理由**（#1628）：「要執行 …」下面一行，例如 MCP 閘門寫明哪台 server、哪支工具（名字被補了指紋時人看不出來）。
- * core 沒有理由時填的預設字不畫，那句跟「要執行 …」重複（`features/approval/reason.ts`）。是一般的文字，報讀照樣唸得到，不靠 tooltip。
+ * **工具名只在多個操作時進卡裡**（#3035 結論 D、#3039 第 1 項）：名稱列已經講「等待核准 `工具名`」，單一操作的卡裡不重複；
+ * 多個操作時每段參數上方放那一個的工具名 `code` 標籤，不加前綴字，參數才對得上是哪一個。
+ *
+ * **子代理在做的事**（#3039 第 2 項）：名稱列已經有「・子代理名」，卡裡只在內文最上面放委派卡的 `description`，淡色、不加前綴；
+ * 沒有 `description` 就不畫這一行。
+ *
+ * **其他工具畫閘門給的理由**（#1628）：參數上面一行，例如 MCP 閘門寫明哪台 server、哪支工具（名字被補了指紋時人看不出來）。
+ * core 沒有理由時填的預設字不畫，那句跟名稱列的工具名重複（`features/approval/reason.ts`）。是一般的文字，報讀照樣唸得到，不靠 tooltip。
  */
 
 import type { PendingApproval } from '@nexus/wire';
@@ -61,11 +67,10 @@ function Actions({ pending, asker }: { pending: PendingApproval; asker?: Pending
       aria-label="要執行的內容"
       className="flex max-h-[40svh] flex-col gap-3 overflow-auto p-3"
     >
-      {/* 前景子代理要核准（#328）：誰在問、它在做什麼（委派卡上寫的 `description`）；root 自己問的沒有這一行。 */}
-      {asker !== undefined && (
+      {/* 前景子代理要核准（#328）時它在做的事（委派卡的 `description`）；root 自己問的、或沒有 `description` 的，沒有這一行。 */}
+      {asker?.description !== undefined && (
         <p className="text-muted-foreground text-tip" data-testid="approval-asker">
-          <span className="text-foreground font-medium">{asker.label}</span>要執行這個操作
-          {asker.description !== undefined && <>，它在做：{asker.description}</>}
+          {asker.description}
         </p>
       )}
       {pending.actions.map((action, index) => {
@@ -85,9 +90,11 @@ function Actions({ pending, asker }: { pending: PendingApproval; asker?: Pending
         const reason = approvalReasonOf(action);
         return (
           <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
-            <p className="text-body">
-              要執行 <code className="font-mono font-medium">{action.name}</code>
-            </p>
+            {pending.actions.length > 1 && (
+              <code className="w-fit font-mono font-medium text-tip" data-testid="approval-tool">
+                {action.name}
+              </code>
+            )}
             {reason !== undefined && (
               // 理由裡有 server 給的工具名：長名字沒有空格，不斷行會撐破窄螢幕。
               <p className="text-body wrap-anywhere" data-testid="approval-reason">

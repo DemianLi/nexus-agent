@@ -16,7 +16,7 @@ import {
   RightSidebarToggle,
 } from '@/app/right-sidebar/right-sidebar';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
-import { TRACE_EMPTY_HINT, TRACE_EMPTY_TEXT } from '@/features/trace/panel';
+import { TRACE_EMPTY_TEXT } from '@/features/trace/panel';
 import { createChangesStores } from '@/features/changes/diff';
 import { createDeliverableFileStore } from '@/features/deliverable/file';
 import type { LocatedFile } from '@/shared/lib/located-file';
@@ -138,7 +138,7 @@ const panel = () => screen.getByTestId('right-sidebar');
 const tabNames = () => screen.getAllByRole('tab').map((tab) => tab.textContent);
 const cardHeader = (seq: number) =>
   within(screen.getAllByTestId('changes')[seq === 7 ? 0 : 1]!).getByRole('button', {
-    name: /個檔案有改動/,
+    name: /^\d+ 個檔案/,
   });
 
 function saved(threadId = 't'): SidebarLayout | undefined {
@@ -209,7 +209,7 @@ describe('從卡片打開', () => {
     ).toBe('true');
   });
 
-  it('改動分頁的標題：一個檔不寫「等」；滑鼠移上去列出全部', () => {
+  it('改動分頁的標題：一個檔不寫「等」；滑鼠移上去只列路徑，沒列出的數量不在這裡講', () => {
     expect(changesTabTitle(undefined)).toEqual({ label: '改動', detail: undefined });
     expect(changesTabTitle({ files: [{ display: 'a/b.ts' }], total: 1 })).toEqual({
       label: '改動 · b.ts',
@@ -217,7 +217,7 @@ describe('從卡片打開', () => {
     });
     expect(
       changesTabTitle({ files: [{ display: 'a/b.ts' }, { display: 'c.ts' }], total: 5 }).detail,
-    ).toBe('a/b.ts\nc.ts\n另有 3 個檔沒有列出');
+    ).toBe('a/b.ts\nc.ts');
   });
 });
 
@@ -452,9 +452,7 @@ describe('單例面板：觀測與成本（#1031）', () => {
     const tab = screen.getByRole('tab', { name: '觀測' });
     expect(tab.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(tab);
-    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe(
-      TRACE_EMPTY_TEXT + TRACE_EMPTY_HINT,
-    );
+    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe(TRACE_EMPTY_TEXT);
     // 有分頁之後空狀態讓位。
     expect(screen.queryByText(RIGHT_SIDEBAR_EMPTY_TEXT)).toBeNull();
     expect(saved()?.tabs).toEqual([{ kind: 'trace' }]);

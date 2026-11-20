@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Composer, inputPlaceholder } from '@/features/composer';
 import { ConversationBody, Entry as TranscriptEntry, useFreshItems } from '@/features/transcript';
 import { ConversationFeedbackDialog, useFeedback } from '@/features/feedback';
-import { ConversationNotices, PendingSwap } from '@/features/status';
+import { ConversationStatus, PendingSwap } from '@/features/status';
 import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
 import { useSubagentControl } from '@/features/tool';
 import { Button } from '@/components/ui/button';
@@ -251,11 +251,11 @@ function EmbeddedConversation({
           {NEW_CONVERSATION_LABEL}
         </Button>
       </header>
-      <div className="mx-auto w-full max-w-2xl shrink-0 px-4">
-        <ConversationNotices conversation={conversation} notice={undefined} />
-      </div>
       <ConversationBody
         conversation={conversation}
+        {...(conversation.refusal === undefined && conversation.history?.legacy === true
+          ? { replayEnd: { kind: 'legacy' } as const }
+          : {})}
         feedback={feedback}
         isFresh={isFresh}
         hasSteers={steers.length > 0}
@@ -263,7 +263,6 @@ function EmbeddedConversation({
         imageSource={imageSource}
         subagentControl={subagentControl}
         deliverableDownload={deliverableDownload}
-        fileDrop={false}
       />
       <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">
         {context !== undefined && (
@@ -272,6 +271,7 @@ function EmbeddedConversation({
             {context.label}
           </p>
         )}
+        <ConversationStatus conversation={conversation} />
         <PendingSwap
           pendings={conversation.state.pendings}
           askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}

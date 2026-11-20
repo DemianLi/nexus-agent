@@ -4,7 +4,8 @@
  * 把對話一輪一組、依序列成一列一列，點開看細節。
  *
  * **有軌跡投影時**（`features/trace/view.ts` 的結構化模式）輪界、模型呼叫段落、重試、重複呼叫提醒、時刻與耗時都讀它；**沒有時**
- * 退回第 0 版（只有順序），兩種的限制都全部寫在畫面上（`TRACE_LIMITS`、`TRACE_STRUCTURED_LIMITS`）。投影的歸位在
+ * 退回第 0 版（只有順序）。兩種的限制清單不在畫面上，在 `docs/operations.md`〈成本與觀測分頁的口徑與限制〉；畫面只留結構
+ * （沒有的值標「—」、更早的輪只剩摘要列）和必要的短句。投影的歸位在
  * `features/trace/view.ts`，這裡只畫。UI/UX 照 AGENTS.md「不在這條範圍內的」：數值以 solid-glass 為準，
  * Libraries.dev 只當元件多樣性與交互模式的參考，不是照 dsh 的 `ui-trajectory` 畫時間線。
  *
@@ -33,23 +34,13 @@ import { Digests, TurnGroup, mainTurnSelector } from '@/features/trace/groups';
 import { TRACE_PULL_FAILED_TEXT, TRACE_PULL_LOADING_TEXT } from '@/features/trace/pull-control';
 import { SubagentSourceContext } from '@/features/trace/subagent';
 import { Button } from '@/components/ui/button';
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty';
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { focusLost, useFocusHandoff } from '@/shared/lib/use-focus-handoff';
 import { useStableNames } from '@/features/tool';
 import { useTrajectoryPull } from '@/features/trace/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/shared/lib/use-visible-snapshot';
 import { TRACE_LOCATE_LOADING_TEXT } from '@/shared/right-sidebar/locate-text';
 import {
-  TRACE_HEADLINE,
-  TRACE_LIMITS,
-  TRACE_STRUCTURED_HEADLINE,
-  TRACE_STRUCTURED_LIMITS,
   TRACE_TARGET_MISSING_TEXT,
   loadsThrough,
   traceModel,
@@ -60,19 +51,16 @@ import { statusOf } from '@/features/trace/trajectory-pull';
 import type { PullSnapshot, TrajectoryPuller } from '@/features/trace/trajectory-pull';
 import { trajectoryOf } from '@/features/trace/trajectory-view';
 
-/** 面板還沒有資料可畫時的空狀態（SG `Empty`，#1690 T1）：`TRACE_EMPTY_TEXT` 是標題，`TRACE_EMPTY_HINT` 是說明。 */
+/** 面板還沒有資料可畫時的空狀態（SG `Empty`，#1690 T1）：只有標題。 */
 export const TRACE_EMPTY_TEXT = '還沒有過程可看';
-export const TRACE_EMPTY_HINT = '送出第一句話之後，這裡會一輪一組列出模型呼叫與工具。';
 
 export const TRACE_LOCATED_TEXT = '已在對話裡定位';
 /** 同一句要再唸一次時，清空到填回去之間隔多久（毫秒）。太短報讀器會當成沒變。 */
 export const REANNOUNCE_MS = 100;
-export const TRACE_LIMITS_HEADING = '這一版的限制';
 export const TRACE_REVEALED_TEXT = '已捲到那一輪';
 export const TRACE_REVEAL_MISSING_TEXT = '觀測分頁已經沒有那一輪的資料';
 /** 從回覆底下按「這一輪的過程」，那一則歸不進軌跡的輪（窗口之前、投影還沒跟上、或沒有軌跡投影）。 */
-export const TRACE_REPLY_UNPLACED_TEXT =
-  '這一則回覆歸不到軌跡裡的輪：它在軌跡窗口之前，或軌跡還沒跟上、或這個會話沒有軌跡投影。';
+export const TRACE_REPLY_UNPLACED_TEXT = '這一則歸不到軌跡裡的輪';
 /** 同上，但軌跡有更早輪的摘要：多半是那一輪太舊，只剩摘要，對不到是哪一輪。 */
 export const TRACE_REPLY_OLDER_TEXT =
   '這一則回覆多半在軌跡窗口之前：更早的輪只剩摘要（上面「更早的輪」），對不到是哪一輪。';
@@ -80,24 +68,6 @@ export const TRACE_REPLY_OLDER_TEXT =
 export const REVEAL_HIGHLIGHT_MS = 3000;
 
 const noop = () => {};
-
-function Limits({ structured }: { structured: boolean }) {
-  const limits = structured ? TRACE_STRUCTURED_LIMITS : TRACE_LIMITS;
-  return (
-    <section aria-labelledby="trace-limits" className="text-muted-foreground mt-2 px-2 text-tip">
-      <h3 id="trace-limits" className="mb-1 font-medium">
-        {TRACE_LIMITS_HEADING}
-      </h3>
-      <ul className="flex list-disc flex-col gap-1 pl-4" data-testid="trace-limits">
-        {Object.entries(limits).map(([key, text]) => (
-          <li key={key} data-limit={key}>
-            {text}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
 
 /** 一次畫幾組；更早的按「顯示更早的」再展開。 */
 export const TURN_PAGE = 12;
@@ -357,9 +327,6 @@ const Timeline = memo(function Timeline({
         // 可捲動的區塊要能用鍵盤捲：進 Tab 順序（同計劃分頁，§8）。
         tabIndex={0}
       >
-        <p className="text-muted-foreground mb-3 px-2 text-tip" data-testid="trace-headline">
-          {model.structured ? TRACE_STRUCTURED_HEADLINE : TRACE_HEADLINE}
-        </p>
         {notice !== undefined && (
           <p
             // 讀屏已經從下面的 `role=status` 聽到同一句，這裡只給看得見的人。
@@ -397,7 +364,6 @@ const Timeline = memo(function Timeline({
           <TurnGroup
             key={turn.key}
             turn={turn}
-            structured={model.structured}
             names={names}
             missing={missing}
             revealed={turn.seq !== undefined && turn.seq === revealedSeq}
@@ -412,7 +378,6 @@ const Timeline = memo(function Timeline({
             onArm={onArm}
           />
         ))}
-        <Limits structured={model.structured} />
         <p role="status" className="sr-only">
           {announced}
         </p>
@@ -438,7 +403,6 @@ export function TraceBody({ visible, sources, locate, reveal, onRevealed }: Pane
             <Activity aria-hidden />
           </EmptyMedia>
           <EmptyTitle>{TRACE_EMPTY_TEXT}</EmptyTitle>
-          <EmptyDescription>{TRACE_EMPTY_HINT}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );

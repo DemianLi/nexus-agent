@@ -35,10 +35,6 @@ export const FORK_FAILED_TEXT = '沒有分出新對話';
 /** 改名失敗時的 toast：子 thread 已經在了，照樣切過去（卡面驗收 5）。 */
 export const FORK_RENAME_FAILED_TEXT = '已分出新對話，但改名失敗';
 
-/** 切到分出來的那條時，畫面上方那一句（`ThreadChoice` 的 `forked`）。 */
-export const FORKED_THREAD_NOTICE =
-  '這是分出來的新對話：到分叉那一輪為止的內容都帶過來了，模型也記得。原本那條對話不變。';
-
 /**
  * 這台 server 分得了叉嗎：清單回 `not_supported` 就是沒接落盤，分叉也必定回 `not_supported`——server 的列表與冷讀兩支由同一個
  * 開關給（`apps/harness/src/serve.ts` 的 `sessionStore`，[#1964](https://github.com/DemianLi/nexus-agent/issues/1964)）。

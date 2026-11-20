@@ -33,13 +33,9 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  App,
-  RESUMED_THREAD_NOTICE,
-  STOP_QUESTIONS_LABEL,
-  SWITCHED_THREAD_NOTICE,
-} from '@/app/App';
+import { App, STOP_QUESTIONS_LABEL } from '@/app/App';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/features/threads/list';
+import { formatLastActivity } from '@/features/transcript';
 import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/shared/connection/stall';
 import { REMEMBERED_THREAD_KEY } from '@/features/threads/remembered-thread';
 import {
@@ -60,6 +56,7 @@ import {
   historyFrame,
   historySaid,
   memoryStorage,
+  ONE_TURN_HISTORY,
   setSeq,
   textFrames,
   threadRows,
@@ -82,18 +79,18 @@ describe('記住這條 thread', () => {
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId }));
   }
 
-  it('第一次載入：開一條新的、記下來，不說「接著上一次」', async () => {
+  it('第一次載入：開一條新的、記下來，不畫重播結尾的線', async () => {
     setSeq(0);
     const { client, opened } = fakeClient([]);
     render(<App client={client} />);
 
     await waitFor(() => expect(opened).toHaveLength(1));
     await waitFor(() => expect(stored()).toBe(opened[0]));
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
   });
 
   /** jsdom 裡的重新整理：拆掉再掛一次，中間只剩 `localStorage`。 */
-  it('重新載入：開的是同一條，而且講一聲是接著上一次', async () => {
+  it('重新載入：開的是同一條，重播的內容結尾畫一條線', async () => {
     setSeq(0);
     const first = fakeClient([]);
     render(<App client={first.client} />);
@@ -101,9 +98,9 @@ describe('記住這條 thread', () => {
     cleanup();
 
     const second = fakeClient([]);
-    render(<App client={second.client} />);
+    render(<App client={{ ...second.client, threadHistory: ONE_TURN_HISTORY }} />);
     await waitFor(() => expect(second.opened).toEqual(first.opened));
-    expect(screen.getByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    expect(await screen.findByRole('separator', { name: /^以上是之前的對話/ })).toBeTruthy();
   });
 
   it('新對話：換一個 id、記下來，上一條的話與提示都不留在畫面上', async () => {
@@ -126,7 +123,7 @@ describe('記住這條 thread', () => {
     await waitFor(() => expect(stored()).toBe(opened[1]));
     // **只斷言「開了另一條」不夠**：不重掛的話下行照樣換一條，留下來的是上一條的 transcript。
     expect(screen.queryByText('記一筆。')).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
   });
 
   /**
@@ -426,7 +423,7 @@ describe('記住這條 thread', () => {
 
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
     expect(opened).toHaveLength(1);
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
   });
 
   it.each([
@@ -443,7 +440,7 @@ describe('記住這條 thread', () => {
     render(<App client={client} />);
 
     await waitFor(() => expect(opened).toHaveLength(1));
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     // 壞掉的那一份被這一條蓋掉，下一次載入就接得回來。
     await waitFor(() => expect(stored()).toBe(opened[0]));
   });
@@ -544,7 +541,7 @@ describe('以前的會話', () => {
     expect(rows[1]).not.toContain('執行中');
     // **#313 翻過來的那一條**：以前空白那條列在第三列；目前這條是新生的 id，所以別條空白的不列（照 dsh `sessionVisible`）。
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
-    expect(list.textContent).toContain('另有 1 份');
+    expect(list.textContent).toContain('1 份無法顯示');
     expect(reads).toBe(1);
 
     fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
@@ -834,7 +831,8 @@ describe('以前的會話', () => {
       await menuOf(list, '幫我改登入頁');
       choose('封存');
       const dialog = await screen.findByRole('alertdialog');
-      expect(within(dialog).getByText(/「幫我改登入頁」正在回答。要停掉再封存嗎？/u)).toBeTruthy();
+      expect(within(dialog).getByRole('heading').textContent).toBe('封存「幫我改登入頁」？');
+      expect(within(dialog).getByText('正在回答。可從「已封存」取消封存。')).toBeTruthy();
       fireEvent.click(within(dialog).getByRole('button', { name: '先不要' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
       expect(server.calls.filter((call) => call.startsWith('archive'))).toEqual([
@@ -1020,13 +1018,25 @@ describe('以前的會話', () => {
     });
   });
 
-  it('點一條就切過去：開那一條、記下來、講一聲切過去了，上一條的話不留', async () => {
+  it('點一條就切過去：開那一條、記下來、重播結尾的線寫清單上的時間，上一條的話不留', async () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    render(<App client={listing(fake, async () => ({ kind: 'ok', result: LISTED }))} />);
+    render(
+      <App
+        client={{
+          ...listing(fake, async () => ({ kind: 'ok', result: LISTED })),
+          threadHistory: ONE_TURN_HISTORY,
+        }}
+      />,
+    );
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
-    expect(screen.getByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    // 清單上沒有「上一條」：不知道上一次的時間，只畫線。
+    expect(
+      (await screen.findByRole('separator', { name: /^以上是之前的對話/ })).getAttribute(
+        'aria-label',
+      ),
+    ).toBe('以上是之前的對話');
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
@@ -1036,9 +1046,12 @@ describe('以前的會話', () => {
 
     await waitFor(() => expect(fake.opened).toEqual(['上一條', '跑著的那條']));
     await waitFor(() => expect(stored()).toBe('跑著的那條'));
-    expect(screen.getByText(SWITCHED_THREAD_NOTICE)).toBeTruthy();
-    // 從清單點的一定是接回來的：換成確定的那一句，條件句那一句不再出現。
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(
+      await screen.findByRole('separator', {
+        name: `以上是之前的對話，最後一次是 ${formatLastActivity(3_000)}`,
+      }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('separator', { name: /^以上是之前的對話/ })).toHaveLength(1);
     expect(screen.queryByText('記一筆。')).toBeNull();
   });
 
@@ -1093,7 +1106,7 @@ describe('以前的會話', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it('目前這條在清單上標出來，按不下去', async () => {
+  it('目前這條在清單上按不下去（靠高亮與停用，不另寫字）', async () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '目標那條' }));
     const fake = fakeClient([]);
@@ -1102,7 +1115,7 @@ describe('以前的會話', () => {
     const current = (await within(list).findByRole('button', {
       name: new RegExp(UNTITLED_THREAD_LABEL.replace(/[()（）]/g, '.')),
     })) as HTMLButtonElement;
-    expect(current.textContent).toContain('目前這條');
+    expect(current.textContent).not.toContain('目前這條');
     expect(current.disabled).toBe(true);
   });
 
@@ -1128,9 +1141,9 @@ describe('以前的會話', () => {
     const fake = fakeClient([]);
     render(<App client={listing(fake, listThreads)} />);
     const list = await openList();
-    await waitFor(() => expect(list.textContent).toContain('列不出來'));
-    expect(list.textContent).toContain(reason);
-    expect(list.textContent).not.toContain('還沒有以前的會話');
+    await waitFor(() => expect(list.textContent).toContain(reason));
+    expect(list.textContent).not.toContain('列不出來：');
+    expect(list.textContent).not.toContain('還沒有會話');
   });
 
   it('一條都沒有：講「還沒有」', async () => {
@@ -1142,7 +1155,7 @@ describe('以前的會話', () => {
       />,
     );
     const list = await openList();
-    await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
+    await waitFor(() => expect(list.textContent).toContain('還沒有會話'));
   });
 
   it('目前這條是空白、已落盤：照列，標「新會話」、不帶時間', async () => {
@@ -1154,7 +1167,7 @@ describe('以前的會話', () => {
 
     await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
     const current = within(list).getByRole('button', { name: new RegExp(BLANK_THREAD_LABEL) });
-    expect(current.textContent).toBe(`${BLANK_THREAD_LABEL}目前這條`);
+    expect(current.textContent).toBe(BLANK_THREAD_LABEL);
   });
 
   it('磁碟上只剩別條空白的：照講「還沒有」', async () => {
@@ -1167,7 +1180,7 @@ describe('以前的會話', () => {
     render(<App client={listing(fake, async () => ({ kind: 'ok', result: blanks }))} />);
     const list = await openList();
 
-    await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
+    await waitFor(() => expect(list.textContent).toContain('還沒有會話'));
     expect(within(list).queryAllByRole('button')).toHaveLength(0);
     // 沒有列就沒有東西可搜。
     expect(within(list).queryByRole('searchbox')).toBeNull();
@@ -1249,8 +1262,8 @@ describe('以前的會話', () => {
       const list = await rendered();
       fireEvent.change(within(list).getByRole('searchbox'), { target: { value: '部署' } });
       expect(threadRows(list)).toHaveLength(0);
-      expect(within(list).getByRole('status').textContent).toBe('沒有標題含「部署」的會話。');
-      expect(list.textContent).not.toContain('還沒有以前的會話');
+      expect(within(list).getByRole('status').textContent).toBe('沒有符合「部署」的會話');
+      expect(list.textContent).not.toContain('還沒有會話');
     });
 
     it('按內容搜（#760）：問的是伺服器，內容才對得上的那一列帶著片段接在後面', async () => {
@@ -1384,7 +1397,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
   const statusOf = (element: HTMLElement) =>
     within(element).queryByTestId('thread-status')?.getAttribute('data-status') ?? null;
 
-  it('沒打開的那條停在核准：那一列寫「等待核准」、不帶時間；撤回就回到在跑', async () => {
+  it('沒打開的那條停在核准：那一列報讀「等待核准」、照樣帶時間；撤回就回到在跑', async () => {
     const feed = rendered(async () => ok(row('a', '改登入頁', true)));
     const target = await rowOf('改登入頁');
     await waitFor(() => expect(statusOf(target)).toBe('running'));
@@ -1396,7 +1409,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     });
     await waitFor(() => expect(statusOf(target)).toBe('approval'));
     expect(within(target).getByTestId('thread-status').textContent).toBe('等待核准');
-    expect(target.textContent).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(within(target).getByTestId('thread-time').textContent).toMatch(/\d{1,2}:\d{2}/);
 
     feed.line().push({ type: 'input-withdrawn', threadId: 'a', interruptId: 'int-1' });
     await waitFor(() => expect(statusOf(target)).toBe('running'));
@@ -1437,7 +1450,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
 
     fireEvent.click(target);
     const current = await rowOf('寫測試');
-    await waitFor(() => expect(current.textContent).toContain('目前這條'));
+    await waitFor(() => expect(current).toHaveProperty('disabled', true));
     expect(statusOf(current)).toBeNull();
 
     feed.line().push({ type: 'status', threadId: 'b', running: true });
@@ -1458,7 +1471,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     const opened = feed.opened();
 
     fireEvent.click(await rowOf('寫測試'));
-    await waitFor(async () => expect((await rowOf('寫測試')).textContent).toContain('目前這條'));
+    await waitFor(async () => expect(await rowOf('寫測試')).toHaveProperty('disabled', true));
     expect(statusOf(await rowOf('跑腿'))).toBe('completed');
     expect(feed.opened()).toBe(opened);
   });
@@ -1888,7 +1901,7 @@ describe('新對話重用空白會話', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
-  it('講過話之後：切到清單上第一條空白的，不開新 id，也不講「切到以前的一條」', async () => {
+  it('講過話之後：切到清單上第一條空白的，不開新 id，也不畫重播結尾的線', async () => {
     setSeq(0);
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
@@ -1899,8 +1912,7 @@ describe('新對話重用空白會話', () => {
 
     await waitFor(() => expect(fake.opened).toEqual(['上一條', '空白那條']));
     await waitFor(() => expect(stored()).toBe('空白那條'));
-    expect(screen.queryByText(SWITCHED_THREAD_NOTICE)).toBeNull();
-    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByTestId('replay-end')).toBeNull();
     expect(screen.queryByText('記一筆。')).toBeNull();
   });
 
@@ -2226,7 +2238,7 @@ describe('會話標題（#655）', () => {
     // 分頁標題在 effect 裡設，比標頭晚一拍。
     await waitFor(() => expect(document.title).toBe('幫我修登入 — nexus-agent'));
     const current = within(list).getByRole('button', { name: /幫我修登入/ });
-    expect(current.textContent).toContain('目前這條');
+    expect(current).toHaveProperty('disabled', true);
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
 
     // #650：模型產生的標題可能在這一輪收完、閒著的時候才推來，照樣換；搜尋吃得到新標題。
@@ -2288,8 +2300,9 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
 
     await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
-        '目前這條',
+      expect(within(list).getByRole('button', { name: /幫我修登入/ })).toHaveProperty(
+        'disabled',
+        true,
       ),
     );
   });
@@ -2388,8 +2401,9 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
 
     await waitFor(() =>
-      expect(within(list).getByRole('button', { name: /幫我修登入/ }).textContent).toContain(
-        '目前這條',
+      expect(within(list).getByRole('button', { name: /幫我修登入/ })).toHaveProperty(
+        'disabled',
+        true,
       ),
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -2560,7 +2574,7 @@ describe('背景子代理的輸入框接線（#869）', () => {
     expect(input.placeholder).toBe('連線中…');
   });
 
-  it('用量鈕的「看明細」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
+  it('用量鈕的「到成本分頁」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
     setSeq(0);
     const fake = fakeClient([
       ...delegated([{ runId: 'bg-1', status: 'idle' }]),

@@ -19,13 +19,13 @@ import { queuedAgentText } from '@/features/queue/view';
  */
 
 /** 插話泡泡底下那一句：這一輪還在（跑著、停在核准點，答完接著跑）。 */
-export const PENDING_STEER_TEXT = '插話・下一步送進模型';
+export const PENDING_STEER_TEXT = '插話・下一步';
 
 /**
  * 插話泡泡底下那一句：這一輪已經停了（按了停止、重啟接回來）。harness 把它留在 `next-step`，**下一輪的第一次模型呼叫**
  * 才領走，排在開那一輪的那句後面（`thread-pump.ts` 的 `#runOnce`，同 dsh 按停止帶 `keepInbox`）。
  */
-export const PARKED_STEER_TEXT = '插話・下一輪送進模型';
+export const PARKED_STEER_TEXT = '插話・下一輪';
 
 /** 泡泡底下那一句看這一輪還在不在。 */
 export function pendingSteerText(status: ConversationStatus): string {
@@ -40,8 +40,8 @@ export function pendingSteerText(status: ConversationStatus): string {
  */
 export function pendingAgentText(agentText: string, status: ConversationStatus): string {
   return status === 'running' || status === 'awaiting-input'
-    ? `${agentText}・下一步送進模型`
-    : `${agentText}・下一輪送進模型`;
+    ? `${agentText}・下一步`
+    : `${agentText}・下一輪`;
 }
 
 export interface PendingSteer {

@@ -18,13 +18,7 @@ import { MAX_TOKENS_NOTICE } from '@/features/tool/max-tokens-view';
 import { PLAN_REVIEW_DISMISSED_TEXT } from '@/features/plan/review-view';
 import { SETTLED_NOTICE_TIMED_OUT_TEXT } from '@/features/queue/view';
 import { Script } from '@/test/conversation-frames';
-import {
-  ENDING_LABEL,
-  TRACE_HEADLINE,
-  TRACE_LIMITS,
-  TRACE_TARGET_MISSING_TEXT,
-  traceTurns,
-} from '@/features/trace/view';
+import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, traceTurns } from '@/features/trace/view';
 import type { TraceRow } from '@/features/trace/view';
 
 const kinds = (rows: readonly TraceRow[]) => rows.map((row) => row.kind);
@@ -117,7 +111,7 @@ describe('traceTurns：一輪一組、依序一列', () => {
   });
 });
 
-describe('切輪（限制 1）', () => {
+describe('切輪', () => {
   it('人的話、結算通知、子代理來信各開一輪', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
@@ -137,7 +131,7 @@ describe('切輪（限制 1）', () => {
     ]);
   });
 
-  it('目標自己排的輪次沒有人話，列黏在前一輪後面——限制寫在畫面上', () => {
+  it('目標自己排的輪次沒有人話，列黏在前一輪後面（docs/operations.md 記為已知限制）', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
       script.running(),
@@ -152,8 +146,6 @@ describe('切輪（限制 1）', () => {
     const turns = traceTurns(state);
     expect(turns).toHaveLength(1);
     expect(kinds(turns[0]!.rows)).toEqual(['input', 'reply', 'reply']);
-    expect(TRACE_LIMITS.turns).toContain('沒有人話');
-    expect(TRACE_LIMITS.turns).toContain('黏在前一輪');
   });
 
   it('載入的第一段不是從人那一句開始：開頭那一組沒有輸入列，不補一個假的', () => {
@@ -188,7 +180,7 @@ describe('切輪（限制 1）', () => {
   });
 });
 
-describe('決定只存本地（限制 2）', () => {
+describe('決定只存本地', () => {
   it('重新整理之後（同樣的 frame 重放、沒有 appendDecision）決定列不見了，工具卡的失敗還在', () => {
     // 同一串 frame：核准點上人按了拒絕，被拒的那顆在日誌裡是一張失敗的卡（#297）。
     const build = (withDecision: boolean) => {
@@ -214,7 +206,6 @@ describe('決定只存本地（限制 2）', () => {
       kind: 'tool',
       entry: { status: 'failed', errorCode: 'REJECTED' },
     });
-    expect(TRACE_LIMITS.decisions).toContain('重新整理之後看不到你當時按了什麼');
   });
 
   it('限制只講「決定」：人答的提問答案在工具結果文字裡，重新整理後還在', () => {
@@ -231,7 +222,6 @@ describe('決定只存本地（限制 2）', () => {
     const rows = only(reloaded);
     expect(kinds(rows)).toEqual(['input', 'tool']);
     expect(rows[1]).toMatchObject({ summary: '已回答 1/1 題' });
-    expect(TRACE_LIMITS.decisions).not.toContain('回答');
   });
 });
 
@@ -487,11 +477,7 @@ describe('計劃的審核結果與子代理', () => {
 });
 
 describe('畫面上的字', () => {
-  it('四條限制與第 0 版的說明都有字', () => {
-    expect(TRACE_HEADLINE).toBe('第 0 版：只有順序，沒有時間');
-    for (const text of Object.values(TRACE_LIMITS)) expect(text.length).toBeGreaterThan(10);
-    expect(Object.keys(TRACE_LIMITS)).toEqual(['turns', 'decisions', 'loaded', 'absent']);
-    expect(TRACE_LIMITS.loaded).toContain('已載入');
+  it('找不到那一則時講下一步', () => {
     expect(TRACE_TARGET_MISSING_TEXT).toContain('往上捲載入更早的對話');
   });
 
