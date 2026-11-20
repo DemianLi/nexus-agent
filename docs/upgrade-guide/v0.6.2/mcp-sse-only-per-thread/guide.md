@@ -1,9 +1,9 @@
 ---
 kind: upgrade-guide
-description: "`process-model: per-thread` 下 MCP 由宿主連，只講舊式 HTTP+SSE 的 server 連不上；單行程不受影響。"
+description: "MCP 一律不再退回舊式 HTTP+SSE（`per-thread` 由宿主連、`single` 與 CLI 由 TS 連），只講這種協定的 server 連不上。"
 ---
 
-# per-thread：只講 SSE 的 MCP server 連不上
+# 只講 SSE 的 MCP server 連不上
 
 ## 變更
 

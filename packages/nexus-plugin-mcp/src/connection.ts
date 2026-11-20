@@ -206,7 +206,6 @@ export async function openClient(
           env: { ...scrubbedParentEnv(), ...substituted(connection.env ?? {}, credentials) },
           ...(connection.cwd !== undefined && { cwd: connection.cwd }),
         }),
-        'auto',
         track,
       );
     } catch (error) {
@@ -238,7 +237,6 @@ export async function openClient(
           reconnectionDelayGrowFactor: 1.5,
         },
       }),
-      'auto',
       track,
     );
   } catch (error) {
@@ -343,12 +341,8 @@ export function withUrlScrubbing(config: McpConfig, base: Redactor): Redactor {
 type Transport = StdioClientTransport | StreamableHTTPClientTransport;
 
 /** 開 client、連上 transport；失敗就兩個都收掉再拋。 */
-async function connected(
-  transport: Transport,
-  mode: 'auto',
-  track: (client: Client) => void,
-): Promise<Client> {
-  const client = new Client(CLIENT_IDENTITY, { versionNegotiation: { mode } });
+async function connected(transport: Transport, track: (client: Client) => void): Promise<Client> {
+  const client = new Client(CLIENT_IDENTITY, { versionNegotiation: { mode: 'auto' } });
   track(client);
   try {
     await client.connect(transport);
