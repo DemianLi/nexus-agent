@@ -19,7 +19,7 @@ function pending(args: unknown, name = 'echo', description?: string): PendingApp
 }
 
 describe('前景子代理在問（#328）', () => {
-  it('給了 asker：卡上寫誰在問、它在做什麼；沒給（root 自己問）沒有這一行', () => {
+  it('給了 asker：內文最上面一行只寫它在做的事，不加前綴、不重複子代理名（#3039）；沒給（root 自己問）沒有這一行', () => {
     const { rerender } = render(
       <ApprovalCard
         pending={pending({ file: 'a' })}
@@ -30,7 +30,8 @@ describe('前景子代理在問（#328）', () => {
       />,
     );
     const line = screen.getByTestId('approval-asker');
-    expect(line.textContent).toBe('子代理「explore」要執行這個操作，它在做：整理 README');
+    expect(line.textContent).toBe('整理 README');
+    expect(line.parentElement?.firstElementChild).toBe(line);
     rerender(
       <ApprovalCard
         pending={pending({ file: 'a' })}
@@ -42,7 +43,7 @@ describe('前景子代理在問（#328）', () => {
     expect(screen.queryByTestId('approval-asker')).toBeNull();
   });
 
-  it('委派卡沒有說明：只寫誰在問', () => {
+  it('委派卡沒有說明：沒有這一行，誰在問由名稱列講', () => {
     render(
       <ApprovalCard
         pending={pending({})}
@@ -52,9 +53,40 @@ describe('前景子代理在問（#328）', () => {
         onStop={() => {}}
       />,
     );
-    expect(screen.getByTestId('approval-asker').textContent).toBe(
-      '子代理「explore」要執行這個操作',
+    expect(screen.queryByTestId('approval-asker')).toBeNull();
+  });
+});
+
+describe('多個操作（#3039 第 1 項）', () => {
+  const twoActions = {
+    kind: 'approval',
+    interruptId: 'int-1',
+    actions: [
+      { name: 'read_file', args: { path: 'a' } },
+      { name: 'write_file', args: { path: 'b' } },
+    ],
+    allowedDecisions: ['approve', 'reject'],
+  } as unknown as PendingApproval;
+
+  it('每段參數上方放工具名標籤，不加前綴字；單一操作不放', () => {
+    const { rerender } = render(
+      <ApprovalCard pending={twoActions} busy={false} onDecide={() => {}} onStop={() => {}} />,
     );
+    const tools = screen.getAllByTestId('approval-tool');
+    expect(tools.map((tool) => [tool.tagName, tool.textContent])).toEqual([
+      ['CODE', 'read_file'],
+      ['CODE', 'write_file'],
+    ]);
+    expect(tools[1]?.parentElement?.textContent).toContain('"path": "b"');
+    rerender(
+      <ApprovalCard
+        pending={pending({ file: 'a' })}
+        busy={false}
+        onDecide={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('approval-tool')).toBeNull();
   });
 });
 
@@ -123,13 +155,15 @@ describe('沙箱升級（#1292）', () => {
   it('沒有描述（較舊的 server）：照一般核准卡畫，不在 web 拼字', () => {
     card(pending({ sandbox_permissions: 'workspace-write' }, ESCALATE));
     expect(screen.queryByTestId('approval-escalation')).toBeNull();
-    expect(screen.getByText(ESCALATE)).toBeTruthy();
+    // 工具名由面板名稱列講（#3035），卡裡只有參數。
+    expect(screen.queryByText(ESCALATE)).toBeNull();
+    expect(screen.getByText(/"sandbox_permissions": "workspace-write"/)).toBeTruthy();
   });
 
-  it('其他工具不走升級那一支：工具名＋參數（描述照一般工具的規則，見下一組）', () => {
+  it('其他工具不走升級那一支：只畫參數，工具名由面板名稱列講（#3035；描述照一般工具的規則，見下一組）', () => {
     card(pending({ file_path: '/a' }, 'write_file', defaultApprovalReason('write_file')));
     expect(screen.queryByTestId('approval-escalation')).toBeNull();
-    expect(screen.getByText('write_file')).toBeTruthy();
+    expect(screen.queryByText('write_file')).toBeNull();
     expect(
       screen.getByText('{ "file_path": "/a" }', {
         normalizer: (text) => text.replace(/\s+/g, ' '),
@@ -144,16 +178,15 @@ describe('閘門給的理由（#1628）', () => {
   const card = (p: PendingApproval) =>
     render(<ApprovalCard pending={p} busy={false} onDecide={() => {}} onStop={() => {}} />);
 
-  it('真的理由：畫在「要執行 …」下面，工具名與參數照舊', () => {
+  it('真的理由：畫在參數上面，參數照舊', () => {
     card(pending({ query: '上週的退貨訂單' }, SEARCH, REASON));
     expect(screen.getByTestId('approval-reason').textContent).toBe(REASON);
-    expect(screen.getByText(SEARCH)).toBeTruthy();
     expect(screen.getByText(/"query": "上週的退貨訂單"/)).toBeTruthy();
     // 在「要執行的內容」那一組裡：讀屏進那一組就唸得到，不是 tooltip。
     expect(screen.getByRole('group', { name: '要執行的內容' }).textContent).toContain(REASON);
   });
 
-  it('core 的預設字：不畫（跟「要執行 …」那一行重複）', () => {
+  it('core 的預設字：不畫（跟面板名稱列的工具名重複）', () => {
     card(pending({ file_path: '/a' }, 'write_file', defaultApprovalReason('write_file')));
     expect(screen.queryByTestId('approval-reason')).toBeNull();
     expect(screen.queryByText(defaultApprovalReason('write_file'))).toBeNull();

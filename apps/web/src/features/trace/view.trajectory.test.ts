@@ -21,14 +21,7 @@ import {
   view,
   withTrajectory,
 } from '@/test/trajectory-fixtures';
-import {
-  TRACE_LIMITS,
-  TRACE_STRUCTURED_LIMITS,
-  sameRow,
-  traceModel,
-  traceTurns,
-  turnSeqOfMessage,
-} from '@/features/trace/view';
+import { sameRow, traceModel, traceTurns, turnSeqOfMessage } from '@/features/trace/view';
 import type { TraceRow } from '@/features/trace/view';
 
 const kinds = (rows: readonly TraceRow[]) => rows.map((row) => row.kind);
@@ -106,7 +99,7 @@ describe('traceModel：結構化模式的歸位', () => {
     expect(kinds(model.turns[0]!.rows)).toEqual(['input', 'call', 'reply']);
   });
 
-  it('目標自己排的輪沒有人話，也是自己一組（取代第 0 版限制 1 的釘子）', () => {
+  it('目標自己排的輪沒有人話，也是自己一組', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
       script.running(),
@@ -126,7 +119,7 @@ describe('traceModel：結構化模式的歸位', () => {
     expect(model.turns).toHaveLength(2);
     expect(model.turns[1]!.head?.kind).toBe('goal');
     expect(kinds(model.turns[1]!.rows)).toEqual(['call', 'reply']);
-    // 同一份對話在沒有投影時（第 0 版）仍黏在前一輪——那條限制還在、仍寫在畫面上。
+    // 同一份對話在沒有投影時（第 0 版）仍黏在前一輪。
     expect(traceTurns(state)).toHaveLength(1);
   });
 
@@ -821,19 +814,6 @@ describe('traceModel：列只放原始值，投影整份換掉時 memo 才擋得
     const flat = (m: typeof first) => m.turns.flatMap((t) => t.rows);
     expect(flat(second)).toHaveLength(flat(first).length);
     flat(first).forEach((row, i) => expect(sameRow(row, flat(second)[i]!)).toBe(true));
-  });
-});
-
-describe('限制文字', () => {
-  it('結構化的限制拿掉了「切輪靠人」；決定那條不再說「只存本地」（核准結局來自軌跡）', () => {
-    expect(Object.keys(TRACE_STRUCTURED_LIMITS)).toEqual(['decisions', 'loaded', 'absent']);
-    expect(TRACE_STRUCTURED_LIMITS.decisions).not.toBe(TRACE_LIMITS.decisions);
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('重新整理後仍在');
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('更早的輪只剩摘要');
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('載入這一輪的細節');
-    expect(TRACE_STRUCTURED_LIMITS.loaded).toContain('載入這一輪的細節');
-    expect(TRACE_STRUCTURED_LIMITS.decisions).not.toContain('只記在這個分頁');
-    expect(Object.keys(TRACE_LIMITS)).toEqual(['turns', 'decisions', 'loaded', 'absent']);
   });
 });
 

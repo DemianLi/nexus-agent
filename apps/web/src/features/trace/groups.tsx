@@ -25,7 +25,6 @@ export const ROW_PAGE = 200;
 
 export const TRACE_MORE_DIGESTS_LABEL = '顯示更早的摘要';
 export const TRACE_MORE_ROWS_LABEL = '顯示更早的列';
-export const TRACE_LEGACY_GROUP_TEXT = '沒有結構資料的一輪：以人說的那一句切開';
 
 /** 主對話那一組：子代理的輪也是 `section[data-seq]`，而且 `seq` 是它自己日誌上的位置，會跟主對話撞號。 */
 export const mainTurnSelector = (seq: number) =>
@@ -33,7 +32,6 @@ export const mainTurnSelector = (seq: number) =>
 
 export function TurnGroup({
   turn,
-  structured,
   names,
   missing,
   revealed,
@@ -44,7 +42,6 @@ export function TurnGroup({
   onArm,
 }: {
   turn: TraceTurn;
-  structured: boolean;
   names: ReadonlyMap<string, string>;
   missing: string | undefined;
   /** 剛被成本分頁指到的那一組：畫一圈標示。 */
@@ -86,11 +83,6 @@ export function TurnGroup({
             onArm={(button) => onArm?.(turn.seq!, button)}
           />
         )}
-      {structured && turn.legacy && (
-        <p className="text-muted-foreground px-2 pt-1 text-tip" data-testid="trace-legacy-group">
-          {TRACE_LEGACY_GROUP_TEXT}
-        </p>
-      )}
       {hiddenRows > 0 && (
         <Button
           type="button"

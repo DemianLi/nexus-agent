@@ -12,7 +12,7 @@ import {
   PARTIAL_OUTPUT_HEADING,
   SUBAGENT_MAX_TOKENS_REASON,
   SUBAGENT_MAX_TOKENS_TEXT,
-  SUBAGENT_PARTIAL_TEXT,
+  SUBAGENT_MAX_TOKENS_PARTIAL_TEXT,
 } from '@/features/tool/max-tokens-view';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
 import { Transcript } from '@/features/transcript/transcript';
@@ -24,7 +24,7 @@ afterEach(cleanup);
 
 /**
  * #1682 起是 SG 的 `StepRow`：收著那一行的 label（標題加摘要）是按鈕裡第一個 span，一段字；SG 的明細框用標題當 `pre` 的名稱
- * （patch `0019`：「參數」「結果」「錯誤」）。
+ * （patch `0019`：「參數」「結果」「錯誤」），參數框與結果框畫面上不寫標題（patch `0028`）。
  */
 const rowLabel = (card: HTMLElement = screen.getByTestId('tool-entry')) =>
   card.querySelector('[data-slot="step-row"] > button > span')?.textContent;
@@ -59,11 +59,11 @@ describe('工具卡', () => {
     expect(within(card).getByText(label)).toBeTruthy();
   });
 
-  it('收著一行：分類的標題、工具名、參數摘要；展開看排好的參數（SG 的參數框）', () => {
+  it('收著一行：專屬標題、參數摘要，不寫原始工具名；展開看排好的參數（SG 的參數框）', () => {
     render(<ToolCard entry={tool({ name: 'echo', input: '{"message":"嗨"}' })} />);
     const trigger = screen.getByRole('button', { name: /回聲/ });
     expect(rowLabel()).toBe('回聲 嗨');
-    expect(trigger.textContent).toContain('echo');
+    expect(trigger.querySelector('code')).toBeNull();
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByLabelText('參數')).toBeNull();
 
@@ -1204,20 +1204,22 @@ describe('子代理撞到輸出上限的 task（#608）', () => {
     fireEvent.click(screen.getAllByRole('button')[0]!);
   }
 
-  it('英文那句換成中文，寫到一半的那段照結果畫', () => {
+  it('英文那句換成中文，寫到一半的那段放進引用框', () => {
     showTask(`${HEADLINE}\n${PARTIAL_OUTPUT_HEADING}\n報告\n寫到一半`);
-    expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_TEXT + SUBAGENT_PARTIAL_TEXT);
-    expect(within(screen.getByTestId('tool-output')).getByLabelText('工具結果').textContent).toBe(
+    expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_PARTIAL_TEXT);
+    expect(document.body.textContent).not.toContain('以下是');
+    expect(screen.getByTestId('partial-quote').tagName).toBe('BLOCKQUOTE');
+    expect(within(screen.getByTestId('partial-quote')).getByLabelText('工具結果').textContent).toBe(
       '報告\n寫到一半',
     );
     expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_REASON);
     expect(document.body.textContent).not.toContain(PARTIAL_OUTPUT_HEADING);
   });
 
-  it('一個字都沒寫：只講沒寫完，沒有「以下是」也沒有結果', () => {
+  it('一個字都沒寫：只講沒寫完，沒有引用框也沒有結果', () => {
     showTask(HEADLINE);
     expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_TEXT);
-    expect(document.body.textContent).not.toContain(SUBAGENT_PARTIAL_TEXT);
+    expect(screen.queryByTestId('partial-quote')).toBeNull();
     expect(screen.queryByTestId('tool-output')).toBeNull();
     expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_REASON);
   });
@@ -1272,7 +1274,7 @@ describe('背景子代理的委派卡上，模型那一行（#889）', () => {
     render(
       <ToolCard entry={tool({ name: 'task', input: '{}', meta: { kind: 'other', model: 'm' } })} />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /task/ }));
+    fireEvent.click(screen.getByRole('button', { name: /委派子代理/ }));
     expect(document.querySelector('[data-subagent-model]')).toBeNull();
   });
 });
@@ -1323,11 +1325,19 @@ describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
     expect(trigger().textContent).toContain('已停止');
   });
 
-  it('工具名在列上（sm 以上），失敗的狀態字是 destructive', () => {
-    render(<ToolCard entry={tool({ name: 'echo', status: 'failed', error: '壞了' })} />);
-    const code = within(trigger()).getByText('echo');
+  it.each([
+    ['同一類共用標題', 'read_file'],
+    ['MCP 工具', 'mcp__files__stat'],
+    ['宿主頁工具', 'page__pick_date'],
+  ])('標題不是專屬的（%s）：工具名在列上（sm 以上）', (_, name) => {
+    render(<ToolCard entry={tool({ name })} />);
+    const code = within(trigger()).getByText(name);
     expect(code.tagName).toBe('CODE');
     expect(code.className).toContain('sm:inline');
+  });
+
+  it('失敗的狀態字是 destructive', () => {
+    render(<ToolCard entry={tool({ name: 'echo', status: 'failed', error: '壞了' })} />);
     expect(within(trigger()).getByText('失敗').getAttribute('data-variant')).toBe('destructive');
   });
 

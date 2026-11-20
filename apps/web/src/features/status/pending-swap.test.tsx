@@ -1,6 +1,6 @@
 import type { PendingApproval, PendingInput, PendingQuestion } from '@nexus/wire';
 import { APPROVAL_PENDING_KIND, QUESTION_PENDING_KIND } from '@nexus/wire';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -87,11 +87,16 @@ describe('換手層', () => {
   it('兩個待決時先來先處理，進度跨面板數（核准與提問一起）', async () => {
     const view = render(<Harness pendings={[]} />);
     view.rerender(<Harness pendings={[approval('edit_file', 'int-1'), question('q-1')]} />);
-    await screen.findByRole('region', { name: '等待核准：edit_file（1／2）' });
+    const first = await screen.findByRole('region', { name: '等待核准：edit_file（1／2）' });
     expect(screen.queryByText('提問')).toBeNull();
+    // 看得到的名稱列是縮寫，工具名是 code 標籤；全句在 `aria-label`（#3035）。
+    const head = within(first).getByTestId('pending-head');
+    expect(head.textContent).toBe('等待核准 edit_file（1／2）');
+    expect(head.querySelector('code')?.textContent).toBe('edit_file');
 
     view.rerender(<Harness pendings={[question('q-1')]} />);
-    await screen.findByRole('region', { name: '有 1 個問題要你回答' });
+    const second = await screen.findByRole('region', { name: '有 1 個問題要你回答' });
+    expect(within(second).getByTestId('pending-head').textContent).toBe('1 個問題');
   });
 
   it('焦點在輸入框時搬到面板本身（不是按鈕）；面板收掉回輸入框', async () => {

@@ -29,10 +29,14 @@ import { Badge } from '@/components/ui/badge';
 import { OutputBlock, StepRow, STEP_LABELS } from '@/components/ui/tool-steps';
 import { answerText, type QuestionAnswer } from '@/features/question';
 import { basename, type PresentedFile } from '@/features/deliverable';
-import { SUBAGENT_MAX_TOKENS_TEXT, SUBAGENT_PARTIAL_TEXT } from '@/features/tool/max-tokens-view';
+import {
+  SUBAGENT_MAX_TOKENS_PARTIAL_TEXT,
+  SUBAGENT_MAX_TOKENS_TEXT,
+} from '@/features/tool/max-tokens-view';
 import { outputOf } from '@/shared/lib/tool-output';
 import { toStep } from '@/features/tool/step';
 import { classifyTool } from '@/features/tool/view';
+import { hasOwnTitle } from '@/features/tool/tools';
 
 export { TOOL_STATUS_LABEL } from '@/features/tool/step';
 
@@ -159,8 +163,10 @@ export function ToolCard({
         onOpenChange={setOpen}
         trailing={
           <>
-            {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的（#625 實機）。 */}
-            <code className="hidden shrink-0 font-mono text-tip sm:inline">{entry.name}</code>
+            {/* 標題不是這支工具專屬的（{@link hasOwnTitle}）才補工具名；手機寬度讓給摘要（#625 實機）。 */}
+            {!hasOwnTitle(entry.name) && (
+              <code className="hidden shrink-0 font-mono text-tip sm:inline">{entry.name}</code>
+            )}
             {view.todoExtra > 0 && (
               <span className="shrink-0 text-tip" data-testid="todo-extra">
                 <span aria-hidden>+{view.todoExtra}</span>
@@ -221,12 +227,20 @@ function toolBody(entry: ToolEntry, view: ReturnType<typeof toStep>): ReactNode 
     const partial = view.truncated.partial.trim() !== '';
     parts.push(
       <Surface key="truncated" as="p" tone="stage" className="text-destructive p-3 text-tip">
-        {SUBAGENT_MAX_TOKENS_TEXT}
-        {partial && SUBAGENT_PARTIAL_TEXT}
+        {partial ? SUBAGENT_MAX_TOKENS_PARTIAL_TEXT : SUBAGENT_MAX_TOKENS_TEXT}
       </Surface>,
     );
+    // 寫到一半的那段放引用框（左邊框）：由框表明下面是它寫的，不另加一句前導。
     if (partial)
-      parts.push(<ToolOutputBlock key="partial" output={outputOf(view.truncated.partial)} />);
+      parts.push(
+        <blockquote
+          key="partial"
+          className="border-border border-l-2 pl-3"
+          data-testid="partial-quote"
+        >
+          <ToolOutputBlock output={outputOf(view.truncated.partial)} />
+        </blockquote>,
+      );
   } else if (view.resultInChildren && view.failed && entry.error !== undefined)
     // 有自己一份檢視的那幾種失敗了：錯誤照 SG 的錯誤框畫，接在檢視後面（SG 的 `error` 沒設，不會畫兩次）。
     parts.push(

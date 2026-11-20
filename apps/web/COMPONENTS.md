@@ -62,7 +62,7 @@
 怎麼判：
 
 - **先看能不能點**。按鈕、觸發鈕、選單項本身不縮成 `text-tip`。裡面夾的計數、時間、`font-normal` 附註另外標 `text-tip`，不要跟著外層一起變大。
-- **再看是不是在幫一群東西命名**：卡片的標頭、清單或群組的標題、區段標題。不可點的也算；同一欄裡可點的群組標題（側欄「已封存」）與不可點的（「今天」）要一樣大。卡片**裡面**只標一塊內容的小標籤（工具卡的「結果」、提問面板的「呼叫參數」）不是在命名一群東西，是附註，留 `text-tip`。
+- **再看是不是在幫一群東西命名**：卡片的標頭、清單或群組的標題、區段標題。不可點的也算；同一欄裡可點的群組標題（側欄「已封存」）與不可點的（「今天」）要一樣大。卡片**裡面**只標一塊內容的小標籤（工具卡的「結果」）不是在命名一群東西，是附註，留 `text-tip`。
 - **同一串清單的列跟著可點的列走**：觀測分頁的列有能展開的（`ExpandableLine`）與不能展開的（`StaticLine`），兩種都是 `text-ui`，不然相鄰的列一大一小。
 - **等寬的內容不是標題**：diff、讀檔、搜尋結果、`MonoBlock`、工具卡上的路徑都留 `text-tip`。路徑本身就是那顆鈕的字時（改動清單的列、審閱分頁選檔案的鈕）才是 `text-ui`。
 - **只動 12 的那一層**：已經是 `text-body` 的按鈕與選單不降成 13。
@@ -253,7 +253,7 @@ node apps/web/visual/compare.ts <上一個的截圖> <這一個的截圖> <輸�
 
 ## 工具卡（SG tool-steps）
 
-#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66 條；diff 是第 77–80 條）。寫呼叫端時：
+#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66、87 條；diff 是第 77–80 條）。寫呼叫端時：
 
 - **`ToolEntry` 只經 `features/tool/step.ts` 轉成 `Step`**：狀態收成 SG 的三態（`running`／`done`／`error`），四格狀態的字由卡放在 `trailing` 的 `Badge`。
 - **寫檔／改檔給 `step.patch`**（#1685 B）：字串只從 `shared/lib/tool-diff.ts` 的 `toolDiffView` 拿（全樹組 unified patch 的只有那裡的 `toolPatch`），卡與段才拿到同一份、nexus 層的 `patchStats` 快取才查得到。上限在 nexus 層的 `DiffView`，不要在轉接層截 patch：vendor 從 patch 算列與段的 `+N −M`，截過就少報。

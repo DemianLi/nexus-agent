@@ -230,7 +230,7 @@ describe('server 上還有沒載的（#725）', () => {
   }
   const loadMore = () => screen.queryByTestId('thread-load-more');
 
-  it('時間組最後有「載入更多會話」，按了叫 loadMore；載入中按不了', () => {
+  it('時間組最後有「載入更多」，按了叫 loadMore；載入中字不換、按不了、旁邊畫點', () => {
     let calls = 0;
     const first = renderPaged({ loadMore: () => void (calls += 1) });
     fireEvent.click(loadMore()!);
@@ -238,7 +238,8 @@ describe('server 上還有沒載的（#725）', () => {
     first.unmount();
 
     renderPaged({ loadingMore: true });
-    expect(loadMore()?.textContent).toBe('載入中…');
+    expect(loadMore()?.textContent).toBe('載入更多');
+    expect(loadMore()!.querySelector('[style]')).not.toBeNull();
     expect(loadMore()).toHaveProperty('disabled', true);
   });
 

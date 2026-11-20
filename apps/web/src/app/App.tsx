@@ -20,7 +20,6 @@ import {
   type ThreadChoice,
   FORK_FAILED_TEXT,
   FORK_RENAME_FAILED_TEXT,
-  FORKED_THREAD_NOTICE,
   forkSupported,
   increasedForkTitle,
   documentTitle,
@@ -47,10 +46,16 @@ import {
   parseModelLine,
   permissionLocked,
 } from '@/features/seats';
-import { ConversationBody, Entry as TranscriptEntry, useFreshItems } from '@/features/transcript';
+import {
+  ConversationBody,
+  Entry as TranscriptEntry,
+  formatLastActivity,
+  useFreshItems,
+} from '@/features/transcript';
+import type { ReplayEnd } from '@/features/transcript';
 import { ConversationFeedbackDialog, useFeedback } from '@/features/feedback';
 import { FEEDBACK_COMMAND_LINE } from '@/shared/connection/command-line';
-import { ConversationNotices, PendingSwap } from '@/features/status';
+import { ConversationStatus, PendingSwap } from '@/features/status';
 import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
 import { GoalBar } from '@/features/goal';
 import { PlanChip, usePlanLibrary } from '@/features/plan';
@@ -97,46 +102,8 @@ import { randomUuid } from '@/shared/lib/uuid';
 import { reportDetail, reportTitle, useSubmit } from '@/features/submit';
 import type { SubmitReport } from '@/features/submit';
 
-export { LEGACY_THREAD_NOTICE } from '@/features/status';
 export { STOP_QUESTIONS_LABEL } from '@/app/pending-panels';
 export { inputPlaceholder } from '@/features/composer';
-
-/**
- * 接回上一次那條 thread 時講的話。
- *
- * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）。會話日誌預設落盤
- * （#607），但部署設定可以把清單上 `session-persistence` 那一列關掉（#613），那時日誌只在記憶體裡，重開過的
- * server 上同一個 id 就是一條新的，畫面與模型都從空的開始；落盤開著但換了 `NEXUS_AGENT_HOME` 或 cwd 再重開，
- * 也一樣找不到。沒重開過的話兩者都在（日誌與 `MemorySaver` 都還在記憶體裡）。
- * **條件講白話**（#620）：看這一句的人不一定知道部署設定長怎樣；要查的話，server 起動時印的那一行與列不出清單的
- * 錯誤都會點名那一列。之前說過的話畫在底下，是從日誌重播的
- * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）——所以「接得回來」看畫面就知道，不用這一句講。
- * **最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
- *
- * **不講 todo**：待辦清單自己畫在輸入框上方（`TodoPanel`，#575），harness 從日誌的 `todo/write` 投影出來，回來了
- * 看得到；最後一輪之後又開了新的一輪就是沒有，照 dsh 的投影。模型則是從對話裡那幾次 `todo_write` 記得它的。
- */
-export const RESUMED_THREAD_NOTICE =
-  '接著上一次的 thread。伺服器有把會話存到磁碟（預設會存）、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
-  '模式、目標與計劃模式跟著回來。不想接就按「新對話」。';
-
-/**
- * 從「以前的會話」點過去時講的話（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。
- *
- * **跟上一句不同，這一句不用條件句**：清單只在會話日誌落盤的 server 上有（預設就落盤，#607；清單上 `session-persistence` 那一列關掉時列不出來，#613），而且只列切得過去的，所以
- * 「日誌上的東西回來了」是確定的。畫面照日誌重播、模型照日誌推回（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）；
- * 舊格式那一種推不回模型，畫面上另有一句 {@link LEGACY_THREAD_NOTICE} 講，所以這一句不再帶例外。todo 不另外講，
- * 理由同上一句。
- */
-export const SWITCHED_THREAD_NOTICE =
-  '切到以前的一條 thread。之前的對話重播在底下，模型也記得，目標、沙箱模式與計劃模式跟著回來。';
-
-const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
-  fresh: undefined,
-  recalled: RESUMED_THREAD_NOTICE,
-  listed: SWITCHED_THREAD_NOTICE,
-  forked: FORKED_THREAD_NOTICE,
-};
 
 /** 光打名字就另有動作的命令（`/feedback` 開回饋框，見 `use-conversation` 的 `send`）。 */
 const DECORATED_COMMANDS: ReadonlySet<string> = new Set([
@@ -322,7 +289,16 @@ export function App({ client }: { client?: WireClient } = {}) {
         }
         if (navigation.current !== ticket) return;
         navigation.current += 1;
-        setChoice({ threadId: child, origin: 'forked' });
+        setChoice({
+          threadId: child,
+          origin: 'forked',
+          forkedFrom: {
+            threadId: source,
+            ...(sourceTitle === undefined || sourceTitle === null || sourceTitle === ''
+              ? {}
+              : { title: sourceTitle }),
+          },
+        });
       } finally {
         forkingNow.current = false;
         setForking(false);
@@ -341,7 +317,8 @@ export function App({ client }: { client?: WireClient } = {}) {
         directory={directory}
         threadManagement={threadManagement}
         threadId={choice.threadId}
-        notice={ORIGIN_NOTICE[choice.origin]}
+        origin={choice.origin}
+        {...(choice.forkedFrom === undefined ? {} : { forkedFrom: choice.forkedFrom })}
         forking={forking}
         {...(forkSupported(directory.listing)
           ? {
@@ -366,7 +343,8 @@ function ConversationView({
   directory,
   threadManagement,
   threadId,
-  notice,
+  origin,
+  forkedFrom,
   forking,
   onFork,
   onNewConversation,
@@ -376,7 +354,8 @@ function ConversationView({
   readonly directory: ThreadDirectory;
   readonly threadManagement: ThreadManagement | undefined;
   readonly threadId: string;
-  readonly notice: string | undefined;
+  readonly origin: ThreadChoice['origin'];
+  readonly forkedFrom?: ThreadChoice['forkedFrom'];
   /** 分叉送出去了、回應還沒到（#1581）。 */
   readonly forking: boolean;
   /** 沒給就不畫分支鈕：這台 server 沒接落盤（#1964，`forkSupported`）。 */
@@ -656,6 +635,34 @@ function ConversationView({
   // `conversation` 放的是 store（身分穩定），不是對話狀態：後者每一格串流都變，`sources` 一變 `RightSidebarPanel` 的 `memo` 就擋不住（#1033）。
   // 計劃分頁的旁路掃描（#1798）從已載入那一頁的游標往前讀：第一頁到了才給，之前沒有游標可以起頭。
   const historyReady = conversation.history !== undefined;
+  // 上一次的時間（清單那一列的 `updatedAt`，見 `ThreadSummary`）：第一次在清單上找到這一條時記下就不再讀，
+  // 在這裡送出一句之後清單的時間就成了剛剛。找不到（清單沒載到、不列這一條）就只畫線。
+  const listedAt =
+    directory.listing.kind === 'ok'
+      ? directory.listing.result.items.find((item) => item.threadId === threadId)?.updatedAt
+      : undefined;
+  const [lastActivity, setLastActivity] = useState(listedAt);
+  if (lastActivity === undefined && listedAt !== undefined) setLastActivity(listedAt);
+  // 伺服器不收這條下行時（thread 數滿了）不畫：跟狀態列的「打不開」矛盾（#1483）。
+  const replayEnd: ReplayEnd | undefined =
+    conversation.refusal !== undefined
+      ? undefined
+      : conversation.history?.legacy === true
+        ? { kind: 'legacy' }
+        : origin === 'forked' && forkedFrom !== undefined
+          ? {
+              kind: 'forked',
+              ...(forkedFrom.title === undefined ? {} : { sourceTitle: forkedFrom.title }),
+              onOpenSource: () => onSwitch(forkedFrom.threadId),
+            }
+          : origin === 'recalled' || origin === 'listed'
+            ? {
+                kind: 'resumed',
+                ...(lastActivity === undefined
+                  ? {}
+                  : { lastActivity: formatLastActivity(lastActivity) }),
+              }
+            : undefined;
   const sidebarSources = useMemo(
     () => ({
       changes,
@@ -713,12 +720,9 @@ function ConversationView({
           <RightSidebarToggle className="size-11 rounded-md lg:size-9" />
         </header>
 
-        <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">
-          <ConversationNotices conversation={conversation} notice={notice} />
-        </div>
-
         <ConversationBody
           conversation={conversation}
+          {...(replayEnd === undefined ? {} : { replayEnd })}
           feedback={feedback}
           isFresh={isFresh}
           hasSteers={steers.length > 0}
@@ -765,6 +769,8 @@ function ConversationView({
           {archived && threadManagement !== undefined && (
             <ArchivedBanner onRestore={() => threadManagement.onUnarchive(threadId)} />
           )}
+          {/* 狀態列貼著輸入框或面板的上緣（#3035），在換手區外面：「立刻重連」不算進焦點搬移的範圍。 */}
+          <ConversationStatus conversation={conversation} />
           <PendingSwap
             pendings={pendings}
             askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}

@@ -58,9 +58,8 @@ import { cn } from '@/lib/utils';
 /** 停靠面板的 id：開關鈕的 `aria-controls` 指它。 */
 export const RIGHT_SIDEBAR_ID = 'right-sidebar';
 
-/** 空狀態那一句（#640 決定 3；#1031 加上觀測與成本的入口鈕）。 */
-export const RIGHT_SIDEBAR_EMPTY_TEXT =
-  '這裡會顯示改動比對、交付預覽與計劃，從對話裡的卡片打開。觀測與成本可以直接打開：';
+/** 空狀態那一句（#640、#1031）；觀測與成本的入口鈕畫在它底下（`EmptyState`）。 */
+export const RIGHT_SIDEBAR_EMPTY_TEXT = '改動、交付、計劃從對話裡的卡片打開';
 
 /** 鍵盤調寬一次幾像素。 */
 const KEYBOARD_STEP = 16;

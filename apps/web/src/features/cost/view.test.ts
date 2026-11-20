@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import { Script } from '@/test/conversation-frames';
 
-import { COST_LIMITS, compactionCount, contextRows, usageSections } from './view';
+import { compactionCount, contextRows, contextSectionRows, usageSections } from './view';
 
 /** 狀態都從真的 frame 折出來，不手寫 `entries`。 */
 function fold(...build: ((script: Script) => Event[])[]) {
@@ -231,24 +231,8 @@ describe('compactionCount', () => {
   });
 });
 
-describe('COST_LIMITS', () => {
-  it('口徑把已知缺口都列出來：子代理、摘要、標題、失敗呼叫、快取讀取、耗時、已載入、金額與完成率', () => {
-    const all = Object.values(COST_LIMITS).join('\n');
-    for (const piece of [
-      '不含任何子代理',
-      '前景的目前沒有數字',
-      '生摘要的那一次',
-      '生標題的那一次',
-      '失敗或中止的呼叫',
-      '輸入含快取讀取',
-      '重試退避',
-      '等人核准',
-      '只算已載入',
-      '讀取當下',
-      '沒有金額',
-      '沒有完成率',
-    ]) {
-      expect(all).toContain(piece);
-    }
+describe('contextSectionRows', () => {
+  it('摘要關掉時只剩壓縮次數那一列，不會整段消失', () => {
+    expect(contextSectionRows(null, 2)).toEqual([['已載入的壓縮次數', '2 次']]);
   });
 });

@@ -208,10 +208,9 @@ describe('<nexus-chat>', () => {
     await waitFor(() => expect(threads()).toEqual(['上一條']));
   });
 
-  test('空白畫面不提拖檔：嵌入版沒有附件（#2384）', async () => {
+  test('空白畫面只有標題，不提拖檔：嵌入版沒有附件（#2384、#3050）', async () => {
     const view = shadow(mount());
     await view.findByRole('heading', { level: 2, name: '今天要做什麼？' });
-    expect(view.getByText('在下面打字。')).toBeTruthy();
     expect(view.queryByText(/拖/u)).toBeNull();
   });
 

@@ -355,7 +355,7 @@ describe('背景子代理結算通知（#851）', () => {
       inbox({ items: [], nextStep: [settled] }),
     ]);
     render(<Transcript state={state} isFresh={() => false} />);
-    expect(screen.getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步送進模型`)).toBeTruthy();
+    expect(screen.getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步`)).toBeTruthy();
     expect(document.querySelector('[data-pending-settled]')).not.toBeNull();
     expect(document.querySelector('[data-pending-steer]')).toBeNull();
     expect(screen.queryByText(/Background subagent/)).toBeNull();
@@ -368,7 +368,7 @@ describe('背景子代理結算通知（#851）', () => {
     ]);
     const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
     const slot = screen
-      .getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步送進模型`)
+      .getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步`)
       .closest('[data-slot="message-scroller-item"]');
     expect(slot).not.toBeNull();
 
@@ -442,7 +442,7 @@ describe('背景子代理結算通知（#851）', () => {
     ]);
     const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
     const slot = screen
-      .getByText('背景子代理已被停止・下一步送進模型')
+      .getByText('背景子代理已被停止・下一步')
       .closest('[data-slot="message-scroller-item"]');
     expect(slot).not.toBeNull();
 

@@ -234,7 +234,7 @@ describe('排著的插話畫附件（#710）', () => {
       },
     }) as Event;
 
-  it('還沒被領走：附件標籤畫在淡一階的泡泡上方，底下一句仍是下一步送進模型', () => {
+  it('還沒被領走：附件標籤畫在淡一階的泡泡上方，底下一句仍是下一步', () => {
     show([nextStep('改看這張')]);
     const bubble = document.querySelector('[data-pending-steer]')!;
     const chips = within(bubble as HTMLElement).getAllByTestId('sent-attachment');

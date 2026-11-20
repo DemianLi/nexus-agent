@@ -184,14 +184,14 @@ describe('背景子代理的來信排在插話那一條（#861）', () => {
 describe('pendingAgentText（#851、#861）', () => {
   it('這一輪還在是下一步、停了是下一輪，跟插話同一條線', () => {
     expect(pendingAgentText(SETTLED_NOTICE_TEXT.completed, 'running')).toBe(
-      `${SETTLED_NOTICE_TEXT.completed}・下一步送進模型`,
+      `${SETTLED_NOTICE_TEXT.completed}・下一步`,
     );
     expect(pendingAgentText(AGENT_MESSAGE_QUEUED_TEXT, 'awaiting-input')).toBe(
-      `${AGENT_MESSAGE_QUEUED_TEXT}・下一步送進模型`,
+      `${AGENT_MESSAGE_QUEUED_TEXT}・下一步`,
     );
     for (const status of ['idle', 'stopped', 'failed'] as const) {
       expect(pendingAgentText(SETTLED_NOTICE_TEXT.completed, status)).toBe(
-        `${SETTLED_NOTICE_TEXT.completed}・下一輪送進模型`,
+        `${SETTLED_NOTICE_TEXT.completed}・下一輪`,
       );
     }
   });
