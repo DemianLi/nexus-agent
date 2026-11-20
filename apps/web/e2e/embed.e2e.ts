@@ -16,6 +16,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { build } from 'vite';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 
+import { THREADS_PATH } from '@nexus/wire';
 import { EMBED_UNAUTHORIZED_TEXT } from '../src/shared/connection/embed-unauthorized';
 
 import { startE2eServe, type E2eServe, type ScriptTurn } from './serve';
@@ -569,9 +570,17 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
     await settled(page);
 
-    await page.goto(`${new URL(serve!.url).origin}/`);
+    const origin = new URL(serve!.url).origin;
+    const listings = recordListings(page, origin);
+    await page.goto(`${origin}/`);
     const row = page.getByTestId('thread-title-text').getByText(question, { exact: true });
-    await expect.poll(() => row.count(), { timeout: 30_000 }).toBe(1);
+    try {
+      await expect.poll(() => row.count(), { timeout: 30_000 }).toBe(1);
+    } catch (error) {
+      // 偶發紅的證據（#3022）。
+      await reportListingFailure(page, origin, listings, serve!);
+      throw error;
+    }
     await row.click();
     // 獨立頁面上這一句出現不只一處，只看有沒有出現。
     await expect
@@ -580,6 +589,52 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     await shot(page, 'embed-thread-in-standalone-history');
   });
 });
+
+/** 頁面打的每一次 `GET /threads`：狀態碼與回應本文（讀不到本文就記原因）。 */
+function recordListings(page: Page, origin: string): string[] {
+  const seen: string[] = [];
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== origin || url.pathname !== THREADS_PATH) return;
+    const at = seen.length;
+    seen.push(`${response.status()} ${url.search}（本文讀取中）`);
+    response.text().then(
+      (body) => {
+        seen[at] = `${response.status()} ${url.search} ${body}`;
+      },
+      (reason: unknown) => {
+        seen[at] = `${response.status()} ${url.search}（本文讀不到：${String(reason)}）`;
+      },
+    );
+  });
+  return seen;
+}
+
+/** 清單裡等不到那一列時，把頁面拿到的列表、現在重抓一次的列表與 serve 的日誌印到 stderr。 */
+async function reportListingFailure(
+  page: Page,
+  origin: string,
+  listings: readonly string[],
+  running: E2eServe,
+): Promise<void> {
+  const now = await page
+    .evaluate(async (url) => {
+      const response = await fetch(url, { headers: { 'content-type': 'application/json' } });
+      return `${response.status} ${await response.text()}`;
+    }, `${origin}${THREADS_PATH}`)
+    .catch((reason: unknown) => `重抓失敗：${String(reason)}`);
+  console.error(
+    [
+      '[#3022] 清單裡等不到元件開的那一列',
+      `頁面拿到的列表（${listings.length} 次）：`,
+      ...listings,
+      `現在重抓：${now}`,
+      'serve 的日誌：',
+      // 登入網址的 token 不進 CI 的 log。
+      running.output().replaceAll(/token=\S+/gu, 'token=…'),
+    ].join('\n'),
+  );
+}
 
 /** serve 的 `host-tools` 那一列（`apps/harness/cordis.serve.yml`）：免核准的名單與宿主頁幾毫秒沒回就當逾時。 */
 function hostToolsRow(config: { readonly exempt: readonly string[]; readonly timeoutMs?: number }) {

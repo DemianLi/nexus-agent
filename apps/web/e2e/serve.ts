@@ -56,6 +56,8 @@ export interface E2eServe {
    * 新的起不來就跟 `close` 一樣整個收掉（home 與暫存目錄一起刪）再拋，錯誤同 {@link startE2eServe}；之後再呼叫 `close` 無害。
    */
   restart(turns: readonly ScriptTurn[]): Promise<string>;
+  /** 這一次起動（{@link restart} 會歸零）以來子行程印出的 stdout 與 stderr，給測試失敗時附在訊息裡。 */
+  output(): string;
   /** 收掉子行程與暫存目錄。 */
   close(): Promise<void>;
 }
@@ -148,7 +150,7 @@ function exited(child: ChildProcess): Promise<void> {
  * @param turns - 腳本。
  * @param extraRows - 接在腳本前面的 patch 列（YAML 頂層清單項目，換行結尾），例如改 `host-tools` 那一列。
  * @param prepareHome - serve 起動之前在它的 home 裡放檔，例如嵌入身分對應表。目錄已經建好。
- * @returns 登入網址、serve 的 home、重起與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
+ * @returns 登入網址、serve 的 home、子行程輸出、重起與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
  *   `NEXUS_E2E_PROCESS_MODEL` 不是 `per-thread`／空、`NEXUS_E2E_AGENT_LOOP` 不是 `langgraph`／`native`／空，或 per-thread 卻沒給
  *   `NEXUS_SUPERVISOR_BIN`，也拋（見 {@link e2eServeInvocation}）。
  */
@@ -179,6 +181,7 @@ export async function startE2eServe(
   if (invocation.createHome) await mkdir(harnessHome, { recursive: true, mode: 0o700 });
   await prepareHome?.(harnessHome);
   let child: ChildProcess | undefined;
+  let output = '';
   const stop = async (): Promise<void> => {
     if (child === undefined) return;
     child.kill('SIGTERM');
@@ -196,6 +199,12 @@ export async function startE2eServe(
       env: { PATH: process.env.PATH ?? '', HOME: home, NEXUS_AGENT_HOME: harnessHome },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    output = '';
+    const collect = (chunk: Buffer): void => {
+      output += chunk.toString('utf8');
+    };
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
     return await authenticatedUrl(child);
   };
   const restart = async (script: readonly ScriptTurn[]): Promise<string> => {
@@ -210,7 +219,7 @@ export async function startE2eServe(
   };
   try {
     const url = await launch(invocation);
-    return { url, home: harnessHome, restart, close };
+    return { url, home: harnessHome, restart, output: () => output, close };
   } catch (error) {
     await close();
     throw error;
