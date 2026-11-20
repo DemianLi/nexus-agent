@@ -176,11 +176,12 @@ export function createThreadIndex(store: SessionStore, options: ThreadIndexOptio
   /**
    * 這一次請求開始時標著的每一條，回之前都有一次**在這次請求開始之後才起跑**的重讀：別的請求早先起的那一次可能早於最後一次寫入，
    * 等它完、還被標著就自己再讀一次。每條最多等一次、讀一次：一直在寫的那一條不會把請求卡住。
+   * 開始時正被別的請求重讀、標記已經被拿走的那幾條也等它讀完；不等的話，這一次回的列表少了那一條，而它比那個請求晚送出、可能先回（#3022）。
    */
   async function drainDirty(signal: AbortSignal | undefined): Promise<void> {
-    if (dirty.size === 0) return;
-    await options.beforeReread?.(signal);
-    for (const id of [...dirty]) {
+    if (dirty.size === 0 && rereading.size === 0) return;
+    if (dirty.size > 0) await options.beforeReread?.(signal);
+    for (const id of new Set([...dirty, ...rereading.keys()])) {
       signal?.throwIfAborted();
       await rereading.get(id)?.catch(() => {});
       if (!dirty.has(id)) continue;
