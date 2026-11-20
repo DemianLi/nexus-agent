@@ -69,7 +69,7 @@ for (const arg of args) {
     );
   }
 }
-lines.push(`W 的公式值：${String(wFormula(summaries.map((s) => s.sum.max)))} ms`);
+lines.push(`W（套下限）：${String(wFormula(summaries.map((s) => s.sum.max)))} ms`);
 const triggers = reportTriggers(summaries);
 lines.push(`回報條件：${triggers.length === 0 ? '沒有觸發' : triggers.join('；')}`);
 process.stdout.write(`${lines.join('\n')}\n`);
