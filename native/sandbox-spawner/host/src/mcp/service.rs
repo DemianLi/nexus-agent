@@ -336,7 +336,7 @@ impl Client {
                 let target = self.by_bridge.get(&open).copied();
                 match target.and_then(|key| self.opens.get_mut(&key)) {
                     Some(entry) => entry.phase = OpenPhase::Arrived(result),
-                    // 呼叫端在取用落定之前就取消了：橋那邊已經記下，要放掉。
+                    // 呼叫端在取用落定之前就取消了：橋若還記著這個綁定（取用成功就記，不看 `result`），這一次放掉它；沒記下或已經放掉時是空操作。
                     None => self.bridge.send(Command::Release { open }),
                 }
             }

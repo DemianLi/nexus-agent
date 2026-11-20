@@ -65,6 +65,10 @@ pub enum Command {
     /// 取消一次還在跑的請求：它照樣交一則 `Done`（`Err("cancelled")`）；已經結束的不理。
     Cancel { id: u64 },
     /// 忘掉 `open`。還在跑的請求照跑完。
+    ///
+    /// 橋交出這個 `open` 的 [`Outcome::Opened`] 之前處理到的是空操作：`Opened` 照樣交出，取用成功的照樣記下綁定。
+    /// 要放掉一個還沒落定的綁定，收到它的 `Opened` 之後再送一次；已經忘掉的編號再送也是空操作
+    /// （[`super::service::Client`] 在 `cancel` 送第一次、在 `deliver` 收到 `Opened` 時補送）。
     Release { open: u64 },
     /// 收掉整座橋。
     Shutdown,
