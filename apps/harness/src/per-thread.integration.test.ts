@@ -1224,13 +1224,20 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     const supervisor = running.child.pid!;
     const client = await clientOf(await running.loginUrl(1));
     expect(toolText(await turn(client, 'thread-w', '動手'))).toContain('已登記：x');
+    const lines = (text: string): number => running.log().split(text).length - 1;
+    await settled(supervisor, 'conversation-process', 1 + WARM);
+    await expect.poll(() => lines('[宿主] 連上了'), { timeout: 20_000 }).toBe(1 + WARM);
     const [host] = childrenRunning(supervisor, 'nexus-host');
     expect(host).toBeDefined();
     signalPid(host!, 'SIGKILL');
+    // 等對話行程都看到斷線才叫工具：搶在那之前送出的呼叫會以「送出後連線斷了」收尾，走不到等綁定的期限。
+    await expect.poll(() => lines('[宿主] 斷線'), { timeout: 20_000 }).toBe(1 + WARM);
 
     const started = Date.now();
     const state = await turn(client, 'thread-w', '再動手');
     const elapsed = Date.now() - started;
+    const tools = state.entries.filter((entry) => entry.kind === 'tool');
+    expect(tools).toHaveLength(1);
     expect(toolText(state)).toContain('server is disconnected');
     expect(replies(state)).toContain('收工');
     expect(childrenRunning(supervisor, 'nexus-host')).toEqual([]);
