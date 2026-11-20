@@ -8,14 +8,17 @@
  *   per-thread  `--process-model per-thread`：監督行程起前台、宿主與每條 thread 一個對話行程，池是每個行程一份。
  * 每回合兩臂都重新起（home 也是新的），開 N 條 thread，暖機 W 輪＋量測 T 輪。每一輪是一道柵欄：N 條同時送出，全部收尾才進下一輪。
  *
- * 每台 serve 掛 M=3 台 MCP server：兩台 stdio（{@link ./mcp-pool-stdio-server.ts}，純 node）、一台 HTTP（{@link ./mcp-pool-http-fixture.ts}，
+ * 每台 serve（pool 模式）掛 M=3 台 MCP server：兩台 stdio（{@link ./mcp-pool-stdio-server.ts}，純 node）、一台 HTTP（{@link ./mcp-pool-http-fixture.ts}，
  * 起在驅動裡、每臂一台）。假模型一輪依序叫三台的 `lookup`，再回一段文字。
  *
  * 每道柵欄的 `cpuMs` 是該臂整棵行程樹（根 pid 的所有後代，加上 cmdline 帶 `--tag <臂>` 的行程）所有 thread 的 schedstat 增量，
  * 只在柵欄上取樣；除以 N 的每輪 CPU 總和在彙總算。
  * 柵欄之間出生的行程從 0 起算；死掉的行程丟了增量，記在 `died`。讀不到的（不是消失的）記在 `readErrors`。
  *
- * 環境變數：OUT、TAG、ARMS（逗號分隔，預設兩臂）、N、R、W、T、HARNESS。
+ * `MODE=hostkill` 時只起一臂 per-thread、只掛 `mcpa` 一台 stdio：建一條綁定後，殺宿主 KILLS 次（每次先等宿主活過 HOST_STABLE_MS＋2 秒），
+ * 再連續殺 CONSEC_ROUNDS 輪、每輪 CONSEC_KILLS 次。段 A、B 的時間點由 {@link ./host-kill-preload.ts} 在對話行程裡記。
+ *
+ * 環境變數：OUT、TAG、ARMS（逗號分隔，預設兩臂）、N、R、W、T、HARNESS、MODE；hostkill 另有 KILLS、CONSEC_ROUNDS、CONSEC_KILLS、HOST_STABLE_MS。
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -51,7 +54,7 @@ if (MODE !== 'pool' && MODE !== 'hostkill') throw new Error(`MODE 只收 pool、
 const KILLS = Number(E.KILLS ?? 30);
 const CONSEC_ROUNDS = Number(E.CONSEC_ROUNDS ?? 3);
 const CONSEC_KILLS = Number(E.CONSEC_KILLS ?? 4);
-/** 監督行程的 `--host-stable-ms` 預設值：宿主活過它，下一次重起的退避才回到最低一級。 */
+/** 殺之前要等宿主活多久；須等於監督行程的 `--host-stable-ms`（預設 60 秒，驅動不傳這個旗標）：宿主活過它，下一次重起的退避才回到最低一級。 */
 const HOST_STABLE_MS = Number(E.HOST_STABLE_MS ?? 60_000);
 const HOSTKILL_LOG = `${E.OUT ?? '/out'}/hostkill-preload.jsonl`;
 const PRELOAD = `${E.HARNESS ?? '/opt/nexus/apps/harness'}/src/measure/host-kill-preload.ts`;
@@ -64,7 +67,7 @@ for (const a of ARMS) {
 const HARNESS = E.HARNESS ?? '/opt/nexus/apps/harness';
 const STDIO_SERVER = `${HARNESS}/src/measure/mcp-pool-stdio-server.ts`;
 const MCP_LOG_DIR = `${OUT}/mcp-log`;
-/** 假模型一輪依序叫的三支工具，跟 patch 裡的 serverName 對上。 */
+/** 假模型一輪依序叫的工具（`MODE=hostkill` 只叫 mcpa 一支），跟 patch 裡的 serverName 對上。 */
 const POOL_TOOLS = (
   MODE === 'hostkill'
     ? ['mcp__mcpa__lookup']
@@ -483,6 +486,7 @@ ${
 }
 
 // 驅動自己跑在 tsx 底下；拿掉它的 loader 設定，被量的 serve 與子行程才是純 node，RSS 與 CPU 不含轉譯器。
+// `MODE=hostkill` 另設 `NODE_OPTIONS=--import <記時預載>`（只在對話行程裡動作，這個模式不拿 CPU、RSS 當數字）。
 function childEnv(home: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -788,7 +792,10 @@ interface KillRecord {
   readonly bindingLost: boolean;
 }
 
-/** 殺一次宿主：等恢復（onReady 與 open ready 都到），自我檢查各恰好一筆，不過就整筆作廢。 */
+/**
+ * 殺一次宿主並等恢復（只看 `boundPid` 的事件）。自我檢查：`openReady` 恰好一筆、`onReady` 每個登記序號恰好一筆。
+ * 找不到宿主、90 秒內沒恢復、自我檢查不過、段 B 為負，都回 `valid: false`，不 throw。`waitStable` 時先等宿主活過 `HOST_STABLE_MS`＋2 秒。
+ */
 async function killOnce(
   p: ArmProc,
   label: string,

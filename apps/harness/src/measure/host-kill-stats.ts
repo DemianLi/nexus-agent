@@ -24,7 +24,7 @@ export interface Dist {
   readonly max: number;
 }
 
-/** nearest-rank 百分位。 */
+/** nearest-rank 百分位；空陣列回 NaN。 */
 export function percentile(xs: readonly number[], p: number): number {
   if (xs.length === 0) return Number.NaN;
   const sorted = [...xs].sort((a, b) => a - b);
@@ -41,9 +41,6 @@ export function dist(xs: readonly number[]): Dist {
   };
 }
 
-/** W 的現值（毫秒），`DEFAULT_REBIND_WAIT_MS`。 */
-export const W_CURRENT_MS = 5_000;
-/** W 的下限（毫秒）。 */
 export const W_FLOOR_MS = 5_000;
 
 /**
@@ -67,6 +64,7 @@ export interface ArchSummary {
   readonly missing: number;
 }
 
+/** attempts 是這個架構應有的單次殺次數；missing＝attempts－有效樣本數，沒殺到的、作廢的都算。 */
 export function summarize(
   arch: string,
   samples: readonly KillSample[],
@@ -84,7 +82,10 @@ export function summarize(
   };
 }
 
-/** 規則寫死的回報條件：觸發就停下報 PM，不自己調。回觸發了哪幾條。 */
+/**
+ * 規則寫死的回報條件：A＋B 最大值超過 3 秒；A、B、A＋B 任一 p95 超過 2 秒；有缺樣本；兩架構最大值差一倍以上。回觸發了哪幾條，空陣列就是都沒觸發。
+ * 觸發後怎麼處理，見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`「要回報 PM、不自己調的情況」。
+ */
 export function reportTriggers(summaries: readonly ArchSummary[]): string[] {
   const out: string[] = [];
   for (const s of summaries) {

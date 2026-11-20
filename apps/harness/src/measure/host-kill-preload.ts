@@ -4,9 +4,9 @@
  * 逐行寫到 `HOSTKILL_LOG`；包的是同一個模組實例，產品碼一個字都不改：
  *
  * - `onReady(listener)`：包住 listener，每次叫用記一行 `onReady`（帶登記序號）。
- * - `call('mcp/client'…'open')` 的 `onChunk`：收到 `ready` 塊記一行 `openReady`。
+ * - `call(…, 'open', …, { onChunk })`（產品碼裡只有 host-pool 對 `mcp/client` 這樣叫）：包住 `onChunk`，收到 `ready` 塊記一行 `openReady`（帶 `server`）。
  *
- * 起來時另記一行 `loaded`：被包的模組 URL、實際檔案路徑與 sha256，證明用的是對話行程同一份 `client.ts` 編出來的產物。
+ * 起來時另記一行 `loaded`：被包的模組 URL、實際檔案路徑與 sha256，結果據此對到產物檔。
  *
  * @module
  */

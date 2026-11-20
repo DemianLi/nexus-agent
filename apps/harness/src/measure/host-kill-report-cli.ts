@@ -1,9 +1,9 @@
 /**
  * 印殺宿主量測的結果（{@link ./host-kill-stats.ts}）：段 A、B、相加的 p50／p95／最大值，W 的公式值，規則寫死的回報條件，連續殺的退避與段 A。
- * 一個檔一個架構，檔名前綴當架構名（`arm64=<檔>`）。不進 CI：原始數據在本機證據目錄。
+ * 每個參數是 `<架構>=<組.json>`，一個檔一個架構。不進 CI：原始數據在本機證據目錄。
  *
  * ```bash
- * pnpm --filter @nexus/harness exec tsx src/measure/host-kill-report-cli.ts arm64=<組.json> [x64=<組.json>]
+ * KILLS=<單次殺次數，要和量測那次相同> pnpm --filter @nexus/harness exec tsx src/measure/host-kill-report-cli.ts arm64=<組.json> [x64=<組.json>]
  * ```
  */
 
@@ -35,6 +35,7 @@ for (const arg of args) {
   const samples: KillSample[] = single
     .filter((r) => r.valid === true)
     .map((r) => ({ aMs: r.aMs ?? Number.NaN, bMs: r.bMs ?? Number.NaN, backoffMs: r.backoffMs }));
+  // 驅動提早收尾時沒殺到的次數也算沒恢復，所以分母取 KILLS。
   const s = summarize(
     arch,
     samples,

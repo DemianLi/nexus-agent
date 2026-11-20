@@ -29,7 +29,7 @@ export const PRE_HANDSHAKES: Readonly<Record<number, { stdio: number; http: numb
   16: { stdio: 36, http: 18 },
 };
 
-/** 每列 stdio server 的數量（M 台裡的 stdio 那兩台）。 */
+/** stdio server 的列數（M 台裡 stdio 的兩台）：條件 2 的預期子行程數，也是條件 3 每列上限的除數。 */
 export const STDIO_ROWS = 2;
 
 export interface Verdict {
@@ -41,6 +41,7 @@ export interface Verdict {
   readonly c3Pass: boolean;
 }
 
+/** 一組（一個 N）的後測判定。只用 roundFlags 沒標記的回合；N 不在前測表裡、或沒有有效回合就 throw。 */
 export function postVerdict(group: Group): Verdict {
   const { N } = group.env;
   const arms = group.env.ARMS;
@@ -94,6 +95,7 @@ export function postVerdict(group: Group): Verdict {
   return { n: N, c1, c1Pass, c2Violations, c3, c3Pass };
 }
 
+/** 每組印三條條件的成立與否與明細；任一組 {@link postVerdict} throw 就整個 throw。 */
 export function reportPost(groups: readonly Group[]): string {
   const lines: string[] = [];
   for (const g of groups) {

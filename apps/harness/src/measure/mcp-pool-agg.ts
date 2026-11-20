@@ -102,7 +102,7 @@ export function conversationMedian(b: Barrier, n: number): number | undefined {
 }
 
 /**
- * 後測過關條件 2（#3032 補充段，收緊版）：量測輪每道柵欄兩端，整台活的 stdio 子行程數＝`expected`，而且父行程全是宿主。
+ * 後測過關條件 2（#3032 補充段一）：量測輪每道柵欄兩端，這一臂行程樹裡活的 mcp-stdio 子行程數＝`expected`，而且父行程全是宿主；沒有父行程資料（前測）算違反。
  * 回違反的描述，空陣列就是成立。只對後測的 per-thread 臂呼叫。
  */
 export function condition2Violations(r: Round, arm: Arm, expected: number): string[] {
