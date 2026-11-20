@@ -33,11 +33,17 @@ while IFS= read -r line; do
     *'"method":"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"0"}}}\n' "$id";;
     *'"method":"tools/list"'*)
-      if [ -n "$STALL_LIST" ]; then : > "$MARK"; else
+      # `LIST_ERR_AFTER`：第一次（連線時）照回並留記號檔，之後每一次回 JSON-RPC 錯誤。
+      if [ -n "$STALL_LIST" ]; then : > "$MARK";
+      elif [ -n "$LIST_ERR_AFTER" ] && [ -e "$LIST_ERR_AFTER" ]; then
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"list failed"}}\n' "$id";
+      else
+      if [ -n "$LIST_ERR_AFTER" ]; then : > "$LIST_ERR_AFTER"; fi
       printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}\n' "$id"; fi;;
     *'"method":"tools/call"'*)
       # 卡死：之後照讀 stdin、什麼都不回（`3>&1` 把宿主讀的 stdout 管線留著，宿主讀不到 EOF）。記號檔在了就不再卡，所以只有第一代卡。
-      if [ -n "$STALL_ONCE" ] && [ ! -e "$STALL_ONCE" ]; then : > "$STALL_ONCE"; exec cat 3>&1 > /dev/null; fi
+      # 卡死之後讀到的 stdin 寫進 `STALL_LOG`（沒給就丟掉），測試數宿主又送了什麼。
+      if [ -n "$STALL_ONCE" ] && [ ! -e "$STALL_ONCE" ]; then : > "$STALL_ONCE"; exec cat 3>&1 > "${STALL_LOG:-/dev/null}"; fi
       # 只有 `tools/call` 不回，別的照回：慢、但活著。
       if [ -z "$MUTE_CALLS" ]; then
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"secret=%s plain=%s probe=%s"}],"isError":false}}\n' "$id" "$FAKE_SECRET" "$PLAIN" "${NEXUS_STDIO_TEST_PROBE-unset}"; fi;;
@@ -719,6 +725,80 @@ mod bridge {
         bridge.send(Command::Shutdown);
         wait_for(&bridge, |o| matches!(o, Outcome::Closed));
         let _ = std::fs::remove_file(&pid_file);
+    }
+
+    /// 同一代一次只探一個：呼叫逾時 300 ms、探活期限 2 秒，第二次呼叫逾時時第一次的探活還沒落定；卡死之後的 server 只收到一則 `tools/list`。
+    #[test]
+    fn 卡死的_server_兩次呼叫逾時_只探一次() {
+        let pid_file = pid_file("stall-twice");
+        let mark = format!("{pid_file}.stalled");
+        let received = format!("{pid_file}.stdin");
+        for file in [&pid_file, &mark, &received] {
+            let _ = std::fs::remove_file(file);
+        }
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        let mut config = liveness_config(
+            &pid_file,
+            300,
+            &[("STALL_ONCE", &mark), ("STALL_LOG", &received)],
+        );
+        config["livenessTimeoutMs"] = json!(2000);
+        open(&bridge, &config).expect("連得上");
+        let stalled_pid = read_pid(&pid_file);
+
+        send_call(&bridge, 10);
+        done(&bridge, 10).expect_err("第一次逾時");
+        send_call(&bridge, 11);
+        done(&bridge, 11).expect_err("第二次逾時");
+        assert!(
+            logged(&bridge, STALLED, Duration::from_secs(8)),
+            "探活逾時要判卡死"
+        );
+        assert_reaped(stalled_pid);
+        let stdin = std::fs::read_to_string(&received).expect("卡死之後收到的 stdin");
+        assert_eq!(
+            stdin.matches("\"method\":\"tools/list\"").count(),
+            1,
+            "同一代同時只該有一次探活：{stdin}"
+        );
+
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        for file in [&pid_file, &mark, &received] {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    /// 探活收到錯誤回應也算活著：有人在讀 stdin、在回。只有等滿期限沒回應才判卡死。
+    #[test]
+    fn 探活收到錯誤回應的_server_不重起() {
+        let pid_file = pid_file("list-error");
+        let mark = format!("{pid_file}.listed");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        let config = liveness_config(
+            &pid_file,
+            300,
+            &[("MUTE_CALLS", "1"), ("LIST_ERR_AFTER", &mark)],
+        );
+        open(&bridge, &config).expect("連線時的 tools/list 照回");
+        let pid = read_pid(&pid_file);
+
+        send_call(&bridge, 10);
+        let error = done(&bridge, 10).expect_err("不回的呼叫要逾時");
+        assert!(error.contains("request timeout"), "{error}");
+        assert!(
+            !logged(&bridge, "mcp-client(fake)", Duration::from_millis(1500)),
+            "探活收到錯誤回應不該判卡死，也不該有重連的日誌"
+        );
+        assert_eq!(read_pid(&pid_file), pid, "沒有起新的一代");
+        assert!(!gone(pid), "原來那一代要活著");
+
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
     }
 
     #[test]
