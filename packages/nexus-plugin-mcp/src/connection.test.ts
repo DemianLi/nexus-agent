@@ -4,6 +4,8 @@
  * 分不出 `abandon` 有沒有等——`client.close()` 本身就收得掉子行程；這裡釘的是「等」的那一半。
  */
 
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Client } from '@modelcontextprotocol/client';
 import { describe, expect, it, vi } from 'vitest';
 import { attemptsOn, connectGeneration, openClient, redactedUrl } from './connection.js';
@@ -226,4 +228,33 @@ describe('錯誤訊息裡網址以別的形式出現時也遮掉', () => {
     }
     expect(text).toContain('[redacted]');
   });
+});
+
+describe('openClient 的 HTTP 連線不退回舊式 SSE（#3001）', () => {
+  it.each([404, 405])(
+    'server 回 %i：直接失敗，訊息不提 SSE，也沒有打 SSE 的請求',
+    async (status) => {
+      const paths: string[] = [];
+      const server = createServer((request, response) => {
+        paths.push(`${request.method ?? ''} ${request.url ?? ''}`);
+        response.writeHead(status).end();
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      try {
+        const { port } = server.address() as AddressInfo;
+        const http = mcpConfigSchema.parse({
+          serverName: 'srv',
+          connection: { transport: 'http', url: `http://127.0.0.1:${port}/mcp` },
+        });
+        const error = await openClient(http, new Map()).catch((caught: unknown) => caught as Error);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain('Failed to connect to streamable HTTP server');
+        expect((error as Error).message).not.toMatch(/sse/iu);
+        // 版本協商 auto 會對同一網址 POST 兩次（新、舊兩代握手），所以只釘方法與路徑、不釘次數。
+        expect(paths.every((path) => path === 'POST /mcp')).toBe(true);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+  );
 });

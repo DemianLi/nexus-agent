@@ -194,14 +194,13 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 ## 跟 TS 的差距
 
 - stdio 的探活在宿主做（〈橋〉），TS 那一側的 `probeLiveness` 在宿主路徑上沒有作用：它探的是門面的 `listTools`，回 open 當下的清單，不送到 server。
-- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
+- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 也直接失敗，沒有 SSE 可退，`packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
 - 對話行程那一側的列由 harness 的 `mcp-host-row-service.ts` 產生（`MCP_HOST_ROW_SERVICE`，包 `hostHttpConnection`／`hostStdioConnection`，沒有斜線的 `command` 照 `PATH` 解成絕對路徑）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
 - 連線之後的錯誤：TS 的工具呼叫錯誤、`tools/list` 錯誤與重連日誌也遮網址的 query（`withUrlScrubbing`）：query 的整串與每個值（原樣、解碼後）進遮蔽器，同宿主 `secrets()`，只差不到 8 個 code point 的值不收（整串、原樣、解碼後各自算，細節與後果見 `docs/credentials-file.md`〈收集〉）。宿主收 query 值讀碼可見（`config.rs` 的 `secrets()`）；沒量的是宿主每一條錯誤出口是否都過 `scrub`。TS 這邊 resources 的錯誤（`read_mcp_resource`、`list_mcp_resources`）還沒遮。
-- 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 - `tools/list` 拿不到工具的 `execution.taskSupport`：rmcp 的工具型別沒有這一欄，解析時丟掉。所以 TS 對 `taskSupport: 'required'` 的工具在呼叫前先擋，宿主做不到；
   新協定本來就沒有 `execution`，影響只在舊協定。
 - rmcp 把回應解成自己的型別再序列化，認得的形狀會丟掉規格外的欄位：`tools/call` 的結果丟掉內容區塊多出的欄位與不認得的頂層欄位。
