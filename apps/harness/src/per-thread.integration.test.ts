@@ -15,11 +15,16 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import { TOOL_NOT_STARTED_TEXT, TOOL_OUTCOME_UNKNOWN_TEXT } from '@nexus/core';
+import { DEFAULT_REBIND_WAIT_MS } from '@nexus/plugin-mcp';
 import {
   createMuxFetch,
   createWireClient,
   decodeSseData,
   EMBED_PATH_PREFIX,
+  emptyConversation,
+  isApprovalPending,
+  reduceConversation,
+  uniformDecisions,
   WIRE_CHANNELS,
   WIRE_MUX_PATH,
 } from '@nexus/wire';
@@ -32,7 +37,7 @@ import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { CREDENTIALS_FILE } from './credentials.js';
-import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
+import { approvalAt, exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
 import {
   fakeEndpoint,
   isMainCall,
@@ -1069,14 +1074,18 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     { content: '收工' },
   ];
 
-  const rowFor = (marker: string, env?: Record<string, unknown>): string =>
+  const rowFor = (
+    marker: string,
+    env?: Record<string, unknown>,
+    approval: 'allow' | 'ask' = 'allow',
+  ): string =>
     [
       '- insert:',
       '    - id: mcp-crm',
       "      name: '@nexus/plugin-mcp'",
       `      config: ${JSON.stringify({
         serverName: 'crm',
-        approval: { default: 'allow' },
+        approval: { default: approval },
         connection: {
           transport: 'stdio',
           command: process.execPath,
@@ -1203,6 +1212,70 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：MCP 經宿主連', () =>
     expect(() => process.kill(serverPid, 0)).toThrow();
     const swept = audit.filter((line) => line['event'] === 'sweep');
     expect(swept.every((line) => (line['signalled'] as number[]).length === 0)).toBe(true);
+  }, 180_000);
+
+  it('宿主被殺、補不回來：下一次工具呼叫等到重新綁定的期限就回斷線，這一輪照常講完', async () => {
+    const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    // 宿主重起前的等待拉到比測試長：被殺之後整個測試期間都沒有宿主，呼叫只能等到期限。
+    const running = await start([...callOnce(), ...callOnce()], rowFor(marker), undefined, [
+      '--host-backoff-ms',
+      '120000',
+    ]);
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    expect(toolText(await turn(client, 'thread-w', '動手'))).toContain('已登記：x');
+    const [host] = childrenRunning(supervisor, 'nexus-host');
+    expect(host).toBeDefined();
+    signalPid(host!, 'SIGKILL');
+
+    const started = Date.now();
+    const state = await turn(client, 'thread-w', '再動手');
+    const elapsed = Date.now() - started;
+    expect(toolText(state)).toContain('server is disconnected');
+    expect(replies(state)).toContain('收工');
+    expect(childrenRunning(supervisor, 'nexus-host')).toEqual([]);
+    // 期限從呼叫進來算一次：等綁定與等宿主連線不疊加，所以整輪落在一倍到兩倍之間。
+    expect(elapsed).toBeGreaterThanOrEqual(DEFAULT_REBIND_WAIT_MS - 500);
+    expect(elapsed).toBeLessThan(2 * DEFAULT_REBIND_WAIT_MS);
+  }, 180_000);
+
+  it('要問的工具經宿主連照樣先問：核准前 server 沒收到呼叫，核准後才收到、結果回得來', async () => {
+    const logDir = await mkdtemp(join(tmpdir(), 'nexus-mcp-calls-'));
+    roots.push(logDir);
+    const callLog = join(logDir, 'calls.log');
+    const marker = `--marker-${String(Date.now())}-${String(process.pid)}`;
+    const running = await start(callOnce(), rowFor(marker, { FIXTURE_CALL_LOG: callLog }, 'ask'));
+    const client = await clientOf(await running.loginUrl(1));
+    const thread = 'thread-ask';
+    const events = await client.openEvents(thread);
+    await client.runStart(thread, '動手');
+    let state = emptyConversation();
+    const until = async (done: (state: ConversationState) => boolean): Promise<void> => {
+      while (!done(state)) {
+        const next = await events.next();
+        if (next.done === true) throw new Error('下行斷了，還沒走到');
+        state = reduceConversation(state, next.value);
+      }
+    };
+    const finished = (now: ConversationState): boolean =>
+      now.status === 'idle' && replies(now).includes('收工');
+    // 沒被問就一路跑完的走錯路也要停得下來，由下面的斷言指出，不等到逾時。
+    await until((now) => now.pendings.some(isApprovalPending) || finished(now));
+    const approval = approvalAt(state.pendings);
+    expect(approval.actions.map((action) => action.name)).toEqual(['mcp__crm__record_order']);
+    expect(existsSync(callLog)).toBe(false);
+
+    expect(
+      await client.inputRespond(thread, {
+        namespace: [...approval.namespace],
+        interrupt_id: approval.interruptId,
+        response: uniformDecisions(approval, 'approve'),
+      }),
+    ).not.toHaveProperty('error');
+    await until(finished);
+    await events.return?.(undefined);
+    expect(toolText(state)).toContain('已登記：x');
+    expect(readFileSync(callLog, 'utf8')).toBe('record_order\n');
   }, 180_000);
 });
 
