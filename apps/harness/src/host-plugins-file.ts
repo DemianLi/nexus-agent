@@ -3,8 +3,8 @@
  * 啟動器換成監督行程之前產生，管理者不手改。宿主只在起來時讀它，所以每次啟動都照當下的環境重寫。
  *
  * - **一律一列 `mcp`**：`NODE_EXTRA_CA_CERTS` 指的檔是宿主唯一信任的根（宿主不讀系統根，也不讀別的來源），有設才帶 `roots`。
- *   沒設也要有這一列：stdio 與 http 的 MCP server 不需要根，宿主沒掛插件，per-thread 就整條沒有 MCP。沒帶 `roots` 時宿主不信任任何
- *   https 憑證，網址是 https 的 server 連不上、錯誤訊息點名 `NODE_EXTRA_CA_CERTS`。`NODE_EXTRA_CA_CERTS` 是 `launch-env.ts` 的
+ *   沒設也要有這一列：stdio、以及直連或走 http 代理的 http MCP server 不需要根，宿主沒掛插件，per-thread 就整條沒有 MCP。沒帶 `roots` 時宿主不信任任何
+ *   https 憑證：網址是 https 的 server、要走 https 代理的 http server 都連不上，錯誤訊息點名 `NODE_EXTRA_CA_CERTS`。`NODE_EXTRA_CA_CERTS` 是 `launch-env.ts` 的
  *   bootstrap 名字，`.env` 本來就設不了，所以只看行程環境不會漏掉哪一層。
  * - **代理跟著那一列**：用 TS 那邊同一個 `resolveProxyPolicy` 解，有代理才寫 `proxy`。解的是啟動器交來的分層啟動環境
  *   （行程環境、home 的 `.env`；帶 `--live` 才讀 `.env`），跟 serve 為模型請求裝代理時看的是同一份（D364）。
