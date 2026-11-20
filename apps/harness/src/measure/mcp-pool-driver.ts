@@ -784,6 +784,8 @@ interface KillRecord {
   readonly backoffMs?: number;
   readonly onReady: number;
   readonly openReady: number;
+  /** 90 秒內綁定沒有恢復：驅動不再往下殺。 */
+  readonly bindingLost: boolean;
 }
 
 /** 殺一次宿主：等恢復（onReady 與 open ready 都到），自我檢查各恰好一筆，不過就整筆作廢。 */
@@ -806,6 +808,7 @@ async function killOnce(
       hostAgeMsAtKill: -1,
       onReady: 0,
       openReady: 0,
+      bindingLost: false,
     };
   if (waitStable) {
     const need = HOST_STABLE_MS + 2000 - ageMs(pid);
@@ -843,9 +846,15 @@ async function killOnce(
     backoffMatch.length === 0 ? undefined : Number(backoffMatch[backoffMatch.length - 1]?.[1]);
   const seqCounts = new Map<number, number>();
   for (const e of ready) seqCounts.set(e.seq ?? -1, (seqCounts.get(e.seq ?? -1) ?? 0) + 1);
-  const base = { label, hostAgeMsAtKill: age, onReady: ready.length, openReady: open.length };
+  const base = {
+    label,
+    hostAgeMsAtKill: age,
+    onReady: ready.length,
+    openReady: open.length,
+    bindingLost: false,
+  };
   if (ready.length === 0 || open.length === 0) {
-    return { ...base, valid: false, why: '90 秒內綁定沒有恢復', backoffMs };
+    return { ...base, valid: false, why: '90 秒內綁定沒有恢復', bindingLost: true, backoffMs };
   }
   if ([...seqCounts.values()].some((c) => c !== 1) || open.length !== 1) {
     return {
@@ -882,24 +891,26 @@ async function hostKillMain(): Promise<void> {
   log('loaded', loaded);
   if (loaded.length === 0)
     throw new Error('預載沒有在對話行程裡動作（沒有 loaded 記錄）：包不到，停下回報');
+  let lost = false;
   const single: KillRecord[] = [];
-  for (let i = 1; i <= KILLS; i++) {
+  for (let i = 1; i <= KILLS && !lost; i++) {
     const rec = await killOnce(p, `single-${String(i)}`, true, boundPid);
     single.push(rec);
     log('kill', rec);
     results.push({ ...rec, label: `kill single-${String(i)}` });
     flush({ loaded });
-    if (!rec.valid && rec.why.startsWith('90 秒')) break; // 綁定沒回來：不往下殺，回報
+    lost = rec.bindingLost;
   }
   const consecutive: KillRecord[][] = [];
-  for (let r = 1; r <= CONSEC_ROUNDS; r++) {
+  for (let r = 1; r <= CONSEC_ROUNDS && !lost; r++) {
     const round: KillRecord[] = [];
-    for (let i = 1; i <= CONSEC_KILLS; i++) {
+    for (let i = 1; i <= CONSEC_KILLS && !lost; i++) {
       const rec = await killOnce(p, `consec-${String(r)}-${String(i)}`, i === 1, boundPid);
       round.push(rec);
       log('kill', rec);
       results.push({ ...rec, label: `kill consec-${String(r)}-${String(i)}` });
       flush({ loaded });
+      lost = rec.bindingLost;
     }
     consecutive.push(round);
   }
