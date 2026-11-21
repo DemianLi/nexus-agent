@@ -5,8 +5,8 @@
  * ## 分類
  *
  * 每顆呼叫先分類：沒宣告可以重疊的就是 exclusive（fail-closed，宣告的值剛好是 `true` 才算 parallel）；
- * exclusive 單獨跑，也是順序屏障。parallel 只有 `read_file` 與子代理委派（{@link DEFAULT_PARALLEL_SAFE_TOOLS}），
- * 其餘包含 `grep`、`glob`、`ls`、`write_file`、`edit_file`、`execute`、外掛工具都是 exclusive。
+ * exclusive 單獨跑，也是順序屏障。基座工具裡，parallel 只有 `read_file` 與子代理委派（{@link DEFAULT_PARALLEL_SAFE_TOOLS}）；
+ * `grep`、`glob`、`ls`、`write_file`、`edit_file`、`execute` 與沒有宣告的外掛工具都是 exclusive。
  *
  * ## 規則
  *
