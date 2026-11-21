@@ -35,6 +35,7 @@ engineer 由 PM 開，一張卡一個 session、一個 worktree：
 
 ```text
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
+再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md 與 docs/agents/collab-mode.md。
 你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
 ```
 
@@ -42,6 +43,7 @@ verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
 
 ```text
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
+再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md（〈Nexus roles〉的 Verifier）與 docs/agents/collab-mode.md。
 你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
 ```
 
@@ -57,9 +59,11 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 - 放行條件是 verifier `PASS` 加 `gate` 綠，由 engineer 自己 squash 合併。同步 `develop` 後 patch-id 沒變就沿用判定；有衝突，engineer 自己解，PM 重開 verifier（[Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 第 2 步）。
 - `FAIL` 退回同一位 engineer 修，最多兩輪；第三次 `FAIL` 之後 PM 標 `needs-info`，在卡上寫明卡在哪，交給 operator。
-- `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate，改標題會。
-- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，修好再重新開 PR。
-- `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。
+- `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate（`develop → main` 例外，由 `pr-edited.yml` 重跑），改標題會。
+- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，修好再重新開 PR。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回）之前，不開下一張 PR。
+- 合併後那一輪的「視覺差異」有差時會在 PR 留言，它不讓這一輪變紅、不走撤回；作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`apps/web/COMPONENTS.md`](../../apps/web/COMPONENTS.md)〈視覺差異〉）。
+- `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。緊急修補同樣先進 `develop`。
+- 分支合併後由 GitHub 自動刪除；突變、實驗分支在對應的卡結了之後可以清。`develop` 與 `main` 之外的分支同樣不 force push。
 
 ## 導正
 
@@ -69,11 +73,11 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 
 ## 對照 dsh
 
-技術實現以 deepseek-harness 為參照（[AGENTS.md](../../AGENTS.md)〈技術實現標準〉）。engineer 自己做、自己選：
+技術實現以 deepseek-harness 為參照（[AGENTS.md](../../AGENTS.md)〈技術實現標準〉）。**先讀原始碼，不要靠搜尋或記憶回答。** engineer 自己做、自己選：
 
 1. **廣度**：在 `deepseek-harness` 與 `nexus-agent` 兩個圖上用 `search_graph`、`trace_path` 找出相關的符號與呼叫路徑。「沒有」「只有 N 個」這類否定宣稱，配 `check_index_coverage` 再 grep 一次（[codebase-memory.md](codebase-memory.md)）。
-2. **深度**：對圖找到的關鍵點讀原始碼，引用寫 `path:line` 並註明 SHA（[引用 deepseek-harness 之前](codebase-memory.md#引用-deepseek-harness-之前)）。
-3. **選**：至少比一種別的做法，用同一組標準比：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求（企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發）、現有基座做不做得到。選比較好的那一個；比不出高下就照 dsh，因為它的做法已經在實際使用中驗證過。
+2. **深度**：對圖找到的關鍵點讀原始碼，引用寫 `path:line` 並註明 SHA（[引用 deepseek-harness 之前](codebase-memory.md#引用-deepseek-harness-之前)）。說出 dsh 在解決什麼問題、付出什麼代價；講不出來，就還不能選。
+3. **選**：至少比一種別的做法，用同一組標準比：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求（企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發）、現有基座做不做得到（今天是 deepagents／LangChain JS／LangGraph JS，正遷往 vendor 的 Cordis，見 [`.docs/decisions-2026-10-11.md`](../../.docs/decisions-2026-10-11.md)）。選比較好的那一個；比不出高下就照 dsh，因為它的做法已經在實際使用中驗證過。
 
 比較結果寫在 PR 內文 Summary 的「對照 dsh」；符合下面 ADR 條件的寫成 ADR，「對照 dsh」只放一行連結。不寫進程式碼與註解。operator 事後不同意，走上面的導正。
 
@@ -91,15 +95,18 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 
 | 規則 | 執行者 |
 | --- | --- |
-| PR 標題 `<type>: <中文描述>` | gate（`.github/scripts/check_pr.py`） |
-| `main` 只收 `develop`；發版 PR 內文要有〈變更內容〉〈驗證方式〉 | gate（`check_pr.py`） |
+| PR 標題的 type、8 到 50 字、至少一個中文字、不是填充句 | gate（`.github/scripts/check_pr.py`） |
+| PR 標題是祈使句、說做了什麼 | 只有文件 |
+| `main` 只收 `develop` | gate（`.github/actions/plan-checks`） |
+| 發版 PR 內文要有〈變更內容〉〈驗證方式〉 | gate（`check_pr.py`） |
+| 發版 PR 的〈驗證方式〉只寫實際跑過的 | 只有文件 |
 | md 相對連結連得過去 | gate（`check_md_links.py`） |
 | 升級指南的格式 | gate（`check_upgrade_guides.py`） |
 | 升級指南有沒有寫 | verifier |
 | 禁止直接 push、force push、刪 `develop`／`main` | ruleset |
 | `develop` 只收 squash、要求 strict；`main` 只收 merge commit | ruleset |
 | `gate` 綠才能合 | ruleset |
-| 沒有測試的套件不得通過 | gate（vitest 找不到測試檔就紅） |
+| 沒有測試的套件不得通過 | 全跑的 CI（`develop → main` 的 gate 與合併後那一輪；功能 PR 的輕模式不擋） |
 | 會話日誌格式升版要補版本邊 | 執行期（不補邊，模組載入就拋） |
 | home 狀態檔改 schema 要留 v1 夾具 | 測試（`home-state-v1-fixtures.test.ts`）＋ verifier |
 | 秘密不進程式碼 | GitHub push protection（已知格式）＋ verifier |
@@ -116,6 +123,6 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 分支命名 `<type>/<kebab-case>` | 只有文件 |
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
 | 開完 PR 開 Auto-fix | 只有文件 |
-| dsh 引用數只降不升 | 只有文件（[#3086](https://github.com/DemianLi/nexus-agent/issues/3086) 第 3 張接進 gate） |
-| 註解的變更敘事用語只降不升 | 只有文件（同上） |
-| ADR 的檔名與編號 | 只有文件（同上） |
+| ADR 的檔名與編號 | 只有文件 |
+
+[#3086](https://github.com/DemianLi/nexus-agent/issues/3086) 第 3 張會把 ADR 格式接進 gate，並新增兩條只降不升的檢查：dsh 引用數、註解裡的變更敘事用語。計法與基準在那張定義，定義前不列進這張表。

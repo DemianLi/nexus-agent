@@ -10,7 +10,7 @@
 另外多驗一條：版本目錄的 `v<版號>` 必須是已存在的 git tag。dsh 的 `<version>` 是讀者正在跑的那一版、也就是上一個
 發出的版本（SKILL.md:8、:26），它從根 `package.json` 讀。本 repo 的 manifest 今天還是 0.0.0，對不上已發出的 tag；
 版號 PR 合進去到 Release 發出之間，manifest 又是還沒發的那一版。所以改取最近一個 Release tag，並由這裡擋住寫錯的目錄
-（#1537 偏離 2，理由 1；撤除條件見 AGENTS.md「升級指南」）。這裡只驗 tag 存在，不驗是不是最近一個。
+（#1537 偏離 2，理由 1；撤除條件見 docs/release.md「升級指南」）。這裡只驗 tag 存在，不驗是不是最近一個。
 
 指南裡的相對連結不在這裡驗：同 dsh 由 `verify-md-links` 管，本 repo 是 `check_md_links.py`，`docs/**` 在它的範圍裡。
 

@@ -14,13 +14,13 @@ PR 標題原封不動成為 `develop` 與 `main` 上的 commit 標題：
 <type>: <中文描述>
 ```
 
-type：`feat` `fix` `refactor` `perf` `test` `docs` `ci` `chore`，`develop → main` 用 `release`。描述是中文祈使句、8 到 50 字、說「做了什麼」而不是改了哪個檔；至少一個中文字，套件名與指令名保留原文；不寫「更新」「調整」這類填充句（gate 檢查，擋下時改標題即可）。分支命名 `<type>/<kebab-case>`。
+type：`feat` `fix` `refactor` `perf` `test` `docs` `ci` `chore`，`develop → main` 用 `release`。描述是中文祈使句、8 到 50 字、說「做了什麼」而不是改了哪個檔；至少一個中文字，套件名與指令名保留原文；不寫「更新」「調整」這類填充句（gate 檢查 type、字數、中文與填充句，擋下時改標題即可）。分支命名 `<type>/<kebab-case>`。
 
 ## PR 內文
 
-- **feature → develop**：`mattpocock-skills:pr` 照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md)。Summary 的圖優先用文字樹或 diff 草圖。第一行 `Refs #N`，不寫 Closes。`gh pr create --body` 不會套模板，要自己照填。Evidence **寫實際跑過的，沒跑過就寫沒跑過**。
+- **feature → develop**：`mattpocock-skills:pr` 照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，段落標題與欄位名用英文、內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md)。Summary 的圖優先用文字樹或 diff 草圖。第一行 `Refs #N`，不寫 Closes。`gh pr create --body` 不會套模板，要自己照填。Evidence **寫實際跑過的，沒跑過就寫沒跑過**。這種 PR 的內文 gate 不檢查。
 - 開 PR 與每次推更新之前，對 diff 跑 [no-comments](.agents/skills/pstack/skills/no-comments/SKILL.md)，刪掉的註解列進內文。
-- **develop → main**：內文要有 `## 變更內容` 與 `## 驗證方式`（gate 檢查）。
+- **develop → main**：內文要有 `## 變更內容` 與 `## 驗證方式`（gate 檢查）；驗證方式同樣只寫實際跑過的。
 
 ## 分支
 
@@ -44,4 +44,4 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 - issue：[`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)；標籤：[`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)
 - 開發環境：[`docs/agents/dev-environment.md`](docs/agents/dev-environment.md)
 - 領域文件與 ADR：[`docs/agents/domain.md`](docs/agents/domain.md)
-- 程式碼檢索：[`docs/agents/codebase-memory.md`](docs/agents/codebase-memory.md)
+- 程式碼檢索：[`docs/agents/codebase-memory.md`](docs/agents/codebase-memory.md)。正向查找走圖；「沒有」「只有 N 個」這類否定宣稱配 `check_index_coverage` 與 grep。
