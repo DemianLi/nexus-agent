@@ -34,7 +34,7 @@ clone 屬於下載，照 repo 的規則先回報再做。核對基準用 `git -C
 | `skills/poteto-mode/SKILL.md` | 加上 nexus 的四個角色（operator、PM、engineer、verifier）；Non-negotiables 拿掉沒複製的 skill 與 Cursor 專屬工具，PR 改走 `mattpocock-skills:pr` 與 gate 的標題格式；模型改成依角色的表（engineer 用 sonnet，verifier 與 Comment Sicko 用 opus）；Autonomy 把 force push、刪分支、合進 `main`、發版、下載列為要停的動作；playbook 只留複製進來的七個；回覆改用中文 |
 | `skills/poteto-mode/worker.md` | 加上 repo 規則優先；worktree 用 `--no-track`、push 寫完整 refspec、禁止 force push；上下文只放進版控的檔；PR 標題與內文照 `AGENTS.md` |
 | `playbooks/feature.md`、`playbooks/bug-fix.md` | engineer 自己寫程式，不再把寫程式委派出去，review 的隔離由 verifier 提供；拿掉 arena、interrogate、`/loop`；修 bug 一定要先寫測試 |
-| `playbooks/opening-a-pr.md` | 標題、內文、`Refs #N` 照 `AGENTS.md`；拿掉 `/deslop`；不疊 PR |
+| `playbooks/opening-a-pr.md` | 標題、內文、`Refs #N` 照 `AGENTS.md`；拿掉 `/deslop`；不疊 PR；開完 PR 立刻用 `mcp__ccd_pr__set_monitor` 開 Auto-fix，不開 auto-merge |
 | `playbooks/babysit.md` | 用 `gh pr update-branch` 同步，衝突由 engineer 自己 merge `develop` 解，再請 PM 重開 verifier；拿掉 `watch-pr`、Origin、Bugbot |
 | `playbooks/shipping.md` | 改成單張 PR：verifier 判定、patch-id 規則、`--match-head-commit` 的 squash 合併、合併後完整一輪的重跑與撤回、在 issue 上列出可逆的預設決定 |
 | `playbooks/autopilot-full.md` | root 換成 PM、owner 換成 engineer；一張卡一位 verifier；拿掉 cloud agent、`/loop`、ketchup、show-me-your-work、force push |
