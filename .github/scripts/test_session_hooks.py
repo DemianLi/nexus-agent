@@ -60,6 +60,8 @@ class StartSessionTest(unittest.TestCase):
         self.assertIsNone(check_start_session({}))
         self.assertIsNone(check_start_session({'proposal_id': 'task_1'}))
         self.assertIsNone(check_start_session({'title': 'Docker 修正'}))
+        self.assertIsNone(check_start_session({'title': 'Engineering handbook 更新'}))
+        self.assertIsNone(check_start_session({'title': 'verifiers 清單'}))
 
     def test_offer_brief_sent_with_proposal_id_is_checked(self) -> None:
         self.assertIsNotNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1', 'model': 'claude-opus-5-5', 'effort': 'medium'}))
@@ -80,7 +82,9 @@ class StartSessionTest(unittest.TestCase):
 
     def test_model_generation(self) -> None:
         for model, ok in (('sonnet', True), ('claude-sonnet-5-5', True), ('claude-sonnet-6', True),
-                          ('claude-sonnet-4-5', False), ('claude-3-5-sonnet', False), ('my-sonnet-fork', False)):
+                          ('claude-sonnet-5-5[1m]', True), ('claude-sonnet-5-5-20261001', True),
+                          ('claude-sonnet-4-5', False), ('claude-3-5-sonnet', False), ('my-sonnet-fork', False),
+                          ('claude-sonnet-5-foo', False), ('claude-sonnet-5-5[1m]x', False)):
             with self.subTest(model=model):
                 self.assertEqual(check_start_session({'name': 'eng-1', 'model': model, 'effort': 'medium'}) is None, ok)
 
