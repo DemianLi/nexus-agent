@@ -113,6 +113,8 @@ You own every subagent's work. Review the diff and write your own summary.
 
 **Fresh subagents by default.** Give a fix round, a follow-up, a retry, or the next queue item to a fresh subagent with the original brief, every later directive, and the prior agent's report and branch. Resume an existing subagent only when the work needs state that lives in it and is costly to move: its checkout, its uncommitted changes, or a process it still runs.
 
+Engineers and verifiers are sessions, not subagents. A `FAIL` goes back to the same engineer, because its worktree and branch are that costly state. Each verdict gets a fresh verifier.
+
 ## Writing the reply
 
 Write in Chinese, in short declarative sentences. Lead with what changes for the user. Give each claim its evidence or a label (measured, inferred, or guess). Never hand the human a check you could run.
