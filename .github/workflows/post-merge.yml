@@ -2,7 +2,7 @@ name: 合併後完整一輪
 
 # 每個合進 develop 的 commit 各跑一輪完整的 ci.yml（不看異動、一律全跑），而且不被下一個 commit 取消，
 # 紅了就能指出是哪一張 PR。不擋合併，也不能設成 required check：它只在 push 時跑，PR 上永遠等不到它。
-# 紅了怎麼處理見 AGENTS.md「分支策略」。
+# 紅了怎麼處理見 docs/agents/collab-mode.md「合併與撤回」。
 #
 # 這支刻意不設 concurrency：ci.yml 被呼叫時用 sha 當 group、不取消（見 ci.yml 的 concurrency）。
 # 呼叫端若設成同一個 group，兩邊會搶同一組。
