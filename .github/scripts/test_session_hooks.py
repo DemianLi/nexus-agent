@@ -3,14 +3,13 @@ from __future__ import annotations
 import io
 import json
 import re
-import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
 import session_hooks
-from session_hooks import ROLES, SKILL_MD, check_closing, check_start_session, last_reply, main
+from session_hooks import ROLES, SKILL_MD, check_closing, check_start_session, main
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -20,22 +19,6 @@ def run(argv: list[str], event: object) -> tuple[int, str]:
     with mock.patch('sys.stdin', io.StringIO(json.dumps(event))), redirect_stderr(err):
         code = main(['session_hooks.py', *argv])
     return code, err.getvalue()
-
-
-def assistant(*texts: str) -> dict:
-    return {'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': t} for t in texts]}}
-
-
-def tool_use() -> dict:
-    return {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Bash', 'input': {}}]}}
-
-
-def tool_result() -> dict:
-    return {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': 'ok'}]}}
-
-
-def user(text: str) -> dict:
-    return {'type': 'user', 'message': {'content': text}}
 
 
 class StartSessionTest(unittest.TestCase):
@@ -74,6 +57,13 @@ class StartSessionTest(unittest.TestCase):
                 self.assertIsNotNone(reason)
                 self.assertIn('`name`', reason)
 
+    def test_name_wins_over_title(self) -> None:
+        self.assertIsNone(check_start_session({'name': 'foo', 'title': 'Verifier：PR #1'}))
+        self.assertIsNotNone(check_start_session({'name': 'ver-1', 'title': 'docker'}))
+
+    def test_role_word_only_counts_at_title_start(self) -> None:
+        self.assertIsNone(check_start_session({'title': '修 verifier 的 bug'}))
+
     def test_fork_and_cloud_are_blocked(self) -> None:
         ok = {'name': 'ver-1', 'model': 'claude-opus-5-5', 'effort': 'medium'}
         self.assertIsNotNone(check_start_session({**ok, 'context': 'fork'}))
@@ -84,7 +74,7 @@ class StartSessionTest(unittest.TestCase):
         for model, ok in (('sonnet', True), ('claude-sonnet-5-5', True), ('claude-sonnet-6', True),
                           ('claude-sonnet-5-5[1m]', True), ('claude-sonnet-5-5-20261001', True),
                           ('claude-sonnet-4-5', False), ('claude-3-5-sonnet', False), ('my-sonnet-fork', False),
-                          ('claude-sonnet-5-foo', False), ('claude-sonnet-5-5[1m]x', False)):
+                          ('claude-sonnet-5-foo', False), ('claude-sonnet-5-5[1m]x', False), ('claude-sonnet-5-5[]', False)):
             with self.subTest(model=model):
                 self.assertEqual(check_start_session({'name': 'eng-1', 'model': model, 'effort': 'medium'}) is None, ok)
 
@@ -124,41 +114,22 @@ class ClosingTest(unittest.TestCase):
     def test_turn_without_text_passes(self) -> None:
         self.assertIsNone(check_closing(None))
 
-    def test_last_reply_is_last_text_of_current_turn(self) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / 't.jsonl'
-            lines = [user('上一輪'), assistant('可封存：舊的'), user('這一輪'), tool_use(), tool_result(), assistant('中途說明'), tool_use(), tool_result(), assistant('不可封存：等 CI')]
-            path.write_text('\n'.join(json.dumps(l) for l in lines) + '\nnot json\n', encoding='utf-8')
-            self.assertEqual(last_reply(path), '不可封存：等 CI')
-            path.write_text('\n'.join(json.dumps(l) for l in [user('上一輪'), assistant('可封存：舊的'), user('這一輪'), tool_use(), tool_result()]), encoding='utf-8')
-            self.assertIsNone(last_reply(path))
+    def test_two_text_blocks_are_read_from_the_first(self) -> None:
+        self.assertIsNotNone(check_closing('中途說明\n不可封存：等 CI'))
 
-    def test_unflushed_final_message_passes(self) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / 't.jsonl'
-            lines = [user('這一輪'), assistant('中途說明'), tool_use(), tool_result(), {'type': 'api-request'}]
-            path.write_text('\n'.join(json.dumps(l) for l in lines), encoding='utf-8')
-            self.assertIsNone(last_reply(path))
-            self.assertEqual(run(['stop'], {'transcript_path': str(path)})[0], 0)
-
-    def test_last_assistant_message_wins_over_transcript(self) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / 't.jsonl'
-            path.write_text(json.dumps(user('做')) + '\n' + json.dumps(assistant('可封存：舊的')), encoding='utf-8')
-            self.assertEqual(run(['stop'], {'transcript_path': str(path), 'last_assistant_message': '做好了'})[0], 2)
-            self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent', 'last_assistant_message': '不可封存：等 CI'})[0], 0)
+    def test_stop_reads_last_assistant_message_only(self) -> None:
+        self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent', 'last_assistant_message': '做好了'})[0], 2)
+        self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent', 'last_assistant_message': '不可封存：等 CI'})[0], 0)
+        self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent'}), (0, ''))
 
     def test_stop_hook_blocks_then_respects_stop_hook_active(self) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / 't.jsonl'
-            path.write_text(json.dumps(user('做')) + '\n' + json.dumps(assistant('做好了')), encoding='utf-8')
-            self.assertEqual(run(['stop'], {'transcript_path': str(path)})[0], 2)
-            self.assertEqual(run(['stop'], {'transcript_path': str(path), 'stop_hook_active': True})[0], 0)
+        self.assertEqual(run(['stop'], {'last_assistant_message': '做好了'})[0], 2)
+        self.assertEqual(run(['stop'], {'last_assistant_message': '做好了', 'stop_hook_active': True})[0], 0)
 
 
 class FailOpenTest(unittest.TestCase):
     def test_errors_pass_with_warning(self) -> None:
-        for argv, event in ((['stop'], {'transcript_path': '/nonexistent/t.jsonl'}), (['stop'], {}), (['bogus'], {})):
+        for argv, event in ((['stop'], []), (['bogus'], {})):
             with self.subTest(argv=argv, event=event):
                 code, err = run(argv, event)
                 self.assertEqual(code, 0)

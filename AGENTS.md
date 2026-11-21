@@ -14,7 +14,7 @@
 - `不可封存：<還差什麼>`：上面任何一項還在。
 - `還在等：<等什麼>`：被 app 叫醒（例如子 session 中途停下、背景工作跑完），而狀態跟上一次收尾比沒變。只寫這一行。
 
-engineer、verifier、PM 另有自己的判準（例如長駐的 PM 不封存），以角色的為準；判準與誰來封存見 [collab-mode](docs/agents/collab-mode.md#收尾與封存)。session 不封存自己。`Stop` hook（`.claude/settings.json`）檢查這一輪最後一個文字區塊的第一個非空行：不是三種前綴之一加冒號，或 `還在等：` 不只一行，就擋回去重寫一次。它只擋一次，出錯就放行，也看不出理由寫得對不對。
+engineer、verifier、PM 另有自己的判準（例如長駐的 PM 不封存），以角色的為準；判準與誰來封存見 [collab-mode](docs/agents/collab-mode.md#收尾與封存)。session 不封存自己。`Stop` hook（`.claude/settings.json`）檢查這一輪最後一則訊息（輸入裡的 `last_assistant_message`，沒有就不檢查）的第一個非空行：不是三種前綴之一加冒號，或 `還在等：` 不只一行，就擋回去重寫一次。它只擋一次，出錯就放行，也看不出理由寫得對不對。
 
 ## 標題格式
 
