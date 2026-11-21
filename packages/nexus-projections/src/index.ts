@@ -1,5 +1,5 @@
 /**
- * `@nexus/projections`：會話投影登記處這個接縫的**定義套件**（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/projections`：會話投影登記處這個接縫的**定義套件**（決議 §3-4 第 16 條，定義、提供者、消費者三角色分開；
  * [#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）。形狀照 {@link https://github.com/DemianLi/nexus-agent/blob/develop/packages/nexus-tools/src/index.ts | `@nexus/tools`}。
  *
  * 一個能力接縫由三個角色組成：
@@ -13,8 +13,7 @@
  * ## 偏離登記：這個定義套件相依 `@nexus/core`（#1421 Q2 (a)）
  *
  * `ProjectionUnit.apply` 的簽名用到 `SessionEvent`，而 `SessionEvent` 與 `isLogicalTurnStart` 活在 `@nexus/core` 的
- * `session-log.ts`。dsh 的對應是 `dsh-session-projection` 相依 `dsh-session`（`SessionEvent` 在 `dsh-session`）；
- * 照那個形狀要抽一個 `@nexus/session` 定義套件，是橫跨整個核心的一刀（Q2 (b)），**這一張不做**。所以：
+ * `session-log.ts`。把它們抽成獨立的 `@nexus/session` 定義套件，是橫跨整個核心的一刀（Q2 (b)），不在這個套件的範圍。所以：
  *
  * - 四樣東西（`ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart`、`ProjectionDetailError`）**留在 `@nexus/core`，由這個套件單向轉出**。
  *   相依是單向的：這個套件相依 `@nexus/core`，core 不 import 這個套件。插件只 import 這個套件，所以 lint 與決議第 17
@@ -47,8 +46,7 @@ export interface ProjectionRegistry {
    *
    * 登記就是 effect：登記者那一列卸載時登記處自己撤掉，不靠呼叫者記得呼叫回傳的 disposer。
    *
-   * **同一個 key、同一個 `stateVersion` 由多列登記時引用計數共用**（照 dsh 的 `SessionProjectionRegistry.register`，
-   * `session-projection/src/index.ts:253-292`）；引用計數還沒歸零時一直用第一個登記者的定義。`stateVersion` 不同就拒絕。
+   * **同一個 key、同一個 `stateVersion` 由多列登記時引用計數共用**；引用計數還沒歸零時一直用第一個登記者的定義。`stateVersion` 不同就拒絕。
    *
    * @param unit - 投影單元；key 與 `stateVersion` 的規則同 `@nexus/core` 的 `normalizeProjectionUnit`。
    * @returns 只撤銷這一次登記的冪等 disposer。
