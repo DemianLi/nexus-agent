@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__ccd_session__start_session",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.github/scripts/session_hooks.py\"; [ ! -f \"$f\" ] || python3 \"$f\" pre-start-session"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.github/scripts/session_hooks.py\"; [ ! -f \"$f\" ] || python3 \"$f\" stop"
+          }
+        ]
+      }
+    ]
+  }
+}
