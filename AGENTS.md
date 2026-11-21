@@ -10,7 +10,7 @@
 
 每個 session 回合結束時，最後那段話的第一句是下面兩種之一：
 
-- `可封存：<一句理由>`：這個 session 裡沒有只存在它身上的東西。沒有沒 commit 的檔、沒推的 commit、開著的 PR、在等的 CI 或背景工作，被問的事也答完了。環境提供封存按鈕時一併附上，由 operator 點。
+- `可封存：<一句理由>`：這個 session 裡沒有只存在它身上的東西。沒有沒 commit 的檔、沒推的 commit、開著的 PR、在等的 CI 或背景工作，被問的事也答完了。環境提供封存按鈕時一併附上，由 operator 點；engineer 與 verifier 由 PM 封存。
 - `不可封存：<還差什麼>`：上面任何一項還在。
 
 engineer、verifier、PM 的判準與誰來封存見 [collab-mode](docs/agents/collab-mode.md#收尾與封存)。session 不封存自己。

@@ -36,7 +36,7 @@ clone 屬於下載，照 repo 的規則先回報再做。核對基準用 `git -C
 | `playbooks/feature.md`、`playbooks/bug-fix.md` | engineer 自己寫程式，不再把寫程式委派出去，review 的隔離由 verifier 提供；拿掉 arena、interrogate、`/loop`；修 bug 一定要先寫測試 |
 | `playbooks/opening-a-pr.md` | 標題、內文、`Refs #N` 照 `AGENTS.md`；拿掉 `/deslop`；不疊 PR；開完 PR 立刻用 `mcp__ccd_pr__set_monitor` 開 Auto-fix，不開 auto-merge |
 | `playbooks/babysit.md` | 用 `gh pr update-branch` 同步，衝突由 engineer 自己 merge `develop` 解，再請 PM 重開 verifier；拿掉 `watch-pr`、Origin、Bugbot |
-| `playbooks/shipping.md` | 改成單張 PR：verifier 判定（最多判三次，第三次 `FAIL` 才停）、patch-id 規則、`gate` 為 `SKIPPED` 也算綠的條件、`--match-head-commit` 的 squash 合併、合併後完整一輪的重跑與撤回（純 `git revert` 的撤回 PR 不需要 verifier；自己那一輪綠了或撤回之前不開下一張）、在 issue 上列出可逆的預設決定與卡做完了沒 |
+| `playbooks/shipping.md` | 改成單張 PR：verifier 判定（第三次 `FAIL` 才停，解衝突後的重判不算）、patch-id 規則、`gate` 為 `SKIPPED` 也算綠的條件、`--match-head-commit` 的 squash 合併、合併後完整一輪的重跑與撤回（純 `git revert` 的撤回 PR 不需要 verifier；自己那一輪綠了或撤回之前不開下一張）、在 issue 上列出可逆的預設決定與卡做完了沒 |
 | `playbooks/autopilot-full.md` | root 換成 PM、owner 換成 engineer；一張卡一位 verifier；engineer 在 code-ready 停下、PM 轉告判定；修 `FAIL` 的 commit 一律重開 verifier；判定只連結不複製；判定貼上後封存 verifier，合併後那一輪綠了就拿掉 `ready-for-agent`、結卡、封存 engineer；拿掉 cloud agent、`/loop`、ketchup、show-me-your-work、force push |
 | `playbooks/worktree-cleanup.md` | 基準固定 `origin/develop`；腳本路徑寫成 repo 裡的完整路徑；拿掉模擬器與 Cursor 的清理；不刪分支 |
 | `scripts/worktree-audit.sh` | 對話紀錄改讀 `~/.claude/projects/<slug>*/`，slug 規則改成 Claude Code 的（非英數字元換成 `-`），每個 worktree 自己的專案資料夾一起掃 |

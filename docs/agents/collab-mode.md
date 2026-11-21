@@ -65,8 +65,8 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 ## 合併與撤回
 
 - 放行條件是 verifier `PASS`（或 `PASS+NOTES`）加 `gate` 綠，由 engineer 自己 squash 合併。同步 `develop` 後 patch-id 沒變就沿用判定；有衝突，engineer 自己解，PM 重開 verifier（[Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 第 2 步）。
-- **`gate` 綠**是最新那一輪的 `gate` 為 `SUCCESS` 或 `SKIPPED`。輕模式下，`plan` 成功、其餘 job 全部跳過時 `gate` 不起 job，顯示 `SKIPPED`，ruleset 照樣放行（`.github/workflows/ci.yml` 裡 `gate` 的 `if`）。`SKIPPED` 時再確認 `plan` 是 `SUCCESS`。
-- 一張卡最多判三次：前兩次 `FAIL` 退回同一位 engineer 修（它的 worktree 與分支就是要接續的狀態），第三次 `FAIL` 就停，PM 標 `needs-info`，在卡上寫明卡在哪，交給 operator。
+- **`gate` 綠**是最新那一輪的 `gate` 為 `SUCCESS` 或 `SKIPPED`。輕模式下，`plan` 成功、`rust` 為 `false`、其餘 job 全部跳過時 `gate` 不起 job，顯示 `SKIPPED`，ruleset 照樣放行（`.github/workflows/ci.yml` 裡 `gate` 的 `if`）。`SKIPPED` 時再確認 `plan` 是 `SUCCESS`。
+- 一張卡最多 `FAIL` 三次：前兩次 `FAIL` 退回同一位 engineer 修（它的 worktree 與分支就是要接續的狀態），第三次 `FAIL` 就停（解衝突之後的重判不算進去），PM 標 `needs-info`，在卡上寫明卡在哪，交給 operator。
 - 修 `FAIL` 理由的 commit，就算只改註解或文件，也一律由 PM 開新的 verifier 判新的 head。
 - 判定只記在 PR 上，卡上只放那則留言的連結。
 - `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate（`develop → main` 例外，由 `pr-edited.yml` 重跑），改標題會。
@@ -148,7 +148,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 內文寫 `Refs #N`，不寫 Closes | 只有文件 |
 | 分支命名 `<type>/<kebab-case>` | 只有文件 |
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
-| 開完 PR 開 Auto-fix | 只有文件（auto mode 會擋下 engineer 開，擋下就在卡上記一筆，不重試；沒開成，engineer 照 `playbooks/babysit.md` 自己盯 CI） |
+| 開完 PR 開 Auto-fix | 只有文件（auto mode 會擋下 engineer 開，擋下就在卡上記一筆，不重試；沒開成，engineer 照 [Babysit](../../.agents/skills/pstack/skills/poteto-mode/playbooks/babysit.md) 自己盯 CI） |
 | 收尾第一句寫可封存或不可封存 | 只有文件 |
 | engineer 可封存之後拿掉 `ready-for-agent`、結卡、封存 | 只有文件（PM 照〈收尾與封存〉做） |
 | 卡的正文是唯一的規格、寫到的程式碼現況要核過 | verifier（Spec 軸對程式碼核正文的前提） |
