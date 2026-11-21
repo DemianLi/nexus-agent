@@ -260,7 +260,7 @@ export interface CreateNexusAgentOptions {
    * 交，見 `system-prompt-middleware.ts`；不再是 `NexusServices` 的服務），而**這裡是唯一的提供者**：手搭的呼叫端不必為了一個它們不關心的
    * 東西各交一份，也就不會有兩份撞在一起。省略時 `model` 取模型物件自己報的型號（`model`／`modelName`，
    * 都沒有就用 `_llmType()`——每個 `BaseChatModel` 都有），`cwd` 是 `/`：檔案工具的位址空間裡的根，不是主機路徑
-   * （偏離登記見 `@nexus/plugin-system-prompt` 的檔頭）。`--live` 的兩個入口明著傳 `live-model` 那一列的 `modelId`，
+   * （理由見 `@nexus/plugin-system-prompt` 的檔頭）。`--live` 的兩個入口明著傳 `live-model` 那一列的 `modelId`，
    * 跟建模型讀的是同一份。
    */
   readonly systemPromptVariables?: Partial<SystemPromptVariables>;

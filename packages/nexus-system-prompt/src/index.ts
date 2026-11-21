@@ -1,8 +1,8 @@
 /**
- * `@nexus/system-prompt`：**系統提示詞**這個接縫的定義套件（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/system-prompt`：**系統提示詞**這個接縫的定義套件（決議 §3-4 第 16 條，定義、提供者、消費者三個角色；
  * [#1477](https://github.com/DemianLi/nexus-agent/issues/1477) Q1 (a)、Q1-1 (a)，Part of #1385）。
  *
- * 對應 dsh 的 `systemPrompt` 服務（`packages/core/system-prompt/src/index.ts`，`86a40220`）：其他插件經 `section()` 登記一段
+ * `systemPrompt` 服務：其他插件經 `section()` 登記一段
  * 文字、經 `variable()` 登記一個可以在文字裡用 `{{名字}}` 引用的變數，宿主 `assemble()` 之後渲染。第一個提供者與消費者都是
  * `system-prompt` 那一列自己（身分句、前綴、後綴三段）；`plan-mode`、`sandbox-policy`、`goal` 遷移時對它登記 `section`。
  *
@@ -14,31 +14,31 @@
  *
  * ## 快照是資料（決議 §3-2 第 6 條）
  *
- * dsh 的 `section()` 是 `layers.effect`，列一卸載就撤。宿主若每次模型呼叫都問活服務，serve 中合法地改一次這一列
+ * `section()` 的登記跟著提供者那一列走，列一卸載就撤。宿主若每次模型呼叫都問活服務，serve 中合法地改一次這一列
  * （`next-thread`），舊列卸載、段被撤，**開著的 thread 下一次呼叫就靜靜少了身分與 persona**。所以宿主在組 thread 的臨界區裡
  * （無樹的路徑則在單獨掛載卸載之前）`assemble()` 一次，留下 {@link SystemPromptAssembly}——各段的**原文**（還沒代入變數）與
- * 已登記的變數**名字**——之後只拿這份資料渲染，不再碰服務。`assemble()` 因此是 async（同 dsh），而且不可以碰 `this.ctx`。
+ * 已登記的變數**名字**——之後只拿這份資料渲染，不再碰服務。`assemble()` 因此是 async，而且不可以碰 `this.ctx`。
  *
  * **活的服務不折進 thread 的 `registry.services`**：相容層的插件拿到行程級的活服務就能呼叫 `section()`，段會跨 thread 越疊越多。
  *
- * ## 偏離登記（AGENTS.md 的偏離規則；dsh 以 `86a40220` 為準）
+ * ## 接縫的限制
  *
- * | # | dsh 怎麼做 | 我們怎麼做 | 為什麼表達不出來 |
- * | --- | --- | --- | --- |
- * | 1 | 整份提示詞由 `assemble` 組 | 只組頭尾兩段，中間是基座與相容層 middleware 已經組好的那一份 | 基座（deepagents）自己組它的提示詞，它的段不經我們的服務 |
- * | 2 | 每個 agent 一層 scoped layer | 行程級一層，root 與子代理同一份 | 今天就是這樣（子代理也走那顆 middleware）；逐委派 persona 是 #328 的事 |
- * | 3 | `context()`、`tools()`、`suppressRuntimeContext()`、`system-prompt/assemble` waterfall | 第一刀沒有 | 沒有消費者；第一個需要的遷移卡再加 |
- * | 4 | 每一步 `assemble`，段的增減即時生效 | 組 thread 時 `assemble` 一次取快照，之後只代入變數 | 決議 §3-2 第 6 條：插件更新只給新對話；列卸載會撤段 |
- * | 5 | section `text` 可以是 `(context) => string`，`PromptSection` 另有 `complete`、`interpolate` | 只收字串，其餘兩個欄位登記時拋 | 快照要完整；沒有消費者 |
- * | 6 | `model`、`provider` 由 agent loop 登記，名字開放；`variable(name, provider)` 每次 `assemble` 求值 | `model`、`cwd` 由 `system-prompt` 那一列登記；`variable(name)` **只登記名字**，值由宿主每次模型呼叫交 | #1477 Q2 (a) 與 PM 更正 2：`model` 要跟著那一步實際用的模型走（#723），組 thread 時求值就定死了 |
- * | 7 | Config 五格（另有 `includeRuntimeContext`、`toolOrder`） | 三格 | 另兩格管執行期上下文與工具段，第一刀沒有 |
- * | 8 | 沒有 `cwd` 變數 | 有，而且出貨值（`cordis.yml` 的後綴）依賴它 | 我們的出貨文案引用了 `{{cwd}}`；要不要拿掉不在 #1477。見 `@nexus/plugin-system-prompt` 檔頭 |
- * | 9 | 渲染時才嚴格插值、才拋，訊息是英文 | **掛載當下**驗語法與名字（寫壞起不來，#720），渲染照 `interpolateStrict`，訊息是中文 | #1446 Q1 (a)：遷移卡不改行為，#720 由 demian 拍板 |
- * | 10 | section 的 order 任意 | 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLAN_POLICY` 與 `PLUGIN_POLICY` 中段不算 |
+ * | # | 我們怎麼做 | 為什麼 |
+ * | --- | --- | --- |
+ * | 1 | 只組頭尾兩段，中間是基座與相容層 middleware 已經組好的那一份 | 基座（deepagents）自己組它的提示詞，它的段不經我們的服務 |
+ * | 2 | 行程級一層，root 與子代理同一份 | 今天就是這樣（子代理也走那顆 middleware）；逐委派 persona 是 #328 的事 |
+ * | 3 | 沒有 `context()`、`tools()`、`suppressRuntimeContext()`、`system-prompt/assemble` waterfall | 沒有消費者；第一個需要的遷移卡再加 |
+ * | 4 | 組 thread 時 `assemble` 一次取快照，之後只代入變數 | 決議 §3-2 第 6 條：插件更新只給新對話；列卸載會撤段 |
+ * | 5 | section 的 `text` 只收字串，`PromptSection` 的 `complete`、`interpolate` 兩個欄位登記時拋 | 快照要完整；沒有消費者 |
+ * | 6 | `model`、`cwd` 由 `system-prompt` 那一列登記；`variable(name)` **只登記名字**，值由宿主每次模型呼叫交 | #1477 Q2 (a) 與 PM 更正 2：`model` 要跟著那一步實際用的模型走（#723），組 thread 時求值就定死了 |
+ * | 7 | Config 三格 | 另兩格管執行期上下文與工具段，第一刀沒有 |
+ * | 8 | 有 `cwd` 變數，而且出貨值（`cordis.yml` 的後綴）依賴它 | 我們的出貨文案引用了 `{{cwd}}`；要不要拿掉不在 #1477。見 `@nexus/plugin-system-prompt` 檔頭 |
+ * | 9 | **掛載當下**驗語法與名字（寫壞起不來，#720），渲染照 `interpolateStrict`，訊息是中文 | #1446 Q1 (a)：遷移卡不改行為，#720 由 demian 拍板 |
+ * | 10 | section 的 order 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLAN_POLICY` 與 `PLUGIN_POLICY` 中段不算 |
  *
  * **撤除條件**：第 1、4、6、9 列各有各的卡（中間段、逐步 `assemble`、渲染時才拋）；撤除時先重審這張表。
  *
- * **`model` 名字的歸屬**：今天由 `system-prompt` 那一列登記。日後 `@nexus/agent-loop` 若照 dsh 再登記同名 `model`，同一個服務內重名當場拋；
+ * **`model` 名字的歸屬**：今天由 `system-prompt` 那一列登記。日後 `@nexus/agent-loop` 若再登記同名 `model`，同一個服務內重名當場拋；
  * 到時候把 `model` 的登記搬去 agent loop 那一列、`system-prompt` 改成只讀，是一次機械的搬動（登記只有一行）。
  *
  * @module
@@ -90,7 +90,7 @@ export interface SystemPromptVariables {
   readonly cwd: string;
 }
 
-/** 提供者登記的三段的名字，照 dsh（`packages/core/system-prompt/src/index.ts:448-465`）。 */
+/** 提供者登記的三段的名字。 */
 export const SYSTEM_PROMPT_SECTION_NAMES = {
   identity: 'harness:identity',
   prefix: 'deployment:persona-prefix',
@@ -113,7 +113,7 @@ export const SYSTEM_PROMPT_MIDDLEWARE_NAME = 'nexusSystemPrompt';
 
 /** 一段文字。 */
 export interface PromptSection {
-  /** 段的名字（dsh 的 `harness:identity` 這種），同一個服務內不可重名。 */
+  /** 段的名字（`harness:identity` 這種），同一個服務內不可重名。 */
   readonly name: string;
   /** 排序值，見 {@link SECTION_ORDERS}。小的在前，同值照登記順序。 */
   readonly order: number;
@@ -172,7 +172,7 @@ export class SystemPromptTemplateError extends Error {
 }
 
 /**
- * 嚴格插值一段文字。照 dsh 的 `interpolate`（`packages/core/system-prompt/src/index.ts:319-360`）：
+ * 嚴格插值一段文字：
  *
  * - 完整的 `{{name}}` 才算引用，名字要合 `/^[a-z][a-z0-9_]*$/`，不合就拋。
  * - 後面還有 `}}` 卻不是完整一組（例如 `{{a b}}` 之外的殘缺形狀），算寫壞，拋；後面沒有 `}}` 的單獨 `{{` 是普通的字。
@@ -236,7 +236,7 @@ export interface SystemPromptParts {
 }
 
 /**
- * 把快照與這一次呼叫的變數值算成前後兩段。**空的段落不佔位**，段與段之間隔一個空行（dsh 的 `renderPrompt` 也是丟掉空段、以空行接）。
+ * 把快照與這一次呼叫的變數值算成前後兩段。**空的段落不佔位**，段與段之間隔一個空行（丟掉空段、以空行接）。
  *
  * 順序 ≤ `DEPLOYMENT_PERSONA_PREFIX` 的段進前段、≥ `DEPLOYMENT_PERSONA_SUFFIX` 的進後段（中間沒有段，登記時就拒絕）。
  * 只有快照裡登記過名字的變數可用；值是 `values` 裡同名的那一格，沒有就是「沒有值」。
@@ -286,7 +286,7 @@ export function assertSectionRegistrable(section: unknown): asserts section is P
   }
   if (typeof text === 'function') {
     throw new TypeError(
-      `systemPrompt.section() "${name}" 的 text 是函式：第一刀只收字串（偏離登記第 5 列），不會靜靜丟掉`,
+      `systemPrompt.section() "${name}" 的 text 是函式：第一刀只收字串（接縫的限制第 5 列），不會靜靜丟掉`,
     );
   }
   if (typeof text !== 'string') {
@@ -295,7 +295,7 @@ export function assertSectionRegistrable(section: unknown): asserts section is P
   for (const unsupported of ['complete', 'interpolate'] as const) {
     if (unsupported in section) {
       throw new TypeError(
-        `systemPrompt.section() "${name}" 帶了 ${unsupported}：第一刀不支援（偏離登記第 5 列），不會靜靜丟掉`,
+        `systemPrompt.section() "${name}" 帶了 ${unsupported}：第一刀不支援（接縫的限制第 5 列），不會靜靜丟掉`,
       );
     }
   }
@@ -305,7 +305,7 @@ export function assertSectionRegistrable(section: unknown): asserts section is P
   ) {
     throw new RangeError(
       `systemPrompt.section() "${name}" 的 order ${String(order)} 落在前綴（${String(SECTION_ORDERS.DEPLOYMENT_PERSONA_PREFIX)}）與後綴（${String(SECTION_ORDERS.DEPLOYMENT_PERSONA_SUFFIX)}）之間：` +
-        '第一刀只渲染頭尾兩段，中間段的規則留給第一個用到的遷移卡（偏離登記第 10 列）',
+        '第一刀只渲染頭尾兩段，中間段的規則留給第一個用到的遷移卡（接縫的限制第 10 列）',
     );
   }
 }

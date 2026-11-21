@@ -1,14 +1,13 @@
 /**
  * 系統提示詞的身分與 persona：**部署方寫，模型讀**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）。
  *
- * 照 dsh 的 `system-prompt` 插件（`packages/core/system-prompt/src/index.ts:407-442`，`477b4f4`）的三格設定：
+ * 三格設定：
  *
  * - `includeHarnessIdentity`（預設開）：最前面一句身分句。
- * - `personaPrefix`：身分句之後、其餘一切之前的一段（dsh 的 `deployment:persona-prefix`）。
- * - `personaSuffix`：**最後一段**（dsh 的 `deployment:persona-suffix`）。
+ * - `personaPrefix`：身分句之後、其餘一切之前的一段（段名 `deployment:persona-prefix`）。
+ * - `personaSuffix`：**最後一段**（段名 `deployment:persona-suffix`）。
  *
- * 順序是身分句 → 前綴 → 其餘（基座與各 plugin 的指引、我們組裝點傳的那句指引）→ 後綴（dsh
- * `packages/core/system-prompt/README.md:137`）。
+ * 順序是身分句 → 前綴 → 其餘（基座與各 plugin 的指引、我們組裝點傳的那句指引）→ 後綴。
  *
  * ## 形狀（#1477：第十一顆搬上 Cordis 樹的插件，第一顆必掛列）
  *
@@ -17,7 +16,7 @@
  *
  * - **提供一個服務**：`systemPrompt`（`@nexus/system-prompt` 1.0.0）。`apply` 裡 `new` 一個繼承 `ContractService` 的類別，建構時
  *   `provide`；用 `new` 不用 `ctx.plugin(Class)`（後者開子 fiber），歸屬（`.provider`）是這一列的 id，宿主據此只把服務折給 active 的這一列。
- *   照 dsh，**三格設定是服務自己的設定**：這個服務建好之後自己登記三段（`harness:identity`、`deployment:persona-prefix`、
+ *   **三格設定是服務自己的設定**：這個服務建好之後自己登記三段（`harness:identity`、`deployment:persona-prefix`、
  *   `deployment:persona-suffix`），日後 `plan-mode`、`sandbox-policy`、`goal` 遷移時對同一個服務登記它們自己的段。
  * - **宿主消費它，而且取的是快照**：宿主在組 thread 時 `assemble()` 一次，拿各段的原文，之後每次模型呼叫只代入變數、渲染成請求
  *   （`apps/harness/src/system-prompt-middleware.ts`）。所以服務的 `assemble()` 不碰 `this.ctx`，列卸載之後宿主手上的資料仍完整。
@@ -29,13 +28,13 @@
  *
  * ## 嚴格插值，而且在掛載當下驗
  *
- * 前後綴裡的 `{{variable}}` 是嚴格的（dsh `README.md:107`）：**未知的變數、註冊了卻沒有值的變數、寫壞的 `{{…}}`
+ * 前後綴裡的 `{{variable}}` 是嚴格的：**未知的變數、註冊了卻沒有值的變數、寫壞的 `{{…}}`
  * 都拋**，不會把字面的 `{{…}}` 送給模型——一份寫壞的提示詞比一個大聲的失敗更糟。單獨一個 `{{` 而後面沒有 `}}`
  * 是普通的字；代入進去的值不會再被掃一次。
  *
  * **掛載當下驗語法與名字，值每次模型呼叫才取**（#1477 Q2 (a)）：這一列自己登記 `model`、`cwd` 兩個名字，`apply` 裡先用一組
  * 空值把前後綴走一遍，寫壞的設定（`{{modle}}`、`{{a b}}`）當場拋 → 這一列掉 → 必掛 → 起不來，跟 #720 一樣；訊息（`SystemPromptTemplateError`）
- * 逐字不變。dsh 在渲染時拋，是因為它的變數會隨每一輪變；我們的名字在掛載當下就全部知道，所以不必等到第一輪才全面失敗。
+ * 逐字不變。我們的名字在掛載當下就全部知道，所以不必等到第一輪才全面失敗。
  * 值（`model`、`cwd`）是宿主每次呼叫交的：`model` 跟著那一步實際用的模型走（#723）。
  *
  * ## 為什麼是宿主那一顆 `wrapModelCall`，而且前綴前置、後綴附加
@@ -50,18 +49,14 @@
  * **子代理也走這裡**：`createDeepAgent` 的 `systemPrompt` 只送到 root，子代理只能靠 middleware 拿到部署 persona
  * （卡上第 2 項）。逐委派指定 persona 遮蔽它是 [#328](https://github.com/DemianLi/nexus-agent/issues/328) 的事。
  *
- * ## 登記：`{{cwd}}` 是工具收的位址，不是主機路徑；而且 dsh 沒有 `cwd` 變數
+ * ## 登記：`{{cwd}}` 是工具收的位址，不是主機路徑
  *
- * **dsh 沒有 `cwd` 這個變數**：loop 只登記 `provider` 與 `model`（`packages/core/agent-loop/src/index.ts:389-390`），
- * `packages/core/system-prompt/README.md:78` 明寫自訂 persona 不可依賴內建的 `{{cwd}}`，目錄文字由 working-directory 服務當字面的
- * 使用者上下文送出。我們登記了 `cwd`，而且出貨的後綴（`cordis.yml`）引用它——**這是我們獨有的變數**（`@nexus/system-prompt` 偏離登記第 8 列）。
- * 要不要拿掉出貨文案裡的 `{{cwd}}` 不在 #1477。（先前這裡寫的「dsh 的 `cwd` 取自 session header，`agent-loop index.ts:372`」已經過時，
- * 那一行現在是 `validateConfiguredAgents`。）
+ * 這一列登記了 `cwd`，而且出貨的後綴（`cordis.yml`）引用它（`@nexus/system-prompt` 檔頭〈接縫的限制〉第 8 列）。
+ * 要不要拿掉出貨文案裡的 `{{cwd}}` 不在 #1477。
  *
  * 我們的檔案工具收的不是主機路徑：`/` 就是工作區根（有 `--workspace` 時），沒有時是基座的虛擬檔案系統，`/` 一樣是它的根。
  * 把主機路徑講給模型，等於給它一個工具收不下的位址（`@nexus/plugin-sandbox-policy` 檔頭記過，用到檔案工具的 30 輪
- * 裡 23 輪照著那個字串用了主機路徑）。所以宿主交進來的 `cwd` 是 `/`。表達不出來的是 dsh 的那個形狀（工具收
- * 主機路徑）；退到最接近的實作，是把值換成工具的位址空間裡的根。
+ * 裡 23 輪照著那個字串用了主機路徑）。所以宿主交進來的 `cwd` 是 `/`：工具的位址空間裡的根。
  *
  * @module
  */
@@ -98,13 +93,13 @@ export {
 export type { SystemPromptVariables };
 
 /**
- * 身分句。**寫死在這裡，不是設定**（dsh 同：文字在 `packages/core/system-prompt/src/index.ts:429`）：部署方想換說法，
- * 用 `personaPrefix`；想拿掉，用 `includeHarnessIdentity: false`。名字換成 nexus-agent，其餘照 dsh。
+ * 身分句。**寫死在這裡，不是設定**：部署方想換說法，
+ * 用 `personaPrefix`；想拿掉，用 `includeHarnessIdentity: false`。名字是 nexus-agent。
  */
 export const HARNESS_IDENTITY_SENTENCE = 'You are an AI agent powered by nexus-agent.';
 
 /**
- * 設定。三格都選填；沒寫的格子回到 dsh 的預設（開身分句、前後綴空）。
+ * 設定。三格都選填；沒寫的格子回到預設（開身分句、前後綴空）。
  *
  * **patch 是整份取代 `config`**：只寫 `includeHarnessIdentity: false` 的話，前後綴也回到空——出貨那一列把三格全部
  * 寫出來，就是讓照著改的人手上有完整的一份可以抄。
