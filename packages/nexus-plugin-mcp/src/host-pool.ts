@@ -14,7 +14,7 @@
  *
  * 取代 SDK 替我們做的事，逐項：逾時取消（工具逾時由宿主算；這一側只在有傳 `timeout` 時，送出後 `timeout` 加 W 到期送取消、丟 `REQUEST_TIMEOUT`）、`outputSchema` 驗證
  * （照 `toolDefinition`，每次呼叫都驗）、`resources/list` 翻頁（呼叫端逐頁走，這裡原樣轉）、掉線分類（宿主自己重連，這一側不分類）、
- * 探活（宿主那一側，這裡的 `listTools` 回開時的清單）、`taskSupport`（宿主的清單沒有 `execution`，宿主路徑上擋不到 `taskSupport: 'required'`，已知差異，見 `docs/host-mcp.md`〈跟 TS 的差距〉）。
+ * 探活（stdio 的請求逾時或被取消之後，宿主在背景探一次，沒回應就照掉線走、收掉子行程重連；HTTP 不探；見 `docs/host-mcp.md`〈橋〉；這裡的 `listTools` 回開時的清單、不送到 server）、`taskSupport`（宿主的清單沒有 `execution`，宿主路徑上擋不到 `taskSupport: 'required'`，已知差異，見 `docs/host-mcp.md`〈跟 TS 的差距〉）。
  *
  * @module
  */
