@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import sys
-from pathlib import Path
 from typing import NamedTuple
 
 SKILL_MD = '.agents/skills/pstack/skills/poteto-mode/SKILL.md'
@@ -65,34 +64,9 @@ def check_start_session(tool_input: dict) -> str | None:
     )
 
 
-def last_reply(transcript: Path) -> str | None:
-    texts: list[str] = []
-    last_kind = None
-    for line in transcript.read_text(encoding='utf-8').splitlines():
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        kind = entry.get('type')
-        content = (entry.get('message') or {}).get('content')
-        if kind == 'user' and (isinstance(content, str) or any(
-            isinstance(b, dict) and b.get('type') == 'text' for b in content or []
-        )):
-            texts = []
-        if kind in ('user', 'assistant') and content:
-            last_kind = kind
-        if kind == 'assistant' and isinstance(content, list):
-            texts += [b['text'] for b in content if isinstance(b, dict) and b.get('type') == 'text' and b.get('text', '').strip()]
-    if last_kind != 'assistant':
-        return None
-    return texts[-1] if texts else None
-
-
 def stop_reply(event: dict) -> str | None:
     message = event.get('last_assistant_message')
-    if isinstance(message, str):
-        return message
-    return last_reply(Path(event['transcript_path']))
+    return message if isinstance(message, str) else None
 
 
 def check_closing(reply: str | None) -> str | None:
