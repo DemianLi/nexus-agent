@@ -149,10 +149,9 @@ export const SESSION_DURABILITY_CONTRACT_VERSION = '1.0.0';
  * 落盤確認（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）：寫進一份日誌的東西**真的到了磁碟**才放行。
  *
  * **為什麼是服務（理由 1，基座表達不出來）**：註冊表**每條 thread 一份**，落盤的 store
- * 由入口持有，插件兩個都拿不到。**做法**：宿主把那三步包成一個服務提供在樹上，插件 inject 它。
+ * 由入口持有，插件兩個都拿不到。**做法**：宿主把「排空、從存檔讀回、核對最後一顆」這三步包成一個服務提供在樹上，插件經 token 取用。
  *
- * 宿主只在**清單上掛著落盤**時提供它（沒掛 `session-persistence-jsonl`，`sessionPersistence` 就不在，
- * `message-feedback` 起不來）。
+ * 宿主只在**清單上掛著落盤**時提供它。消費者把它當選配、每次呼叫當下才讀：沒有它時，要等落盤的操作在呼叫當下拋錯。
  */
 export interface SessionDurabilityService {
   /**
