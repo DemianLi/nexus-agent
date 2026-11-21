@@ -55,10 +55,34 @@ class StartSessionTest(unittest.TestCase):
                 self.assertIsNotNone(reason)
                 self.assertIn(SKILL_MD, reason)
 
-    def test_other_names_and_proposal_starts_are_not_checked(self) -> None:
+    def test_other_names_and_bare_proposal_starts_are_not_checked(self) -> None:
         self.assertIsNone(check_start_session({'name': 'docker-fix'}))
         self.assertIsNone(check_start_session({}))
-        self.assertIsNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1'}))
+        self.assertIsNone(check_start_session({'proposal_id': 'task_1'}))
+        self.assertIsNone(check_start_session({'title': 'Docker 修正'}))
+
+    def test_offer_brief_sent_with_proposal_id_is_checked(self) -> None:
+        self.assertIsNotNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1', 'model': 'claude-opus-5-5', 'effort': 'medium'}))
+        self.assertIsNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1', 'model': 'claude-sonnet-5-5', 'effort': 'medium'}))
+
+    def test_role_title_without_name_is_blocked(self) -> None:
+        for title in ('verifier：PR #3093', 'Engineer：#2521'):
+            with self.subTest(title=title):
+                reason = check_start_session({'title': title, 'model': 'claude-opus-5-5', 'effort': 'medium'})
+                self.assertIsNotNone(reason)
+                self.assertIn('`name`', reason)
+
+    def test_fork_and_cloud_are_blocked(self) -> None:
+        ok = {'name': 'ver-1', 'model': 'claude-opus-5-5', 'effort': 'medium'}
+        self.assertIsNotNone(check_start_session({**ok, 'context': 'fork'}))
+        self.assertIsNotNone(check_start_session({**ok, 'target': 'cloud'}))
+        self.assertIsNone(check_start_session({**ok, 'context': 'fresh', 'target': 'local'}))
+
+    def test_model_generation(self) -> None:
+        for model, ok in (('sonnet', True), ('claude-sonnet-5-5', True), ('claude-sonnet-6', True),
+                          ('claude-sonnet-4-5', False), ('claude-3-5-sonnet', False), ('my-sonnet-fork', False)):
+            with self.subTest(model=model):
+                self.assertEqual(check_start_session({'name': 'eng-1', 'model': model, 'effort': 'medium'}) is None, ok)
 
     def test_hook_exit_codes(self) -> None:
         self.assertEqual(run(['pre-start-session'], {'tool_input': {'name': 'ver-1'}})[0], 2)
@@ -72,21 +96,26 @@ class RoleTableTest(unittest.TestCase):
             m = re.match(r'^\| ([^|]+?) \| `([^`]+)` \| `([^`]+)` \|$', line)
             if m:
                 rows[m.group(1).split(' (')[0]] = (m.group(2), m.group(3))
-        for role, model, effort in ROLES.values():
-            with self.subTest(role=role):
-                self.assertEqual(rows.get(role), (model, effort))
+        for role in ROLES.values():
+            with self.subTest(role=role.table_row):
+                self.assertEqual(rows.get(role.table_row), (role.model, role.effort))
 
 
 class ClosingTest(unittest.TestCase):
     def test_accepted_first_lines(self) -> None:
-        for reply in ('可封存：都合了', '不可封存：CI 還在跑\n\n細節', '還在等：verifier', '**不可封存：**等判定', '\n\n> 可封存：x'):
+        for reply in ('可封存：都合了', '不可封存：CI 還在跑\n\n細節', '還在等：verifier', '還在等: verifier\n\n', '**不可封存：**等判定', '**不可封存**：等判定', '\n\n> 可封存：x'):
             with self.subTest(reply=reply):
                 self.assertIsNone(check_closing(reply))
 
     def test_missing_closing_line_is_blocked(self) -> None:
-        for reply in ('合好了。\n\n可封存：都合了', '判定出來了', ''):
+        for reply in ('合好了。\n\n可封存：都合了', '判定出來了', '', '可封存了', '不可封存，等 CI'):
             with self.subTest(reply=reply):
                 self.assertIsNotNone(check_closing(reply))
+
+    def test_waiting_reply_must_be_one_line(self) -> None:
+        reason = check_closing('還在等：CI\n\n細節')
+        self.assertIsNotNone(reason)
+        self.assertIn('只寫這一行', reason)
 
     def test_turn_without_text_passes(self) -> None:
         self.assertIsNone(check_closing(None))

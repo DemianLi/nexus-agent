@@ -52,7 +52,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
 
-- PM 直接開 engineer 與 verifier，不先問 operator（operator 的常設授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表；`PreToolUse` hook 擋下不合的。app 在自動事件叫醒的回合（例如背景工作跑完）會拒絕開 session；被拒才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。PM 在 engineer 回報 code-ready 的那一輪開 verifier，多半不會被擋；作者是 operator 的協調 session、等的是自己的 CI 時才容易被擋。
+- PM 直接開 engineer 與 verifier，不先問 operator（operator 的常設授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，出錯就放行。app 在自動事件叫醒的回合（例如背景工作跑完）會拒絕開 session；被拒才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。PM 在 engineer 回報 code-ready 的那一輪開 verifier。
 - engineer 與 verifier 都開成 session，不開成 subagent。PM 開 session 時不讓 app 建 worktree（app 會自己取分支名、加前綴，跟 `<type>/<kebab-case>` 不合），讓 session 從主 checkout 起跑，自己照 worker.md 開 worktree，之後只在那個 worktree 裡改。
 - engineer 推出 code-ready 的 head 之後，回報 PM 並結束這一輪，不自己合併。PM 把 verifier 的判定用訊息轉給 engineer；engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。
 - verifier 開背景子代理（例如 code-review 兩軸）之後，先做完自己的部分（重跑 Evidence、突變護欄、核行號）才結束回合，少停幾次；判定貼上之前，自己移除它開的 worktree。
@@ -151,8 +151,8 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 分支命名 `<type>/<kebab-case>` | 只有文件 |
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
 | 開完 PR 開 Auto-fix | 只有文件（工具不在或被權限檢查擋下時，在卡上記一筆，不重試；沒開成，engineer 照 [Babysit](../../.agents/skills/pstack/skills/poteto-mode/playbooks/babysit.md) 自己盯 CI） |
-| 收尾第一句寫可封存、不可封存或還在等 | `Stop` hook（`.github/scripts/session_hooks.py`） |
-| engineer、verifier 照角色表的 `model`、`effort` 開 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-`） |
+| 收尾第一句寫可封存、不可封存或還在等 | `Stop` hook（`.github/scripts/session_hooks.py`；只看前綴與 `還在等：` 是否一行，擋一次、出錯放行） |
+| engineer、verifier 照角色表的 `model`、`effort` 開 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到） |
 | 開 session 被 app 拒絕時改成提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
 | engineer 可封存之後拿掉 `ready-for-agent`、結卡、封存 | 只有文件（PM 照〈收尾與封存〉做） |
 | 卡的正文是唯一的規格、寫到的程式碼現況要核過 | verifier（Spec 軸對程式碼核正文的前提） |

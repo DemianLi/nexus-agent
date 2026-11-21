@@ -4,34 +4,65 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 SKILL_MD = '.agents/skills/pstack/skills/poteto-mode/SKILL.md'
 
+
+class Role(NamedTuple):
+    table_row: str
+    title_word: str
+    model: str
+    effort: str
+
+
 ROLES = {
-    'eng-': ('Engineer', 'sonnet', 'medium'),
-    'ver-': ('Verifier', 'opus', 'medium'),
+    'eng-': Role('Engineer', 'engineer', 'sonnet', 'medium'),
+    'ver-': Role('Verifier', 'verifier', 'opus', 'medium'),
 }
 
+MIN_GENERATION = 5
+
 CLOSING_PREFIXES = ('可封存', '不可封存', '還在等')
+WAITING = '還在等'
+CLOSING_LINE = re.compile(rf'^({"|".join(CLOSING_PREFIXES)})[：:]')
+
+
+def model_matches(got: str, family: str) -> bool:
+    if got == family:
+        return True
+    m = re.fullmatch(rf'claude-{family}-(\d+)(?:-\d+)*', got)
+    return bool(m) and int(m.group(1)) >= MIN_GENERATION
+
+
+def role_for(tool_input: dict) -> tuple[str, Role] | None:
+    name = tool_input.get('name') or ''
+    title = (tool_input.get('title') or '').lower()
+    for prefix, role in ROLES.items():
+        if name.startswith(prefix) or (not name and title.startswith(role.title_word)):
+            return prefix, role
+    return None
 
 
 def check_start_session(tool_input: dict) -> str | None:
-    if tool_input.get('proposal_id'):
+    found = role_for(tool_input)
+    if found is None:
         return None
+    prefix, role = found
     name = tool_input.get('name') or ''
-    for prefix, (role, model, effort) in ROLES.items():
-        if not name.startswith(prefix):
-            continue
-        got_model = tool_input.get('model') or ''
-        got_effort = tool_input.get('effort') or ''
-        if model in got_model and got_effort == effort:
-            return None
-        return (
-            f'`{name}` 是 {role}，要用 model 含 `{model}`、effort `{effort}`，'
-            f'這次是 model `{got_model or "（沿用）"}`、effort `{got_effort or "（沿用）"}`。'
-            f'角色表在 {SKILL_MD}〈Subagents〉。'
-        )
-    return None
+    where = f'角色表在 {SKILL_MD}〈Subagents〉，開法在 docs/agents/collab-mode.md〈開場說明〉。'
+    if not name.startswith(prefix):
+        return f'{role.table_row} 的 session 要給 `name`，以 `{prefix}` 開頭。{where}'
+    if tool_input.get('context') == 'fork' or tool_input.get('target') == 'cloud':
+        return f'`{name}` 是 {role.table_row}，要用 `context: "fresh"` 在本機開：fork 會帶進 PM 的對話，cloud 不吃 model 與 effort。{where}'
+    got_model = tool_input.get('model') or ''
+    got_effort = tool_input.get('effort') or ''
+    if model_matches(got_model, role.model) and got_effort == role.effort:
+        return None
+    return (
+        f'`{name}` 是 {role.table_row}，要用 model `{role.model}`（第 {MIN_GENERATION} 代以後的 id 也行）、effort `{role.effort}`，'
+        f'這次是 model `{got_model or "（沿用）"}`、effort `{got_effort or "（沿用）"}`。{where}'
+    )
 
 
 def last_reply(transcript: Path) -> str | None:
@@ -55,14 +86,15 @@ def last_reply(transcript: Path) -> str | None:
 def check_closing(reply: str | None) -> str | None:
     if reply is None:
         return None
-    first = next((l for l in reply.splitlines() if l.strip()), '')
-    first = re.sub(r'^[\s>#*_`-]+', '', first)
-    if first.startswith(CLOSING_PREFIXES):
+    lines = [l for l in reply.splitlines() if l.strip()]
+    first = re.sub(r'^[\s>#*_`-]+', '', lines[0] if lines else '').replace('**', '')
+    m = CLOSING_LINE.match(first)
+    if m and (m.group(1) != WAITING or len(lines) == 1):
         return None
-    return (
-        '最後那段話的第一句要以 `可封存：`、`不可封存：` 或 `還在等：` 開頭'
-        '（AGENTS.md〈收尾〉）。補上這一句再結束。'
-    )
+    if m:
+        return f'`{WAITING}：` 的回合只寫這一行（AGENTS.md〈收尾〉）。狀態有變就改寫成另外兩種。'
+    allowed = '、'.join(f'`{p}：`' for p in CLOSING_PREFIXES)
+    return f'最後那段話的第一句要以 {allowed} 之一開頭（AGENTS.md〈收尾〉）。補上這一句再結束。'
 
 
 def main(argv: list[str]) -> int:
