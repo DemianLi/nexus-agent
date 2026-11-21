@@ -1,9 +1,9 @@
 /**
- * `@nexus/agent-loop`：**一次 agent 呼叫開頭注入訊息**這個接縫的定義套件（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/agent-loop`：**一次 agent 呼叫開頭注入訊息**這個接縫的定義套件（決議 §3-4 第 16 條，三角色紀律；
  * [#1474](https://github.com/DemianLi/nexus-agent/issues/1474) Q1 (a)、Q1-1 (a)，Part of #1385）。
  *
- * 對應 dsh 的 `agent/pre-step`：插件在模型看到這一步之前，往這一步的訊息批次加一則持久的使用者訊息
- * （`agent-instructions` 的 `AGENTS.md` 基線是第一個消費者）。名字叫 `agent-loop`，是因為 dsh 的這條事件就是 agent loop 的
+ * 事件是 `agent/pre-step`：插件在模型看到這一步之前，往這一步的訊息批次加一則持久的使用者訊息
+ * （`agent-instructions` 的 `AGENTS.md` 基線是第一個消費者）。名字叫 `agent-loop`，是因為這條事件就是 agent loop 的
  * 時機，以後 `agent/turn-stopping` 這類也住這裡（本套件今天只放有消費者的 `preStep`，見檔尾）。
  *
  * | 角色 | 是誰 | 依賴什麼 |
@@ -20,26 +20,23 @@
  * 1. 用 core 的 `applySummaryCutoff` 套上這次組裝切點表的切點，算出「模型看得到的那一串」交給 listener——切點表留在宿主，
  *    插件不碰；
  * 2. 把 listener 回的內容建成 `HumanMessage`（`additional_kwargs` 先放 listener 給的、再蓋 `source`）；
- * 3. 經**這條 thread 自己的**會話註冊表記一筆 `user/message`，來源是 listener 給的 `source`，沒給是 `{ kind: 'plugin', plugin: <名字> }`；記不進去原錯往外拋，這一輪失敗（#1665，照 dsh）；
+ * 3. 經**這條 thread 自己的**會話註冊表記一筆 `user/message`，來源是 listener 給的 `source`，沒給是 `{ kind: 'plugin', plugin: <名字> }`；記不進去原錯往外拋，這一輪失敗（#1665）；
  * 4. 回 `{ messages }`，由基座**追加**。
  *
- * 這跟 dsh 一致：dsh 的插件只把基線放進這一步的批次，由 agent loop 記成 `user/message`，插件不寫日誌
- * （`packages/core/agent-loop/src/agent.ts:426-436`）。「進了模型的訊息一定有記錄」因此是接縫的保證，不靠每顆插件記得做。
+ * 插件只回要追加的訊息，由宿主記成 `user/message`，插件不寫日誌。「進了模型的訊息一定有記錄」因此是接縫的保證，不靠每顆插件記得做。
  *
- * ## 偏離登記（AGENTS.md 的偏離規則；dsh 以 `86a40220` 為準）
+ * ## 接縫的限制
  *
- * | # | dsh 怎麼做 | 我們怎麼做 | 為什麼表達不出來 |
+ * | # | 限制 | 我們怎麼做 | 為什麼 |
  * | --- | --- | --- | --- |
- * | 1 | waterfall：listener 收 `next()`、拿到這一步的決定（`enter`／`reject`）後可以 splice 進批次的任何位置、可以 `reject` 整步（`agent.ts:267-288`、`runtime-types.ts:309-320`（`agent/pre-step` 的說明與簽名；`:321` 起是 `agent/request`））。`agent-instructions` 遇到 `reject`、或第 1 步批次是空的就不 splice，把基線留在收件匣等下一步（`agent-instructions/src/index.ts:345`） | **只能追加**，位置由基座決定（今天落在使用者那一句之後，與 dsh 同位）；沒有 `reject`，也沒有「留到下一步」 | 載體是 middleware 的 `beforeAgent`，只能回要追加的訊息（`interception-index.test.ts` 第 2 列 `permissionDelta`）；拿不到整個批次 |
- * | 2 | **每一步**都跑（waterfall 在 `preStep()`，迴圈裡每個 step 一次：`agent.ts:318` 呼叫、`:267-288` 實作） | **每次 invoke 一次**（`beforeAgent`） | 每一步要 `beforeModel`，它是圖裡的節點，預設上限 100 下每輪多一格＝33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做，這裡也就沒有另外為它付那一格。名字叫 `preStep` 而不叫 `beforeInvoke`：#389 重開時名字不必改 |
- * | 3 | listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是**這一步從收件匣領出來的批次**（`runtime-types.ts:313`） | listener 收「**模型看得到的那一串**」（套上摘要切點的 state 訊息串）與呼叫設定 `{ configurable, signal? }`（`signal` 是 1.1.0 加的）；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由 `configurable` 認 | 我們沒有收件匣：訊息批次在圖的 state 裡。沒有 `agent` 物件，身分由呼叫設定認（同 `@nexus/session` 的會話查找） |
- * | 4 | 在請求被接受的**第一次嘗試**才記 `user/message`（`agent.ts:426-436`，`if (firstAttempt)` 底下） | 在注入當下記（`beforeAgent` 回傳之前） | `beforeAgent` 在請求之前就跑，看不到「這一步是不是第一次嘗試」。重試是模型呼叫那一層的事（`retryModelCall`），不會重跑 `beforeAgent`，所以同一次 invoke 不會因重試記兩筆 |
+ * | 1 | 載體是 middleware 的 `beforeAgent`，只能回要追加的訊息，拿不到整個批次 | **只能追加**，位置由基座決定（落在使用者那一句之後）；沒有 `reject`，也沒有「留到下一步」 | 見 `interception-index.test.ts` 第 2 列 `permissionDelta` |
+ * | 2 | 每一步都跑要用 `beforeModel`，它是圖裡的節點 | **每次 invoke 一次**（`beforeAgent`） | 預設上限 100 下每輪多一格＝33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做。名字叫 `preStep` 而不叫 `beforeInvoke`：#389 重開時名字不必改 |
+ * | 3 | 沒有收件匣，訊息批次在圖的 state 裡；沒有 `agent` 物件 | listener 收「**模型看得到的那一串**」（套上摘要切點的 state 訊息串）與呼叫設定 `{ configurable, signal? }`（`signal` 是 1.1.0 加的）；這次呼叫屬於哪條 thread 由 `configurable` 認 | 身分由呼叫設定認（同 `@nexus/session` 的會話查找） |
+ * | 4 | `beforeAgent` 在請求之前就跑，看不到「這一步是不是第一次嘗試」 | 在注入當下記 `user/message`（`beforeAgent` 回傳之前） | 重試是模型呼叫那一層的事（`retryModelCall`），不會重跑 `beforeAgent`，所以同一次 invoke 不會因重試記兩筆 |
  *
  * **撤除條件**：#389 重開（每一步注入），或 core 開了讓多個貢獻者共用一格的 pre-step 節點時，第 1、2、4 列一起重評。
  *
- * 這張表只收接縫本身的偏離。另有一條屬於消費者而不是接縫的——agent-instructions 把 `fs` 放進 `inject`（必填，不是 dsh 的選配
- * `ctx.get('fs')`，#1474 Q3 (a)）——登記在 `@nexus/plugin-agent-instructions` 檔頭「偏離登記」第 2 條；`docs/plugin-contract.md` 的偏離表把兩處
- * 合在一張表裡。
+ * 這張表只收接縫本身的限制。另有一條屬於消費者而不是接縫的——agent-instructions 把 `fs` 放進 `inject`（必填，#1474 Q3 (a)）——登記在 `@nexus/plugin-agent-instructions` 檔頭「偏離登記」第 2 條；`docs/plugin-contract.md` 的偏離表把兩處合在一張表裡。
  *
  * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`agent/turn-stopping` 等其餘 agent loop
  * 事件今天沒有遷出的消費者，不加。
@@ -74,7 +71,7 @@ export interface PreStepInvocation {
   /** 基座給 `beforeAgent` 的 `runtime.configurable`；取不到時是 `undefined`。 */
   readonly configurable: unknown;
   /**
-   * 這一輪的中止訊號（`1.1.0` 起），對應 dsh `agent/pre-step` 參數裡的 `signal`（`packages/core/agent/src/runtime-types.ts:320`，`687f282e`）：人按了停止，listener
+   * 這一輪的中止訊號（`1.1.0` 起）：人按了停止，listener
    * 做到一半的事（例如讀檔）就收手。宿主拿不到時省略。
    */
   readonly signal?: AbortSignal;
@@ -95,9 +92,8 @@ export interface PreStepInjection {
    */
   readonly additionalKwargs?: Readonly<Record<string, unknown>>;
   /**
-   * 這則訊息的來源（`1.2.0` 起），寫進訊息的 `nexus_source` 與日誌 `user/message` 的 `source`。對應 dsh listener 自己在
-   * `createUserMessage({ source })` 帶的那一格（例如 `tool-skill` 的 `{ kind: 'skill-invocation', name, form: 'instructions' }`，
-   * `packages/skill/tool-skill/src/index.ts:198-202`，`687f282e`）。
+   * 這則訊息的來源（`1.2.0` 起），寫進訊息的 `nexus_source` 與日誌 `user/message` 的 `source`。例如 `tool-skill` 帶的
+   * `{ kind: 'skill-invocation', name, form: 'instructions' }`。
    *
    * 不給就是 `{ kind: 'plugin', plugin: <登記時的名字> }`。**只收兩種**：同上那一種（`1.3.0` 起可多帶 `form: 'instructions'`），與
    * `{ kind: 'skill-invocation', name, form: 'instructions' }`（`name` 非空），多一個鍵都不收。`'user'` 是「有人在場」的判別（goal 的直接

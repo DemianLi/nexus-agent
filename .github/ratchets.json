@@ -5,7 +5,6 @@
     "apps/harness": 2333,
     "apps/web": 482,
     "native": 1,
-    "packages/nexus-agent-loop": 11,
     "packages/nexus-approval-channel": 4,
     "packages/nexus-brand": 3,
     "packages/nexus-commands": 4,
@@ -39,7 +38,6 @@
     "packages/nexus-system-prompt": 14,
     "packages/nexus-timeout": 1,
     "packages/nexus-tool-result": 2,
-    "packages/nexus-tools": 10,
     "packages/nexus-wire": 360,
     "scripts": 60
   },

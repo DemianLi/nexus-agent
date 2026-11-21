@@ -92,7 +92,7 @@ describe('@nexus/tools 的定義', () => {
       peerDependencies: Record<string, string>;
       devDependencies: Record<string, string>;
     };
-    // dsh 的做法：插件與服務定義套件把框架／規範套件放 peerDependencies，開發時由 devDependencies 補上。
+    // 插件與服務定義套件把框架／規範套件放 peerDependencies，開發時由 devDependencies 補上。
     // `ContractError` 的 `instanceof` 靠「宿主與這個套件看到同一份 `@nexus/sdk`」，放進 dependencies 就可能各裝一份。
     expect(Object.keys(manifest.dependencies)).toEqual(['@langchain/core']);
     expect(manifest.peerDependencies).toEqual({ '@nexus/sdk': 'workspace:*' });

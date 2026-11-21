@@ -1,5 +1,5 @@
 /**
- * `@nexus/tools`：工具登記處這個接縫的**定義套件**（決議 §3-4 第 16 條，dsh 的三角色紀律）。
+ * `@nexus/tools`：工具登記處這個接縫的**定義套件**（決議 §3-4 第 16 條，三角色紀律）。
  *
  * 一個能力接縫由三個角色組成：
  *
@@ -266,7 +266,7 @@ export interface ToolGateExecution {
 }
 
 /**
- * 一次 pre-execute 決定（#1466）。**三格封閉，照 dsh**（`packages/core/tools/src/index.ts:589`）：`allow`／`deny`／`ask`。
+ * 一次 pre-execute 決定（#1466）。**三格封閉**：`allow`／`deny`／`ask`。
  * 對應 `@nexus/core` 的 `PreToolDecision`。
  */
 export type ToolGateDecision =
@@ -276,7 +276,7 @@ export type ToolGateDecision =
 
 /**
  * 一位核准閘門 listener（#1466）。waterfall 依註冊順序跑，**鏈底是 `allow`**；`next()` 委派給下一位，不呼叫就是把後面的人
- * 短路掉（照 dsh 的 waterfall 語義）。
+ * 短路掉（waterfall 語義）。
  */
 export type ToolGateListener = (
   exec: ToolGateExecution,
@@ -538,8 +538,7 @@ export interface ToolRegistry {
   /**
    * 登記一位**核准閘門** listener（契約 `1.2.0` 起，#1466 Q1 (a)）：對一次工具呼叫回 `allow`／`deny`／`ask`。
    *
-   * 對應 dsh 的 `ctx.on('tools/pre-execute')`（`packages/core/tools/src/index.ts:1512-1516`，鏈底 `allow`）。**偏離**：樹上沒有
-   * 事件匯流排的 token，核准也不搬上匯流排（demian 2026-10-09），所以退到 tools 服務上的一個方法；宿主把這一列登記的
+   * 樹上沒有事件匯流排的 token，核准也不搬上匯流排（demian 2026-10-09），所以是 tools 服務上的一個方法；宿主把這一列登記的
    * listener 折進**每條 thread 自己的** `registry.approvals`，問人仍走 `nexusApprovalGate` 中介層（管道、政策、確定拒絕照舊）。
    *
    * 註冊就是 effect：登記者那一列卸載時自己撤掉。已經折進某條 thread 的那一份不受影響（組 thread 時取快照，決議 §3-2 第 6 條）。
@@ -554,8 +553,7 @@ export interface ToolRegistry {
    * 登記一位 **`tools/result` 觀察者**（契約 `1.3.0` 起，#1469 Q1 (a)）：每一次工具呼叫的最終結果落定時（成功、工具拋的錯、被拒絕的都算）
    * 被叫，在記 `tool/result` 之前。
    *
-   * 對應 dsh 的 `ctx.on('tools/result')`（`packages/deliverables/tool-present/src/index.ts:100-108`）。**偏離**：樹上沒有事件匯流排的
-   * token，退到 tools 服務上的一個方法（理由同 {@link ToolRegistry.gate}）；宿主把這一列登記的 listener 折進**每條 thread 自己的**
+   * 樹上沒有事件匯流排的 token，所以是 tools 服務上的一個方法（理由同 {@link ToolRegistry.gate}）；宿主把這一列登記的 listener 折進**每條 thread 自己的**
    * `registry.events.on('tools/result', l)`，所以派發的時機與次序不變，而且 listener 跟工具一起被快照——登記者那一列之後被停用或重載，
    * 開著的 thread 手上的工具與 listener 仍然成對可用。
    *
@@ -571,8 +569,7 @@ export interface ToolRegistry {
   onResult?(listener: ToolResultListener): () => void;
   /**
    * 標「這一輪在這個工具呼叫之後收」（契約 `1.4.0` 起，#1607）：宣告了 `returnDirect: true` 的工具（`NexusTool` 宣告的是 `concludesTurn: true`，轉接器轉成同一格），在**本體執行當中**、
-   * 走到要收的那個結局時呼叫它。對應 dsh 的 `exec.concludeTurn()`（`packages/core/tools/src/index.ts:1862` 的 `concludingExecutions`，
-   * 由 plan-mode 在 `ASK_CANCELLED` 呼叫，`plan-mode/src/index.ts:331-341`）。
+   * 走到要收的那個結局時呼叫它（plan-mode 在 `ASK_CANCELLED` 呼叫）。
    *
    * **`returnDirect` 的語意因此改了**：基座把 `returnDirect: true` 當成「這顆工具的每一種結局都收這一輪」；宿主現在改成**標了才收**。
    * 宣告了 `returnDirect` 卻不呼叫這個方法的工具，這一輪**不再**在它之後結束（升級指南 `returndirect-conclude-turn`）。
@@ -580,12 +577,11 @@ export interface ToolRegistry {
    * 要收，同時要成立：
    * - 在該工具本體執行當中呼叫，且 `toolName` 是正在執行的那顆（別顆的名字、槽外呼叫都什麼都不做）；
    * - 那個工具宣告了 `returnDirect: true`（`NexusTool` 宣告的是 `concludesTurn: true`，轉接器轉成同一格）；
-   * - 最終結果不是錯誤（錯誤不收，dsh 的 `ToolExecutionFailure` 寫的是 `concludesTurn?: never`）；
-   * - 同一則 AI 訊息叫的工具只有這一個（**偏離**，下）。
+   * - 最終結果不是錯誤（錯誤不收）；
+   * - 同一則 AI 訊息叫的工具只有這一個（限制，下）。
    *
-   * **偏離（理由 1：基座表達不出來）**：dsh 的 `concludeTurn()` 在**每次呼叫各自的 exec 物件**上，基座的工具沒有；所以退到 tools 服務上
-   * 的一個方法，以工具名認人。另外，dsh 是批內任何一個工具標了就收，基座把批裡每個呼叫各自送成一個 `Send`、tools 路由各判各的，
-   * 混批會擲 `InvalidUpdateError`，所以批裡不只一個呼叫時標了也照常繼續叫模型。
+   * **限制（基座表達不出來）**：基座的工具沒有每次呼叫各自的 exec 物件，所以這是 tools 服務上的一個方法，以工具名認人。另外，
+   * 基座把批裡每個呼叫各自送成一個 `Send`、tools 路由各判各的，混批會擲 `InvalidUpdateError`，所以批裡不只一個呼叫時標了也照常繼續叫模型。
    *
    * 這個方法由**宿主**注入（定義套件不相依 `@nexus/core`）；沒注入的提供者呼叫它什麼都不做。
    *
