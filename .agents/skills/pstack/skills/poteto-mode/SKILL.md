@@ -109,7 +109,7 @@ Merging your own verified PR into `develop` is reversible by a revert PR, so it 
 | Comment Sicko | `opus` | `high` |
 | Trivial mechanical subagents (run tests, grep inventories, byte compares) | `sonnet` | `medium` |
 
-Engineers and verifiers run exactly at their table row: a hook (`.github/scripts/session_hooks.py`) blocks a `start_session` whose `name` starts with `eng-` or `ver-` and does not pass that `model` and `effort`, so name them that way. Raise any other role one effort step for the hardest work and lower it for routine work. No role runs above `xhigh`.
+Engineers and verifiers run exactly at their table row: a hook (`.github/scripts/session_hooks.py`) blocks a `start_session` whose `name` starts with `eng-` or `ver-` and does not pass that `model` and `effort`, one whose title names the role without such a `name`, and a fork or cloud start of either role, so name them that way and start them fresh on this machine. Raise any other role one effort step for the hardest work and lower it for routine work. No role runs above `xhigh`.
 
 You own every subagent's work. Review the diff and write your own summary.
 
