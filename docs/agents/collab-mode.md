@@ -15,6 +15,9 @@ grill（討論）
 
 `ready-for-agent` 之前每一步都要人回答；之後不等人，只有 [poteto-mode](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Autonomy〉列的動作會停下來。
 
+- **卡的正文是唯一的規格。** 標 `ready-for-agent` 之前，把留言裡還要做的併進正文；沒併進去的，engineer 不做。
+- **正文寫到程式碼現況的地方，要對 `origin/develop` 核過，附 `path:line` 與 SHA**，不從舊留言或記憶抄。前提跟程式碼不合時，engineer 照程式碼做，把差異列成可逆的預設。
+
 ## 角色
 
 operator（demian）、PM、engineer、verifier 的職責與模型見 [poteto-mode](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Nexus roles〉與〈Subagents〉。PM 照 [Autopilot-full](../../.agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md) 跑佇列，engineer 照 Feature 或 Bug fix 開發、照 [Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 合併。
@@ -49,6 +52,9 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
 
+- engineer 與 verifier 都開成 session，不開成 subagent。PM 開 session 時不讓 app 建 worktree（app 會自己取分支名、加前綴，跟 `<type>/<kebab-case>` 不合），讓 session 從主 checkout 起跑，自己照 worker.md 開 worktree，之後只在那個 worktree 裡改。
+- engineer 推出 code-ready 的 head 之後，回報 PM 並結束這一輪，不自己合併。PM 把 verifier 的判定用訊息轉給 engineer；engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。
+
 ## worktree 與上下文
 
 - 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。
@@ -58,13 +64,32 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 ## 合併與撤回
 
-- 放行條件是 verifier `PASS` 加 `gate` 綠，由 engineer 自己 squash 合併。同步 `develop` 後 patch-id 沒變就沿用判定；有衝突，engineer 自己解，PM 重開 verifier（[Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 第 2 步）。
-- `FAIL` 退回同一位 engineer 修，最多兩輪；第三次 `FAIL` 之後 PM 標 `needs-info`，在卡上寫明卡在哪，交給 operator。
+- 放行條件是 verifier `PASS`（或 `PASS+NOTES`）加 `gate` 綠，由 engineer 自己 squash 合併。同步 `develop` 後 patch-id 沒變就沿用判定；有衝突，engineer 自己解，PM 重開 verifier（[Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 第 2 步）。
+- **`gate` 綠**是最新那一輪的 `gate` 為 `SUCCESS` 或 `SKIPPED`。輕模式下，`plan` 成功、`rust` 為 `false`、其餘 job 全部跳過時 `gate` 不起 job，顯示 `SKIPPED`，ruleset 照樣放行（`.github/workflows/ci.yml` 裡 `gate` 的 `if`）。`SKIPPED` 時再確認 `plan` 是 `SUCCESS`。
+- 一張卡最多 `FAIL` 三次：前兩次 `FAIL` 退回同一位 engineer 修（它的 worktree 與分支就是要接續的狀態），第三次 `FAIL` 就停。每一次 `FAIL` 都算，解衝突之後的重判也算，不然解壞了可以一直退回。停下時 PM 標 `needs-info`、拿掉 `ready-for-agent`，在卡上寫明卡在哪，交給 operator；engineer 不封存，留著它的 worktree 等 operator 回覆。
+- 修 `FAIL` 理由的 commit，就算只改註解或文件，也一律由 PM 開新的 verifier 判新的 head。
+- 判定只記在 PR 上，卡上只放那則留言的連結。
 - `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate（`develop → main` 例外，由 `pr-edited.yml` 重跑），改標題會。
-- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，修好再重新開 PR。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回）之前，不開下一張 PR。
+- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，再由同一位 engineer 修好、重新開 PR，照常走 verifier。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回）之前，不開下一張 PR。
 - 合併後那一輪的「視覺差異」有差時會在 PR 留言，它不讓這一輪變紅、不走撤回；作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`apps/web/COMPONENTS.md`](../../apps/web/COMPONENTS.md)〈視覺差異〉）。
 - `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。緊急修補同樣先進 `develop`。
 - 分支合併後由 GitHub 自動刪除；突變、實驗分支在對應的卡結了之後可以清。`develop` 與 `main` 之外的分支同樣不 force push。
+
+## 收尾與封存
+
+每個 session 收尾的第一句寫 `可封存：…` 或 `不可封存：…`（[AGENTS.md](../../AGENTS.md)〈收尾〉）。三個角色什麼時候算可封存：
+
+| 角色 | 可封存的時候 | 誰封存 |
+| --- | --- | --- |
+| engineer | 自己合的 PR 合併後那一輪是綠的，Shipping 第 5 步的回報也寫在卡上了。撤回 PR 合了不算：撤回之後它還要修好、重新開 PR | PM |
+| verifier | 判定已經貼在 PR 上，自己開的 worktree 也移除了 | PM |
+| PM | 長駐的不封存；有終點的（例如試跑），交出報告之後 | operator |
+
+PM 在 engineer 可封存時依序做三件事：
+
+1. 拿掉卡上的 `ready-for-agent`，免得下一輪再派一次。
+2. engineer 的回報說卡上要做的都做完了，就結卡；沒做完，就把剩下的寫在卡上，卡留著。
+3. 封存 engineer，再照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它的 worktree。
 
 ## 導正
 
@@ -123,7 +148,10 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 內文寫 `Refs #N`，不寫 Closes | 只有文件 |
 | 分支命名 `<type>/<kebab-case>` | 只有文件 |
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
-| 開完 PR 開 Auto-fix | 只有文件 |
+| 開完 PR 開 Auto-fix | 只有文件（auto mode 會擋下 engineer 開，擋下就在卡上記一筆，不重試；沒開成，engineer 照 [Babysit](../../.agents/skills/pstack/skills/poteto-mode/playbooks/babysit.md) 自己盯 CI） |
+| 收尾第一句寫可封存或不可封存 | 只有文件 |
+| engineer 可封存之後拿掉 `ready-for-agent`、結卡、封存 | 只有文件（PM 照〈收尾與封存〉做） |
+| 卡的正文是唯一的規格、寫到的程式碼現況要核過 | verifier（Spec 軸對程式碼核正文的前提） |
 | ADR 的位置、檔名、編號與標題行 | gate（`check_adrs.py`） |
 | ADR 只在三個條件都成立時寫 | verifier |
 | 程式碼裡的 dsh 引用數只降不升 | gate（`check_ratchets.py`，基準 `.github/ratchets.json`） |
