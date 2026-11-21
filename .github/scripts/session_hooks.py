@@ -31,7 +31,7 @@ CLOSING_LINE = re.compile(rf'^({"|".join(CLOSING_PREFIXES)})[：:]')
 def model_matches(got: str, family: str) -> bool:
     if got == family:
         return True
-    m = re.fullmatch(rf'claude-{family}-(\d+)(?:-\d+)*', got)
+    m = re.fullmatch(rf'claude-{family}-(\d+)(?:-\d+)*(?:\[\w+\])?', got)
     return bool(m) and int(m.group(1)) >= MIN_GENERATION
 
 
@@ -39,7 +39,7 @@ def role_for(tool_input: dict) -> tuple[str, Role] | None:
     name = tool_input.get('name') or ''
     title = (tool_input.get('title') or '').lower()
     for prefix, role in ROLES.items():
-        if name.startswith(prefix) or (not name and title.startswith(role.title_word)):
+        if name.startswith(prefix) or (not name and re.match(rf'{role.title_word}(?![a-z])', title)):
             return prefix, role
     return None
 
