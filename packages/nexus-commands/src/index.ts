@@ -1,5 +1,5 @@
 /**
- * `@nexus/commands`：人打的斜線命令這個接縫的**定義套件**（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/commands`：人打的斜線命令這個接縫的**定義套件**（決議 §3-4 第 16 條，定義套件、實作、消費者三角色分開；
  * [#1456](https://github.com/DemianLi/nexus-agent/issues/1456)，Part of #1385）。形狀照 `@nexus/tools`、`@nexus/projections`。
  *
  * 一個能力接縫由三個角色組成：
@@ -25,15 +25,15 @@
  * ## 偏離登記：這個定義套件相依 `@nexus/core` 的型別（照 `@nexus/projections` 的 #1421 Q2 (a)）
  *
  * `CommandDefinition.handler` 的簽名用到 `CommandInvocation`，後者帶著 `SessionLog` 與 `AttachmentRef`——它們都活在
- * `@nexus/core`。dsh 的對應是 `dsh-commands` 相依 `dsh-session`；照那個形狀抽出核心是橫跨整個核心的一刀（#1421 Q2 (b)），
- * 這一張不做。所以命令的型別**留在 `@nexus/core`，由這個套件單向轉出**：
+ * `@nexus/core`。把核心抽出來是橫跨整個核心的一刀（#1421 Q2 (b)），
+ * 這裡不做。所以命令的型別**留在 `@nexus/core`，由這個套件單向轉出**：
  *
  * - 相依是單向的：這個套件相依 `@nexus/core`，core 不 import 這個套件。插件只 import 這個套件，所以 lint 與決議第 17 條在
  *   插件那一側成立。
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（#1421 PM 決策 3）。
  * - **撤除條件**：併入 #1421 Q2 (b)——SDK 與定義套件要發布到私有 registry 之前，型別的實作搬進定義套件。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：沒有 dsh 的 `ScopedLayers`、
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：沒有 `ScopedLayers`、
  * `commands/change` 通知與 `definitionId`（`@nexus/core` 的 `CommandRegistrationPoint` 檔頭已登記為什麼不做）。
  *
  * @module
@@ -71,7 +71,7 @@ export interface CommandRegistry {
    * - **中繼資料當場驗**：規則同 `@nexus/core` 的 `normalizeCommandDefinition`（名字的形狀、描述非空、handler 是函式、
    *   `input.hint` 非空、`runWhileBusy` 若有要是非空字面值的陣列）。
    * - **同一個名字只收一次**，不論是同一列登記兩次還是兩列各登記一次：後登記的那一列在這裡拋，掛上它的那一列掉在 `apply`
-   *   階段（#1456 Q5 (a)；照 dsh 的 `commands`：同一層重名就拋，`packages/interaction/commands/src/index.ts:93-111`）。
+   *   階段（#1456 Q5 (a)：同一層重名就拋）。
    *
    * @param definition - 命令名、描述、可選的輸入提示與 handler。
    * @returns 只撤銷這一次登記的冪等 disposer。
