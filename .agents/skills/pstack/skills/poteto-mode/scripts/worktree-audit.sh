@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Read-only worktree prune audit. Classifies every git worktree by size, merge
-# state, uncommitted work, remote/PR state, and the most recent chat that
-# operated in it. Emits a table sorted by size with a suggested bucket. Never
-# deletes anything; deletion stays a human-gated step in the playbook.
+# Worktree prune audit. Classifies every git worktree by size, HEAD age, merge
+# state, uncommitted work, remote/PR state, and the newest chat transcript that
+# mentions its path. Emits a table sorted by size with a suggested bucket.
+# Changes no worktree or branch and deletes nothing; it only fetches the base
+# ref. Deletion stays a human-gated step in playbooks/worktree-cleanup.md.
 #
 # Usage: worktree-audit.sh [-b|--base <ref>] [repo-path]
 #   repo-path defaults to the current repo.
@@ -38,9 +39,9 @@ if [ -z "$base" ]; then
 	echo "warn: no -b given; MERGED checks against $base" >&2
 fi
 
-# The base drives the merge check. The fetch is best-effort (stale is fine for
-# a first pass) and runs before the check, since -b may name a branch not
-# fetched yet. The explicit refspec creates it even in a single-branch clone.
+# Best-effort fetch for origin/* bases (stale is fine for a first pass). It runs
+# before the existence check, since -b may name a branch not fetched yet; the
+# explicit refspec creates the ref even in a single-branch clone.
 case "$base" in
 origin/*) git fetch origin "+refs/heads/${base#origin/}:refs/remotes/$base" --quiet 2>/dev/null \
 	|| echo "warn: could not fetch $base; merged column may be stale" >&2 ;;
@@ -55,9 +56,11 @@ else
 	stat_fmt=(-f '%m %N'); fmt_day() { date -r "$1" '+%Y-%m-%d'; }
 fi
 
-# PR state by branch, fetched once as [{number, state, head}] with a lowercase
-# state. Origin when its CLI can read this repo's PRs, otherwise gh. Empty when
-# neither can.
+# PR state by branch, fetched once as [{number, state, head}]: only PRs
+# authored by the current user (@me), at most 1000, so a branch whose PR
+# someone else opened shows "-" and is not held as an open PR. Uses the
+# `origin` CLI when it is on PATH and can read this repo's PRs (status passed
+# through as-is), otherwise gh (state lowercased). "[]" when neither can.
 prs=$(mktemp)
 if command -v origin >/dev/null 2>&1 \
 	&& raw=$(origin pr list --author "@me" --state all --limit 1000 \
@@ -69,9 +72,12 @@ elif raw=$(gh pr list --author "@me" --state all --limit 1000 \
 fi
 [ -s "$prs" ] || echo "[]" > "$prs"
 
-# Transcripts: ~/.claude/projects/<slug>*/, where the slug is the repo path with
-# each character other than a letter or digit changed to "-". Worktrees under the repo get their own
-# project folder whose name starts with the main checkout's slug.
+# Transcripts: ~/.claude/projects/<slug>*/. The slug is a path with every
+# character other than a letter or digit changed to "-". A session's folder is
+# named after the directory it started in, so a worktree's chats sit in the
+# main checkout's folder or in the worktree's own folder, whose name starts
+# with the main checkout's slug; the glob covers both. Worktrees outside the
+# main checkout's path are not covered.
 slug=$(printf '%s' "$main_wt" | sed 's#[^A-Za-z0-9]#-#g')
 transcripts=()
 while IFS= read -r d; do transcripts+=("$d"); done < <(find "$HOME/.claude/projects" -mindepth 1 -maxdepth 1 -type d -name "${slug}*" 2>/dev/null)
@@ -88,8 +94,9 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 	head_ts=$(git -C "$wt" log -1 --format='%ct' HEAD 2>/dev/null || echo 0)
 	age=$([ "$head_ts" -gt 0 ] 2>/dev/null && echo "$(( (now - head_ts) / 86400 ))d" || echo "?")
 
-	# Squash-merged branches are not ancestors of the base, so PR state is the
-	# real signal; merge-base only catches fast-forward/rebase merges.
+	# --is-ancestor only catches merges that keep the branch head: fast-forward
+	# and merge commits. Squash merges and GitHub rebase merges rewrite commits,
+	# so PR state is the real signal.
 	git merge-base --is-ancestor "$head" "$base" 2>/dev/null && merged=YES || merged=no
 
 	# Distinguish real WIP (tracked edits) from disposable untracked scratch.
@@ -111,8 +118,8 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 		'.[] | select(.head==$b) | "#\(.number)/\(.state)"' "$prs" 2>/dev/null | head -1)
 	[ -z "$pr" ] && pr="-"
 
-	# Most recent chat whose transcript operated in this worktree. Match path
-	# followed by "/" or a quote so glint-482 does not match glint-482-r37.
+	# Newest transcript that mentions this worktree's path followed by "/" or a
+	# quote, so glint-482 does not match glint-482-r37.
 	last="-"; last_ts=0
 	if [ "${#transcripts[@]}" -gt 0 ]; then
 		f=$(rg -l -g '*.jsonl' -F -e "${wt}/" -e "${wt}\"" "${transcripts[@]}" 2>/dev/null \
