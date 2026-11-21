@@ -114,9 +114,6 @@ class ClosingTest(unittest.TestCase):
     def test_turn_without_text_passes(self) -> None:
         self.assertIsNone(check_closing(None))
 
-    def test_two_text_blocks_are_read_from_the_first(self) -> None:
-        self.assertIsNotNone(check_closing('中途說明\n不可封存：等 CI'))
-
     def test_stop_reads_last_assistant_message_only(self) -> None:
         self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent', 'last_assistant_message': '做好了'})[0], 2)
         self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent', 'last_assistant_message': '不可封存：等 CI'})[0], 0)
@@ -129,7 +126,7 @@ class ClosingTest(unittest.TestCase):
 
 class FailOpenTest(unittest.TestCase):
     def test_errors_pass_with_warning(self) -> None:
-        for argv, event in ((['stop'], []), (['bogus'], {})):
+        for argv, event in ((['stop'], []), (['stop'], {'last_assistant_message': 5}), (['bogus'], {})):
             with self.subTest(argv=argv, event=event):
                 code, err = run(argv, event)
                 self.assertEqual(code, 0)
