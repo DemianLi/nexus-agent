@@ -1,0 +1,121 @@
+# 協作模式
+
+需求由人和 agent 一起釐清，開成卡之後由 agent 全自動開發到合進 `develop`；合進 `main` 與發版仍然由人來。為什麼選這套見 [ADR 0001](../adr/0001-pm-engineer-verifier-collab-mode.md)。
+
+## 流程
+
+```text
+grill（討論）
+  → grill-with-docs（ADR、詞彙表）
+  → 功能卡：to-spec（只寫要什麼、為什麼、測試接縫）
+    機械卡：to-tickets
+  → 標 ready-for-agent
+  → PM 派工 → engineer 開發、開 PR → verifier 判定 → engineer 合進 develop
+```
+
+`ready-for-agent` 之前每一步都要人回答；之後不等人，只有 [poteto-mode](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Autonomy〉列的動作會停下來。
+
+## 角色
+
+operator（demian）、PM、engineer、verifier 的職責與模型見 [poteto-mode](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Nexus roles〉與〈Subagents〉。PM 照 [Autopilot-full](../../.agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md) 跑佇列，engineer 照 Feature 或 Bug fix 開發、照 [Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 合併。
+
+pstack 不走 Skill 工具：照 [Claude Code 對照](../../.agents/skills/pstack/docs/harness/claude-code.md)直接讀 `SKILL.md`。副本的來源與改寫見 [UPSTREAM.md](../../.agents/skills/pstack/UPSTREAM.md)。
+
+## 開場說明
+
+PM 由 operator 開，開場整段貼：
+
+```text
+Read .agents/skills/pstack/skills/poteto-mode/SKILL.md and docs/agents/collab-mode.md before anything else.
+你是 PM。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 跑 ready-for-agent 佇列。
+同時進行的 engineer 上限：<N>。
+```
+
+engineer 由 PM 開，一張卡一個 session、一個 worktree：
+
+```text
+Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
+你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
+```
+
+verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
+
+```text
+Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
+你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
+```
+
+`<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
+
+## worktree 與上下文
+
+- 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。
+- **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
+- 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
+
+## 合併與撤回
+
+- 放行條件是 verifier `PASS` 加 `gate` 綠，由 engineer 自己 squash 合併。同步 `develop` 後 patch-id 沒變就沿用判定；有衝突，engineer 自己解，PM 重開 verifier（[Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 第 2 步）。
+- `FAIL` 退回同一位 engineer 修，最多兩輪；第三次 `FAIL` 之後 PM 標 `needs-info`，在卡上寫明卡在哪，交給 operator。
+- `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate，改標題會。
+- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，修好再重新開 PR。
+- `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。
+
+## 導正
+
+engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在卡上（[Shipping](../../.agents/skills/pstack/skills/poteto-mode/playbooks/shipping.md) 第 5 步）。operator 在卡上回覆不同意，就開一張修正卡。
+
+同一類 verifier `FAIL` 理由在兩張不同的卡上各出現一次，PM 就開一張 `correct` 卡，把那條規則改成機械檢查，並更新下面的表。
+
+## 對照 dsh
+
+技術實現以 deepseek-harness 為參照（[AGENTS.md](../../AGENTS.md)〈技術實現標準〉）。engineer 自己做、自己選：
+
+1. **廣度**：在 `deepseek-harness` 與 `nexus-agent` 兩個圖上用 `search_graph`、`trace_path` 找出相關的符號與呼叫路徑。「沒有」「只有 N 個」這類否定宣稱，配 `check_index_coverage` 再 grep 一次（[codebase-memory.md](codebase-memory.md)）。
+2. **深度**：對圖找到的關鍵點讀原始碼，引用寫 `path:line` 並註明 SHA（[引用 deepseek-harness 之前](codebase-memory.md#引用-deepseek-harness-之前)）。
+3. **選**：至少比一種別的做法，用同一組標準比：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求（企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發）、現有基座做不做得到。選比較好的那一個；比不出高下就照 dsh，因為它的做法已經在實際使用中驗證過。
+
+比較結果寫在 PR 內文 Summary 的「對照 dsh」；符合下面 ADR 條件的寫成 ADR，「對照 dsh」只放一行連結。不寫進程式碼與註解。operator 事後不同意，走上面的導正。
+
+## ADR
+
+三個條件都成立才寫：**難以撤回、少了背景會讓人意外、是真的取捨過的結果**。少一個就不寫，比較留在 PR 內文。
+
+- 全系統的決策放 [`docs/adr/`](../adr/)，單一 app 的放 `apps/<name>/docs/adr/`；`packages/*` 的歸到根目錄。
+- 檔名 `NNNN-<kebab-slug>.md`，四位數編號依序遞增。第一行 `# <編號>. <標題>`，正文一段話說清楚情境、決定與理由就夠；有價值時才加「Considered Options」與「Consequences」。
+- `docs/` 只寫現況；決策與取捨寫 ADR；`.docs/` 逐步退場，不再新增。
+
+## 規則與執行者
+
+每條規則由誰擋。「只有文件」的列代表還沒機械化，agent 跳過它時什麼都不會失敗。
+
+| 規則 | 執行者 |
+| --- | --- |
+| PR 標題 `<type>: <中文描述>` | gate（`.github/scripts/check_pr.py`） |
+| `main` 只收 `develop`；發版 PR 內文要有〈變更內容〉〈驗證方式〉 | gate（`check_pr.py`） |
+| md 相對連結連得過去 | gate（`check_md_links.py`） |
+| 升級指南的格式 | gate（`check_upgrade_guides.py`） |
+| 升級指南有沒有寫 | verifier |
+| 禁止直接 push、force push、刪 `develop`／`main` | ruleset |
+| `develop` 只收 squash、要求 strict；`main` 只收 merge commit | ruleset |
+| `gate` 綠才能合 | ruleset |
+| 沒有測試的套件不得通過 | gate（vitest 找不到測試檔就紅） |
+| 會話日誌格式升版要補版本邊 | 執行期（不補邊，模組載入就拋） |
+| home 狀態檔改 schema 要留 v1 夾具 | 測試（`home-state-v1-fixtures.test.ts`）＋ verifier |
+| 秘密不進程式碼 | GitHub push protection（已知格式）＋ verifier |
+| 不得有預設 key 或 fallback | verifier |
+| 修 bug 先寫會紅的測試 | verifier |
+| 護欄要證明會紅 | verifier（自己突變一次） |
+| 期望值不取自被測物、斷言看得到被宣稱的東西 | verifier |
+| Evidence 只寫實際跑過的 | verifier（重跑每一條） |
+| 跨套件型別收緊先實測拆不拆得開 | verifier |
+| 註解規則 | engineer 跑 no-comments ＋ verifier |
+| verifier `PASS` 才合併 | 只有文件（ruleset 不要求 approval） |
+| 合併後那一輪紅了：重跑一次，還是紅就撤回 | 只有文件（engineer 照 Shipping 做） |
+| 內文寫 `Refs #N`，不寫 Closes | 只有文件 |
+| 分支命名 `<type>/<kebab-case>` | 只有文件 |
+| 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
+| 開完 PR 開 Auto-fix | 只有文件 |
+| dsh 引用數只降不升 | 只有文件（[#3086](https://github.com/DemianLi/nexus-agent/issues/3086) 第 3 張接進 gate） |
+| 註解的變更敘事用語只降不升 | 只有文件（同上） |
+| ADR 的檔名與編號 | 只有文件（同上） |

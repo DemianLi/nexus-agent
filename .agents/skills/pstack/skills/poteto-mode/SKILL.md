@@ -31,7 +31,7 @@ The remaining triggers live only here:
 - Starting any agent, whether a subagent or a session → the first line of its kickoff is `Read <path>/worker.md before anything else.`, with `<path>` the absolute path of this skill's folder. Keep the rest of the kickoff to the goal and the task, plus the issue number.
 - A fork you could settle by running something → prototype it in a scratch directory instead of asking.
 - Code → name the data shape first. Across a function boundary → **architect**.
-- Contested design, or a choice where deepseek-harness did it differently → make the reversible choice, record it in an ADR per `AGENTS.md`, and list it on the issue as a default the operator can overturn.
+- Contested design, or a choice where deepseek-harness did it differently → make the reversible choice, record the comparison per `AGENTS.md` (an ADR when it meets the bar, otherwise the PR's 對照 dsh), and list it on the issue as a default the operator can overturn.
 - Before review → **no-comments**.
 - PR body → `mattpocock-skills:pr` with `.github/pull_request_template.md`. PR title → `<type>: <中文描述>` per `AGENTS.md`.
 - PR status → the **Babysit** playbook. Merging a verified PR → the **Shipping** playbook.
