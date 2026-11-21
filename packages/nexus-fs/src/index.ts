@@ -1,5 +1,5 @@
 /**
- * `@nexus/fs`：**工具在呼叫當下拿到「這條 thread 的 fs」** 這個接縫的定義套件（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/fs`：**工具在呼叫當下拿到「這條 thread 的 fs」** 這個接縫的定義套件（決議 §3-4 第 16 條，定義、提供者、消費者三角色分開；
  * [#1466](https://github.com/DemianLi/nexus-agent/issues/1466) Q2 (a)、Q2-1 (a)，Part of #1385；逐條 thread 接縫的第四段，
  * #1418 → #1458 → #1463 → 這張）。
  *
@@ -14,18 +14,13 @@
  * | 提供者 | 樹上一列內建列，行程級（`@nexus/fs/provider`），**由宿主把「這次呼叫找哪一條 thread 的把手」的挑法交給它** | 這個套件、`@nexus/sdk` |
  * | 消費者 | 要讀寫工作區的模型工具，今天是 `submit-record` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
- * ## 偏離 dsh（AGENTS.md 的偏離規則）
+ * ## 為什麼是逐 thread 的把手，不是全域單例
  *
- * **哪一條**：dsh 的 `fs` 是行程全域一份的 Cordis 服務（`packages/fs/fs/src/index.ts:45-48`、`:87-90`；提供者是
- * `fs-local` 與 `fs-sandbox` 兩種），工具 `inject: ['fs', …]`（`packages/fs/tool-fs/src/index.ts:23`）後從閉包取用；**每個 agent 不同的東西在呼叫當下以參數傳入**：
- * cwd 來自 `ctx.workingDirectory.ensure(exec.agent, …)`（`session-cwd.ts:23`），沙箱政策是 `sandbox.resolvePolicy(…)` 的結果、當成 `writeText` 的參數
- * （`write.ts:117-124`）。對讀版本 86a40220。dsh 沒有路由、沒有 mount，也沒有每個 agent 一份的 fs。
- *
- * **為什麼表達不出來**：我們每條 thread 的 backend 是 deepagents 的 `CompositeBackend`，路由（會話歷史、工具結果暫存、附件、
+ * 我們每條 thread 的 backend 是 deepagents 的 `CompositeBackend`，路由（會話歷史、工具結果暫存、附件、
  * plugin 的 `backend.mount()`）與 fence 都**綁在每次組裝新建的物件上**，沒有「同一個 fs、換參數」的介面；拆成「全域 fs＋每次
  * 呼叫的政策參數」等於重寫整層 backend，遷移卡做不到（#1466 Q2 (c)）。
  *
- * **退到什麼**：退到「**呼叫當下依 thread 找回那條 thread 自己的把手**」，與 {@link https://github.com/DemianLi/nexus-agent/issues/1463 | 會話查找}
+ * 所以退到「**呼叫當下依 thread 找回那條 thread 自己的把手**」，與 {@link https://github.com/DemianLi/nexus-agent/issues/1463 | 會話查找}
  * 同一個形狀——同一張登記表（一次 `attachSession` 登記一筆，這一筆同時帶這條 thread 的會話註冊表與 fs 把手）、同一支挑法
  * （`@nexus/core` 的 `pickBoundForCall`）。**不另建 backend**：把手就是這次組裝 host-services 裡那一格 `fs` 服務。
  *
@@ -114,7 +109,7 @@ export type FsLookup =
 /** fs 查找：這次工具呼叫該讀寫哪一條 thread 的 backend。 */
 export interface FsLookupService {
   /**
-   * **模型工具問「我這次呼叫該用哪一個 fs」的地方**，dsh `ctx.fs` 的對應物（偏離見檔頭）。
+   * **模型工具問「我這次呼叫該用哪一個 fs」的地方**（為什麼逐 thread 見檔頭）。
    *
    * 挑法與四種結果的意思見 {@link FsLookup}。服務看的是**行程裡每一條活著的 thread**，所以多條 thread 同時活著時，
    * **每一次呼叫都靠 `thread_id` 認出主人**——工具要把整個呼叫設定（handler 的第二個參數）原樣傳進來。

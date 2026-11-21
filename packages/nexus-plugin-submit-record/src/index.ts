@@ -10,12 +10,12 @@
  *
  * 1. **閘門認得出來。** `approvals.gate()` 判的是工具名（`ToolExecution.name`）。送出如果
  *    走 `write_file`，只認名字就等於把**所有**檔案寫入都攔下來——那是射程大得多的另一張卡
- *    （#231「不在這張卡裡」）；而要只攔「這一次是送出」就得去猜路徑，猜錯的方向是**放行**。
+ *    （#231 劃在範圍外）；而要只攔「這一次是送出」就得去猜路徑，猜錯的方向是**放行**。
  * 2. **核准卡顯示的是填好的欄位。** 中斷酬載裡的 `actionRequests[0].args` 就是這個工具的
  *    參數，所以人看到的是 `{ file_path, record: { 姓名: "阿明", … } }`——不是一坨已經
  *    escape 過的 CSV 字串。**這條有測試釘著**（`apps/harness/src/submit-record-wire.test.ts`），
  *    否則這個理由就只是散文。
- * 3. **換目標只換這個工具的身體。** `.xlsx`／MCP 那兩條（#231 都在「不在這張卡裡」）換的是
+ * 3. **換目標只換這個工具的身體。** `.xlsx`／MCP 那兩條（#231 都劃在範圍外）換的是
  *    下面 `writeRow` 那幾行，模型面與閘門那一面一個字都不用動。
  *
  * ## backend 是 `write_file` 實際讀寫的**那一個**
@@ -23,8 +23,7 @@
  * 這個 plugin 不自己造 backend。分岔的樣子是「`write_file` 寫到 A、`submit_record` 寫到 B」，
  * **而那不會有任何測試紅**——兩邊各自都寫成功了。所以：
  *
- * - **從 `fs` 查找服務（`@nexus/fs`，#1466）拿，工具被叫時才讀**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)，
- *   照 dsh 寫檔工具注入的 `fs`）。查找服務依這次呼叫的 `thread_id` 回**那條 thread 自己的** fs 把手，把手的 `backend()` 是
+ * - **從 `fs` 查找服務（`@nexus/fs`，#1466）拿，工具被叫時才讀**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。查找服務依這次呼叫的 `thread_id` 回**那條 thread 自己的** fs 把手，把手的 `backend()` 是
  *   fold 填的**折後**那一個：組裝點在 fold 之前包的路由（`apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、
  *   `/large_tool_results/`）與 plugin `registry.backend.mount()` 掛的路由都在裡面。以前收的是組裝點交給 host-services 的
  *   **折前**那一個，被路由的兩個前綴上兩邊各寫各的。量它的是 `apps/harness/src/submit-record-mounts.test.ts`。
@@ -34,9 +33,7 @@
  * - **拿不到就響亮地拒絕，不退回自己建的預設**（[#687](https://github.com/DemianLi/nexus-agent/issues/687)）。
  *   **「拿不到」有四種**（沒有任何一條 thread 登記、呼叫認不出、多條 thread 挑不出、把手裡沒有 backend），**對模型一律同一句**
  *   {@link SUBMIT_RECORD_NO_BACKEND_MESSAGE}（#1466 Q3，逐字不變）；分開是給宿主與測試看的。
- *   照 dsh 的寫檔工具：`tool-str-replace-editor` 硬注入 `fs`（`inject = ['tools', 'fs']`，
- *   `packages/fs/tool-str-replace-editor/src/index.ts:503`，SHA `477b4f4`），缺件時不會悄悄換一個。
- *   以前退到一顆自建的 `StateBackend`：帶 `--workspace` 卻沒接上時，`write_file` 寫進磁碟、`submit_record`
+ *   缺件時不會悄悄換一個。以前退到一顆自建的 `StateBackend`：帶 `--workspace` 卻沒接上時，`write_file` 寫進磁碟、`submit_record`
  *   寫進 state，而且照樣回「已經寫進」。拒絕的時刻是**那一次呼叫**，不是載入：載體在工具被叫時才讀，
  *   排錯序對它不存在，剩下的只有「需要卻缺」。訊息見 {@link SUBMIT_RECORD_NO_BACKEND_MESSAGE}。
  *
@@ -189,7 +186,6 @@ export function submitRecordStateUpdateMessage(filePath: string): string {
 
 /**
  * 拿不到 backend 時模型看到的那一句（前面由宿主加 `Error: `）。帶 plugin 名與 `backend`，
- * 同 dsh `tool-bash: the mounted bash executor confines but ctx.sandboxPolicy is missing` 的寫法：
  * 讀的人一眼看得出是誰、缺什麼。
  */
 export const SUBMIT_RECORD_NO_BACKEND_MESSAGE =
@@ -248,7 +244,7 @@ export function createSubmitRecordTool(fsFor: (exec: ToolExec) => FsLookup): Nex
  * ## 兩樣東西為什麼在同一個插件裡
  *
  * 形狀照當時的 `@nexus/plugin-plan-mode`：它那時也是自己註冊 `exit_plan_mode`、自己註冊一個只認
- * `exit_plan_mode` 的 `approvals.gate()`（[#652](https://github.com/DemianLi/nexus-agent/issues/652) 照 dsh
+ * `exit_plan_mode` 的 `approvals.gate()`（[#652](https://github.com/DemianLi/nexus-agent/issues/652)
  * 改走提問通道，那位閘門已經拿掉）。**「這個工具要人看過」是這個工具的性質**，拆到
  * 別的組裝點去掛的失敗方式是「工具在、閘門沒掛」——而那條路上模型會直接把檔案寫出去，
  * 一張卡都不會出現。
@@ -263,13 +259,11 @@ export function createSubmitRecordTool(fsFor: (exec: ToolExec) => FsLookup): Nex
  * **閘門沒有開關**。做成可選的失敗方式是有人為了跑測試把它關掉，然後那個組裝就變成
  * 「模型自己把資料寫進真實磁碟」——而 `--workspace` 之下那就是真的檔案。
  *
- * ## 偏離 dsh（AGENTS.md 的偏離規則，#1466 Q1 (a)）
+ * ## 閘門的入口
  *
- * **哪一條**：dsh 的工具插件用 `ctx.on('tools/pre-execute', listener)` 掛核准閘門
- * （`packages/core/tools/src/index.ts:1512-1516`，鏈底 `allow`）。**為什麼表達不出來**：樹上沒有事件匯流排的服務 token，
- * 而核准不搬上匯流排（demian 2026-10-09）。**退到什麼**：`@nexus/tools` 1.2.0 的 `gate(listener)`——同一個 waterfall、同一個
- * 鏈底，只是入口是 tools 服務上的方法；宿主把這一列的 listener 折進每條 thread 自己的 `registry.approvals`，問人仍走
- * `nexusApprovalGate` 中介層。
+ * 樹上沒有事件匯流排的服務 token，而核准不搬上匯流排（demian 2026-10-09），所以閘門掛在 `@nexus/tools` 1.2.0 的
+ * `gate(listener)`：同一個 waterfall、鏈底 `allow`，入口是 tools 服務上的方法；宿主把這一列的 listener 折進每條 thread 自己的
+ * `registry.approvals`，問人仍走 `nexusApprovalGate` 中介層。（#1466 Q1 (a)）
  *
  * @param exec - 這一次待決的呼叫。
  * @param next - 委派給下一位。

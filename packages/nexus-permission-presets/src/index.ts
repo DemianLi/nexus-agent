@@ -10,21 +10,19 @@
  * | 提供者 | `@nexus/plugin-permission-presets`，樹上一列函式插件 | 這個套件、`@nexus/sdk`、`@nexus/session`、`@nexus/commands`、`@nexus/projections`、`@nexus/agent-loop`、`@nexus/fs` |
  * | 消費者 | 宿主（`apps/harness`）：組一條 thread 時從折進來的 `registry.services` 取它，叫 {@link PermissionPresetsService.start} | 這個套件；**不 import 提供者套件**（決議 §3-4 第 16 條） |
  *
- * ## 偏離登記
+ * ## 已登記的取捨
  *
- * 1. **目錄是逐條 thread 的，dsh 整台共用**（Q3 (a)；類別：遷移卡不改行為（暫時））。dsh 的 `catalog()` 預設組只從設定或行程預設推
- *    （`packages/interaction/permission-presets/src/index.ts:293-299`，`86a40220`）；我們今天的預設組是**這條 thread 的起始值推出來的**
- *    （續接的 thread 沒設 `defaultPreset` 時，是日誌記著的那一組），wire 的 `permission.catalog` 逐條 thread 回。照 dsh 做會讓新會話的日誌多一顆
- *    `sandbox/mode`、續接的目錄預設組變動，都是行為改變，遷移卡不做。**撤除條件**：之後的權限卡定。
- * 2. **子代理的組名由會話參與者寫，dsh 由委派那一側（`subagent/subagent/src/child-agent.ts:248-279`）寫**（Q2-1；類別：遷移卡不改行為（暫時））。
+ * 1. **目錄是逐條 thread 的，不是整台共用**（Q3 (a)；類別：遷移卡不改行為（暫時））。預設組是**這條 thread 的起始值推出來的**
+ *    （續接的 thread 沒設 `defaultPreset` 時，是日誌記著的那一組），wire 的 `permission.catalog` 逐條 thread 回。改成只從設定或行程預設推
+ *    會讓新會話的日誌多一顆 `sandbox/mode`、續接的目錄預設組變動，都是行為改變，遷移卡不做。**撤除條件**：之後的權限卡定。
+ * 2. **子代理的組名由會話參與者寫，不由委派那一側寫**（Q2-1；類別：遷移卡不改行為（暫時））。
  *    沙箱那一格的委派快照由 `sandbox-policy` 的 `tools/execute` 監聽者在委派工具那一次拍（ALS）；組名由參與者在子代理接上會話時讀，
  *    讀到的跟委派那一刻相同，因為一輪跑著時沒有入口能切權限組合——`/permission` 沒有宣告 `runWhileBusy`（`@nexus/plugin-permission-presets`
  *    的 `index.test.ts` 有一格守著），控制器的 `switchTo` 唯一的非測試呼叫點是 `assembly-root.ts` 組 thread 那一步。
  *    **撤除條件**：任何能在一輪跑著時切核准的入口落地，就改由委派那一側寫。
- * 3. **參與者安裝失敗只記 warn、已寫的收不回**（R3；類別：基座表達不出來）。dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上
- *    （`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`@nexus/session` 的 `join` 沿用。
+ * 3. **參與者安裝失敗只記 warn、已寫的收不回**（R3；類別：基座表達不出來）。會話註冊表不會在參與者拋錯時回滾這次接上；相容層的七位會話參與者本來就是記 warn 的語意，`@nexus/session` 的 `join` 沿用。
  *    **撤除條件**：會話註冊表能在參與者拋錯時回滾這次接上（`registry.sessions` 與 `join` 一起改，連同相容層其餘的參與者同一天換）；在那之前單獨改這一位沒有意義。
- * 4. **起始值在宿主的組 thread 那一步算，不在參與者裡套**（Q3 (a)；類別：遷移卡不改行為（暫時））。dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進
+ * 4. **起始值在宿主的組 thread 那一步算，不在參與者裡套**（Q3 (a)；類別：遷移卡不改行為（暫時））。我們不在 `session/created` 上整組套預設，而是把「算出預設組」放進
  *    {@link PermissionPresetsService.start}（純函式，不碰日誌也不碰控制器），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名。
  *    好處是新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變。
  *    **撤除條件**：兩顆控制器整個拿掉、fence 與閘門改讀日誌投影（#1491 Q1 (c)）時，宿主不再靜默切控制器，起始值就能直接由參與者往日誌套。
@@ -85,7 +83,7 @@ export const PERMISSION_COMMAND_NAME = 'permission';
  * 宿主交給插件的「這一次是怎麼開始的」。
  *
  * - `fresh`：這份日誌從零開始，沒有續接任何已記下的旋鈕。**只有 fresh 才套用預設組、才在對不上任何一組時報錯**；續接保留日誌裡的值，
- *   對不上就顯示 `custom`（照 dsh：續接的會話保留日誌裡的值，不套用預設）。
+ *   對不上就顯示 `custom`（續接的會話保留日誌裡的值，不套用預設）。
  * - `sandboxExplicit`：這一次的沙箱起始值是 `--sandbox` 明確給的（不是出廠預設）。`defaultPreset` 與它矛盾時啟動報錯。
  */
 export interface PermissionSeed {
@@ -165,8 +163,8 @@ export interface PermissionPresetsService {
   /**
    * 背景子代理被叫醒、讀回自己日誌上的委派沙箱時，這一格要不要收回（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)，1.2.0）。
    * **純函式，只看「組合表＋這一格快照」**，不讀 root 當下的狀態、不碰日誌、不碰控制器：條件與目標跟 {@link PermissionStarted.narrowed} 相同
-   * （比表裡每一組都寬才收；有 `defaultPreset` 收到它，否則收到表裡檔案政策最寬的一組）。照 dsh，子代理的快照在委派時拍、冷復活只重播，
-   * 不看父代理的即時狀態（`manager.ts:881-882`、`.agents/notes/archived/feature/2026-07-25-subagent-policy-inheritance.md:34`）。
+   * （比表裡每一組都寬才收；有 `defaultPreset` 收到它，否則收到表裡檔案政策最寬的一組）。子代理的快照在委派時拍、冷復活只重播，
+   * 不看父代理的即時狀態。
    *
    * @param sandbox - 子代理日誌上記的委派沙箱。
    * @returns 要收回的描述；不用收是 `undefined`。

@@ -12,12 +12,11 @@
  *
  * ## 偏離登記：provider 只收定義，不負責推動（PM 決策 2）
  *
- * dsh 的 `SessionProjectionRegistry` 自己監聽 `session/created` 與 `session/event`，逐 session 推動每一格
- * （`session-projection/src/index.ts`）。這裡**只收定義**：推動（把事件折進單元、送 `projection` frame）留在
+ * 這裡**只收定義**，不監聽 `session/created` 與 `session/event`：推動（把事件折進單元、送 `projection` frame）留在
  * `@nexus/core` 每條 thread 的登記處（`createProjectionFold`）。理由：推動綁在會話日誌與 wire 的投影通道上，搬到 provider
  * 就是 #1421 Q2 (b) 那一刀。**撤除條件**：跟 Q2 (b)（抽 `@nexus/session` 定義套件）一起做。
  *
- * ## 共用語意（PM 決策 1，照 dsh）
+ * ## 共用語意（PM 決策 1）
  *
  * - 同一個 key、同一個 `stateVersion`：引用計數共用；引用計數沒歸零時一直用**第一個**登記者的單元。
  * - `stateVersion` 不同：拒絕，錯誤指名 key、兩個版本與兩邊登記者（`ctx.effect` 內拋，掛第二個的那一列 FAILED）。
