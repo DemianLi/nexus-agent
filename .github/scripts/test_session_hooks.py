@@ -133,6 +133,21 @@ class ClosingTest(unittest.TestCase):
             path.write_text('\n'.join(json.dumps(l) for l in [user('上一輪'), assistant('可封存：舊的'), user('這一輪'), tool_use(), tool_result()]), encoding='utf-8')
             self.assertIsNone(last_reply(path))
 
+    def test_unflushed_final_message_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 't.jsonl'
+            lines = [user('這一輪'), assistant('中途說明'), tool_use(), tool_result(), {'type': 'api-request'}]
+            path.write_text('\n'.join(json.dumps(l) for l in lines), encoding='utf-8')
+            self.assertIsNone(last_reply(path))
+            self.assertEqual(run(['stop'], {'transcript_path': str(path)})[0], 0)
+
+    def test_last_assistant_message_wins_over_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 't.jsonl'
+            path.write_text(json.dumps(user('做')) + '\n' + json.dumps(assistant('可封存：舊的')), encoding='utf-8')
+            self.assertEqual(run(['stop'], {'transcript_path': str(path), 'last_assistant_message': '做好了'})[0], 2)
+            self.assertEqual(run(['stop'], {'transcript_path': '/nonexistent', 'last_assistant_message': '不可封存：等 CI'})[0], 0)
+
     def test_stop_hook_blocks_then_respects_stop_hook_active(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 't.jsonl'
