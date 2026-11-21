@@ -1,5 +1,5 @@
 /**
- * `@nexus/approval-channel`：答題管道這個接縫的**定義套件**（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/approval-channel`：答題管道這個接縫的**定義套件**（決議 §3-4 第 16 條，定義套件、實作、消費者三角色分開；
  * [#1458](https://github.com/DemianLi/nexus-agent/issues/1458) Q2 (a)，Part of #1385）。形狀照 `@nexus/tools`、
  * `@nexus/feedback`。
  *
@@ -16,14 +16,14 @@
  * ## 接縫的形狀：行程級的預設管道（#1458 Q1 (c)）
  *
  * 服務只有一個方法 `current()`，回宿主給這個行程的 {@link ApprovalChannel}。今天管道在一個行程裡是常數：只看入口有沒有人在
- * （serve 有、CLI 沒有）與有沒有 checkpointer（一律有），所以不需要逐條 thread 的路由。這就是 dsh 的形狀：行程級的答題者
- * 沒有標籤，每個 agent 都拿到（`packages/core/scope/src/index.ts:170-185`）。
+ * （serve 有、CLI 沒有）與有沒有 checkpointer（一律有），所以不需要逐條 thread 的路由：行程級的答題者
+ * 沒有標籤，每個 agent 都拿到。
  *
  * **`ChannelForThread`（逐條 thread 的管道，#1418）今天沒有提供者，也沒有查詢它的消費者。** 型別與服務名（
  * {@link CHANNEL_FOR_THREAD_SERVICE}）留在這裡，是因為 #1418 的接縫（`@nexus/core` 的 `NexusServices.channelForThread`、`createHostServicesPlugin` 的選項）
  * 已經存在；但**全樹今天沒有任何地方提供它**，只有測試夾具（`apps/harness/src/ask-user.fixture.ts`，舊外殼）還在查。樹上的
  * `ask-user` 不查它。等出現真的會逐條不同的答題者時，再加提供者與查詢，一起加回來。
- * 這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離：dsh 的答題者也不是逐條 thread 提供（見上）。
+ * 這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離：答題者不是逐條 thread 提供（見上）。
  *
  * ## 偏離登記
  *
@@ -32,8 +32,7 @@
  *   核准的卡相撞的一刀。相依是單向的：這個套件相依 core，core 不 import 它。**`@nexus/core` 放 `peerDependencies`，
  *   `devDependencies` 留 `workspace:*`**（不能讓安裝結果出現第二份 core）。撤除條件併入 #1421 Q2 (b)：發布到私有 registry 之前，
  *   把實作搬進來。
- * - **一條通道加一個判別式**（#231 登記過，不在這張新增）：dsh 用兩條獨立的事件通道（`approval/request` 與
- *   `user-questions/request`），LangGraph 只給一顆 `interrupt()`，所以提問的中斷酬載明著帶 `kind`，判別式是
+ * - **一條通道加一個判別式**（#231 登記過，不在這張新增）：LangGraph 只給一顆 `interrupt()`，沒有兩條獨立的事件通道，所以提問的中斷酬載明著帶 `kind`，判別式是
  *   {@link QUESTION_INTERRUPT_KIND}。
  *
  * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
