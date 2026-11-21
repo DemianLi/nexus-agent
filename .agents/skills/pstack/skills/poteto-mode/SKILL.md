@@ -15,7 +15,7 @@ This is the nexus copy of pstack (see [UPSTREAM.md](../../UPSTREAM.md)). Where t
 ## Nexus roles
 
 - **Operator**: demian. Decides product and preference questions, corrects merged work by replying on the issue, and releases `develop` to `main`. Nothing else waits on the operator.
-- **PM**: one long-lived session. Takes `ready-for-agent` issues, starts one engineer per issue, starts the verifier when the engineer reports code-ready, tracks progress on the issue, and escalates to the operator. The PM never reads or reviews code and is not on the merge path. The PM plays the root in **Autopilot-full**.
+- **PM**: one long-lived session, or a finite one for a bounded run such as a pilot. Takes `ready-for-agent` issues, starts one engineer per issue, starts the verifier when the engineer reports code-ready, tracks progress on the issue, and escalates to the operator. The PM never reads or reviews code and is not on the merge path. The PM plays the root in **Autopilot-full**.
 - **Engineer**: one session per issue, in its own worktree. Owns the diff directly (it is the delegate, so it does not delegate code-writing again), opens the PR, and merges it itself once the verifier passes it and `gate` is green. The engineer plays the owner in **Autopilot-full**.
 - **Verifier**: started by the PM with only the issue and the PR number, never the engineer's conversation. Runs `mattpocock-skills:code-review` on both axes, reruns every command in the PR's Evidence, and mutates any new or changed guard to prove it goes red. Posts `PASS`, `PASS+NOTES`, or `FAIL` on the PR.
 
@@ -104,12 +104,12 @@ Merging your own verified PR into `develop` is reversible by a revert PR, so it 
 | Role | `model` | `effort` |
 | --- | --- | --- |
 | PM | `opus` | the PM session's own |
-| Engineer (feature, refactoring, bug fix) | `sonnet` | `high` |
-| Verifier | `opus` | `high` |
+| Engineer (feature, refactoring, bug fix) | `sonnet` | `medium` |
+| Verifier | `opus` | `medium` |
 | Comment Sicko | `opus` | `high` |
 | Trivial mechanical subagents (run tests, grep inventories, byte compares) | `sonnet` | `medium` |
 
-Raise a role one effort step for the hardest work and lower it for routine work. No role runs above `xhigh`.
+Engineers and verifiers run exactly at their table row: a hook (`.github/scripts/session_hooks.py`) blocks a `start_session` whose `name` starts with `eng-` or `ver-` and does not pass that `model` and `effort`, so name them that way. Raise any other role one effort step for the hardest work and lower it for routine work. No role runs above `xhigh`.
 
 You own every subagent's work. Review the diff and write your own summary.
 
