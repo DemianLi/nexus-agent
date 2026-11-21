@@ -14,7 +14,7 @@
  *
  * ## 快照是資料（決議 §3-2 第 6 條）
  *
- * `section()` 的登記跟著提供者那一列走，列一卸載就撤。宿主若每次模型呼叫都問活服務，serve 中合法地改一次這一列
+ * `section()` 的登記跟著**呼叫它的那一列**走，那一列卸載就撤；今天登記身分與前後綴三段的是提供者這一列自己。宿主若每次模型呼叫都問活服務，serve 中合法地改一次這一列
  * （`next-thread`），舊列卸載、段被撤，**開著的 thread 下一次呼叫就靜靜少了身分與 persona**。所以宿主在組 thread 的臨界區裡
  * （無樹的路徑則在單獨掛載卸載之前）`assemble()` 一次，留下 {@link SystemPromptAssembly}——各段的**原文**（還沒代入變數）與
  * 已登記的變數**名字**——之後只拿這份資料渲染，不再碰服務。`assemble()` 因此是 async，而且不可以碰 `this.ctx`。
@@ -31,7 +31,7 @@
  * | 4 | 組 thread 時 `assemble` 一次取快照，之後只代入變數 | 決議 §3-2 第 6 條：插件更新只給新對話；列卸載會撤段 |
  * | 5 | section 的 `text` 只收字串，`PromptSection` 的 `complete`、`interpolate` 兩個欄位登記時拋 | 快照要完整；沒有消費者 |
  * | 6 | `model`、`cwd` 由 `system-prompt` 那一列登記；`variable(name)` **只登記名字**，值由宿主每次模型呼叫交 | #1477 Q2 (a) 與 PM 更正 2：`model` 要跟著那一步實際用的模型走（#723），組 thread 時求值就定死了 |
- * | 7 | Config 三格 | 另兩格管執行期上下文與工具段，第一刀沒有 |
+ * | 7 | Config 三格（身分句開關、前綴、後綴） | 沒有執行期上下文與工具段順序這兩格 |
  * | 8 | 有 `cwd` 變數，而且出貨值（`cordis.yml` 的後綴）依賴它 | 我們的出貨文案引用了 `{{cwd}}`；要不要拿掉不在 #1477。見 `@nexus/plugin-system-prompt` 檔頭 |
  * | 9 | **掛載當下**驗語法與名字（寫壞起不來，#720），渲染照 `interpolateStrict`，訊息是中文 | #1446 Q1 (a)：遷移卡不改行為，#720 由 demian 拍板 |
  * | 10 | section 的 order 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLAN_POLICY` 與 `PLUGIN_POLICY` 中段不算 |
