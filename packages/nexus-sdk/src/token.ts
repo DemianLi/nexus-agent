@@ -1,10 +1,9 @@
 /**
  * 帶型別的服務 token：定義套件匯出 token 與介面，消費方經 token 取得服務（決議 §3-4 第 14 條）。
  *
- * ## 偏離 dsh
+ * ## 為什麼不用 declaration merging
  *
- * dsh 用 declaration merging（`declare module '@deepseek-ai/cordis' { interface Context { tools: ... } }`）
- * 加型錄生成器。幾百人並行開發下，全域命名空間只能靠人工登記表守，型別保證在執行期又不成立。token 是一個
+ * 不在 Cordis 的 `Context` 上用 declaration merging 加服務型別。幾百人並行開發下，全域命名空間只能靠人工登記表守，型別保證在執行期又不成立。token 是一個
  * 值：名字與型別綁在一起、由定義套件擁有，打錯名字或拿錯型別在 `tsc` 就停下（決議 §五）。
  *
  * 字串鍵只留給框架內部——Cordis 自己仍以字串為鍵，所以 {@link ServiceToken.name} 就是那個鍵。
@@ -65,7 +64,7 @@ export function service<T>(ctx: Context, token: ServiceToken<T>): T {
 }
 
 /**
- * 讀一個**選配**服務：沒提供就是 `undefined`，不拋。選配的服務不放進 `inject`（dsh `packages/AGENTS.md:6`）。
+ * 讀一個**選配**服務：沒提供就是 `undefined`，不拋。選配的服務不放進 `inject`。
  */
 export function optionalService<T>(ctx: Context, token: ServiceToken<T>): T | undefined {
   return ctx.get(token.name) as T | undefined;
