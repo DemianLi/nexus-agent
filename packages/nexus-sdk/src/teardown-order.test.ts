@@ -7,7 +7,7 @@
  * - **兄弟 effect**：同時開跑（`_unload` 的 `Promise.all`；上游同一件事的斷言在 `tests/service-dispose.spec.ts`）。
  *   誰先開始不釘，只釘「兩個都開始了，才有一個結束」。
  *
- * 照 dsh `docs/cordis-primer.md`〈Practical Rules〉：「If teardown order matters, keep the related work in one effect」。
+ * 卸載順序要緊的工作，放在同一個 effect 裡。
  */
 
 import { setImmediate } from 'node:timers/promises';

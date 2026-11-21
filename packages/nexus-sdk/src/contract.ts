@@ -15,11 +15,10 @@
  * - 不相容時 `check` 拋 {@link ContractError}；Cordis 把它交給**提供者**的 logger，消費者留在 PENDING。
  *   要把錯誤對回消費者那一列，靠的是 {@link ContractError} 上的結構化欄位。
  *
- * ## 偏離 dsh
+ * ## 為什麼檢查放在服務層
  *
- * dsh 一處都沒用 `check`（`Service.check` 在 `packages`、`apps` 為 0）；它的版本相容檢查在套件層，比的是整個
- * runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`）。服務層級的 semver 是產品需求超出
- * dsh（決議 §五）。
+ * 版本相容檢查放在服務層，比的是每個服務自己的 semver，不是整個 runtime 的版本；多人並行開發下，各服務各自演進，
+ * 這是產品需求（決議 §五）。
  *
  * @module
  */

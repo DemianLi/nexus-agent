@@ -4,11 +4,10 @@
  * 決議 §3-4 第 10 條：**必填，缺一個就不載入**。這支驗證只是函式庫——載入期的接線（`plugin-config.ts`）
  * 不在這一刀（#1416 PR 1），所以它今天不會擋任何出貨的列。
  *
- * ## 偏離 dsh
+ * ## 必填欄位
  *
- * dsh 的身分只有 `package.json` 的 `name`／`version` 加 Loader 的列 id；它的 `dsh` 欄位沒有 id、owner、provides、
- * consumes、capabilities、reload（`packages/util/package-manifest/src/types.ts:8-39`）。這裡的必填欄位是產品需求，
- * 超出 dsh 的射程；決議 §五登記。`config` 用 zod `strictObject` 是沿用既有偏離（`@nexus/core` 的 `plugin.ts` 檔頭）。
+ * 身分不只 `package.json` 的 `name`／`version` 加 Loader 的列 id，還要 id、owner、provides、
+ * consumes、capabilities、reload。這些必填欄位是產品需求（決議 §五登記）。`config` 用 zod `strictObject` 是沿用既有偏離（`@nexus/core` 的 `plugin.ts` 檔頭）。
  *
  * ## `reload` 拆成兩軸（#1136）
  *
