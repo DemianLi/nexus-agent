@@ -22,6 +22,13 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
+/**
+ * `take_note` 睡的毫秒數。日誌的 `time` 是 `Date.now()`，計時器走單調時鐘，兩邊各自取整，
+ * 量到的間隔可能比睡的少 1ms（本機 2000 次裡有 7 次是 19），所以下限是 `NAP_MS - 1`。
+ */
+const NAP_MS = 20;
+const NAP_FLOOR_MS = NAP_MS - 1;
+
 /** 一顆會花一點時間的工具，讓 `toolMs` 量得出非零；一顆要核准的。 */
 const toolsPlugin: PluginEntry = {
   plugin: {
@@ -30,7 +37,7 @@ const toolsPlugin: PluginEntry = {
       registry.tools.register(
         tool(
           async ({ text }: { text: string }) => {
-            await new Promise((resolve) => setTimeout(resolve, 20));
+            await new Promise((resolve) => setTimeout(resolve, NAP_MS));
             return `已記下：${text}`;
           },
           {
@@ -127,8 +134,8 @@ describe('一場跑過的會話', () => {
       const stats = deriveSessionStats(events);
       expect(stats.turns).toBe(2);
       expect(stats.steps).toBe(3);
-      // 兩顆各睡 20ms，併發跑：每一對都至少 20，加總至少 40。
-      expect(stats.toolMs).toBeGreaterThanOrEqual(40);
+      // 兩顆各睡 NAP_MS，併發跑：每一對都至少 NAP_FLOOR_MS，加總至少兩倍。
+      expect(stats.toolMs).toBeGreaterThanOrEqual(2 * NAP_FLOOR_MS);
       // 工具事件落在一次模型呼叫**之後**，不在 model/start 與 model/end 之間——名字換掉的理由。
       const types = events.map((event) => event.type);
       const firstEnd = types.indexOf('model/end');
@@ -193,7 +200,7 @@ describe('一場跑過的會話', () => {
       expect(subagents).toHaveLength(1);
       const sub = deriveSessionStats(subagents[0]!);
       expect(sub).toMatchObject({ turns: 1, steps: 2 });
-      expect(sub.toolMs).toBeGreaterThanOrEqual(20);
+      expect(sub.toolMs).toBeGreaterThanOrEqual(NAP_FLOOR_MS);
     } finally {
       await run.close();
     }
