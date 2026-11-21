@@ -2,9 +2,8 @@
   "dsh": {
     ".": 14,
     ".github": 28,
-    "apps/harness": 2333,
+    "apps/harness": 2332,
     "apps/web": 482,
-    "packages/nexus-agent-loop": 11,
     "packages/nexus-core": 1372,
     "packages/nexus-goal": 15,
     "packages/nexus-plugin-agent-instructions": 32,
@@ -28,7 +27,6 @@
     "packages/nexus-plugin-workspace-changes": 58,
     "packages/nexus-projections": 1,
     "packages/nexus-system-prompt": 14,
-    "packages/nexus-tools": 10,
     "packages/nexus-wire": 360,
     "scripts": 60
   },
