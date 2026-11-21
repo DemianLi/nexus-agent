@@ -87,7 +87,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 三個條件都成立才寫：**難以撤回、少了背景會讓人意外、是真的取捨過的結果**。少一個就不寫，比較留在 PR 內文。
 
 - 全系統的決策放 [`docs/adr/`](../adr/)，單一 app 的放 `apps/<name>/docs/adr/`；`packages/*` 的歸到根目錄。
-- 檔名 `NNNN-<kebab-slug>.md`，四位數編號依序遞增。第一行 `# <編號>. <標題>`，正文一段話說清楚情境、決定與理由就夠；有價值時才加「Considered Options」與「Consequences」。
+- 檔名 `NNNN-<kebab-slug>.md`，四位數編號從 `0001` 起依序遞增、不跳號。第一行 `# <標題>`，正文一段話說清楚情境、決定與理由就夠；有價值時才加「Considered Options」與「Consequences」（格式照 `domain-modeling` 的 ADR-FORMAT）。
 - `docs/` 只寫現況；決策與取捨寫 ADR；`.docs/` 逐步退場，不再新增。
 
 ## 規則與執行者
