@@ -8,14 +8,17 @@
  *   per-thread  `--process-model per-thread`：監督行程起前台、宿主與每條 thread 一個對話行程，池是每個行程一份。
  * 每回合兩臂都重新起（home 也是新的），開 N 條 thread，暖機 W 輪＋量測 T 輪。每一輪是一道柵欄：N 條同時送出，全部收尾才進下一輪。
  *
- * 每台 serve 掛 M=3 台 MCP server：兩台 stdio（{@link ./mcp-pool-stdio-server.ts}，純 node）、一台 HTTP（{@link ./mcp-pool-http-fixture.ts}，
+ * 每台 serve（pool 模式）掛 M=3 台 MCP server：兩台 stdio（{@link ./mcp-pool-stdio-server.ts}，純 node）、一台 HTTP（{@link ./mcp-pool-http-fixture.ts}，
  * 起在驅動裡、每臂一台）。假模型一輪依序叫三台的 `lookup`，再回一段文字。
  *
  * 每道柵欄的 `cpuMs` 是該臂整棵行程樹（根 pid 的所有後代，加上 cmdline 帶 `--tag <臂>` 的行程）所有 thread 的 schedstat 增量，
  * 只在柵欄上取樣；除以 N 的每輪 CPU 總和在彙總算。
  * 柵欄之間出生的行程從 0 起算；死掉的行程丟了增量，記在 `died`。讀不到的（不是消失的）記在 `readErrors`。
  *
- * 環境變數：OUT、TAG、ARMS（逗號分隔，預設兩臂）、N、R、W、T、HARNESS。
+ * `MODE=hostkill` 時只起一臂 per-thread、只掛 `mcpa` 一台 stdio：建一條綁定後，殺宿主 KILLS 次（每次先等宿主活過 HOST_STABLE_MS＋2 秒），
+ * 再連續殺 CONSEC_ROUNDS 輪、每輪 CONSEC_KILLS 次。段 A、B 的時間點由 {@link ./host-kill-preload.ts} 在對話行程裡記。
+ *
+ * 環境變數：OUT、TAG、ARMS（逗號分隔，預設兩臂）、N、R、W、T、HARNESS、MODE；hostkill 另有 KILLS、CONSEC_ROUNDS、CONSEC_KILLS、HOST_STABLE_MS。
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -45,6 +48,17 @@ const R = Number(E.R ?? 3);
 const T = Number(E.T ?? 40);
 const W = Number(E.W ?? 5);
 const LLM_PORT = 18080;
+/** `pool`：池的前後測（預設）；`hostkill`：殺宿主量段 A、B（#3032，`host-kill-preload.ts` 記時）。 */
+const MODE = E.MODE ?? 'pool';
+if (MODE !== 'pool' && MODE !== 'hostkill') throw new Error(`MODE 只收 pool、hostkill：${MODE}`);
+const KILLS = Number(E.KILLS ?? 30);
+const CONSEC_ROUNDS = Number(E.CONSEC_ROUNDS ?? 3);
+const CONSEC_KILLS = Number(E.CONSEC_KILLS ?? 4);
+/** 殺之前要等宿主活多久；須等於監督行程的 `--host-stable-ms`（預設 60 秒，驅動不傳這個旗標）：宿主活過它，下一次重起的退避才回到最低一級。 */
+const HOST_STABLE_MS = Number(E.HOST_STABLE_MS ?? 60_000);
+// session-file-exempt: 殺宿主量測的記時預載逐行寫的時間點日誌（onReady／openReady／loaded），驅動讀回來算段 A、B，不是會話檔
+const HOSTKILL_LOG = `${E.OUT ?? '/out'}/hostkill-preload.jsonl`;
+const PRELOAD = `${E.HARNESS ?? '/opt/nexus/apps/harness'}/src/measure/host-kill-preload.ts`;
 for (const [k, v] of Object.entries({ N, R, T, W })) {
   if (!Number.isInteger(v) || v < 0) throw new Error(`${k} 要是非負整數：${String(E[k])}`);
 }
@@ -54,8 +68,12 @@ for (const a of ARMS) {
 const HARNESS = E.HARNESS ?? '/opt/nexus/apps/harness';
 const STDIO_SERVER = `${HARNESS}/src/measure/mcp-pool-stdio-server.ts`;
 const MCP_LOG_DIR = `${OUT}/mcp-log`;
-/** 假模型一輪依序叫的三支工具，跟 patch 裡的 serverName 對上。 */
-const POOL_TOOLS = ['mcp__mcpa__lookup', 'mcp__mcpb__lookup', 'mcp__mcph__lookup'] as const;
+/** 假模型一輪依序叫的工具（`MODE=hostkill` 只叫 mcpa 一支），跟 patch 裡的 serverName 對上。 */
+const POOL_TOOLS = (
+  MODE === 'hostkill'
+    ? ['mcp__mcpa__lookup']
+    : ['mcp__mcpa__lookup', 'mcp__mcpb__lookup', 'mcp__mcph__lookup']
+) as readonly string[];
 
 type Arm = 'single' | 'per-thread';
 type Json = Record<string, unknown>;
@@ -399,6 +417,18 @@ function census(s: Scan): Json {
 const stdioCount = (s: Scan): number =>
   [...s.procs.values()].filter((p) => roleOf(p.cmd) === 'mcp-stdio').length;
 
+/** 每個 `mcp-stdio` 子行程的父行程角色，逐角色數個數（後測過關條件 2）；父行程不在這一臂的行程樹裡記成 `outside`。 */
+function stdioParents(s: Scan): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of s.procs.values()) {
+    if (roleOf(p.cmd) !== 'mcp-stdio') continue;
+    const parent = s.procs.get(p.ppid);
+    const role = parent === undefined ? 'outside' : roleOf(parent.cmd);
+    out[role] = (out[role] ?? 0) + 1;
+  }
+  return out;
+}
+
 function patchFor(arm: Arm, http: HttpPoolFixture, logFile: string): string {
   const stdio = (id: string, server: string): string => `  - id: mcp-pool-${id}
     name: '@nexus/plugin-mcp'
@@ -440,7 +470,10 @@ function patchFor(arm: Arm, http: HttpPoolFixture, logFile: string): string {
     maxThreads: 100000
     idleEvictAfterMs: 0
 - insert:
-${stdio('a', 'mcpa')}${stdio('b', 'mcpb')}  - id: mcp-pool-h
+${
+  MODE === 'hostkill'
+    ? stdio('a', 'mcpa')
+    : `${stdio('a', 'mcpa')}${stdio('b', 'mcpb')}  - id: mcp-pool-h
     name: '@nexus/plugin-mcp'
     config:
       serverName: mcph
@@ -449,10 +482,12 @@ ${stdio('a', 'mcpa')}${stdio('b', 'mcpb')}  - id: mcp-pool-h
         url: '${http.url}'
       approval:
         exempt: [lookup]
-`;
+`
+}`;
 }
 
 // 驅動自己跑在 tsx 底下；拿掉它的 loader 設定，被量的 serve 與子行程才是純 node，RSS 與 CPU 不含轉譯器。
+// `MODE=hostkill` 另設 `NODE_OPTIONS=--import <記時預載>`（只在對話行程裡動作，這個模式不拿 CPU、RSS 當數字）。
 function childEnv(home: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -460,7 +495,9 @@ function childEnv(home: string): Record<string, string> {
     if (k === 'NODE_OPTIONS' || k.startsWith('TSX') || k === 'NODE_PATH') continue;
     env[k] = v;
   }
-  return { ...env, NEXUS_AGENT_HOME: home, NVIDIA_API_KEY: 'nvapi-fake-for-measure' };
+  const hostkill: Record<string, string> =
+    MODE === 'hostkill' ? { NODE_OPTIONS: `--import ${PRELOAD}`, HOSTKILL_LOG } : {};
+  return { ...env, ...hostkill, NEXUS_AGENT_HOME: home, NVIDIA_API_KEY: 'nvapi-fake-for-measure' };
 }
 
 function isRootEnd(v: unknown): string | undefined {
@@ -692,6 +729,8 @@ async function barrier(p: ArmProc, links: readonly Downlink[], text: string): Pr
     ...cpuBetween(s0, s1),
     stdioBefore: stdioCount(s0),
     stdioAfter: stdioCount(s1),
+    stdioParentsBefore: stdioParents(s0),
+    stdioParentsAfter: stdioParents(s1),
     procsBefore: s0.procs.size,
     procsAfter: s1.procs.size,
     threadWallMs: per.map((x) => x.wallMs),
@@ -710,94 +749,277 @@ async function closeDownlink(d: Downlink): Promise<void> {
   }
 }
 
-log('start', { ARMS, N, R, T, W, loadavg: loadavg(), node: process.version });
-try {
-  for (let r = 1; r <= R; r++) {
-    const laBefore = loadavg();
-    const order = r % 2 === 0 ? [...ARMS].reverse() : [...ARMS];
-    const arms: Partial<Record<Arm, ArmProc>> = {};
-    for (const a of order) arms[a] = await startArm(a, r);
-    const get = (a: Arm): ArmProc => {
-      const p = arms[a];
-      if (p === undefined) throw new Error(`第 ${r} 回合沒有 ${a}`);
-      return p;
-    };
-    const links: Partial<Record<Arm, Downlink[]>> = {};
-    const open: Json = {};
-    for (const a of ARMS) {
-      const p = get(a);
-      const s0 = scanArm(p.pid, a);
-      const t0 = performance.now();
-      links[a] = await Promise.all(
-        Array.from({ length: N }, async () => {
-          const id = randomUUID();
-          const abort = new AbortController();
-          const events = await p.client.openEvents(id, { signal: abort.signal });
-          return { id, events, abort };
-        }),
-      );
-      open[a] = {
-        wallMs: +(performance.now() - t0).toFixed(1),
-        ...cpuBetween(s0, scanArm(p.pid, a)),
-      };
-    }
-    const turns: Record<string, Json[]> = Object.fromEntries(ARMS.map((a) => [a, []]));
-    const firstCall: Json = {};
-    for (let k = 1; k <= W + T; k++) {
-      const rot = (k + r) % ARMS.length;
-      const turnOrder = [...ARMS.slice(rot), ...ARMS.slice(0, rot)];
-      for (const a of turnOrder) {
-        const text =
-          k <= W
-            ? `暖機 ${k}：請查三個系統並整理重點。`
-            : `第 ${k - W} 輪：請查三個系統並整理重點。`;
-        const p = get(a);
-        const tr = await barrier(p, links[a] ?? [], text);
-        if (k === 1) firstCall[a] = firstCallMs(p, Number(tr.at0));
-        turns[a]?.push({ k, warm: k <= W, pos: turnOrder.indexOf(a), ...tr });
-      }
-    }
-    const pool = Object.fromEntries(ARMS.map((a) => [a, poolMetrics(get(a), get(a).startedAt)]));
-    const memAfter = Object.fromEntries(ARMS.map((a) => [a, census(scanArm(get(a).pid, a, true))]));
-    for (const a of ARMS) for (const d of links[a] ?? []) await closeDownlink(d);
-    const stopped: Json = {};
-    for (const a of ARMS) stopped[a] = await stopArm(get(a));
-    const row = {
-      label: `round ${String(r)}`,
-      round: r,
-      order,
-      laBefore,
-      laAfter: loadavg(),
-      startup: Object.fromEntries(
-        ARMS.map((a) => [a, { readyMs: get(a).readyMs, ...get(a).startup }]),
-      ),
-      open,
-      firstCall,
-      pool,
-      memAfter,
-      stopped,
-      turns,
-    };
-    results.push(row);
-    const med = (xs: number[]): number | undefined =>
-      [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
-    log(row.label, {
-      laBefore,
-      firstCall,
-      medCpuPerTurn: Object.fromEntries(
-        ARMS.map((a) => [
-          a,
-          med((turns[a] ?? []).filter((t) => t.warm !== true).map((t) => Number(t.cpuMs) / N)),
-        ]),
-      ),
-      bad: ARMS.map(
-        (a) =>
-          (turns[a] ?? []).flatMap((t) => t.outcomes as string[]).filter((o) => o !== 'completed')
-            .length,
-      ),
-    });
-    flush();
+/** `/proc/<pid>` 的存活毫秒（`stat` 第 22 欄 starttime 對 `/proc/uptime`）。 */
+function ageMs(pid: number): number {
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  const start = Number(fields[19]) / CLK;
+  const up = Number(readFileSync('/proc/uptime', 'utf8').split(' ')[0]);
+  return Math.round((up - start) * 1000);
+}
+
+function hostPidOf(p: ArmProc): number | undefined {
+  for (const x of scanArm(p.pid, p.arm).procs.values()) if (roleOf(x.cmd) === 'host') return x.pid;
+  return undefined;
+}
+
+interface PreloadEvent {
+  readonly ev: string;
+  readonly t: string;
+  readonly seq?: number;
+  readonly server?: string;
+  readonly pid?: number;
+  readonly [k: string]: unknown;
+}
+function preloadEvents(): PreloadEvent[] {
+  if (!existsSync(HOSTKILL_LOG)) return [];
+  return readFileSync(HOSTKILL_LOG, 'utf8')
+    .split('\n')
+    .filter((l) => l !== '')
+    .map((l) => JSON.parse(l) as PreloadEvent);
+}
+
+interface KillRecord {
+  readonly label: string;
+  readonly valid: boolean;
+  readonly why: string;
+  readonly hostAgeMsAtKill: number;
+  readonly aMs?: number;
+  readonly bMs?: number;
+  readonly backoffMs?: number;
+  readonly onReady: number;
+  readonly openReady: number;
+  /** 90 秒內綁定沒有恢復：驅動不再往下殺。 */
+  readonly bindingLost: boolean;
+}
+
+/**
+ * 殺一次宿主並等恢復（只看 `boundPid` 的事件）。自我檢查：`openReady` 恰好一筆、`onReady` 每個登記序號恰好一筆。
+ * 找不到宿主、90 秒內沒恢復、自我檢查不過、段 B 為負，都回 `valid: false`，不 throw。`waitStable` 時先等宿主活過 `HOST_STABLE_MS`＋2 秒。
+ */
+async function killOnce(
+  p: ArmProc,
+  label: string,
+  waitStable: boolean,
+  boundPid: number,
+): Promise<KillRecord> {
+  let pid = hostPidOf(p);
+  for (let i = 0; pid === undefined && i < 600; i++) {
+    await sleep(100);
+    pid = hostPidOf(p);
   }
+  if (pid === undefined)
+    return {
+      label,
+      valid: false,
+      why: '找不到宿主行程',
+      hostAgeMsAtKill: -1,
+      onReady: 0,
+      openReady: 0,
+      bindingLost: false,
+    };
+  if (waitStable) {
+    const need = HOST_STABLE_MS + 2000 - ageMs(pid);
+    if (need > 0) await sleep(need);
+  }
+  const age = ageMs(pid);
+  const logf = `${OUT}/logs/${TAG}-${p.arm}-1.log`;
+  const logOffset = existsSync(logf) ? readFileSync(logf).length : 0;
+  const tKill = process.hrtime.bigint();
+  process.kill(pid, 'SIGKILL');
+  const deadline = Date.now() + 90_000;
+  let ready: PreloadEvent[] = [];
+  let open: PreloadEvent[] = [];
+  const pick = (): void => {
+    // 預熱池裡那個對話行程也有自己的 HostClient 與 onReady，不是被量的；只看接了 thread、做過 open 的那一個。
+    const evs = preloadEvents().filter((e) => BigInt(e.t) > tKill && e.pid === boundPid);
+    ready = evs.filter((e) => e.ev === 'onReady');
+    open = evs.filter((e) => e.ev === 'openReady');
+  };
+  for (;;) {
+    pick();
+    if (ready.length > 0 && open.length > 0) break;
+    if (Date.now() > deadline) break;
+    await sleep(20);
+  }
+  await sleep(1500); // 多等一下，抓重複的紀錄
+  pick();
+  const backoffMatch = [
+    ...readFileSync(logf)
+      .subarray(logOffset)
+      .toString('utf8')
+      .matchAll(/宿主 (\d+) ms 後重起/gu),
+  ];
+  const backoffMs =
+    backoffMatch.length === 0 ? undefined : Number(backoffMatch[backoffMatch.length - 1]?.[1]);
+  const seqCounts = new Map<number, number>();
+  for (const e of ready) seqCounts.set(e.seq ?? -1, (seqCounts.get(e.seq ?? -1) ?? 0) + 1);
+  const base = {
+    label,
+    hostAgeMsAtKill: age,
+    onReady: ready.length,
+    openReady: open.length,
+    bindingLost: false,
+  };
+  if (ready.length === 0 || open.length === 0) {
+    return { ...base, valid: false, why: '90 秒內綁定沒有恢復', bindingLost: true, backoffMs };
+  }
+  if ([...seqCounts.values()].some((c) => c !== 1) || open.length !== 1) {
+    return {
+      ...base,
+      valid: false,
+      why: `自我檢查不過：onReady 各序號次數 ${JSON.stringify([...seqCounts])}、openReady ${String(open.length)}`,
+      backoffMs,
+    };
+  }
+  const tReady = ready.map((e) => BigInt(e.t)).reduce((a, b) => (a < b ? a : b));
+  const tOpen = BigInt(open[0]?.t ?? '0');
+  const aMs = Number(tReady - tKill) / 1e6;
+  const bMs = Number(tOpen - tReady) / 1e6;
+  if (bMs < 0)
+    return { ...base, valid: false, why: `段 B 為負（${bMs.toFixed(1)} ms）`, aMs, bMs, backoffMs };
+  return { ...base, valid: true, why: '', aMs, bMs, backoffMs };
+}
+
+async function hostKillMain(): Promise<void> {
+  const p = await startArm('per-thread', 1);
+  const id = randomUUID();
+  const abort = new AbortController();
+  const events = await p.client.openEvents(id, { signal: abort.signal });
+  const tr = await barrier(p, [{ id, events, abort }], '叫一次工具，建立綁定。');
+  const outcomes = tr.outcomes as string[];
+  if (outcomes.some((o) => o !== 'completed'))
+    throw new Error(`建綁定的那一輪沒完成：${outcomes.join(',')}`);
+  const loaded = preloadEvents().filter((e) => e.ev === 'loaded');
+  const bound = preloadEvents().filter((e) => e.ev === 'openReady');
+  if (bound.length !== 1 || bound[0]?.pid === undefined) {
+    throw new Error(`建綁定之後 openReady 應該恰好 1 筆，實際 ${String(bound.length)}：停下回報`);
+  }
+  const boundPid = bound[0].pid;
+  log('loaded', loaded);
+  if (loaded.length === 0)
+    throw new Error('預載沒有在對話行程裡動作（沒有 loaded 記錄）：包不到，停下回報');
+  let lost = false;
+  const single: KillRecord[] = [];
+  for (let i = 1; i <= KILLS && !lost; i++) {
+    const rec = await killOnce(p, `single-${String(i)}`, true, boundPid);
+    single.push(rec);
+    log('kill', rec);
+    results.push({ ...rec, label: `kill single-${String(i)}` });
+    flush({ loaded });
+    lost = rec.bindingLost;
+  }
+  const consecutive: KillRecord[][] = [];
+  for (let r = 1; r <= CONSEC_ROUNDS && !lost; r++) {
+    const round: KillRecord[] = [];
+    for (let i = 1; i <= CONSEC_KILLS && !lost; i++) {
+      const rec = await killOnce(p, `consec-${String(r)}-${String(i)}`, i === 1, boundPid);
+      round.push(rec);
+      log('kill', rec);
+      results.push({ ...rec, label: `kill consec-${String(r)}-${String(i)}` });
+      flush({ loaded });
+      lost = rec.bindingLost;
+    }
+    consecutive.push(round);
+  }
+  await closeDownlink({ id, events, abort });
+  const stopped = await stopArm(p);
+  results.push({ label: 'hostkill-summary', single, consecutive, loaded, stopped });
+  flush({ loaded });
+}
+
+log('start', { ARMS, N, R, T, W, MODE, loadavg: loadavg(), node: process.version });
+try {
+  if (MODE === 'hostkill') await hostKillMain();
+  else
+    for (let r = 1; r <= R; r++) {
+      const laBefore = loadavg();
+      const order = r % 2 === 0 ? [...ARMS].reverse() : [...ARMS];
+      const arms: Partial<Record<Arm, ArmProc>> = {};
+      for (const a of order) arms[a] = await startArm(a, r);
+      const get = (a: Arm): ArmProc => {
+        const p = arms[a];
+        if (p === undefined) throw new Error(`第 ${r} 回合沒有 ${a}`);
+        return p;
+      };
+      const links: Partial<Record<Arm, Downlink[]>> = {};
+      const open: Json = {};
+      for (const a of ARMS) {
+        const p = get(a);
+        const s0 = scanArm(p.pid, a);
+        const t0 = performance.now();
+        links[a] = await Promise.all(
+          Array.from({ length: N }, async () => {
+            const id = randomUUID();
+            const abort = new AbortController();
+            const events = await p.client.openEvents(id, { signal: abort.signal });
+            return { id, events, abort };
+          }),
+        );
+        open[a] = {
+          wallMs: +(performance.now() - t0).toFixed(1),
+          ...cpuBetween(s0, scanArm(p.pid, a)),
+        };
+      }
+      const turns: Record<string, Json[]> = Object.fromEntries(ARMS.map((a) => [a, []]));
+      const firstCall: Json = {};
+      for (let k = 1; k <= W + T; k++) {
+        const rot = (k + r) % ARMS.length;
+        const turnOrder = [...ARMS.slice(rot), ...ARMS.slice(0, rot)];
+        for (const a of turnOrder) {
+          const text =
+            k <= W
+              ? `暖機 ${k}：請查三個系統並整理重點。`
+              : `第 ${k - W} 輪：請查三個系統並整理重點。`;
+          const p = get(a);
+          const tr = await barrier(p, links[a] ?? [], text);
+          if (k === 1) firstCall[a] = firstCallMs(p, Number(tr.at0));
+          turns[a]?.push({ k, warm: k <= W, pos: turnOrder.indexOf(a), ...tr });
+        }
+      }
+      const pool = Object.fromEntries(ARMS.map((a) => [a, poolMetrics(get(a), get(a).startedAt)]));
+      const memAfter = Object.fromEntries(
+        ARMS.map((a) => [a, census(scanArm(get(a).pid, a, true))]),
+      );
+      for (const a of ARMS) for (const d of links[a] ?? []) await closeDownlink(d);
+      const stopped: Json = {};
+      for (const a of ARMS) stopped[a] = await stopArm(get(a));
+      const row = {
+        label: `round ${String(r)}`,
+        round: r,
+        order,
+        laBefore,
+        laAfter: loadavg(),
+        startup: Object.fromEntries(
+          ARMS.map((a) => [a, { readyMs: get(a).readyMs, ...get(a).startup }]),
+        ),
+        open,
+        firstCall,
+        pool,
+        memAfter,
+        stopped,
+        turns,
+      };
+      results.push(row);
+      const med = (xs: number[]): number | undefined =>
+        [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+      log(row.label, {
+        laBefore,
+        firstCall,
+        medCpuPerTurn: Object.fromEntries(
+          ARMS.map((a) => [
+            a,
+            med((turns[a] ?? []).filter((t) => t.warm !== true).map((t) => Number(t.cpuMs) / N)),
+          ]),
+        ),
+        bad: ARMS.map(
+          (a) =>
+            (turns[a] ?? []).flatMap((t) => t.outcomes as string[]).filter((o) => o !== 'completed')
+              .length,
+        ),
+      });
+      flush();
+    }
 } catch (error) {
   log('ERROR', String((error as Error).stack ?? error).slice(0, 2000));
   results.push({ label: 'ERROR', error: String(error).slice(0, 500) });
