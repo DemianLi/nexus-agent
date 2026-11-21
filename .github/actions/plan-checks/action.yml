@@ -1,7 +1,7 @@
 name: 異動與格式檢查
 description: >-
   算出這一輪的異動檔（寫進 changed.txt），再跑不用安裝相依的檢查：main 的 PR 來源、PR 標題與內文、升級指南、
-  Markdown 相對連結、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
+  Markdown 相對連結、ADR 格式、只降不升的計數、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
 
 outputs:
   count:
@@ -79,6 +79,25 @@ runs:
     - name: 檢查 Markdown 相對連結
       shell: bash
       run: python3 .github/scripts/check_md_links.py
+
+    # ADR 的位置、檔名、編號與標題行，規則見 docs/agents/collab-mode.md「ADR」。
+    - name: 檢查 ADR 格式
+      shell: bash
+      run: python3 .github/scripts/check_adrs.py
+
+    # dsh 引用與註解裡的變更敘事用語只降不升，規則見腳本檔頭。PR 另外拿分歧點那一版的基準比，基準不能調高。
+    - name: 只降不升的計數
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          python3 .github/scripts/check_ratchets.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"
+        else
+          python3 .github/scripts/check_ratchets.py
+        fi
 
     - name: 攔截大檔案
       shell: bash

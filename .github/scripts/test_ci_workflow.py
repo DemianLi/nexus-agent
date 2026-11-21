@@ -367,11 +367,17 @@ class UpgradeGuideGate(unittest.TestCase):
         self.jobs = load(CI)['jobs']
 
     def test_runs_without_condition(self) -> None:
-        for script in ('check_upgrade_guides.py', 'check_md_links.py'):
+        for script in ('check_upgrade_guides.py', 'check_md_links.py', 'check_adrs.py'):
             with self.subTest(script=script):
                 steps = [s for s in self.steps if s.get('run') == f'python3 .github/scripts/{script}']
                 self.assertEqual(len(steps), 1)
                 self.assertNotIn('if', steps[0])
+
+    def test_ratchets_run_without_condition_and_compare_base_on_prs(self) -> None:
+        steps = [s for s in self.steps if 'check_ratchets.py' in str(s.get('run', ''))]
+        self.assertEqual(len(steps), 1)
+        self.assertNotIn('if', steps[0])
+        self.assertIn('check_ratchets.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"', steps[0]['run'])
 
     def test_plan_runs_it_after_full_checkout(self) -> None:
         steps = self.jobs['plan']['steps']
