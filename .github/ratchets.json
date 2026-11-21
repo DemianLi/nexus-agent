@@ -7,7 +7,7 @@
     "packages/nexus-core": 1372,
     "packages/nexus-goal": 15,
     "packages/nexus-plugin-agent-instructions": 32,
-    "packages/nexus-plugin-ask-user": 19,
+    "packages/nexus-plugin-ask-user": 1,
     "packages/nexus-plugin-commands": 17,
     "packages/nexus-plugin-feedback": 38,
     "packages/nexus-plugin-goal": 116,
