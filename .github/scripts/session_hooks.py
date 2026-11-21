@@ -64,11 +64,6 @@ def check_start_session(tool_input: dict) -> str | None:
     )
 
 
-def stop_reply(event: dict) -> str | None:
-    message = event.get('last_assistant_message')
-    return message if isinstance(message, str) else None
-
-
 def check_closing(reply: str | None) -> str | None:
     if reply is None:
         return None
@@ -91,7 +86,7 @@ def main(argv: list[str]) -> int:
         elif argv[1:] == ['stop']:
             if event.get('stop_hook_active'):
                 return 0
-            reason = check_closing(stop_reply(event))
+            reason = check_closing(event.get('last_assistant_message'))
         else:
             raise ValueError(f'unknown hook {argv[1:]}')
     except Exception as e:
