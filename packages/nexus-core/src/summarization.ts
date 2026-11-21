@@ -35,7 +35,6 @@
  * ## 基座表達得出、表達不出的
  *
  * deepagents 給的是**一個寫死的 middleware**。
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 28、29 節。
  *
  * - **表達得出來的**：按模型選門檻（就是這個檔）、每個 subagent 都吃到同一份
  *   （`foldSubAgents` 打底）、歷史去處是獨立的一格（`backend` 參數）。
@@ -64,7 +63,6 @@
  * 「Primary Request and Intent」要求逐字引用、第四段「Errors and Fixes」連同使用者的回饋，規則裡
  * 還有「忠實保留指示，尤其是糾正」。**用英文**：這是給模型讀的，不是給 demian 讀的。
  * **沒有把「是哪一版提示詞」寫進日誌**：指令是程式碼常數，`compaction/summary` 記的是那次呼叫的信封。
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 18、31 節。
  *
  * ### 形狀與標籤
  *
@@ -79,15 +77,13 @@
  *   `<summary>…</summary>`；讀不回來、歷史檔也沒寫成時只有「Here is a summary of the conversation to date:」一句，
  *   不包標籤。所以那條規則兩種都要認。
  *
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 19、20 節。
- *
  * ### 摘要輸出 fail-closed（[#1539](https://github.com/DemianLi/nexus-agent/issues/1539)）
  *
  * 基座的 `createSummary` 只取回覆的 `.text`，不看結束原因、不看是否為空、不看有沒有圖：被截斷的半份、全空白、只有推理、
  * 夾了圖的摘要都會被換上去。我們在 {@link quietInvoke} 拿得到完整的那則 `AIMessage`，在那裡對這幾種一律拒收：
  * 依序檢查結束原因、圖片、有沒有文字（判的是 `response_metadata.finish_reason` 與 `content`），拋
  * {@link SummaryRejectedError}，走 #1374 既有的退路。圖片區塊除了 `type === 'image'`，LangChain 的圖片另有 OpenAI
- * 形狀的 `image_url`，兩種都認是同一個語意。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 23 節。
+ * 形狀的 `image_url`，兩種都認是同一個語意。
  *
  * ⚠️ **基座的 `{conversation}` 替換有一個已知的小缺陷，我們這層擋不住**：`createSummary` 用
  * `String.prototype.replace(字串, 字串)`，替換字串裡的 `$&`、`` $` ``、`$'`、`$$` 會被當成特殊樣式解讀。
@@ -279,7 +275,7 @@ export const WINDOW_THRESHOLD_RATIO = 0.8;
 /**
  * 這顆模型能撐的 `tokens` 門檻上限：`floor(min(窗口 × 0.8, 窗口 − 輸出上限))`，至少 1。
  *
- * **不扣 headroom**，理由見 {@link effectiveTrigger}。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 1、2 節。
+ * **不扣 headroom**，理由見 {@link effectiveTrigger}。
  */
 export function windowThreshold(limits: ModelContextLimits): number {
   return Math.max(
@@ -308,8 +304,6 @@ export function windowThreshold(limits: ModelContextLimits): number {
  * - **沒有型錄的模型不夾**：解不出窗口不等於不壓縮，用配置的絕對門檻接住它，所以 `limits` 是 `undefined` 時原樣回。
  * - **沒有 headroom。** 再扣一段為百萬級窗口定的 headroom（例如 65,536），套在 131k 的窗口上門檻會掉到 49,087，比我們量過
  *   安全的 100,000 低一半，無謂地多摘要。輸出上限那一項（`窗口 − maxTokens`）已經守住「請求加回應不超過窗口」。
- *
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 2、3、4、6 節。
  *
  * @param trigger - 配置的門檻。
  * @param limits - 這一步用的模型的上限；不知道（沒貼型錄的模型）就原樣回。
@@ -371,7 +365,7 @@ export function retainTokensFor(
 }
 
 /**
- * 摘要之後要留的尾巴有幾則（與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 7、10 節）：
+ * 摘要之後要留的尾巴有幾則：
  *
  * 1. 從最新往前累加，到 **≥** `retainTokens` 為止，**跨過的那則也留**——所以至少留一則，最新一則再大也不會一則不留
  *    （基座的 `tokens` 形式會，見 {@link DEFAULT_SUMMARIZATION} 的「保留量」一節）；
@@ -583,8 +577,6 @@ export interface SummarizationSettings {
  * 只留工具呼叫與結果配對需要的尾巴（保留 0）；保留量只用在我們自己的門檻觸發。兩條觸發走同一顆基座，所以由
  * {@link withRetainedTail} 分開：**真超窗**（錯誤鏈上第一顆 `ContextOverflowError` 不在我們合成的 WeakSet 裡）換上 retain 0
  * 的實例、現在就摘要；**我們自己合成的預算超窗**保留量照常。
- *
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 7、8、10、11 節。
  *
  * ## `truncateArgs`：顯式寫出來，是為了**保住**基座本來的行為
  *
@@ -1114,7 +1106,6 @@ const SUMMARY_CALL_TAG = 'nostream';
  *
  * 照模板生摘要時，輸入是基座 `getBufferString` 攤成的一段字串，表達不出「一則帶圖的訊息」，所以圖退到文字佔位；
  * 檔案換成一行 handle 文字。重播那條（{@link replayedSummaryCall}）的原訊息從日誌推，不經這一層的投影。
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 21、22 節。
  *
  * @param base - 基座那顆摘要器。
  * @returns 同名、同狀態、摘要輸入裡附件是文字的 middleware。沒有附件時請求原樣通過。
@@ -1209,14 +1200,13 @@ const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
  *
  * **為什麼是貼標記，不是另起一條呼叫**：摘要呼叫長在基座的 middleware 裡、跟主模型共用一條 callback 鏈，表達不出
  * 「另起一條不上線的呼叫」，所以是同一次呼叫，貼一個串流層認得的標記。結果：摘要文字不進對話，只以 `compaction/summary`
- * 那一顆存在。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 26 節。
+ * 那一顆存在。
  *
  * ## 生摘要用哪一顆（[#1377](https://github.com/DemianLi/nexus-agent/issues/1377)）
  *
  * **門檻跟選中那顆（[#1378](https://github.com/DemianLi/nexus-agent/issues/1378)），生摘要跟最近一次已送出的請求那顆。**
  * 替身的 `invoke` 轉給 `summaryModelOf` 挑的那顆；其餘屬性仍讀 `request.model`（基座讀它的
  * `profile`）。`summaryModelOf` 沒給或回 `undefined`＝摘要打到 `request.model`，與沒有模型選擇的組裝一樣。
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 5、27 節。
  *
  * @param base - 基座那顆摘要器。
  * @param summaryModelOf - 這次生摘要用哪一顆；省略＝`request.model`。
@@ -1312,7 +1302,7 @@ export class SummaryNotSmallerError extends Error {
  * - **兩邊同一把量具**：{@link estimateMessageTokens}，與保留量選尾巴同一把的估算；我們沒有逐路由的計價（同 #1383 的理由）。
  *   被取代那段取的是參數截斷之前的有效串，所以只會略高估被取代的量（檢查寬鬆一點，不會多擋）。
  *
- * 估不出來（形狀不對、估算拋）就不擋：檢查不能反過來把摘要殺掉。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 16、17 節。
+ * 估不出來（形狀不對、估算拋）就不擋：檢查不能反過來把摘要殺掉。
  *
  * 累加到超過框好的摘要就放行，不量完那段：那段被剪過的工具結果是新字串，全量是一次冷編碼，而被取代的內容之後不再送出。
  *
@@ -1346,7 +1336,6 @@ function assertSummaryShrinks(
 
 /**
  * {@link SummaryRejectedError} 的原因。每一種都有碼，讓測試與 warn 認得。
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 23 節。
  */
 export type SummaryRejectedCode = 'MAX_TOKENS' | 'UNSUPPORTED_CONTENT' | 'EMPTY_SUMMARY';
 
@@ -1755,7 +1744,6 @@ function quietInvoke<T extends object>(
  *
  * **我們沒有 surface 這一軸**（`conversation-replay.ts` 檔頭），表達不出「蓋住一段 seq」。所以只有一顆
  * `compaction/summary`，範圍用原始訊息串的切點 `cutoffIndex` 表達，推導端據此切。
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 30 節。
  *
  * ## 為什麼是包住它，而不是一顆新 middleware
  *
@@ -2101,8 +2089,6 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *    {@link withRetainedTail}：
  *    - 重試交下去的永遠是原請求，換的只有保留量（`chainFor(zero, true)`），再試一次切到的是同一段；
  *    - 保留 0 那一次在 `catch` 裡，外面沒有 `try`，再拋 {@link RetainLessSignal} 會冒過 {@link withTokenBudget}，整輪失敗。
- *
- * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 14、15、32 節。
  *
  * ## 量與記都不准拋
  *

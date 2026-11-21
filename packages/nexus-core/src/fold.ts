@@ -1692,14 +1692,12 @@ function repeatReminderDisposition(
 /**
  * 摘要器的**工廠**。明著關掉時工廠給的是同名空殼。
  *
- * **回工廠而不是一份實例。** 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`。`summarization.ts` 的 `createSummarizer`
- * 照切點表的鍵（thread 加呼叫身分）每次委派各生一個 `sessionId`，認不出身分的呼叫退回那顆實例自己的一個（#2451）。
- * 一份實例同時掛在 root 與每個 subagent 上的話，那種呼叫**共用實例那個會話名**，root 與 subagent 的歷史
- * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話（PR #156 量過）。
- *
- * 這也是基座的形狀：`createSubagentDefaultMiddleware` 每個 subagent 各呼叫一次
- * `createSummarizationMiddleware({ backend })`，不共用。基座的 `task` 工具另外還替 subagent 的 state
- * 塞一個新的會話 id，我們的摘要器不讀它——會話名看呼叫身分，認不出時看實例，所以答案是別共用。
+ * **回工廠而不是一份實例：跟基座同形，加上逐實例的狀態。** 基座的 `createSubagentDefaultMiddleware` 每個 subagent
+ * 各呼叫一次 `createSummarizationMiddleware({ backend })`，不共用；我們照做。逐實例的狀態是認不出身分的呼叫用的會話名：
+ * 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`，`summarization.ts` 的 `createSummarizer` 照切點表的鍵（thread 加
+ * 呼叫身分）每次委派各生一個 `sessionId`，認得出身分的呼叫因此不會撞檔（#2451）；認不出身分的呼叫退回那顆實例自己的一個。
+ * 一份實例同時掛在 root 與每個 subagent 上的話，那種呼叫**共用這個會話名**，兩個 agent 的歷史 append 進同一個檔，
+ * 一份摘要裡混著兩個 agent 的對話（PR #156 量過）。
  *
  * **關掉是給空殼，不是不給。** 不給的話基座會補回它自己那顆——一組沒有人在檢查的門檻，
  * 加上寫死的 `/conversation_history`，那正是
