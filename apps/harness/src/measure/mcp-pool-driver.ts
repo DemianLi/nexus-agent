@@ -56,6 +56,7 @@ const CONSEC_ROUNDS = Number(E.CONSEC_ROUNDS ?? 3);
 const CONSEC_KILLS = Number(E.CONSEC_KILLS ?? 4);
 /** 殺之前要等宿主活多久；須等於監督行程的 `--host-stable-ms`（預設 60 秒，驅動不傳這個旗標）：宿主活過它，下一次重起的退避才回到最低一級。 */
 const HOST_STABLE_MS = Number(E.HOST_STABLE_MS ?? 60_000);
+// session-file-exempt: 殺宿主量測的記時預載逐行寫的時間點日誌（onReady／openReady／loaded），驅動讀回來算段 A、B，不是會話檔
 const HOSTKILL_LOG = `${E.OUT ?? '/out'}/hostkill-preload.jsonl`;
 const PRELOAD = `${E.HARNESS ?? '/opt/nexus/apps/harness'}/src/measure/host-kill-preload.ts`;
 for (const [k, v] of Object.entries({ N, R, T, W })) {
