@@ -24,7 +24,7 @@ import type { PumpAgent } from './thread-pump.js';
 
 /**
  * `take_note` 睡的毫秒數。日誌的 `time` 是 `Date.now()`，計時器走單調時鐘，兩邊各自取整，
- * 量到的間隔可能比睡的少 1ms（本機 2000 次裡有 7 次是 19），所以下限是 `NAP_MS - 1`。
+ * 量到的間隔可能比睡的少 1ms，所以下限是 `NAP_MS - 1`。
  */
 const NAP_MS = 20;
 const NAP_FLOOR_MS = NAP_MS - 1;

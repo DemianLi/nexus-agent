@@ -14,7 +14,7 @@ use super::supervisor::Policy;
 use crate::json::{Map, Value};
 
 /// stdio 這一代從起行程到列完工具最久等多久（[`Stdio::startup_timeout`] 的預設），逾時就收掉子行程、回連線失敗。server 讀了 stdin 卻不回時，沒有它 `Open` 永遠不回、子行程活到橋關閉。
-/// 30 秒：夠 `npx` 冷啟動下載與起動；dsh 的 `startupTimeoutMs` 沒有預設值（要使用者設，`mcp-client/src/index.ts:170`），TS 這邊沒有上限。HTTP 沒有這個上限。
+/// 30 秒：夠 `npx` 冷啟動下載與起動；TS 這邊沒有上限。HTTP 沒有這個上限。
 pub const STDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 一次 `tools/call` 的預設逾時，同 `DEFAULT_TOOL_CALL_TIMEOUT_MS`。

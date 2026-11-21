@@ -1,8 +1,7 @@
 /**
- * `@nexus/brand`：名義型別（branded string／number）的共用工具，**原碼照抄 dsh** `packages/util/brand/src/index.ts`
- * （MIT；`687f282e`），只改成這個 repo 的格式（分號、單引號）與註解，邏輯一行不動。
- * 為什麼是獨立套件：dsh 本身就是 `@deepseek-ai/dsh-brand` 一個零相依套件，核心的 id 都靠它帶品牌，我們的基礎建設也做得出來，
- * 所以照 dsh（[#1569](https://github.com/DemianLi/nexus-agent/issues/1569)）。
+ * `@nexus/brand`：名義型別（branded string／number）的共用工具，原碼取自 MIT 授權的上游實作，
+ * 只改成這個 repo 的格式（分號、單引號）與註解，邏輯一行不動。
+ * 為什麼是獨立套件：它零相依，核心的 id 都靠它帶品牌（[#1569](https://github.com/DemianLi/nexus-agent/issues/1569)）。
  *
  * 品牌只在編譯期存在：`Branded<B>` 是 `string & { readonly [BRAND]: B }`，執行期就是那串字，比較、記日誌、序列化都和裸字串一樣。
  * 這個套件不擁有任何具體的領域值、不留執行期身分或可變狀態，所以多份獨立安裝產生的值可以互換。

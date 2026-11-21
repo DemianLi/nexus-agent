@@ -3,9 +3,8 @@
  * only notifies through abort signals; each capability still owns the mechanism
  * that stops its work and translates timeout reasons into public outcomes.
  *
- * 原碼照抄 dsh `packages/util/timeout/src/index.ts`（MIT；`687f282e`）的 `TimeoutReason`、`MAX_TIMER_DELAY_MS`、`clampTimeout`、
- * `deadline`、`timeoutOf`，只改成這個 repo 的格式；**`idleWatchdog` 這一刀不抄**（#1251 在 `live-model.ts` 拆了首事件與閒置兩種逾時，
- * 要不要換成它留到那個檔下次被動到時再對；#1569 N1561）。
+ * 原碼取自 MIT 授權的上游實作（#1569 N1561）：`TimeoutReason`、`MAX_TIMER_DELAY_MS`、`clampTimeout`、`deadline`、`timeoutOf`，
+ * 只改成這個 repo 的格式。沒有 `idleWatchdog`：#1251 在 `live-model.ts` 拆了首事件與閒置兩種逾時。
  * @module
  */
 

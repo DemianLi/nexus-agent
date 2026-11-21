@@ -25,7 +25,7 @@
  *
  * 插件只回要追加的訊息，由宿主記成 `user/message`，插件不寫日誌。「進了模型的訊息一定有記錄」因此是接縫的保證，不靠每顆插件記得做。
  *
- * ## 接縫的限制
+ * ## 偏離登記
  *
  * | # | 限制 | 我們怎麼做 | 為什麼 |
  * | --- | --- | --- | --- |
@@ -36,7 +36,7 @@
  *
  * **撤除條件**：#389 重開（每一步注入），或 core 開了讓多個貢獻者共用一格的 pre-step 節點時，第 1、2、4 列一起重評。
  *
- * 這張表只收接縫本身的限制。另有一條屬於消費者而不是接縫的——agent-instructions 把 `fs` 放進 `inject`（必填，#1474 Q3 (a)）——登記在 `@nexus/plugin-agent-instructions` 檔頭「偏離登記」第 2 條；`docs/plugin-contract.md` 的偏離表把兩處合在一張表裡。
+ * 這張表只收接縫本身的偏離。另有一條屬於消費者而不是接縫的——agent-instructions 把 `fs` 放進 `inject`（必填，#1474 Q3 (a)）——登記在 `@nexus/plugin-agent-instructions` 檔頭「偏離登記」第 2 條；`docs/plugin-contract.md` 的偏離表把兩處合在一張表裡。
  *
  * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`agent/turn-stopping` 等其餘 agent loop
  * 事件今天沒有遷出的消費者，不加。

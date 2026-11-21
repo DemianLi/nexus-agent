@@ -4,7 +4,7 @@
  *
  * 建 middleware 要 core 的 `applySummaryCutoff`／`sourceKwargs`／`toLoggedMessage`／`createHookStepMiddleware`，定義套件
  * 不 import core，所以這段程式放在宿主，跟 `plugin-config.ts` 的 `registerFolded` 一起用（橋接列把每位 listener 折進**這條 thread
- * 自己的** `registry.middleware`）。接縫的契約、偏離登記與 dsh 的對照寫在 `@nexus/agent-loop` 的檔頭。
+ * 自己的** `registry.middleware`）。接縫的契約與偏離登記寫在 `@nexus/agent-loop` 的檔頭。
  *
  * ## 一顆 listener 一顆 middleware，落點不變
  *
