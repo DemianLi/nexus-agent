@@ -1,19 +1,3 @@
-"""只降不升的計數：程式碼裡的 dsh 引用、註解裡的變更敘事用語。規則見 docs/agents/collab-mode.md「規則與執行者」。
-
-兩種計數都以目錄為單位（`apps/<name>`、`packages/<name>`，其餘取第一層目錄，根目錄的檔記成 `.`），
-基準在 `.github/ratchets.json`：
-
-- 實際數字要等於基準。多了就是新增了引用或敘事；少了就要在同一張 PR 把基準調低（`--write` 重算）。
-- 帶 `--base <rev>` 時，基準的每個數字都不能比 `<rev>` 那一版高，基準只能降。
-
-掃的是進版控的程式碼檔（副檔名見 `EXTENSIONS`），不含 `references/`、`vendor/`、`docs/`、`.docs/`、夾具、快照與 Markdown。
-
-- **dsh 引用**：含 `dsh` 這個字或 `deepseek-harness` 的行。
-- **變更敘事**：註解行裡含 `NARRATIVE` 列的用語。註解行用行首的 `//`、`/*`、`*`、`#` 或行中的 ` // ` 判斷，
-  所以字串裡剛好有 ` // ` 的程式碼行也會算進去。用語刻意只收幾乎只會出現在變更敘事裡的那幾個，
-  「改成」「不再」「以前」這類在現況描述裡也常見的不收，免得擋掉正常的新註解。
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -32,7 +16,7 @@ EXCLUDED_PARTS = ('/fixtures/', '/__snapshots__/')
 EXEMPT = {'.github/scripts/check_ratchets.py', '.github/scripts/test_check_ratchets.py'}
 
 DSH = re.compile(r'(?i)(?<![a-z0-9_])dsh(?![a-z0-9_])|deepseek[-_ ]?harness')
-COMMENT = re.compile(r'^\s*(?://|/\*|\*|#)|\s//\s')
+COMMENT_OR_INLINE_SLASHES = re.compile(r'^\s*(?://|/\*|\*|#)|\s//\s')
 NARRATIVE = re.compile(r'這張 ?PR|這張卡|本 ?PR|原本寫|(?<!還)原先')
 RULES = {'dsh': '程式碼裡的 dsh 引用', 'narrative': '註解裡的變更敘事用語'}
 
@@ -65,7 +49,7 @@ def measure(root: Path, files: list[str]) -> dict[str, dict[str, int]]:
         for line in text.split('\n'):
             if DSH.search(line):
                 counts['dsh'][key] += 1
-            if COMMENT.search(line) and NARRATIVE.search(line):
+            if COMMENT_OR_INLINE_SLASHES.search(line) and NARRATIVE.search(line):
                 counts['narrative'][key] += 1
     return {rule: dict(sorted(c.items())) for rule, c in counts.items()}
 

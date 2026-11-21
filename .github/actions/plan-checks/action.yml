@@ -80,12 +80,10 @@ runs:
       shell: bash
       run: python3 .github/scripts/check_md_links.py
 
-    # ADR 的位置、檔名、編號與標題行，規則見 docs/agents/collab-mode.md「ADR」。
     - name: 檢查 ADR 格式
       shell: bash
       run: python3 .github/scripts/check_adrs.py
 
-    # dsh 引用與註解裡的變更敘事用語只降不升，規則見腳本檔頭。PR 另外拿分歧點那一版的基準比，基準不能調高。
     - name: 只降不升的計數
       shell: bash
       env:

@@ -129,4 +129,4 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 程式碼裡的 dsh 引用數只降不升 | gate（`check_ratchets.py`，基準 `.github/ratchets.json`） |
 | 註解裡的變更敘事用語只降不升 | gate（同上） |
 
-只降不升的計數以目錄為單位，計法寫在 `check_ratchets.py` 檔頭。清掉引用的 PR 要在同一張把基準調低：`python3 .github/scripts/check_ratchets.py --write`。基準不能調高，gate 會拿分歧點那一版的基準比。
+只降不升的計數以目錄為單位，計法見 `check_ratchets.py` 的 `EXTENSIONS`、`EXCLUDED_PREFIXES`、`EXCLUDED_PARTS`、`EXEMPT`、`DSH`、`COMMENT_OR_INLINE_SLASHES`、`NARRATIVE`。清掉引用的 PR 要在同一張把基準調低：`python3 .github/scripts/check_ratchets.py --write`。基準不能調高，gate 會拿分歧點那一版的基準比。

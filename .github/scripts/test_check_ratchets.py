@@ -1,5 +1,3 @@
-"""check_ratchets.py 與 check_adrs.py 的單元測試：算哪些行、怎麼比基準、ADR 的格式。"""
-
 from __future__ import annotations
 
 import tempfile
@@ -59,6 +57,12 @@ class MeasureTest(unittest.TestCase):
                 ),
             })
             self.assertEqual(measure(root, files)['narrative'], {'apps/web': 3})
+
+    def test_inline_slashes_in_string_count_as_comment(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            files = write(root, {'apps/web/src/a.ts': 'const u = "a // 這張卡";\n'})
+            self.assertEqual(measure(root, files)['narrative'], {'apps/web': 1})
 
     def test_directory_key(self) -> None:
         self.assertEqual(directory('apps/harness/src/a.ts'), 'apps/harness')

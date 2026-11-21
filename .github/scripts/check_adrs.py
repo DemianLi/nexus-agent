@@ -1,12 +1,3 @@
-"""檢查 ADR 的位置、檔名、編號與標題行。規則見 docs/agents/collab-mode.md「ADR」。
-
-- ADR 只放根目錄的 `docs/adr/` 與 `apps/<name>/docs/adr/`；`packages/*/docs/adr/` 一律報，套件的決策歸到根目錄。
-- 目錄裡只准有 `NNNN-<kebab-slug>.md`，不准有子目錄或其他檔。
-- 每個目錄的編號從 `0001` 起連續、不重複。
-- 第一行是 `# <標題>`，標題非空；標題之後要有正文。
-- 目錄不存在就沒有違規。
-"""
-
 from __future__ import annotations
 
 import re
