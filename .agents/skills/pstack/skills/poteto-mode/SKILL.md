@@ -97,6 +97,8 @@ Merging your own verified PR into `develop` is reversible by a revert PR, so it 
 
 **Spawn every subagent with `subagent_type: "general-purpose"`** and make the first line of its brief `Read <path>/worker.md before anything else.` Routed skills that name a reviewer agent, such as **no-comments**, say which file that agent reads first.
 
+**Engineers and verifiers are sessions, not subagents.** The PM starts them as sessions; the model table below still sets their model. The fresh-subagent rule below does not apply to them: a `FAIL` goes back to the same engineer, because its worktree and branch are costly state, and each verdict gets a fresh verifier.
+
 **Models per role.** These replace the upstream defaults and any `pstack-models` rule.
 
 | Role | `model` | `effort` |
@@ -112,8 +114,6 @@ Raise a role one effort step for the hardest work and lower it for routine work.
 You own every subagent's work. Review the diff and write your own summary.
 
 **Fresh subagents by default.** Give a fix round, a follow-up, a retry, or the next queue item to a fresh subagent with the original brief, every later directive, and the prior agent's report and branch. Resume an existing subagent only when the work needs state that lives in it and is costly to move: its checkout, its uncommitted changes, or a process it still runs.
-
-Engineers and verifiers are sessions, not subagents. A `FAIL` goes back to the same engineer, because its worktree and branch are that costly state. Each verdict gets a fresh verifier.
 
 ## Writing the reply
 
