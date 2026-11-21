@@ -1,10 +1,10 @@
 /**
- * `@nexus/tool-result`：工具結果的**寫法**這個定義套件（決議 §3-4 第 16 條，dsh 的三角色紀律；
+ * `@nexus/tool-result`：工具結果的**寫法**這個定義套件（決議 §3-4 第 16 條，定義套件、實作、消費者三角色分開；
  * [#1458](https://github.com/DemianLi/nexus-agent/issues/1458) Q4 (a)，Part of #1385）。
  *
  * 遷出的插件要回「這次呼叫沒有生效」的工具結果、認出這次呼叫的 `tool_call_id`、替結果標上日誌讀的錯誤碼，但**不能 import
- * `@nexus/core`**（決議 §3-4 第 17 條：外部插件只相依 SDK 與服務定義套件；#1420 的 lint 擋它）。dsh 的對應是工具作者從
- * `tools` 套件拿 `toolErrorResult` 與 `ToolErrorInfo`；這個套件就是那個位置。
+ * `@nexus/core`**（決議 §3-4 第 17 條：外部插件只相依 SDK 與服務定義套件；#1420 的 lint 擋它）。工具作者拿
+ * `toolErrorResult` 與 `ToolErrorInfo` 的位置就是這個套件。
  *
  * ## 為什麼不放 `@nexus/tools`、`@nexus/sdk`、`@nexus/session`
  *

@@ -1,9 +1,8 @@
 /**
- * `@nexus/deque`：環狀雙端佇列，**原碼照抄 dsh** `packages/util/deque/src/index.ts`（MIT；`1517a4db` 與 `687f282e` 的 blob 都是
- * `8d117b749980fbc413b4ff1a549cbc920949fd2d`），只改成這個 repo 的格式（分號、單引號）與 `.ts` 的 import 寫法，邏輯一行不動。
- * 為什麼是獨立套件：dsh 本身就是 `@deepseek-ai/dsh-deque` 一個零相依套件，`gateway` 的 `RemoteEventQueue` 與
- * `TerminalFollower` 都靠它，我們的基礎建設也做得出來，所以照 dsh（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，
- * PM 拍板 Q-A (2)）。
+ * `@nexus/deque`：環狀雙端佇列，原碼取自 MIT 授權的上游實作，
+ * 只改成這個 repo 的格式（分號、單引號）與 `.ts` 的 import 寫法，邏輯一行不動。
+ * 為什麼是獨立套件：它零相依，`gateway` 的 `RemoteEventQueue` 與 `TerminalFollower` 都靠它
+ * （[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，PM 拍板 Q-A (2)）。
  *
  * @module
  */
