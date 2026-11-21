@@ -124,6 +124,9 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 分支命名 `<type>/<kebab-case>` | 只有文件 |
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
 | 開完 PR 開 Auto-fix | 只有文件 |
-| ADR 的檔名與編號 | 只有文件 |
+| ADR 的位置、檔名、編號與標題行 | gate（`check_adrs.py`） |
+| ADR 只在三個條件都成立時寫 | verifier |
+| 程式碼裡的 dsh 引用數只降不升 | gate（`check_ratchets.py`，基準 `.github/ratchets.json`） |
+| 註解裡的變更敘事用語只降不升 | gate（同上） |
 
-[#3086](https://github.com/DemianLi/nexus-agent/issues/3086) 第 3 張會把 ADR 格式接進 gate，並新增兩條只降不升的檢查：dsh 引用數、註解裡的變更敘事用語。計法與基準在那張定義，定義前不列進這張表。
+只降不升的計數以目錄為單位，計法寫在 `check_ratchets.py` 檔頭。清掉引用的 PR 要在同一張把基準調低：`python3 .github/scripts/check_ratchets.py --write`。基準不能調高，gate 會拿分歧點那一版的基準比。
