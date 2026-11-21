@@ -54,6 +54,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 - 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。
 - **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
 - 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
+- engineer 與 verifier 的開場第一行讀主 checkout 的檔，`.env` 也從主 checkout 讀，所以 PM 每次派工前先把主 checkout 同步到 `origin/develop`（`git -C <主 checkout> pull --ff-only`）。
 
 ## 合併與撤回
 
