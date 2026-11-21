@@ -4,8 +4,7 @@
  * **純函式，回結構化結果**：不相依 vitest，插件自己的測試只要 `expect(await checkConformance(...)).toEqual([])`。
  * 回傳「哪一格不合格、為什麼」比一個紅掉的 `it` 好用——後台、gate 與插件作者看的是同一份東西。
  *
- * 量的全部走真的 Loader 與 fiber（dsh 的三種測試寫法之一：經 Loader 開機的真組合測試，
- * `packages/AGENTS.md:7`），不手建 `ctx.plugin(...)`。
+ * 量的全部走真的 Loader 與 fiber（經 Loader 開機的真組合測試），不手建 `ctx.plugin(...)`。
  *
  * ## 五格
  *
@@ -137,7 +136,7 @@ async function boot(builtins: Record<string, unknown>): Promise<Tree> {
 }
 
 /**
- * 那一列真正的 Fiber。上游 `Entry.fiber` 存的是 `registry.plugin()` 回的 PromiseLike 包裝（dsh 本地修改第 20 條），
+ * 那一列真正的 Fiber。上游 `Entry.fiber` 存的是 `registry.plugin()` 回的 PromiseLike 包裝，
  * 要比身分得取 `.ctx.fiber`。
  */
 export function fiberOf(loader: Loader, row: string): Fiber | undefined {
@@ -291,7 +290,7 @@ export async function checkConformance(target: ConformanceTarget): Promise<Confo
           `掛上後活資源沒有變多（${before} → ${during}），這一格量不到卸載：residue 要指到插件貢獻的地方`,
         );
       }
-      // 直接卸載那顆 fiber 並等它收斂（dsh「dispose the fiber and observe removal」）。不用 `loader.remove`：
+      // 直接卸載那顆 fiber 並等它收斂。不用 `loader.remove`：
       // 它發起卸載卻不等（`entry.fiber?.dispose()`），回來時 fiber 還在 UNLOADING；再呼叫一次 dispose 也只拿到
       // 「單次結果」而提早返回。
       await fiber.dispose();

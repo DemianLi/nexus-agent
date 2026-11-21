@@ -33,8 +33,6 @@
     "packages/nexus-plugin-token-meter": 27,
     "packages/nexus-plugin-workspace-changes": 58,
     "packages/nexus-projections": 1,
-    "packages/nexus-sdk": 13,
-    "packages/nexus-session": 12,
     "packages/nexus-system-prompt": 14,
     "packages/nexus-timeout": 1,
     "packages/nexus-tool-result": 2,
