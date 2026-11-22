@@ -91,14 +91,14 @@ agent 做的下載都要 operator 核可。常設核可只有一個形狀：`git
 - 其他下載：把指令和用途寫在卡上，停下，等 operator 核可，PM 不能代核。核可後誰跑看形狀：會被下面 hook 擋的形狀（`git pull`、`git remote update`、別的 `git fetch`、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`）由 operator 在終端自己跑，agent 與 PM 不代跑，也沒有 agent 自己能開的放行路；hook 不擋的形狀（例如解衝突的 `git fetch origin develop`、`worktree-audit.sh`）核可後由原本要跑的 session 跑。
 - 「是否在開分支前」script 判不了，只有文件。
 
-`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash、Monitor 與 Terminal 面板的 `run_in_terminal` 用同一套判斷，只認 git 與 pnpm 的這幾個形狀：擋 `git pull`、`git remote update`、不是 `git fetch origin develop`（只允許再加 `-q`／`--quiet`）的 `git fetch`（含 `-c remote.*`／`url.*` 改寫的）、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`。它把指令字串當 shell 語法解析：引號、註解與 heredoc 裡的字串不算指令；`$(…)`、反引號、`<(…)`／`>(…)` 裡（含出現在 `${…}`、算術與會展開的 heredoc 本文裡的這幾種；`${…}` 本身的字串不算指令）、`bash -c`／`bash -lc`／`eval` 的參數，都照樣查；同一條指令裡只要有不帶腳本、讀 stdin 的 shell（`bash`、`sh`、`zsh` 等），這條指令的每個 heredoc 本文都當指令查；`env`、`nice`、`timeout`、`sudo`、`taskpolicy`、`npx`、`corepack`、`rtk` 之類前綴會剝掉。它只看指令字串，環境變數與 marker 檔都不影響結果。`bash -c`、`eval`、餵給 shell 的 heredoc 疊超過 12 層、`$(…)` 巢狀深到遞迴爆掉，都判不了，一律擋。擋不到的：
+`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash、Monitor 與 Terminal 面板的 `run_in_terminal` 用同一套判斷，只認 git 與 pnpm 的這幾個形狀：擋 `git pull`、`git remote update`、不是 `git fetch origin develop`（只允許再加 `-q`／`--quiet`）的 `git fetch`（含 `-c remote.*`／`url.*` 改寫的）、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`。它把指令字串當 shell 語法解析：引號、註解與 heredoc 裡的字串不算指令；`$(…)`、反引號、`<(…)`／`>(…)` 裡（`$(…)` 與反引號也查出現在 `${…}`、算術與會展開的 heredoc 本文裡的；`<(…)`／`>(…)` 在不加引號的 `${…}` 裡查，算術與 heredoc 本文裡 shell 不會執行它所以不查；`${…}` 本身的字串不算指令）、`bash -c`／`bash -lc`／`eval` 的參數，都照樣查；同一條指令裡只要有不帶腳本、讀 stdin 的 shell（`bash`、`sh`、`zsh` 等），這條指令的每個 heredoc 本文都當指令查；`env`、`nice`、`timeout`、`sudo`、`taskpolicy`、`npx`、`corepack`、`rtk` 之類前綴會剝掉。它只看指令字串，環境變數與 marker 檔都不影響結果。`bash -c`、`eval`、餵給 shell 的 heredoc 疊超過 12 層、`$(…)` 巢狀深到遞迴爆掉，都判不了，一律擋。擋不到的：
 
 - 上面以外的下載指令：`pnpm add`／`update`／`dlx`／`fetch`、`npx <套件>` 本身、`pip`、`curl`、`docker pull`、`gh api`、`gh pr checkout`、`git clone`、`git submodule update --remote`、`git lfs`、`git remote prune`。上面那幾條禁令對這些只有文件。`git ls-remote` 只列 ref、不下載物件，不算下載（push 之後核對 `develop` 沒動要用它）。
 - 腳本或別的程式裡的下載、指令名來自變數（`$cmd pull`）或 alias、zsh 特有語法（`=git pull`）、`source` 進來的檔。
 - 用管線或 here-string 餵給 shell 的指令（`echo git pull | bash`、`bash <<<"git pull"`）。
 - 讓 remote 指到別處的寫法，形狀符合就放行：`git -C <別的 repo> fetch origin develop`、`GIT_DIR`／`GIT_CONFIG_*`、`-c include.path=…`、先跑 `git config remote.origin.url …`。
 - 上面沒列的包裝指令（`find -exec`、`watch`、`ssh`、`coproc` 之類）。
-- 掃描器是手寫的，認得哪些 shell 語法以 `test_session_hooks.py` 的 `CONSTRUCTS` × `PLACES` 與 `BASIC_CONSTRUCTS` × `BASIC_PLACES` 兩張表為準（算術 `$((…))`／`((…))`／`$[…]`、`${…}`、`case`、`function`、子殼、反引號、heredoc、`bash -c`／`bash -`），表外的語法可能漏。
+- 掃描器是手寫的，認得哪些 shell 語法以 `test_session_hooks.py` 的 `CONSTRUCTS` × `PLACES` 與 `BASIC_CONSTRUCTS` × `BASIC_PLACES` 兩張表為準（算術 `$((…))`／`((…))`／`$[…]`、`${…}`、`case`、`function`、子殼、反引號、heredoc、`bash -c`／`bash -`），表外的語法可能漏。兩張表各跳過兩種 shell 結果不一致或不合法的組合：含單引號的語法放進 `bash -c '…'`，以及反引號語法放進反引號（bash 回語法錯，zsh 會跑；hook 照擋）。
 - 解析不了的指令，出錯就放行。
 
 **分支開了之後需要本機沒有的物件時，不放寬，逐次核可：**

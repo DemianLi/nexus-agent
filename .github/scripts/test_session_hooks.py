@@ -281,7 +281,7 @@ class DownloadTest(unittest.TestCase):
     def test_basic_syntax_table_matches_what_real_bash_would_run(self) -> None:
         with fake_programs() as ran_under_fakes:
             for core, construct, place in itertools.product(('git pull',), BASIC_CONSTRUCTS, BASIC_PLACES):
-                if "'" in construct and place.startswith('bash -c'):
+                if ("'" in construct and place.startswith('bash -c')) or ('`' in construct and '`' in place):
                     continue
                 command = place.replace('{k}', construct).replace('{c}', core)
                 with self.subTest(command=command):
@@ -295,13 +295,13 @@ class DownloadTest(unittest.TestCase):
             'if [ ${#x} -gt 0 ]; then git pull; fi', 'echo "${#a[@]}"; git pull', 'echo ${#}; git pull', 'echo "${x% #*}"; git pull',
             "bash -c 'echo ${#x}; git pull'", 'echo $(( $(git pull) ))', 'echo $[ $(git pull) ]', 'echo $[1<<4]\ngit pull',
             'x=$((( 1+1 )); git pull)', 'cat <<EOF\n${x:-it\'s}\n$(git pull)\nEOF', 'function f { git pull; }; f',
-            'echo $(case x in (x) git pull;; esac)', 'echo $(case x in x) git pull;; esac)', 'bash - <<EOF\ngit pull\nEOF', 'bash -s a <<EOF\ngit pull\nEOF',
+            'echo $(case x in (x) git pull;; esac)', 'echo $(case x in x) git pull;; esac)', 'x=`echo `echo hi`; git pull`', 'echo ${x:-<(git pull)}', 'bash - <<EOF\ngit pull\nEOF', 'bash -s a <<EOF\ngit pull\nEOF',
             'echo "`bash -c \\"git pull\\"`"',
         ):
             with self.subTest(command=command):
                 self.assertTrue(blocked(command))
         for command in (
-            'pnpm install --child-concurrency=$((8/2)) --offline', 'echo "${x:+now; git pull}"', 'a=(git pull)', 'echo $((1+1)) git pull',
+            'pnpm install --child-concurrency=$((8/2)) --offline', 'echo "${x:+now; git pull}"', 'a=(git pull)', 'echo "${x:-<(git pull)}"', 'cat <<EOF\n<(git pull)\nEOF', 'echo $((1+1)) git pull',
             'echo $((cd x && echo "git pull") )', 'echo $(( 1 << 2 )) ${#x} "$[1+1]"; git status', 'case x in git) git status;; esac',
         ):
             with self.subTest(command=command):

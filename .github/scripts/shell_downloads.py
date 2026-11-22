@@ -137,6 +137,9 @@ class Scanner:
                 self.i = self.s.index("'", self.i + 1) + 1
             elif c in '$`' and self.expand(in_dq):
                 pass
+            elif c in '<>' and not in_dq and self.s.startswith('(', self.i + 1):
+                self.i += 2
+                self.scan_list(')')
             else:
                 self.i += 1
         raise ValueError(f'unclosed {terminator}')
