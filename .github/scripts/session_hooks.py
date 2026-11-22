@@ -22,6 +22,8 @@ ROLES = {
 
 MIN_GENERATION = 5
 
+NOTES_RULE = re.compile(r'不讀不寫[^\n]*notes')
+
 CLOSING_PREFIXES = ('可封存', '不可封存', '還在等')
 WAITING = '還在等'
 CLOSING_LINE = re.compile(rf'^({"|".join(CLOSING_PREFIXES)})[：:]')
@@ -54,6 +56,14 @@ def check_start_session(tool_input: dict) -> str | None:
         return f'{role.table_row} 的 session 要給 `name`，以 `{prefix}` 開頭。{where}'
     if tool_input.get('context') == 'fork' or tool_input.get('target') == 'cloud':
         return f'`{name}` 是 {role.table_row}，要用 `context: "fresh"` 在本機開：fork 會帶進 PM 的對話，cloud 不吃 model 與 effort。{where}'
+    extra = [k for k in ('cwd', 'host') if tool_input.get(k)]
+    if extra:
+        return f'`{name}` 是 {role.table_row}，不帶 {"、".join(f"`{k}`" for k in extra)}：子 session 要從 PM 所在的主 checkout 起跑。{where}'
+    if tool_input.get('use_worktree') is not False:
+        return f'`{name}` 是 {role.table_row}，要明確給 `use_worktree: false`：worktree 由 session 自己照 worker.md 開。{where}'
+    prompt = tool_input.get('prompt')
+    if prompt is not None and not NOTES_RULE.search(prompt):
+        return f'`{name}` 是 {role.table_row}，開場要寫一句「不讀不寫 app 給的共用 notes 目錄」。{where}'
     got_model = tool_input.get('model') or ''
     got_effort = tool_input.get('effort') or ''
     if model_matches(got_model, role.model) and got_effort == role.effort:

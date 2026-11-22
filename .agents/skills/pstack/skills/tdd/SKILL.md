@@ -19,7 +19,7 @@ Make the broken behavior executable before changing production code. The goal is
 
 ## If a Failing Test Looks Impractical
 
-A cheaper test is still a test: a targeted script under the package's test runner, a log assertion, or a focused integration check. If no executable check can reproduce the bug, stop and tell the PM why, instead of shipping the fix without one.
+A cheaper test is still a test: a targeted script under the package's test runner, a log assertion, or a focused integration check. If no executable check can reproduce the bug, stop and write why on the issue, instead of shipping the fix without one.
 
 A bad test is one that mostly tests mocks, encodes current implementation details, or depends on timing or unrelated global state. Take the expected value from a source other than the code under test, per `docs/standards.md`.
 
