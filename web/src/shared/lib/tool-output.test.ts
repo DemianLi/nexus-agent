@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { EXTERNAL_MCP_CONTENT_NOTICE } from '../../../../../packages/nexus-core/src/untrusted-content';
+import { EXTERNAL_MCP_CONTENT_NOTICE } from '../../../../harness/packages/nexus-core/src/untrusted-content';
 import type { ToolEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
