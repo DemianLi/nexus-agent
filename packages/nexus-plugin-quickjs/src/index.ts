@@ -1,8 +1,8 @@
 /**
  * `@nexus/plugin-quickjs`——在 WASM 裡的 QuickJS 直譯器上跑一段 JavaScript。
  *
- * **套件名不叫 `plugin-sandbox`，是刻意的。** 這個套件是一個沒有 ambient 能力的 JS 直譯器，在行程內的 WASM 裡跑，
- * 不隔離行程，也碰不到檔案系統，所以不叫 sandbox。
+ * **套件名不叫 `plugin-sandbox`，是刻意的。** 在這個 repo 裡「sandbox」指檔案工具改得動哪裡的政策（`SandboxMode`）。
+ * 這個套件是一個沒有 ambient 能力的 JS 直譯器，在行程內的 WASM 裡跑，碰不到檔案系統，也不管那條政策。
  *
  * **為什麼不走 `SandboxBackendProtocolV2`。** 基座確實有 sandbox backend 協定，但
  * `createFilesystemMiddleware` 在 `permissions` 非空、`execute` 工具開著、而 backend
@@ -443,7 +443,7 @@ const LOSSLESS_JSON_MESSAGE = 'program completion must be lossless JSON';
  * - 只收 `null`、布林、字串、**有限且不是 `-0`** 的數字；
  * - 陣列：原型是 `Array.prototype`、自有鍵恰是索引加 `length`（沒有多餘屬性）、每個索引都是自有的（沒有洞）；
  * - 物件：原型是 `Object.prototype` 或 `null`、自有鍵全是**可列舉的字串鍵**（沒有 symbol、沒有不可列舉的）；
- * - 值一律用一般的取值（`obj[key]`）**讀一次**；accessor 的 getter 因此照跑一次；
+ * - 值一律用一般的取值（`obj[key]`）**讀一次**（每個出現的位置各讀一次）；accessor 的 getter 因此照跑；
  * - 不能有循環；成員不能是 `undefined`、函式、`bigint`、symbol。
  *
  * **純 JS、不 bridge 任何 host function**（檔頭說的邊界寬度仍是零）。**迭代走訪、不遞迴**，所以深層巢狀不會先撞堆疊上限。

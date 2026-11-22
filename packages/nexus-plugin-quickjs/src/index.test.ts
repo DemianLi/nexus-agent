@@ -411,8 +411,7 @@ describe('非同步', () => {
   });
 
   // 等得到的都等到了還是 pending，代表它在等一個 VM 裡不存在的東西。這是永遠不會變的
-  // 狀態，不是「再等一下就好」。#615 之前它算成功、回一句話；demian 拍板改成算失敗，
-  // 收在 `timeout`。
+  // 狀態，不是「再等一下就好」。等不到就算失敗，收在 `timeout`（#615）。
   it('等不到的 promise 是失敗，種類是 timeout，原因講清楚它等不到', async () => {
     const error = await runFailing({}, 'new Promise(() => {})');
     expect(error.kind).toBe('timeout');
@@ -450,10 +449,8 @@ describe('資源邊界——只有設定的那麼強', () => {
     // 時間上限刻意放寬，否則擋下它的可能是逾時而不是記憶體上限，這條就測不到想測的東西。
     // 斷言的是 `out of memory` 而不是泛泛的「錯誤」，理由同上：訊息不對就代表擋它的是別的東西。
     //
-    // **指數成長，不是一次一小塊。** 一次一小塊的寫法是 `push(new Array(10000))` 慢慢磨到上限，
-    // 本地 2.1 秒、CI runner 上 5.03 秒——撞爆 vitest 預設的 5000ms testTimeout，gate 紅了
-    // （CI #88）。倍增只要幾十步就到，本地量到 18ms。慢測試不是「調高 timeout」的理由，
-    // 是測試寫法的問題。
+    // **指數成長，不是一次一小塊。** 倍增很快就到上限，不會逼近 vitest 預設的 5000ms testTimeout。
+    // 慢測試不是「調高 timeout」的理由，是測試寫法的問題。
     const error = await runFailing(
       { memoryLimitBytes: 1024 * 1024, timeoutMs: 10_000 },
       'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);',
