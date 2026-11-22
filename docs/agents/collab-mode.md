@@ -56,7 +56,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
 
 - PM 直接開 engineer 與 verifier，不先問 operator（operator 在開場一次授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表。開 session 不帶 `cwd`、`host`，`use_worktree: false`，子 session 因此從 PM 所在的主 checkout 起跑；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合（`model`、`effort`、`cwd`、`host`、`use_worktree`）、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，prompt 沒有「不讀不寫共用 notes 目錄」那一句的也擋（重送提案卡、沒有 prompt 時不查），出錯就放行。
-- **開 session 的回合，分實測過的與沒測過的。** 實測過能開的：operator 開場授權後，子 session 停下、app 叫醒 PM 的回合（code-ready 開 verifier、判定後合併、結卡後開下一位 engineer、FAIL 後開新 verifier），都沒有訊息從子 session 傳給 PM。沒測過：子 session 傳了訊息的回合是否一定開不了（上一版規則說一律開不了，那是 `cross-session-message` 回合的觀察，不是普遍結論）、平行、連續接續的上限。被拒時先用備案：在 operator 說話的回合預開待命的 session，之後用訊息叫醒；備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
+- **開 session 的回合，分實測過的與沒測過的。** 實測過能開的：operator 開場授權後，engineer 停下、app 叫醒 PM 的回合（code-ready 開 verifier、結卡後開下一位 engineer、FAIL 後開新 verifier），都沒有訊息從子 session 傳給 PM。判定後合併那一段只用訊息把判定轉給 engineer，不開 session。沒測過：verifier 停下的回合能不能開 session、PM 自己的背景工作叫醒的回合、子 session 傳了訊息的回合是否一定開不了、平行、連續接續的上限。被拒時先用備案：在 operator 說話的回合預開待命的 session，之後用訊息叫醒；備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
 - 自動模式回「no verdict」且附了 hook 產生的輸入時：照那份輸入單獨重送一次；再被擋就停、回報原文，不改用別的做法繞過。
 - engineer 與 verifier 都開成 session，不開成 subagent。app 自己建 worktree 會取分支名、加前綴，跟 `<type>/<kebab-case>` 不合，所以子 session 不用 app 的 worktree，自己照 worker.md 開，之後只在那個 worktree 裡改。
 - engineer 推出 code-ready 的 head 之後，把結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA，然後結束這一輪，不自己合併，也不傳訊息給 PM。PM 被叫醒後核對 PR 與 SHA 再開 verifier；PM 仍用訊息把 verifier 的判定轉給 engineer，engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。修完 `FAIL`、解衝突要重判時，同樣只寫在 PR 或卡上、收尾帶 SHA。
@@ -65,7 +65,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 ## worktree 與上下文
 
-- 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。移到一半、目錄還有殘留時：PM 自己派出去的 worktree，卡已結、合併後那一輪綠、沒有人在用，而且剩下的內容都能從 commit 或建置重建（`.DS_Store` 這類系統中繼檔也算），PM 直接刪那一個路徑，刪完確認目錄不在；分支不刪。
+- 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。移除到一半、目錄還有殘留時：PM 派出去的 session 建的 worktree，卡已結、合併後那一輪綠、沒有人在用，而且剩下的內容都能從 commit 或建置重建（`.DS_Store` 這類系統中繼檔也算），PM 直接刪那一個路徑，刪完確認目錄不在；分支不刪。
 - **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
 - 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
 - engineer 與 verifier 的開場第一行讀主 checkout 的檔，`.env` 也從主 checkout 讀，所以 PM 每次派工前先把主 checkout 同步到 `origin/develop`（`git -C <主 checkout> pull --ff-only`）。
@@ -104,11 +104,11 @@ PM 在 engineer 可封存時依序做三件事：
 **需要人**（規則本來就停在這裡）：
 
 - 開場授權，一次。
-- 刪 worktree 時有未提交或來源不明的內容、或那是別的 session 建的（後者照 #3151 先列清單）。
+- 刪 worktree 時有未提交或來源不明的內容、或那不是這位 PM 派出去的 session 建的（後者照 #3151 先列清單）。
 - 放寬 gate。
 - 第 3 次 `FAIL`。
 
-**沒測過**（不是保證能自動，也不是一定要人）：平行；連續接續的上限；解衝突後重判；撤回與往前修；開 session 被拒後接備案；Auto-fix 叫醒；PM 不在主 checkout（只寫進規則，不用 hook 擋，擋了備案就不能用）；子 session 傳了訊息是否一定開不了。
+**沒測過**（不是保證能自動，也不是一定要人）：verifier 停下的回合能不能開 session；PM 自己的背景工作叫醒的回合；平行；連續接續的上限；解衝突後重判；撤回與往前修；開 session 被拒後接備案；Auto-fix 叫醒；PM 不在主 checkout（只寫進規則，不用 hook 擋，擋了備案就不能用）；子 session 傳了訊息是否一定開不了。
 
 ## 導正
 
