@@ -52,6 +52,11 @@ Comments = list[tuple[int, list[str], bool]]
 class Unit:
     line: int
     text: str
+    end: int = 0
+
+    @property
+    def last(self) -> int:
+        return max(self.line, self.end)
 
 
 @dataclass(frozen=True)
@@ -167,13 +172,24 @@ def units(comments: Comments) -> list[Unit]:
         prev_end, prev_joinable = start + len(lines) - 1, joinable
     out: list[Unit] = []
     for start, lines in blocks:
-        para: list[str] = []
-        para_line = start
+        para: list[tuple[int, str]] = []
 
         def flush() -> None:
-            for sentence in SENTENCE_END.split(' '.join(para)) if para else []:
-                if sentence.strip():
-                    out.append(Unit(para_line, sentence.strip()))
+            if not para:
+                return
+            text = ' '.join(t for _, t in para)
+            line_at: list[int] = []
+            for number, t in para:
+                line_at += [number] * (len(t) + 1)
+            pos = 0
+            for cut in [*SENTENCE_END.finditer(text), None]:
+                end = len(text) if cut is None else cut.start()
+                segment = text[pos:end]
+                if segment.strip():
+                    first = pos + len(segment) - len(segment.lstrip())
+                    last = pos + len(segment.rstrip()) - 1
+                    out.append(Unit(line_at[first], segment.strip(), line_at[last]))
+                pos = end if cut is None else cut.end()
             para.clear()
 
         for offset, raw in enumerate(lines):
@@ -182,13 +198,11 @@ def units(comments: Comments) -> list[Unit]:
                 flush()
             elif HEADING.match(s) or TABLE_ROW.match(s):
                 flush()
-                out.append(Unit(start + offset, s))
+                out.append(Unit(start + offset, s, start + offset))
             else:
                 if LIST_START.match(s):
                     flush()
-                if not para:
-                    para_line = start + offset
-                para.append(s)
+                para.append((start + offset, s))
         flush()
     return [u for u in out if TABLE_ROW.match(u.text) or (len(norm(u.text)) >= 2 and re.search(r'\w', u.text))]
 
@@ -380,12 +394,12 @@ def line_exists(head: str, path: str, line: int) -> bool:
     return bool(text) and 1 <= line <= len(text.rstrip('\n').split('\n'))
 
 
-def valid_refs(row: str, head: str, exclude: tuple[str, int] | None = None) -> list[tuple[str, int, int]]:
+def valid_refs(row: str, head: str, exclude: tuple[str, int, int] | None = None) -> list[tuple[str, int, int]]:
     out = []
     for m in REF.finditer(row):
         path, lo = m.group(1), int(m.group(2))
         hi = int(m.group(3) or lo)
-        if exclude and path == exclude[0] and lo <= exclude[1] <= hi:
+        if exclude and path == exclude[0] and lo <= exclude[2] and hi >= exclude[1]:
             continue
         if lo <= hi and line_exists(head, path, lo) and line_exists(head, path, hi):
             out.append((path, lo, hi))
@@ -413,8 +427,8 @@ def verify(a: Analysis, body: str, head: str) -> list[str]:
         where = f'{path}:{u.line} 的句子「{u.text[:60]}」'
         if not hit:
             errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:line |` 補一列，整句放第一格。')
-        elif not any(valid_refs(' '.join(r[1:]), head, exclude=(path, u.line)) for r in hit):
-            errors.append(f'規則 1：{where}，那一列後面的格子沒有在 head 上存在的 nexus 實作 path:line（句子自己的位置不算）。')
+        elif not any(valid_refs(' '.join(r[1:]), head, exclude=(path, u.line, u.last)) for r in hit):
+            errors.append(f'規則 1：{where}，那一列後面的格子沒有在 head 上存在的 nexus 實作 path:line（句子跨到的每一行都不算）。')
     for path, n, blocking in a.vanished:
         if blocking:
             errors.append(f'規則 2：{path}:{n.line} 的段名「{n.text}」在這個檔消失了。階段 1 不改段名，改名留給階段 2，跟所有指向同一張 PR 改。')
@@ -431,10 +445,14 @@ def verify(a: Analysis, body: str, head: str) -> list[str]:
     return errors
 
 
+def span(u: Unit) -> str:
+    return str(u.line) if u.last == u.line else f'{u.line}-{u.last}'
+
+
 def report(a: Analysis) -> str:
     pipe = '\\|'
     lines = ['## 規則 1：改寫與新增的註解句（貼進內文，整句放第一格，最後一格補 nexus 實作的 path:line，不用改位置那格）', '', '| 句子 | 位置 | nexus 實作的 path:line |', '| --- | --- | --- |']
-    lines += [f'| {u.text.replace("|", pipe)} | {path} 第 {u.line} 行 | {PLACEHOLDER}：path:line> |' for path, u in a.sentences] or ['| （沒有） | | |']
+    lines += [f'| {u.text.replace("|", pipe)} | {path} 第 {span(u)} 行 | {PLACEHOLDER}：path:line> |' for path, u in a.sentences] or ['| （沒有） | | |']
     lines += ['', '## 規則 2：消失的段名', '']
     lines += [
         f'- {path}:{n.line}「{n.text}」' + ('' if blocking else '（含對照詞或是文件標題，不擋，改走規則 3）')

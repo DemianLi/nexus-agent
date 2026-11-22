@@ -292,6 +292,95 @@ class PrintedTableTest(unittest.TestCase):
         self.assertEqual([e for e in errors if '規則 1' in e or '規則 3' in e], [])
 
 
+class OwnLineIsNotEvidenceTest(unittest.TestCase):
+    """句子跨到的每一行都不算證據，行號寫死（#3152 第 2 次 verifier）。"""
+
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+
+    def analysis(self, base: str, head: str) -> tuple[mod.Analysis, str]:
+        b = self.repo.commit({'a.ts': d(base), 'impl.ts': 'export const real = 1;\n'})
+        h = self.repo.commit({'a.ts': head})
+        return analyze(b, h), h
+
+    def rule1(self, a: mod.Analysis, head: str, row: str) -> list[str]:
+        return [e for e in verify(a, row, head) if '規則 1' in e]
+
+    def test_second_line_of_a_paragraph(self) -> None:
+        a, h = self.analysis('// 第一句不動。\n// @@ 才這樣。\n', '// 第一句不動。\n// 我們也這樣。\n')
+        self.assertEqual([(u.line, u.last) for _, u in a.sentences], [(2, 2)])
+        row = '| 我們也這樣。 | 位置 | {} |'
+        self.assertTrue(self.rule1(a, h, row.format('a.ts:2')))
+        self.assertEqual(self.rule1(a, h, row.format('impl.ts:1')), [])
+        self.assertEqual(self.rule1(a, h, row.format('a.ts:1')), [])
+
+    def test_second_sentence_on_the_same_line(self) -> None:
+        a, h = self.analysis('// 甲句不動。@@ 乙句。\n', '// 甲句不動。我們的乙句。\n')
+        self.assertEqual([(u.line, u.last) for _, u in a.sentences], [(1, 1)])
+        self.assertTrue(self.rule1(a, h, '| 我們的乙句。 | 位置 | a.ts:1 |'))
+        self.assertEqual(self.rule1(a, h, '| 我們的乙句。 | 位置 | impl.ts:1 |'), [])
+
+    def test_sentence_spanning_lines(self) -> None:
+        a, h = self.analysis(
+            '// 前一句。\n// @@ 後面這一句寫得比較長，\n// 所以跨到第三行。\n// 末句。\n',
+            '// 前一句。\n// 改寫後的句子寫得比較長，\n// 所以跨到第三行。\n// 末句。\n',
+        )
+        self.assertEqual([(u.line, u.last) for _, u in a.sentences], [(2, 3)])
+        self.assertIn('a.ts 第 2-3 行', mod.report(a))
+        row = '| 改寫後的句子寫得比較長，所以跨到第三行。 | 位置 | {} |'
+        for ref in ('a.ts:2', 'a.ts:3', 'a.ts:2-3', 'a.ts:1-2'):
+            with self.subTest(ref=ref):
+                got = self.rule1(a, h, row.format(ref))
+                self.assertTrue(got)
+                self.assertIn('a.ts:2 的句子', got[0])
+        for ref in ('a.ts:1', 'a.ts:4', 'impl.ts:1'):
+            with self.subTest(ref=ref):
+                self.assertEqual(self.rule1(a, h, row.format(ref)), [])
+
+
+class RuleThreeRoutesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+
+    def candidates(self, pointer: str, heading: str = '偏離登記') -> mod.Analysis:
+        base = self.repo.commit(
+            {'src/a.ts': d(TS_BASE.replace('## 偏離登記', f'## {heading}')), 'src/p.ts': pointer, 'src/impl.ts': 'export const real = 1;\n'}
+        )
+        self.head = self.repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 登記')})
+        return analyze(base, self.head)
+
+    def test_owner_path_and_header_word_route_finds_it_without_the_name(self) -> None:
+        a = self.candidates('// 詳見 src/a.ts 的檔頭。\n')
+        self.assertIn(('src/p.ts', 1), [(c.path, c.line) for c in a.candidates])
+
+    def test_owner_path_and_shorthand_route(self) -> None:
+        a = self.candidates('// src/a.ts 的簡寫在那裡。\n', heading='偏離登記 簡寫')
+        self.assertIn(('src/p.ts', 1), [(c.path, c.line) for c in a.candidates])
+
+    def test_unrelated_line_is_not_a_candidate(self) -> None:
+        a = self.candidates('// 完全無關的一行。\n')
+        self.assertEqual([c for c in a.candidates if c.path == 'src/p.ts'], [])
+
+    def test_reason_is_the_last_cell_only(self) -> None:
+        a = self.candidates('// 偏離登記制度說明寫在 a.ts 的檔頭。\n', heading='偏離登記制度說明')
+        self.assertTrue(any(c.path == 'src/p.ts' for c in a.candidates))
+        errors = verify(a, '| src/p.ts:1 | 偏離登記制度說明 | |', self.head)
+        self.assertTrue(any('規則 3' in e and 'src/p.ts:1' in e for e in errors))
+
+
+class SentenceCellTest(unittest.TestCase):
+    def test_sentence_cell_must_equal_not_contain(self) -> None:
+        repo = Repo(self)
+        base = repo.commit({'a.ts': d(TS_BASE), 'impl.ts': 'export const real = 1;\n'})
+        head = repo.commit({'a.ts': CLEAN.replace('我們放在插件裡。', '這一段由插件登記。')})
+        a = analyze(base, head)
+        exact = '| 這一段由插件登記。 | 位置 | impl.ts:1 |'
+        self.assertEqual([e for e in verify(a, exact, head) if '規則 1' in e], [])
+        for longer in ('| 這一段由插件登記。再加一句別的話。 | 位置 | impl.ts:1 |', '| 前面還有字這一段由插件登記。 | 位置 | impl.ts:1 |'):
+            with self.subTest(row=longer):
+                self.assertTrue(any('規則 1' in e for e in verify(a, longer, head)))
+
+
 class CssAndShortSentenceTest(unittest.TestCase):
     def test_css_hash_is_not_a_comment(self) -> None:
         a, _ = scan('a { color: #000; /* 舊 */ }\n', '.css')
