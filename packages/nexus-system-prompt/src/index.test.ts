@@ -80,7 +80,7 @@ describe('嚴格插值', () => {
     expect(interpolateStrict('花括號 {{ 沒有收尾', VARIABLES, 'personaPrefix')).toBe(
       '花括號 {{ 沒有收尾',
     );
-    // 前面的 `{{` 之後還有收尾的 `}}` 就算寫壞（照 dsh）：不是只要這個位置沒有收尾就行，要整段後面都沒有。
+    // 前面的 `{{` 之後還有收尾的 `}}` 就算寫壞：不是只要這個位置沒有收尾就行，要整段後面都沒有。
     expect(() => interpolateStrict('{{ 之後才是 {{model}}', VARIABLES, 'personaPrefix')).toThrow(
       /寫壞/u,
     );

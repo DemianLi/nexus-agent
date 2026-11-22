@@ -726,7 +726,7 @@ export const SCRIPTED_MODEL_NAME = 'scripted';
 
 /**
  * 系統提示詞前後綴的 `{{cwd}}`：檔案工具的位址空間裡的根，**不是主機上的工作目錄**。
- * 理由與偏離登記見 `@nexus/plugin-system-prompt` 的檔頭；沒有 `--workspace` 時是基座的虛擬檔案系統，`/` 一樣是它的根。
+ * 理由見 `@nexus/plugin-system-prompt` 的檔頭；沒有 `--workspace` 時是基座的虛擬檔案系統，`/` 一樣是它的根。
  */
 export const PROMPT_WORKING_DIRECTORY = '/';
 
