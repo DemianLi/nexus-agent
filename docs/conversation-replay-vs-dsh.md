@@ -49,4 +49,4 @@ dsh 的掃描（`repair.ts:53` 的 `openTurnClosers`）只在 `turn/start`、`tu
 
 ## 六、改 `conversation-replay.ts` 的人要知道的
 
-`session-format.ts` 的 `readerBranch` 只登記讀方分支所在的檔（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷），`session-format-fixtures.test.ts` 的錨點表登記那一行一定有的字串，並核它在檔內有且只有一行。在這個檔上面增減行、或把那一行搬到同檔別處，都不必改登記；錨點不見或出現在不只一行才紅。
+`session-format.ts` 的 `readerBranch` 只登記讀方分支所在的檔（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷），`session-format-fixtures.test.ts` 的錨點表登記那一行一定有的字串，並核它在檔內有且只有一行、而且在程式碼裡。在這個檔上面增減行、或把那一行搬到同檔別處，都不必改登記；錨點不見、出現在不只一行，或只剩在註解或字串內容裡才紅。

@@ -395,15 +395,20 @@ describe('從基線起算的同版紀錄', () => {
     const type = (sources: string[]): PersistenceSchemaInventory => ({
       ...base,
       types: [{ ...base.roots[2]!, names: ['A#B'], sources }].map(
-        ({ schema, digest, names, sources }) => ({ schema, digest, names, sources }),
+        ({ schema, digest, names, sources }) => ({ digest, schema, names, sources }),
       ),
     });
     baseline(root, type(['a.ts:3', 'b.ts:7']));
     expect(runPersistenceChanges(['--check'], root, () => type(['a.ts:4', 'b.ts:70']))).toContain(
       'roots match',
     );
-    for (const sources of [['a.ts:3', 'c.ts:7'], ['a.ts:3'], ['a.ts:3', 'a.ts:9', 'b.ts:7']]) {
-      expect(() => verifyPersistenceChanges(root, type(sources))).toThrow('stale');
+    for (const sources of [
+      ['a.ts:3', 'c.ts:7'],
+      ['a.ts:3'],
+      ['a.ts:3', 'a.ts:9', 'b.ts:7'],
+      ['b.ts:7', 'a.ts:3'],
+    ]) {
+      expect(() => runPersistenceChanges(['--check'], root, () => type(sources))).toThrow('stale');
     }
   });
 

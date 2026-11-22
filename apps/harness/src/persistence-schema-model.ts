@@ -114,7 +114,7 @@ export function reachableSchemaTypes(
  * 從根重建得出來的型別圖省掉，其他的照留。
  *
  * @param inventory - 完整清單，包括被正規化從根圖抹掉的型別。
- * @returns 無損的精簡清單：根圖、型別順序、宣告資訊都保留。
+ * @returns 精簡清單：根圖、型別順序、宣告名稱都保留，宣告位置只留檔。
  */
 export function persistenceSchemaSnapshot(
   inventory: PersistenceSchemaInventory,
@@ -133,8 +133,7 @@ export function persistenceSchemaSnapshot(
 }
 
 /**
- * 把宣告位置 `檔:行號` 的行號去掉，只留檔。生成物與新鮮度比對都用它，註解增減造成的行號位移才不會讓生成物過期；
- * 不去重，同一個檔的宣告個數照比。
+ * 把宣告位置 `檔:行號` 的行號去掉，只留檔。
  *
  * @param source - 抽取器記下的 `檔:行號`。
  */

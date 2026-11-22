@@ -14,6 +14,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { createFeedbackService } from '@nexus/plugin-feedback';
 import { deriveBrowserTimeZoneContext } from '@nexus/plugin-time-context';
 import { applyTrajectory, initialTrajectory, viewTrajectory } from '@nexus/plugin-trajectory';
@@ -609,8 +610,6 @@ describe('規則（驗收 D）', () => {
   });
 
   it('readerBranch 指到的檔裡，有且只有一行是那條分支的錨點', () => {
-    // 邊的 `to` → 那一行一定有的字串。改了讀方、錨點不見或不唯一，這裡紅；加了新的 readerBranch 沒登錨點，也紅。
-    // 不比行號：上面增減行、那一行搬到同檔別處，都不紅。
     const anchors = new Map<number, string>([
       [9, 'if (logged === undefined) {'],
       [10, "if ('messageId' in stored) {"],
@@ -631,32 +630,68 @@ describe('規則（驗收 D）', () => {
       expect(existsSync(file), edge.readerBranch).toBe(true);
       const anchor = anchors.get(edge.to)!;
       expect(
-        anchorLines(readFileSync(file, 'utf8'), anchor),
-        `${edge.readerBranch} 裡含錨點的行：${anchor}`,
-      ).toHaveLength(1);
+        anchorProblem(readFileSync(file, 'utf8'), anchor),
+        `${edge.readerBranch}：${anchor}`,
+      ).toBeUndefined();
     }
   });
 });
 
-function anchorLines(text: string, anchor: string): string[] {
-  return text.split('\n').filter((line) => line.includes(anchor));
+function anchorProblem(text: string, anchor: string): string | undefined {
+  const lines = text.split('\n').filter((line) => line.includes(anchor));
+  if (lines.length === 0) return '錨點不見了';
+  if (lines.length > 1) return `錨點出現在 ${String(lines.length)} 行`;
+  const source = ts.createSourceFile('anchor.ts', text, ts.ScriptTarget.Latest, true);
+  const opaque: [number, number][] = [];
+  const visit = (node: ts.Node): void => {
+    for (const range of [
+      ...(ts.getLeadingCommentRanges(text, node.pos) ?? []),
+      ...(ts.getTrailingCommentRanges(text, node.end) ?? []),
+    ])
+      opaque.push([range.pos, range.end]);
+    if (
+      ts.isStringLiteralLike(node) ||
+      ts.isTemplateLiteralToken(node) ||
+      ts.isRegularExpressionLiteral(node)
+    )
+      opaque.push([node.getStart(source), node.end]);
+    for (const child of node.getChildren(source)) visit(child);
+  };
+  visit(source);
+  for (let at = text.indexOf(anchor); at !== -1; at = text.indexOf(anchor, at + 1)) {
+    if (!opaque.some(([start, end]) => at > start && at < end)) return undefined;
+  }
+  return '錨點只剩在註解或字串內容裡';
 }
 
-describe('錨點只比內容，不比行號', () => {
-  const anchor = '  if (x) {';
-  it('上方插註解、整行搬到別處都還剛好一行；不見或出現兩次才不是一行', () => {
-    expect(anchorLines(`a\n${anchor}\nb`, anchor)).toHaveLength(1);
-    expect(anchorLines(`// 新註解\n// 再一行\na\n${anchor}\nb`, anchor)).toHaveLength(1);
-    expect(anchorLines(`${anchor}\na\nb`, anchor)).toHaveLength(1);
-    expect(anchorLines('a\nb', anchor)).toHaveLength(0);
-    expect(anchorLines(`${anchor}\na\n${anchor}`, anchor)).toHaveLength(2);
+describe('錨點只比內容，不比行號，而且要在程式碼裡', () => {
+  const anchor = 'if (x) {';
+  const code = `function f() {\n  ${anchor}\n    return 1;\n  }\n}\n`;
+  it.each([
+    ['上方插註解', `// 新註解\n// 再一行\n${code}`],
+    ['整行搬到別處', `function g() {}\n${code}`],
+  ])('%s：照樣是剛好一行', (_name, text) => {
+    expect(anchorProblem(text, anchor)).toBeUndefined();
+  });
+
+  it.each([
+    ['不見', 'function f() {}\n', '錨點不見了'],
+    ['兩行', `${code}${code}`, '錨點出現在 2 行'],
+    ['一行在程式碼、一行在註解', `${code}// ${anchor}\n`, '錨點出現在 2 行'],
+    ['只剩整行註解', `function f() {}\n// ${anchor}\n`, '錨點只剩在註解或字串內容裡'],
+    ['只剩行尾註解', `const a = 1; // ${anchor}\n`, '錨點只剩在註解或字串內容裡'],
+    ['只剩區塊註解', `/* 舊的：\n${anchor}\n*/\n`, '錨點只剩在註解或字串內容裡'],
+    ['只剩字串內容', `const a = "${anchor}";\n`, '錨點只剩在註解或字串內容裡'],
+    ['只剩樣板字串內容', `const a = \`x\n${anchor}\`;\n`, '錨點只剩在註解或字串內容裡'],
+  ])('%s：紅', (_name, text, problem) => {
+    expect(anchorProblem(text, anchor)).toBe(problem);
   });
 
   it('32→33 的錨點靠縮排區分同文字的另外兩行', () => {
     const text = readFileSync(join(REPO, 'apps/harness/src/conversation-history.ts'), 'utf8');
     const turnClose = "if (turnOpen || suspended) close(event.time, { event: 'completed' });";
-    expect(anchorLines(text, turnClose).length).toBeGreaterThan(1);
-    expect(anchorLines(text, `          ${turnClose}`)).toHaveLength(1);
+    expect(anchorProblem(text, turnClose)).toBe('錨點出現在 3 行');
+    expect(anchorProblem(text, `          ${turnClose}`)).toBeUndefined();
   });
 });
 
