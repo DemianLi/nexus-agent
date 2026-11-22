@@ -1,22 +1,8 @@
 /**
  * `@nexus/plugin-quickjs`——在 WASM 裡的 QuickJS 直譯器上跑一段 JavaScript。
  *
- * **套件名不叫 `plugin-sandbox`，是刻意的。** 計劃裡這條分支叫 `feat/sandbox-plugin`，
- * 但「sandbox」在 dsh 的詞彙裡指的是**行程沙箱**（見底下的偏離說明），叫它 sandbox 等於
- * 宣稱一個這裡沒有填的 seam。這個套件只填其中一格：一個沒有 ambient 能力的 JS 直譯器。
- *
- * **與 dsh 的偏離**（AGENTS.md 的偏離規則）—— 這是**結構性偏離**，不是細節不同：
- * dsh 的 sandbox（`packages/sandbox/*`、`packages/shell/*-sandbox`）是把子行程的 argv
- * 包進**核心級**的檔案效果策略（Linux bwrap/Landlock、macOS Seatbelt、Windows ACL 受限
- * token）。它整個 repo grep `quickjs` 零命中。
- * dsh 有程式碼執行的接口 `ctx.ptcRuntime`（`packages/ptc-runtime/ptc-runtime/src/index.ts:98`），語言與執行方式
- * 由提供方決定，是它「模型寫程式、程式裡呼叫工具」那個模式（PTC，工具叫 `run_code`）的執行環境；出廠的提供方
- * 是每支程式開一個 Node 行程、跟 Bash 走同一個 `ctx.sandbox`（2026-09-11 起）。我們的 `run_javascript` 是沒有外部
- * 函式可叫的純計算工具，不是那個接口的提供方；它取代的是計劃第 7 節決策 3 延後掉的那一格（shell 沙箱，等容器方案
- * 明朗）。所以這裡沒有可照抄的 dsh 做法，退到最接近的實作：**用行程內的 WASM 直譯器換掉「跑任意 shell 指令」**。
- * 可以對齊的先例只有詞彙——dsh 的 `SandboxMode` 三個模式與
- * `ContainedFilesystemBackend` 已落地的三個一字不差，但那條軸線管的是檔案效果，這個
- * 套件一格都沒碰（它根本碰不到檔案系統）。
+ * **套件名不叫 `plugin-sandbox`，是刻意的。** 這個套件不管檔案工具的 `SandboxMode`，也不提供行程沙箱：
+ * 它是一個沒有 ambient 能力的 JS 直譯器，在行程內的 WASM 裡跑，碰不到檔案系統。
  *
  * **為什麼不走 `SandboxBackendProtocolV2`。** 基座確實有 sandbox backend 協定，但
  * `createFilesystemMiddleware` 在 `permissions` 非空、`execute` 工具開著、而 backend
@@ -76,8 +62,7 @@ export type { QuickJsModules };
 export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
 
 /**
- * 程式本身失敗時分成哪幾種，詞彙照 dsh 的 `PtcRunFailure.kind`
- * （`packages/ptc-runtime/ptc-runtime/src/types.ts:130-141` 的 `PtcRunFailure.kind`，`687f282e`）。這裡用得到其中三個：
+ * 程式本身失敗時分成哪幾種，這裡有三個：
  *
  * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。求值時撞到記憶體、堆疊上限也走這一條（檢查完成值時撞到的算 `invalid-output`）——
  *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。host 的堆疊先用完
@@ -347,9 +332,8 @@ function formatResult(
 
   try {
     // 微任務佇列已經跑完了還是 pending，代表它在等一個 VM 裡不存在的東西（計時器、IO）。
-    // 這是永遠不會變的狀態，**算失敗**（demian 2026-09-25 拍板，#615）：dsh 的 `run_code` 等不到
-    // 結果會一直等到經過時間的預算用完，收在 `timeout`。這裡當場就判得出來，所以不等，
-    // 種類照 dsh 的結局記 `timeout`，原因講清楚不是跑太久。
+    // 這是永遠不會變的狀態，**算失敗**（demian 2026-09-25 拍板，#615）。這裡當場就判得出來，所以不等，
+    // 種類記 `timeout`，原因講清楚不是跑太久。
     if (state.type === 'pending') {
       throw new CodeRunFailedError(
         'timeout',
@@ -418,12 +402,12 @@ function fail(detail: unknown, run: Run): never {
  * 完成值的最後一關：在 VM 裡**邊驗邊組出 JSON 文字，只讀一次**，host 只拿那份文字去 `JSON.parse` 再渲染。
  *
  * **為什麼不是「先檢查、再 dump 原本的 handle」。** 那樣檢查與輸出各讀一次活的值：`Object.prototype.toJSON`、`Array.prototype.toJSON`、
- * 說謊的 `Proxy` 都能讓兩次讀到的不一樣，錯的值就被當成功回去（#1842 審查實測）。現在輸出就是檢查時讀到的那一份（dsh 的
- * `snapshotPtcJsonValue` 同樣一邊驗一邊抄、只讀一次），原本的 handle 不再 dump。
+ * 說謊的 `Proxy` 都能讓兩次讀到的不一樣，錯的值就被當成功回去（#1842 審查實測）。現在輸出就是檢查時讀到的那一份，
+ * 原本的 handle 不再 dump。
  *
  * **檢查一定在 VM 裡做。** `QuickJSContext#dump` 對物件是在 VM 裡先 `JSON.stringify` 才交出來（`quickjs-emscripten-core@0.32.0`
  * 實測），host 拿到的時候 `NaN` 已經是 `null`、`Map` 已經是 `{}`、`undefined` 欄位已經不見——在 host 端檢查看不到。
- * 頂層的 `undefined` 照舊（「沒有回傳值」，同 dsh 的 `prepareCompletion` 對 `undefined` 回 `{}`）。
+ * 頂層的 `undefined` 照舊（「沒有回傳值」）。
  *
  * 快照函式拋錯時，interrupt handler 觸發過就是 `timeout`（getter 裡的無窮迴圈）；其餘一律是「讀不出一份無損的值」，回 `invalid-output`，
  * 不看丟出來的值。getter 裡撞到記憶體或堆疊上限也算在這裡。
@@ -450,24 +434,23 @@ function completion(
   return formatValue(JSON.parse(json));
 }
 
-/** `invalid-output` 的原因，字串逐字照 dsh `bootstrap.ts:179`。 */
+/** `invalid-output` 的原因。 */
 const LOSSLESS_JSON_MESSAGE = 'program completion must be lossless JSON';
 
 /**
- * 在 VM 裡跑的快照函式：回一份 JSON 文字，不合格回 `undefined`。規則照 dsh 的 lossless JSON 快照（`ptc-runtime-node/src/json-wire.ts:150-233`
- * 的 `snapshotPtcJsonValue`，`687f282e`）：
+ * 在 VM 裡跑的快照函式：回一份 JSON 文字，不合格回 `undefined`。規則：
  *
  * - 只收 `null`、布林、字串、**有限且不是 `-0`** 的數字；
  * - 陣列：原型是 `Array.prototype`、自有鍵恰是索引加 `length`（沒有多餘屬性）、每個索引都是自有的（沒有洞）；
  * - 物件：原型是 `Object.prototype` 或 `null`、自有鍵全是**可列舉的字串鍵**（沒有 symbol、沒有不可列舉的）；
- * - 值一律用一般的取值（`obj[key]`）**讀一次**；accessor 的 getter 因此照跑一次，跟 dsh 一樣；
+ * - 值一律用一般的取值（`obj[key]`）**讀一次**（每個出現的位置各讀一次）；accessor 的 getter 因此照跑；
  * - 不能有循環；成員不能是 `undefined`、函式、`bigint`、symbol。
  *
  * **純 JS、不 bridge 任何 host function**（檔頭說的邊界寬度仍是零）。**迭代走訪、不遞迴**，所以深層巢狀不會先撞堆疊上限。
- * 用到的內建函式在 IIFE 開頭收進閉包，同 dsh 的 intrinsics：程式事後改 `Array.isArray`、`Object.prototype` 上的東西，騙不了它。
+ * 用到的內建函式在 IIFE 開頭收進閉包，程式事後改 `Array.isArray`、`Object.prototype` 上的東西，騙不了它。
  * 文字是自己拼的，**不呼叫 `JSON.stringify` 去走物件**（只對字串原始值用它做跳脫，原始值沒有 `toJSON` 查找）。
  *
- * 偏離（理由 1，基座表達不出來）：dsh 在外層行程檢查，這裡在 VM 裡檢查，見 {@link completion}。
+ * 這裡在 VM 裡檢查，理由見 {@link completion}。
  */
 const SNAPSHOT_SOURCE = `(function () {
   'use strict';
@@ -557,7 +540,7 @@ const SNAPSHOT_SOURCE = `(function () {
  * 把一個非 promise 的值翻成一句話。
  *
  * `undefined` 要有自己的講法：直接回傳等於給模型一個空回應，讀起來像工具壞了。而「這段程式沒有回傳值」是正常且常見的結果。
- * 字串原樣；其餘照 dsh 的 `renderValue`（`packages/core/tools/src/ptc.ts:284-286`，`687f282e`）。進來的已經過 {@link completion}
+ * 字串原樣；其餘交給 {@link renderJsonValue}。進來的已經過 {@link completion}
  * 的快照，是無損的 JSON 值。
  */
 function formatValue(value: unknown): string {
@@ -569,10 +552,10 @@ function formatValue(value: unknown): string {
 /** 無損的 JSON 值。 */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-/** 縮排兩個空白，同 dsh `ptc.ts:199`。 */
+/** 縮排兩個空白。 */
 const JSON_INDENT = '  ';
 
-/** 總縮排的字元上限，超過的子樹改緊湊格式，同 dsh `ptc.ts:206`：輸出大小與 JSON 大小成線性。 */
+/** 總縮排的字元上限，超過的子樹改緊湊格式。 */
 const MAX_JSON_INDENT_CHARS = 10;
 
 type JsonRenderTask =
@@ -580,7 +563,7 @@ type JsonRenderTask =
   | { kind: 'value'; value: JsonValue; depth: number; compact: boolean };
 
 /**
- * 把一個非字串的 JSON 根渲染成文字，**逐行照抄** dsh 的 `renderJsonValue`（`ptc.ts:214-281`，`687f282e`）：兩個空白縮排，
+ * 把一個非字串的 JSON 根渲染成文字，兩個空白縮排，
  * 總縮排超過 {@link MAX_JSON_INDENT_CHARS} 之後改緊湊；迭代走訪，不遞迴。
  */
 function renderJsonValue(value: JsonValue): string {
