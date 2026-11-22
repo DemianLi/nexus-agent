@@ -127,8 +127,32 @@ export function persistenceSchemaSnapshot(
       digest,
       ...(isDeepStrictEqual(schema, reachable.get(digest)) ? {} : { schema }),
       names,
-      sources,
+      sources: sources.map(withoutSourceLine),
     })),
+  };
+}
+
+/**
+ * 把宣告位置 `檔:行號` 的行號去掉，只留檔。生成物與新鮮度比對都用它，註解增減造成的行號位移才不會讓生成物過期；
+ * 不去重，同一個檔的宣告個數照比。
+ *
+ * @param source - 抽取器記下的 `檔:行號`。
+ */
+export function withoutSourceLine(source: string): string {
+  return source.replace(/:\d+$/, '');
+}
+
+/**
+ * 去掉每筆宣告位置的行號，其餘照留。
+ *
+ * @param inventory - 完整清單。
+ */
+export function inventoryWithoutSourceLines(
+  inventory: PersistenceSchemaInventory,
+): PersistenceSchemaInventory {
+  return {
+    ...inventory,
+    types: inventory.types.map((type) => ({ ...type, sources: type.sources.map(withoutSourceLine) })),
   };
 }
 

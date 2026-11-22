@@ -608,14 +608,15 @@ describe('規則（驗收 D）', () => {
     }
   });
 
-  it('readerBranch 指到的那一行就是那條分支：檔在、行裡有它的錨點', () => {
-    // 邊的 `to` → 那一行一定有的字串。改了讀方、行號漂了，這裡紅；加了新的 readerBranch 沒登錨點，也紅。
+  it('readerBranch 指到的檔裡，有且只有一行是那條分支的錨點', () => {
+    // 邊的 `to` → 那一行一定有的字串。改了讀方、錨點不見或不唯一，這裡紅；加了新的 readerBranch 沒登錨點，也紅。
+    // 不比行號：上面增減行、那一行搬到同檔別處，都不紅。
     const anchors = new Map<number, string>([
       [9, 'if (logged === undefined) {'],
       [10, "if ('messageId' in stored) {"],
       [13, 'if (header.workspaceRoot === undefined) return;'],
       [29, 'if (open) {'],
-      [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
+      [33, "          if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
       [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
@@ -626,12 +627,36 @@ describe('規則（驗收 D）', () => {
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);
     for (const edge of branched) {
-      const [path, line] = edge.readerBranch!.split(':');
-      const file = join(REPO, path!);
+      const file = join(REPO, edge.readerBranch!);
       expect(existsSync(file), edge.readerBranch).toBe(true);
-      const text = readFileSync(file, 'utf8').split('\n')[Number(line) - 1];
-      expect(text, edge.readerBranch).toContain(anchors.get(edge.to));
+      const anchor = anchors.get(edge.to)!;
+      expect(
+        anchorLines(readFileSync(file, 'utf8'), anchor),
+        `${edge.readerBranch} 裡含錨點的行：${anchor}`,
+      ).toHaveLength(1);
     }
+  });
+});
+
+function anchorLines(text: string, anchor: string): string[] {
+  return text.split('\n').filter((line) => line.includes(anchor));
+}
+
+describe('錨點只比內容，不比行號', () => {
+  const anchor = '  if (x) {';
+  it('上方插註解、整行搬到別處都還剛好一行；不見或出現兩次才不是一行', () => {
+    expect(anchorLines(`a\n${anchor}\nb`, anchor)).toHaveLength(1);
+    expect(anchorLines(`// 新註解\n// 再一行\na\n${anchor}\nb`, anchor)).toHaveLength(1);
+    expect(anchorLines(`${anchor}\na\nb`, anchor)).toHaveLength(1);
+    expect(anchorLines('a\nb', anchor)).toHaveLength(0);
+    expect(anchorLines(`${anchor}\na\n${anchor}`, anchor)).toHaveLength(2);
+  });
+
+  it('32→33 的錨點靠縮排區分同文字的另外兩行', () => {
+    const text = readFileSync(join(REPO, 'apps/harness/src/conversation-history.ts'), 'utf8');
+    const turnClose = "if (turnOpen || suspended) close(event.time, { event: 'completed' });";
+    expect(anchorLines(text, turnClose).length).toBeGreaterThan(1);
+    expect(anchorLines(text, `          ${turnClose}`)).toHaveLength(1);
   });
 });
 

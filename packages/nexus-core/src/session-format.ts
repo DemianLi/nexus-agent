@@ -31,7 +31,7 @@
  * 2. 在下面的 {@link SESSION_FORMAT_EDGES} 末尾加一條 `{ from: 舊, to: 新, … }`。不加的話這個模組載入就拋。
  * 3. 讀方為舊形狀留了分支的，填 `readerBranch`，並讓 `apps/harness/src/fixtures/session-format/` 裡某一份比 `to` 舊的夾具
  *    含觸發它的事件（夾具的 `expected.json` 的 `triggers` 登記這條邊；規則測試檢查每條 `readerBranch` 都有），並在
- *    規則測試的錨點表登記那一行一定有的字串（行號漂了、或指到別的行，那裡會紅）。
+ *    規則測試的錨點表登記那一行一定有的字串（錨點在檔內不見了、或出現在不只一行，那裡會紅；行號不登記，上面增減行不受影響）。
  * 4. 要發的版本格式版本是新的，**發版前**另開一張進 `develop` 的 PR，把它加進 {@link RELEASED_SESSION_FORMAT_VERSIONS}，
  *    並用當下 `develop` 那個 commit 的寫入器凍一份夾具（產生器在 `scripts/session-format-fixtures/`；細節見
  *    `docs/standards.md`〈會話日誌格式〉）。`develop → main` 的 PR 不另加 commit、tag 要發完才有，所以不能留到那一步。
@@ -60,7 +60,8 @@ export interface SessionFormatEdge {
   /** 這一版的卡，`#N`。段落在 `session-store.ts` 檔頭的 `## <to>`。 */
   readonly ref: string;
   /**
-   * 今天的讀方為「比 `to` 舊的寫入器才寫得出來的形狀」留的分支，`<repo 相對路徑>:<行號>`，指到判斷的那一行。
+   * 今天的讀方為「比 `to` 舊的寫入器才寫得出來的形狀」留的分支，`<repo 相對路徑>`，指到分支所在的檔；
+   * 檔內哪一行由規則測試的錨點表登記（那一行一定有的字串，在檔內只出現一行）。
    * 只在 `additive` 上有意義：`breaking` 的舊檔根本讀不到讀方。
    */
   readonly readerBranch?: string;
@@ -138,14 +139,14 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 9,
     kind: 'additive',
     ref: '#305',
-    readerBranch: 'packages/nexus-core/src/conversation-replay.ts:418',
+    readerBranch: 'packages/nexus-core/src/conversation-replay.ts',
   },
   {
     from: 9,
     to: 10,
     kind: 'additive',
     ref: '#382',
-    readerBranch: 'packages/nexus-core/src/feedback.ts:297',
+    readerBranch: 'packages/nexus-core/src/feedback.ts',
   },
   { from: 10, to: 11, kind: 'additive', ref: '#441' },
   { from: 11, to: 12, kind: 'additive', ref: '#443' },
@@ -154,7 +155,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 13,
     kind: 'additive',
     ref: '#504',
-    readerBranch: 'apps/harness/src/resume-guards.ts:164',
+    readerBranch: 'apps/harness/src/resume-guards.ts',
   },
   { from: 13, to: 14, kind: 'additive', ref: '#528' },
   { from: 14, to: 15, kind: 'additive', ref: '#433' },
@@ -176,7 +177,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 29,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'packages/nexus-core/src/session-relationships.ts:319',
+    readerBranch: 'packages/nexus-core/src/session-relationships.ts',
   },
   { from: 29, to: 30, kind: 'additive', ref: '#1025' },
   { from: 30, to: 31, kind: 'additive', ref: '#1023' },
@@ -186,14 +187,14 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 33,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'apps/harness/src/conversation-history.ts:1201',
+    readerBranch: 'apps/harness/src/conversation-history.ts',
   },
   {
     from: 33,
     to: 34,
     kind: 'additive',
     ref: '#437',
-    readerBranch: 'packages/nexus-core/src/approval-policy.ts:111',
+    readerBranch: 'packages/nexus-core/src/approval-policy.ts',
   },
   { from: 34, to: 35, kind: 'additive', ref: '#437' },
   { from: 35, to: 36, kind: 'additive', ref: '#724' },
@@ -210,7 +211,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 45,
     kind: 'additive',
     ref: '#1301',
-    readerBranch: 'packages/nexus-core/src/conversation-replay.ts:422',
+    readerBranch: 'packages/nexus-core/src/conversation-replay.ts',
   },
   { from: 45, to: 46, kind: 'additive', ref: '#1302' },
   { from: 46, to: 47, kind: 'additive', ref: '#1303' },
@@ -222,14 +223,14 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 51,
     kind: 'additive',
     ref: '#1579',
-    readerBranch: 'packages/nexus-core/src/session-store.ts:874',
+    readerBranch: 'packages/nexus-core/src/session-store.ts',
   },
   {
     from: 51,
     to: 52,
     kind: 'additive',
     ref: '#2132',
-    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1911',
+    readerBranch: 'apps/harness/src/jsonl-session-store.ts',
   },
   { from: 52, to: 53, kind: 'additive', ref: '#2367' },
   { from: 53, to: 54, kind: 'additive', ref: '#2370' },
@@ -238,14 +239,14 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 55,
     kind: 'additive',
     ref: '#2416',
-    readerBranch: 'packages/nexus-core/src/session-relationships.ts:177',
+    readerBranch: 'packages/nexus-core/src/session-relationships.ts',
   },
   {
     from: 55,
     to: 56,
     kind: 'additive',
     ref: '#2649',
-    readerBranch: 'packages/nexus-core/src/subagent-mention.ts:55',
+    readerBranch: 'packages/nexus-core/src/subagent-mention.ts',
   },
 ];
 
