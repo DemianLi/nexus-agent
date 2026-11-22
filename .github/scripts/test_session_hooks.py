@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import io
+import itertools
 import json
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -107,7 +111,13 @@ class StartSessionTest(unittest.TestCase):
         reason = check_start_session({**ok, 'prompt': notes_only})
         self.assertIsNotNone(reason)
         self.assertIn('下載', reason)
-        self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + '下載先寫在卡上等 operator 核可。'}))
+        rule = '下載只有開分支前一次 git fetch origin develop，其餘先寫在卡上等 operator 核可。'
+        self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + rule}))
+        unrelated = '合併不用等 operator 核可。'
+        self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + rule + unrelated}))
+        for wrong in ('下載先寫在卡上等 operator 核可。', '下載只有開分支前一次 git fetch origin develop，其餘不用 operator 核可。', '下載不需要核可，照常 git fetch origin develop。'):
+            with self.subTest(wrong=wrong):
+                self.assertIsNotNone(check_start_session({**ok, 'prompt': notes_only + wrong}))
 
     def test_hook_exit_codes(self) -> None:
         self.assertEqual(run(['pre-start-session'], {'tool_input': {'name': 'ver-1'}})[0], 2)
@@ -151,6 +161,15 @@ class DownloadTest(unittest.TestCase):
             'rtk git pull', 'FOO=1 git pull', 'env X=1 git pull', 'timeout 5 git pull', 'cd x && git pull', 'git status | head; git pull',
             'if true; then git pull; fi', 'bash -c "git pull"', "sh -c 'cd x && pnpm install'", 'echo $(git pull)', 'echo "$(git pull)"',
             'x=`git pull`', 'cat <<E\nx\nE\ngit pull', 'git status\ngit pull', '(git pull)', '/usr/bin/git pull',
+            'eval git pull', 'eval eval eval eval eval git pull', 'cat <<-EOF\n x\nEOF\ngit pull', 'cat <<\\EOF\nx\nEOF\ngit pull',
+            'echo $((1<<4))\ngit pull', "bash -lc 'git pull'", 'zsh -lc "git pull"', "sh -ec 'pnpm install'", 'git -C $(pwd) pull',
+            'pnpm --dir $(pwd) install', 'out="$(cd "$ROOT" && git pull --ff-only)"', 'echo "$(cd x && (git pull))"', 'cat <(git pull)',
+            'cat <<EOF\n$(git pull)\nEOF', 'nice -n 10 git pull', 'timeout -k 5 10 git pull', 'env -u X git pull', 'sudo -u x git pull',
+            'taskpolicy -c background pnpm install', 'npx pnpm install', 'corepack pnpm install', 'pnpm --store-dir /s install',
+            'pnpm install --offline --offline=false', 'bash <<EOF\ngit pull\nEOF', 'cat <<EOF | bash\ngit pull\nEOF',
+            "echo $'it\\'s'; git pull", 'echo "${x:-$(git pull)}"', '(( x << 2 ))\ngit pull', 'git -c remote.origin.url=x fetch origin develop',
+            'echo "$(echo "$(echo "$(git pull)")")"', 'taskpolicy -b git pull', 'caffeinate -i git pull', 'env -S "git pull"',
+            'bash -o pipefail -c "git pull"', 'echo ' + '$(' * 2000 + 'git pull' + ')' * 2000,
         ):
             with self.subTest(command=command):
                 self.assertTrue(blocked(command))
@@ -159,17 +178,49 @@ class DownloadTest(unittest.TestCase):
         for command in (
             'echo "git pull"', "grep 'git pull' f", 'git commit -m "run pnpm install"', "cat <<'E'\ngit pull\nE\ngit status",
             'git fetch origin develop # git pull', 'echo "pnpm install" > notes.txt',
+            'git commit -m "docs: 不用 \\`git pull\\`"', 'echo "寫法是 \\$(git pull)"', 'pnpm install --dir $(pwd) --offline',
+            'gh pr comment 1 --body "$(cat <<\'EOF\'\n用 `git fetch --all` 會被擋\nEOF\n)"', 'cat <<EOF\ngit pull\nEOF', 'bash <<EOF\necho hi\nEOF',
+            "echo 'a;git pull'", 'cat <<-E\n\tgit pull\n\tE', "gh pr comment 1 --body 'git pull and pnpm install'",
         ):
             with self.subTest(command=command):
                 self.assertFalse(blocked(command))
 
+    @unittest.skipUnless(os.path.exists('/bin/bash'), 'needs /bin/bash')
+    def test_verdict_matches_what_real_bash_would_run(self) -> None:
+        wrappers = ('', 'env X=1 ', 'nice -n 10 ', 'FOO=1 ')
+        cores = ('git pull', 'git fetch --all', 'git fetch origin develop', 'pnpm install', 'pnpm install --offline', 'git status')
+        shapes = (
+            '{c}', 'echo hi; {c}', '( {c} )', '$( {c} )', '"$( {c} )"', 'x=`{c}`', 'bash -c "{c}"', "bash -ec '{c}'", 'eval "{c}"',
+            'echo "{c}"', "echo '{c}'", 'echo \\"{c}\\"', 'echo "\\$({c})"', 'echo "\\`{c}\\`"',
+            'cat <<EOF\n{c}\nEOF', "cat <<'EOF'\n{c}\nEOF", 'cat <<EOF\n$({c})\nEOF', "cat <<'EOF'\n$({c})\nEOF", 'cat <<-EOF\n\t{c}\n\tEOF',
+            'cat <<EOF | bash\n{c}\nEOF', 'bash <<EOF\n{c}\nEOF', "bash <<'EOF'\n{c}\nEOF", 'cat <({c})', 'echo ${{x:-$({c})}}',
+            'if true; then {c}; fi', '{c} 2>&1', '{c} # {c}', 'echo $((1<<4))\n{c}', 'echo "a $({c}) b"', 'echo "$(echo "$({c})")"',
+            'echo "$(cat <<\'EOF\'\n{c}\nEOF\n)"', 'f() {{ {c}; }}; f',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp, 'ran.log')
+            for tool in ('git', 'pnpm'):
+                stub = Path(tmp, tool)
+                stub.write_text('#!/bin/sh\necho "$(basename "$0") $*" >> "$STUBLOG"\n', encoding='utf-8')
+                stub.chmod(0o755)
+            env = {'PATH': f'{tmp}:/usr/bin:/bin', 'STUBLOG': str(log), 'HOME': tmp}
+            for wrapper, core, shape in itertools.product(wrappers, cores, shapes):
+                command = shape.replace('{{', '{').replace('}}', '}').replace('{c}', wrapper + core)
+                log.write_text('', encoding='utf-8')
+                subprocess.run(['/bin/bash', '-c', command], cwd=tmp, env=env, capture_output=True, timeout=10, stdin=subprocess.DEVNULL, check=False)
+                really_ran = [line for line in log.read_text(encoding='utf-8').splitlines() if line.strip()]
+                with self.subTest(command=command):
+                    self.assertEqual(blocked(command), any(blocked(line) for line in really_ran))
+
     def test_env_vars_and_marker_files_do_not_unblock(self) -> None:
-        for command in (
-            'ALLOW_DOWNLOAD=1 git pull', 'NEXUS_APPROVED=1 pnpm install', 'touch .download-approved && git pull',
-            'echo approved > /tmp/approved; git fetch --all', 'export OK=1; git pull',
-        ):
-            with self.subTest(command=command):
-                self.assertTrue(blocked(command))
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ('.download-approved', 'approved', 'APPROVED', '.nexus-approved'):
+                Path(tmp, name).write_text('ok', encoding='utf-8')
+            env = {**os.environ, 'ALLOW_DOWNLOAD': '1', 'NEXUS_APPROVED': '1', 'NEXUS_ALLOW_DOWNLOAD': 'true', 'DOWNLOAD_APPROVED': '1'}
+            for command in ('git pull', 'pnpm install', 'git fetch --all'):
+                with self.subTest(command=command):
+                    result = run_settings_hook('Bash', command, env=env, cwd=tmp)
+                    self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_message_tells_operator_to_run_it(self) -> None:
         reason = check_download({'command': 'git pull'})
@@ -192,14 +243,34 @@ class DownloadTest(unittest.TestCase):
         self.assertIn('放行', err)
 
 
+def settings_entry() -> dict:
+    settings = json.loads((REPO / '.claude/settings.json').read_text(encoding='utf-8'))
+    entries = [e for e in settings['hooks']['PreToolUse'] if any('pre-download' in h['command'] for h in e['hooks'])]
+    assert len(entries) == 1
+    return entries[0]
+
+
+def run_settings_hook(tool_name: str, command: str, env: dict | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
+    entry = settings_entry()
+    hook = entry['hooks'][0]['command']
+    event = json.dumps({'tool_name': tool_name, 'tool_input': {'command': command}})
+    full_env = {**(env or os.environ), 'CLAUDE_PROJECT_DIR': str(REPO)}
+    return subprocess.run(['/bin/sh', '-c', hook], input=event, capture_output=True, text=True, env=full_env, cwd=cwd, check=False)
+
+
 class SettingsTest(unittest.TestCase):
-    def test_download_hook_covers_bash_and_terminal_panel(self) -> None:
-        settings = json.loads((REPO / '.claude/settings.json').read_text(encoding='utf-8'))
-        entries = [e for e in settings['hooks']['PreToolUse'] if any('pre-download' in h['command'] for h in e['hooks'])]
-        self.assertEqual(len(entries), 1)
-        for tool in ('Bash', 'mcp__terminal__run_in_terminal'):
+    def test_download_hook_covers_bash_monitor_and_terminal_panel(self) -> None:
+        for tool in ('Bash', 'Monitor', 'mcp__terminal__run_in_terminal'):
             with self.subTest(tool=tool):
-                self.assertRegex(tool, f'^(?:{entries[0]["matcher"]})$')
+                self.assertRegex(tool, f'^(?:{settings_entry()["matcher"]})$')
+
+    def test_settings_hook_command_blocks_end_to_end_for_each_tool(self) -> None:
+        for tool in ('Bash', 'Monitor', 'mcp__terminal__run_in_terminal'):
+            with self.subTest(tool=tool):
+                blocked_result = run_settings_hook(tool, 'git pull')
+                self.assertEqual(blocked_result.returncode, 2, blocked_result.stderr)
+                self.assertIn('operator', blocked_result.stderr)
+                self.assertEqual(run_settings_hook(tool, 'git status').returncode, 0)
 
 
 class RoleTableTest(unittest.TestCase):

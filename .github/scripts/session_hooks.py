@@ -25,7 +25,9 @@ ROLES = {
 MIN_GENERATION = 5
 
 NOTES_RULE = re.compile(r'不讀不寫[^\n]*notes')
-DOWNLOAD_RULE = re.compile(r'下載[^\n]*核可')
+DOWNLOAD_RULE = re.compile(r'下載[^\n]*git fetch origin develop[^\n]*核可')
+DOWNLOAD_NEGATED = re.compile(r'(不用|不需|不必|無須|免|不要)[^\n。；;，,]{0,14}核可')
+SENTENCE_END = re.compile(r'[。\n]')
 DOWNLOAD_HELP = '寫在卡上、停下，等 operator 核可，核可後由 operator 自己在終端跑；agent 與 PM 不代跑（docs/agents/collab-mode.md〈下載〉）。'
 
 CLOSING_PREFIXES = ('可封存', '不可封存', '還在等')
@@ -49,6 +51,10 @@ def role_for(tool_input: dict) -> tuple[str, Role] | None:
     return None
 
 
+def download_rule_negated(prompt: str) -> bool:
+    return any(DOWNLOAD_NEGATED.search(s) for s in SENTENCE_END.split(prompt) if '下載' in s or 'git fetch' in s)
+
+
 def check_start_session(tool_input: dict) -> str | None:
     found = role_for(tool_input)
     if found is None:
@@ -68,7 +74,7 @@ def check_start_session(tool_input: dict) -> str | None:
     prompt = tool_input.get('prompt')
     if prompt is not None and not NOTES_RULE.search(prompt):
         return f'`{name}` 是 {role.table_row}，開場要寫一句「不讀不寫 app 給的共用 notes 目錄」。{where}'
-    if prompt is not None and not DOWNLOAD_RULE.search(prompt):
+    if prompt is not None and (not DOWNLOAD_RULE.search(prompt) or download_rule_negated(prompt)):
         return f'`{name}` 是 {role.table_row}，開場要寫一句下載規則：只有開分支前一次 `git fetch origin develop`，其餘下載先寫在卡上等 operator 核可。{where}'
     got_model = tool_input.get('model') or ''
     got_effort = tool_input.get('effort') or ''

@@ -67,7 +67,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
   | 背景工作叫醒 | 桌面 app | 成功 0；被拒 4（其中 1 次是 Remote Control） |
   | operator 說話 | iOS | 開得成 |
 
-  所以 operator 用桌面 app 時，engineer 停下、app 叫醒 PM 的回合通常開得成（code-ready 開 verifier、結卡後開下一位 engineer、FAIL 後開新 verifier），不能當成一定成功；用 Remote Control 時不要指望，背景工作叫醒的回合（PM 自己的背景工作、engineer 帶著背景工作停下）實測被拒，也不指望。app 實際的判準不明，上表只是相關。判定後合併那一段只用訊息把判定轉給 engineer，不開 session；自動接續時傳訊息給已開好的 session，在 iOS 的情況下成功過。沒測過：子 session 傳了訊息的回合是否一定開不了、平行、連續接續的上限。
+  所以 operator 用桌面 app 時，engineer 停下、app 叫醒 PM 的回合通常開得成（code-ready 開 verifier、結卡後開下一位 engineer、FAIL 後開新 verifier），不能當成一定成功；用 Remote Control 時不要指望，背景工作叫醒的回合實測被拒（上表那 4 次），也不指望。engineer 帶著背景工作停下算不算這一類，沒有紀錄。app 實際的判準不明，上表只是相關。判定後合併那一段只用訊息把判定轉給 engineer，不開 session；自動接續時傳訊息給已開好的 session，在 iOS 的情況下成功過。沒測過：子 session 傳了訊息的回合是否一定開不了、平行、連續接續的上限。
 - **備案是事前做的。** operator 用 Remote Control 時，PM 在 operator 說話的回合就預開待命的 session：數量夠一張卡走完（含一次重判）並加上下一張，之後用訊息叫醒。待命的不算同時進行的 engineer，前一張收掉才叫醒下一位。備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
 - 自動模式回「no verdict」且附了 hook 產生的輸入時：照那份輸入單獨重送一次；再被擋就停、回報原文，不改用別的做法繞過。
 - engineer 與 verifier 都開成 session，不開成 subagent。app 自己建 worktree 會取分支名、加前綴，跟 `<type>/<kebab-case>` 不合，所以子 session 不用 app 的 worktree，自己照 worker.md 開，之後只在那個 worktree 裡改。
@@ -91,11 +91,18 @@ agent 做的下載都要 operator 核可。唯一的常設核可：**開分支�
 - 其他下載：把指令和用途寫在卡上，停下，等 operator 核可。核可後由 operator 在終端自己跑；agent 與 PM 不代跑，也沒有 agent 自己能開的放行路。PM 不能代核。
 - 「是否在開分支前」script 判不了，只有文件。
 
-`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash 與 Terminal 面板的 `run_in_terminal` 用同一套判斷：擋 `git pull`、`git remote update`、不是 `git fetch origin develop` 的 `git fetch`、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`；引號、註解與 heredoc 裡的字串不算指令，但 `sh -c`、`eval` 的參數與 `$(…)`、反引號裡的指令照樣查。它只看指令字串，環境變數與 marker 檔都不影響結果。看不到的：腳本或別的程式裡的下載、解析不了的指令（出錯就放行）。
+`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash、Monitor 與 Terminal 面板的 `run_in_terminal` 用同一套判斷，只認 git 與 pnpm 的這幾個形狀：擋 `git pull`、`git remote update`、不是 `git fetch origin develop` 的 `git fetch`（含 `-c remote.*`／`url.*` 改寫的）、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`。它把指令字串當 shell 語法解析：引號、註解與不展開的 heredoc 裡的字串不算指令；`$(…)`、反引號、`<(…)`、`${…}` 裡、會展開的 heredoc 本文、`bash -c`／`bash -lc`／`eval` 的參數、餵給 `bash` 的 heredoc，都照樣查；`env`、`nice`、`timeout`、`sudo`、`taskpolicy`、`npx`、`corepack`、`rtk` 之類前綴會剝掉。它只看指令字串，環境變數與 marker 檔都不影響結果。`bash -c`、`eval`、餵給 shell 的 heredoc 疊超過 12 層、`$(…)` 巢狀深到遞迴爆掉，都判不了，一律擋。擋不到的：
+
+- 上面以外的下載指令：`pnpm add`／`update`／`dlx`／`fetch`、`npx <套件>` 本身、`pip`、`curl`、`docker pull`、`gh api`、`gh pr checkout`、`git clone`、`git submodule update --remote`、`git lfs`、`git ls-remote`、`git remote prune`。上面那幾條禁令對這些只有文件。
+- 腳本或別的程式裡的下載、指令名來自變數（`$cmd pull`）或 alias、zsh 特有語法（`=git pull`）、`source` 進來的檔。
+- 用管線或 here-string 餵給 shell 的指令（`echo git pull | bash`、`bash <<<"git pull"`）。
+- 讓 remote 指到別處的寫法，形狀符合就放行：`git -C <別的 repo> fetch origin develop`、`GIT_DIR`／`GIT_CONFIG_*`、`-c include.path=…`、先跑 `git config remote.origin.url …`。
+- 上面沒列的包裝指令（`find -exec`、`watch`、`ssh`、`coproc` 之類）。
+- 解析不了的指令，出錯就放行。
 
 **分支開了之後需要本機沒有的物件時，不放寬，逐次核可：**
 
-- `gh pr update-branch` 之後 verifier 要在本機檢出新 head：抓 PR head 的 `git fetch` 會被 hook 擋，核可後由 operator 在終端跑；operator 不在電腦前，這張卡就等。
+- `gh pr update-branch` 之後 verifier 要在本機檢出新 head：抓 PR head 的 `git fetch` 會被 hook 擋，`gh pr checkout` 擋不到但同樣要核可；核可後由 operator 在終端跑；operator 不在電腦前，這張卡就等。
 - engineer 解衝突：`git fetch origin develop` 的形狀 hook 放行，所以先申請核可這一條只有文件。
 - 跑 `worktree-audit.sh`（`:46` 會自己 fetch develop）：hook 看不到腳本裡的指令，跑它之前先申請核可，只有文件。
 
@@ -217,7 +224,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 開完 PR 開 Auto-fix | 只有文件（工具不在或被權限檢查擋下時，在卡上記一筆，不重試；沒開成，engineer 照 [Babysit](../../.agents/skills/pstack/skills/poteto-mode/playbooks/babysit.md) 自己盯 CI） |
 | 收尾第一句寫可封存、不可封存或還在等 | `Stop` hook（`.github/scripts/session_hooks.py`；只看前綴與 `還在等：` 是否一行，擋一次、出錯放行） |
 | engineer、verifier 照角色表的 `model`、`effort` 開，不帶 `cwd`、`host`，`use_worktree: false`，開場有「不讀不寫共用 notes 目錄」 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到；沒有 prompt 時不查最後一項） |
-| 下載：不 pull、只 `git fetch origin develop`、`pnpm install`／`deploy` 帶 `--offline`，其餘先核可 | `PreToolUse` hook（`session_hooks.py pre-download`，管 Bash 與 `run_in_terminal`）擋這幾個指令形狀；腳本裡的下載、是否在開分支前、解衝突與跑 `worktree-audit.sh` 前先申請核可：只有文件 |
+| 下載：不 pull、只 `git fetch origin develop`、`pnpm install`／`deploy` 帶 `--offline`，其餘先核可 | `PreToolUse` hook（`session_hooks.py pre-download`，管 Bash、Monitor 與 `run_in_terminal`）擋這幾個指令形狀；git 與 pnpm 以外的下載指令、〈下載〉列的擋不到的寫法、腳本裡的下載、指向別的 remote 的 `git -C`、是否在開分支前、解衝突與跑 `worktree-audit.sh` 前先申請核可：只有文件 |
 | engineer、verifier 的開場有下載規則那一句 | `PreToolUse` hook（`session_hooks.py pre-start-session`，沒有 prompt 時不查） |
 | 子 session 不傳訊息給 PM、PM 開在主 checkout | 只有文件（hook 看不到訊息與 PM 所在的資料夾） |
 | 開 session 被 app 拒絕時先用備案、再提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
