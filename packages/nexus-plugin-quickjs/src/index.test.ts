@@ -136,8 +136,7 @@ describe('失敗種類由 host 判定', () => {
 });
 
 /**
- * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672），照 dsh 的 `prepareCompletion`
- * （`ptc-runtime-node/src/bootstrap.ts:164-188`）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
+ * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
  * 模型拿到錯的值，照著告訴使用者。
  */
 describe('完成值必須是無損的 JSON', () => {
@@ -234,7 +233,7 @@ describe('完成值必須是無損的 JSON', () => {
     expect(error.kind).toBe('invalid-output');
   });
 
-  // dsh 的快照一邊驗一邊抄、只讀一次（`snapshotPtcJsonValue`）：輸出就是驗過的那一份，不再去讀活的值。
+  // 快照一邊驗一邊抄、只讀一次：輸出就是驗過的那一份，不再去讀活的值。
   // 以前驗完再 dump 原本的 handle，原型上的 `toJSON` 與說謊的 Proxy 讓兩次讀到的不一樣，錯的值當成功回去（#1842 審查）。
   describe('驗過的就是輸出的：活的值動不了手腳', () => {
     it('Object.prototype.toJSON 改不了輸出', async () => {
@@ -343,7 +342,7 @@ describe('完成值必須是無損的 JSON', () => {
   });
 });
 
-/** 非字串的結果用 dsh `renderJsonValue` 的縮排格式（`packages/core/tools/src/ptc.ts:214-281`），字串原樣。 */
+/** 非字串的結果用縮排格式，字串原樣。 */
 describe('結果的呈現', () => {
   it('兩個空白縮排；字串不加引號', async () => {
     expect(await runTool({}, '({ a: 1, b: [true, null, "x"] })')).toBe(
@@ -412,8 +411,8 @@ describe('非同步', () => {
   });
 
   // 等得到的都等到了還是 pending，代表它在等一個 VM 裡不存在的東西。這是永遠不會變的
-  // 狀態，不是「再等一下就好」。#615 之前它算成功、回一句話；demian 拍板照 dsh 的結局算失敗
-  // （dsh 等到預算用完，收在 `timeout`）。
+  // 狀態，不是「再等一下就好」。#615 之前它算成功、回一句話；demian 拍板改成算失敗，
+  // 收在 `timeout`。
   it('等不到的 promise 是失敗，種類是 timeout，原因講清楚它等不到', async () => {
     const error = await runFailing({}, 'new Promise(() => {})');
     expect(error.kind).toBe('timeout');
@@ -451,7 +450,7 @@ describe('資源邊界——只有設定的那麼強', () => {
     // 時間上限刻意放寬，否則擋下它的可能是逾時而不是記憶體上限，這條就測不到想測的東西。
     // 斷言的是 `out of memory` 而不是泛泛的「錯誤」，理由同上：訊息不對就代表擋它的是別的東西。
     //
-    // **指數成長，不是一次一小塊。** 原本寫的是 `push(new Array(10000))` 慢慢磨到上限，
+    // **指數成長，不是一次一小塊。** 一次一小塊的寫法是 `push(new Array(10000))` 慢慢磨到上限，
     // 本地 2.1 秒、CI runner 上 5.03 秒——撞爆 vitest 預設的 5000ms testTimeout，gate 紅了
     // （CI #88）。倍增只要幾十步就到，本地量到 18ms。慢測試不是「調高 timeout」的理由，
     // 是測試寫法的問題。
