@@ -21,17 +21,24 @@ def run(argv: list[str], event: object) -> tuple[int, str]:
     return code, err.getvalue()
 
 
+BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。'}
+
+
+def ok_input(name: str, model: str, effort: str, **more: object) -> dict:
+    return {'name': name, 'model': model, 'effort': effort, **BASE, **more}
+
+
 class StartSessionTest(unittest.TestCase):
     def test_engineer_and_verifier_with_table_values_pass(self) -> None:
-        self.assertIsNone(check_start_session({'name': 'eng-2521', 'model': 'claude-sonnet-5-5', 'effort': 'medium'}))
-        self.assertIsNone(check_start_session({'name': 'ver-3092', 'model': 'claude-opus-5-5', 'effort': 'medium'}))
+        self.assertIsNone(check_start_session(ok_input('eng-2521', 'claude-sonnet-5-5', 'medium')))
+        self.assertIsNone(check_start_session(ok_input('ver-3092', 'claude-opus-5-5', 'medium')))
 
     def test_wrong_model_or_effort_is_blocked(self) -> None:
         for tool_input in (
-            {'name': 'eng-1', 'model': 'claude-opus-5-5', 'effort': 'medium'},
-            {'name': 'eng-1', 'model': 'claude-sonnet-5-5', 'effort': 'high'},
-            {'name': 'ver-1', 'model': 'claude-opus-5-5'},
-            {'name': 'ver-1', 'effort': 'medium'},
+            ok_input('eng-1', 'claude-opus-5-5', 'medium'),
+            ok_input('eng-1', 'claude-sonnet-5-5', 'high'),
+            {**BASE, 'name': 'ver-1', 'model': 'claude-opus-5-5'},
+            {**BASE, 'name': 'ver-1', 'effort': 'medium'},
         ):
             with self.subTest(tool_input=tool_input):
                 reason = check_start_session(tool_input)
@@ -48,7 +55,7 @@ class StartSessionTest(unittest.TestCase):
 
     def test_offer_brief_sent_with_proposal_id_is_checked(self) -> None:
         self.assertIsNotNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1', 'model': 'claude-opus-5-5', 'effort': 'medium'}))
-        self.assertIsNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1', 'model': 'claude-sonnet-5-5', 'effort': 'medium'}))
+        self.assertIsNone(check_start_session({'proposal_id': 'task_1', 'name': 'eng-1', 'model': 'claude-sonnet-5-5', 'effort': 'medium', 'use_worktree': False}))
 
     def test_role_title_without_name_is_blocked(self) -> None:
         for title in ('verifier：PR #3093', 'Engineer：#2521'):
@@ -65,7 +72,7 @@ class StartSessionTest(unittest.TestCase):
         self.assertIsNone(check_start_session({'title': '修 verifier 的 bug'}))
 
     def test_fork_and_cloud_are_blocked(self) -> None:
-        ok = {'name': 'ver-1', 'model': 'claude-opus-5-5', 'effort': 'medium'}
+        ok = ok_input('ver-1', 'claude-opus-5-5', 'medium')
         self.assertIsNotNone(check_start_session({**ok, 'context': 'fork'}))
         self.assertIsNotNone(check_start_session({**ok, 'target': 'cloud'}))
         self.assertIsNone(check_start_session({**ok, 'context': 'fresh', 'target': 'local'}))
@@ -76,11 +83,27 @@ class StartSessionTest(unittest.TestCase):
                           ('claude-sonnet-4-5', False), ('claude-3-5-sonnet', False), ('my-sonnet-fork', False),
                           ('claude-sonnet-5-foo', False), ('claude-sonnet-5-5[1m]x', False), ('claude-sonnet-5-5[]', False)):
             with self.subTest(model=model):
-                self.assertEqual(check_start_session({'name': 'eng-1', 'model': model, 'effort': 'medium'}) is None, ok)
+                self.assertEqual(check_start_session(ok_input('eng-1', model, 'medium')) is None, ok)
+
+    def test_cwd_host_and_worktree_flag_are_blocked(self) -> None:
+        ok = ok_input('eng-1', 'sonnet', 'medium')
+        self.assertIsNone(check_start_session(ok))
+        for extra in ({'cwd': '/tmp/x'}, {'host': 'devbox'}, {'use_worktree': True}):
+            with self.subTest(extra=extra):
+                self.assertIsNotNone(check_start_session({**ok, **extra}))
+        missing = {k: v for k, v in ok.items() if k != 'use_worktree'}
+        self.assertIsNotNone(check_start_session(missing))
+
+    def test_prompt_must_forbid_shared_notes(self) -> None:
+        ok = ok_input('ver-1', 'opus', 'medium')
+        self.assertIsNotNone(check_start_session({**ok, 'prompt': '判定 #1 的 PR #2。'}))
+        self.assertIsNotNone(check_start_session({**ok, 'prompt': '去讀 notes 目錄。'}))
+        no_prompt = {k: v for k, v in ok.items() if k != 'prompt'}
+        self.assertIsNone(check_start_session(no_prompt))
 
     def test_hook_exit_codes(self) -> None:
         self.assertEqual(run(['pre-start-session'], {'tool_input': {'name': 'ver-1'}})[0], 2)
-        self.assertEqual(run(['pre-start-session'], {'tool_input': {'name': 'ver-1', 'model': 'opus', 'effort': 'medium'}})[0], 0)
+        self.assertEqual(run(['pre-start-session'], {'tool_input': ok_input('ver-1', 'opus', 'medium')})[0], 0)
 
 
 class RoleTableTest(unittest.TestCase):
