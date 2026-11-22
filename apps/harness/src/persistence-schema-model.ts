@@ -152,7 +152,10 @@ export function inventoryWithoutSourceLines(
 ): PersistenceSchemaInventory {
   return {
     ...inventory,
-    types: inventory.types.map((type) => ({ ...type, sources: type.sources.map(withoutSourceLine) })),
+    types: inventory.types.map((type) => ({
+      ...type,
+      sources: type.sources.map(withoutSourceLine),
+    })),
   };
 }
 
