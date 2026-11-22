@@ -52,7 +52,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md（〈Nexus roles〉的 Verifier）與 docs/agents/collab-mode.md。
 你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
 不傳訊息給 PM：判定貼在 PR 上，收尾第一行帶判定與 PR 號碼。不讀不寫 app 給的共用 notes 目錄。
-下載只有開分支前一次 `git fetch origin develop`；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
+下載只有開分支前一次 `git fetch origin develop`（verifier 不 fetch）；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
 ```
 
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
@@ -84,27 +84,28 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 ## 下載
 
-agent 做的下載都要 operator 核可。唯一的常設核可：**開分支前一次 `git fetch origin develop`**（只這個 remote、這個 ref），分支開了之後不再 fetch。PM 同步主 checkout 也是這個形狀（見上）。
+agent 做的下載都要 operator 核可。常設核可只有一個形狀：`git fetch origin develop`（只這個 remote、這個 ref），用在兩處：engineer **開分支前一次**，分支開了之後不再 fetch；PM 每次派工前同步主 checkout（見上）。
 
 - `pnpm install`、`pnpm deploy` 一律加 `--offline`，跑不起來交給 CI。
 - 不用 `git pull`，不用不帶 refspec 的 `git fetch`，不 pip install、不 npx、不 cargo 下載、不用 `gh api` 讀上游 repo；docker 一律 `--pull=never`。
-- 其他下載：把指令和用途寫在卡上，停下，等 operator 核可。核可後由 operator 在終端自己跑；agent 與 PM 不代跑，也沒有 agent 自己能開的放行路。PM 不能代核。
+- 其他下載：把指令和用途寫在卡上，停下，等 operator 核可，PM 不能代核。核可後誰跑看形狀：會被下面 hook 擋的形狀（`git pull`、`git remote update`、別的 `git fetch`、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`）由 operator 在終端自己跑，agent 與 PM 不代跑，也沒有 agent 自己能開的放行路；hook 不擋的形狀（例如解衝突的 `git fetch origin develop`、`worktree-audit.sh`）核可後由原本要跑的 session 跑。
 - 「是否在開分支前」script 判不了，只有文件。
 
-`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash、Monitor 與 Terminal 面板的 `run_in_terminal` 用同一套判斷，只認 git 與 pnpm 的這幾個形狀：擋 `git pull`、`git remote update`、不是 `git fetch origin develop`（只允許再加 `-q`／`--quiet`）的 `git fetch`（含 `-c remote.*`／`url.*` 改寫的）、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`。它把指令字串當 shell 語法解析：引號、註解與 heredoc 裡的字串不算指令；`$(…)`、反引號、`<(…)`、`${…}` 裡（含會展開的 heredoc 本文裡的）、`bash -c`／`bash -lc`／`eval` 的參數，都照樣查；同一條指令裡只要有不帶腳本、讀 stdin 的 shell（`bash`、`sh`、`zsh` 等），這條指令的每個 heredoc 本文都當指令查；`env`、`nice`、`timeout`、`sudo`、`taskpolicy`、`npx`、`corepack`、`rtk` 之類前綴會剝掉。它只看指令字串，環境變數與 marker 檔都不影響結果。`bash -c`、`eval`、餵給 shell 的 heredoc 疊超過 12 層、`$(…)` 巢狀深到遞迴爆掉，都判不了，一律擋。擋不到的：
+`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash、Monitor 與 Terminal 面板的 `run_in_terminal` 用同一套判斷，只認 git 與 pnpm 的這幾個形狀：擋 `git pull`、`git remote update`、不是 `git fetch origin develop`（只允許再加 `-q`／`--quiet`）的 `git fetch`（含 `-c remote.*`／`url.*` 改寫的）、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`。它把指令字串當 shell 語法解析：引號、註解與 heredoc 裡的字串不算指令；`$(…)`、反引號、`<(…)`／`>(…)` 裡（含出現在 `${…}`、算術與會展開的 heredoc 本文裡的這幾種；`${…}` 本身的字串不算指令）、`bash -c`／`bash -lc`／`eval` 的參數，都照樣查；同一條指令裡只要有不帶腳本、讀 stdin 的 shell（`bash`、`sh`、`zsh` 等），這條指令的每個 heredoc 本文都當指令查；`env`、`nice`、`timeout`、`sudo`、`taskpolicy`、`npx`、`corepack`、`rtk` 之類前綴會剝掉。它只看指令字串，環境變數與 marker 檔都不影響結果。`bash -c`、`eval`、餵給 shell 的 heredoc 疊超過 12 層、`$(…)` 巢狀深到遞迴爆掉，都判不了，一律擋。擋不到的：
 
-- 上面以外的下載指令：`pnpm add`／`update`／`dlx`／`fetch`、`npx <套件>` 本身、`pip`、`curl`、`docker pull`、`gh api`、`gh pr checkout`、`git clone`、`git submodule update --remote`、`git lfs`、`git ls-remote`、`git remote prune`。上面那幾條禁令對這些只有文件。
+- 上面以外的下載指令：`pnpm add`／`update`／`dlx`／`fetch`、`npx <套件>` 本身、`pip`、`curl`、`docker pull`、`gh api`、`gh pr checkout`、`git clone`、`git submodule update --remote`、`git lfs`、`git remote prune`。上面那幾條禁令對這些只有文件。`git ls-remote` 只列 ref、不下載物件，不算下載（push 之後核對 `develop` 沒動要用它）。
 - 腳本或別的程式裡的下載、指令名來自變數（`$cmd pull`）或 alias、zsh 特有語法（`=git pull`）、`source` 進來的檔。
 - 用管線或 here-string 餵給 shell 的指令（`echo git pull | bash`、`bash <<<"git pull"`）。
 - 讓 remote 指到別處的寫法，形狀符合就放行：`git -C <別的 repo> fetch origin develop`、`GIT_DIR`／`GIT_CONFIG_*`、`-c include.path=…`、先跑 `git config remote.origin.url …`。
 - 上面沒列的包裝指令（`find -exec`、`watch`、`ssh`、`coproc` 之類）。
+- 掃描器是手寫的，認得哪些 shell 語法以 `test_session_hooks.py` 的 `CONSTRUCTS` × `PLACES` 與 `BASIC_CONSTRUCTS` × `BASIC_PLACES` 兩張表為準（算術 `$((…))`／`((…))`／`$[…]`、`${…}`、`case`、`function`、子殼、反引號、heredoc、`bash -c`／`bash -`），表外的語法可能漏。
 - 解析不了的指令，出錯就放行。
 
 **分支開了之後需要本機沒有的物件時，不放寬，逐次核可：**
 
-- `gh pr update-branch` 之後 verifier 要在本機檢出新 head：抓 PR head 的 `git fetch` 會被 hook 擋，`gh pr checkout` 擋不到但同樣要核可；核可後由 operator 在終端跑；operator 不在電腦前，這張卡就等。
-- engineer 解衝突：`git fetch origin develop` 的形狀 hook 放行，所以先申請核可這一條只有文件。
-- 跑 `worktree-audit.sh`（`:46` 會自己 fetch develop）：hook 看不到腳本裡的指令，跑它之前先申請核可，只有文件。
+- `gh pr update-branch` 之後 verifier 要在本機檢出新 head：抓 PR head 的 `git fetch` 會被 hook 擋，`gh pr checkout` 擋不到但同樣要核可；兩者核可後都由 operator 在終端跑；operator 不在電腦前，這張卡就等。
+- engineer 解衝突：`git fetch origin develop` 的形狀 hook 放行，所以先申請核可這一條只有文件；核可後由 engineer 自己跑。
+- 跑 `worktree-audit.sh`（`:46` 會自己 fetch develop）：hook 看不到腳本裡的指令，跑它之前先申請核可，只有文件；核可後由 PM 跑。
 
 ## 合併與撤回
 

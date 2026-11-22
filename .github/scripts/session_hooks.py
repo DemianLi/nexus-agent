@@ -26,7 +26,7 @@ MIN_GENERATION = 5
 
 NOTES_RULE = re.compile(r'不讀不寫[^\n]*notes')
 DOWNLOAD_RULE = re.compile(r'下載[^\n]*git fetch origin develop[^\n]*核可')
-DOWNLOAD_NEGATED = re.compile(r'(不用|不需|不必|無須|免|不要)[^\n。；;，,]{0,14}核可')
+DOWNLOAD_NEGATED = re.compile(r'(不用|不需要?|不必|無[須需])(?![^\n。；;，,]{0,14}(自己|代|PM))[^\n。；;，,]{0,14}核可')
 SENTENCE_END = re.compile(r'[。\n]')
 DOWNLOAD_HELP = '寫在卡上、停下，等 operator 核可，核可後由 operator 自己在終端跑；agent 與 PM 不代跑（docs/agents/collab-mode.md〈下載〉）。'
 

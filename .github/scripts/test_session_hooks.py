@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import itertools
 import json
@@ -27,6 +28,7 @@ def run(argv: list[str], event: object) -> tuple[int, str]:
 
 FAKE_PREFIX = 'fake'
 FAKE_PROGRAMS = ('git', 'pnpm')
+SHELLS_UNDER_TEST = tuple(argv for argv in (('/bin/bash', '--noprofile', '--norc', '-c'), ('/bin/zsh', '-f', '-c')) if os.path.exists(argv[0]))
 
 BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。下載只有開分支前一次 git fetch origin develop，其餘寫在卡上等 operator 核可。'}
 
@@ -118,6 +120,10 @@ class StartSessionTest(unittest.TestCase):
         self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + rule}))
         unrelated = '合併不用等 operator 核可。'
         self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + rule + unrelated}))
+        for fine in ('下載不要自己核可。', '下載時 PM 不要代為核可。', '下載先問，免得白等核可。'):
+            with self.subTest(fine=fine):
+                self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + rule + fine}))
+        self.assertIsNotNone(check_start_session({**ok, 'prompt': notes_only + rule + '其餘下載無需核可。'}))
         for wrong in ('下載先寫在卡上等 operator 核可。', '下載只有開分支前一次 git fetch origin develop，其餘不用 operator 核可。', '下載不需要核可，照常 git fetch origin develop。'):
             with self.subTest(wrong=wrong):
                 self.assertIsNotNone(check_start_session({**ok, 'prompt': notes_only + wrong}))
@@ -129,6 +135,60 @@ class StartSessionTest(unittest.TestCase):
 
 def blocked(command: str) -> bool:
     return check_download({'command': command}) is not None
+
+
+CONSTRUCTS = (
+    ':', 'echo $((1+1))', 'echo "$((1+1))"', 'echo $((1<<2))', '(( 1 + 1 ))', '(( 1<<2 ))', 'if ((1<<2)); then :; fi',
+    'while ((n<1)); do n=1; done', 'for ((i=0;i<1;i++)); do :; done', 'echo $(( (1+2)*3 ))', 'echo $(( $(echo 1) + 1 ))', 'echo $((cd x && echo y) )',
+    'x=ab; echo ${#x}', 'x=ab; echo "${#x}"', 'echo ${#}', 'echo "${#a[@]}"', 'x=a.b; echo ${x%%.*}', 'x=a.b; echo "${x//./-}"',
+    'echo "${x:-d}"', 'echo "${x% #*}"', 'echo "${x:+a; b}"', 'echo $?', 'echo $#', 'echo $[1<<2]', 'echo "$[1+1]"',
+    'a=(1 2); echo "${a[0]}"', 'a=(1 2)', '[[ a == a ]]', 'echo $(echo hi)', 'echo `echo hi`', 'cat <(echo hi)',
+    'echo hi >/dev/null 2>&1', 'cat <<<hi', '( : )', '{ :; }', "echo $'a\\tb'",
+    'case x in (x) : ;; (y) : ;; esac', 'case x in (x) case y in (y) : ;; esac ;; esac', 'f() { :; }', 'function f { :; }',
+)
+PLACES = (
+    '{k}; {c}', '{k}\n{c}', '{k} && {c}', 'x=$({k}; {c})', 'x="$({k}; {c})"', 'x=`{k}; {c}`', "bash -c '{k}; {c}'",
+    "bash <<'EOF'\n{k}\n{c}\nEOF", 'cat <<EOF\n$({k}; {c})\nEOF', '({k}; {c})', 'cat <({k}; {c})', 'echo $(case x in (x) {k}; {c};; esac)',
+    'f() { {k}; {c}; }; f', 'if true; then {k}; {c}; fi', 'bash - <<EOF\n{k}\n{c}\nEOF',
+)
+
+
+BASIC_CONSTRUCTS = [
+    ':', 'echo $((1+1))', 'echo "$((1+1))"', 'echo $((1<<2))', '(( 1 + 1 ))', '(( 1<<2 ))',
+    'if ((1<<2)); then :; fi', 'x=ab; echo ${#x}', 'x=ab; echo "${#x}"', 'echo ${#}',
+    'x=a.b; echo ${x%%.*}', 'x=a.b; echo "${x//./-}"', 'echo "${x:-d}"', 'echo $?', 'echo $#',
+    'a=(1 2); echo "${a[0]}"', '[[ a == a ]]', 'echo $(echo hi)', 'echo `echo hi`', 'cat <(echo hi)',
+    'echo hi >/dev/null 2>&1', 'cat <<<hi', '( : )', '{ :; }', "echo $'a\\tb'",
+]
+BASIC_PLACES = [
+    '{k}; {c}', '{k}\n{c}', '{k} && {c}', 'x=$({k}; {c})', 'x="$({k}; {c})"', 'x=`{k}; {c}`',
+    "bash -c '{k}; {c}'", "bash <<'EOF'\n{k}\n{c}\nEOF", 'cat <<EOF\n$({k}; {c})\nEOF',
+    '({k}; {c})', 'cat <({k}; {c})',
+]
+
+
+@contextlib.contextmanager
+def fake_programs():
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp, 'ran.log')
+        for tool in FAKE_PROGRAMS:
+            stub = Path(tmp, f'{FAKE_PREFIX}{tool}')
+            stub.write_text('#!/bin/sh\necho "$(basename "$0") $*" >> "$STUBLOG"\n', encoding='utf-8')
+            stub.chmod(0o755)
+        env = {'PATH': f'{tmp}:/usr/bin:/bin', 'STUBLOG': str(log), 'HOME': tmp}
+        pattern = rf'\b({"|".join(FAKE_PROGRAMS)})\b'
+
+        def ran_under_fakes(command: str) -> list[str]:
+            renamed = re.sub(pattern, rf'{FAKE_PREFIX}\1', command)
+            assert not re.search(pattern, renamed)
+            ran: list[str] = []
+            for argv in SHELLS_UNDER_TEST:
+                log.write_text('', encoding='utf-8')
+                subprocess.run([*argv, renamed], cwd=tmp, env=env, capture_output=True, timeout=10, stdin=subprocess.DEVNULL, check=False)
+                ran += [line.replace(FAKE_PREFIX, '') for line in log.read_text(encoding='utf-8').splitlines() if line.strip()]
+            return ran
+
+        yield ran_under_fakes
 
 
 class DownloadTest(unittest.TestCase):
@@ -200,22 +260,52 @@ class DownloadTest(unittest.TestCase):
             'if true; then {c}; fi', '{c} 2>&1', '{c} # {c}', 'echo $((1<<4))\n{c}', 'echo "a $({c}) b"', 'echo "$(echo "$({c})")"',
             'echo "$(cat <<\'EOF\'\n{c}\nEOF\n)"', 'f() {{ {c}; }}; f',
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp, 'ran.log')
-            for tool in FAKE_PROGRAMS:
-                stub = Path(tmp, f'{FAKE_PREFIX}{tool}')
-                stub.write_text('#!/bin/sh\necho "$(basename "$0") $*" >> "$STUBLOG"\n', encoding='utf-8')
-                stub.chmod(0o755)
-            env = {'PATH': f'{tmp}:/usr/bin:/bin', 'STUBLOG': str(log), 'HOME': tmp}
+        with fake_programs() as ran_under_fakes:
             for wrapper, core, shape in itertools.product(wrappers, cores, shapes):
                 command = shape.replace('{{', '{').replace('}}', '}').replace('{c}', wrapper + core)
-                log.write_text('', encoding='utf-8')
-                renamed = re.sub(rf'\b({"|".join(FAKE_PROGRAMS)})\b', rf'{FAKE_PREFIX}\1', command)
-                self.assertNotRegex(renamed, rf'\b({"|".join(FAKE_PROGRAMS)})\b')
-                subprocess.run(['/bin/bash', '-c', renamed], cwd=tmp, env=env, capture_output=True, timeout=10, stdin=subprocess.DEVNULL, check=False)
-                really_ran = [line.replace(FAKE_PREFIX, '') for line in log.read_text(encoding='utf-8').splitlines() if line.strip()]
                 with self.subTest(command=command):
-                    self.assertEqual(blocked(command), any(blocked(line) for line in really_ran))
+                    self.assertEqual(blocked(command), any(blocked(line) for line in ran_under_fakes(command)))
+
+    @unittest.skipUnless(os.path.exists('/bin/bash'), 'needs /bin/bash')
+    def test_every_syntax_in_every_position_matches_what_real_bash_would_run(self) -> None:
+        cores = ('git pull', 'git fetch origin develop', 'pnpm install', 'pnpm install --offline')
+        with fake_programs() as ran_under_fakes:
+            for core, construct, place in itertools.product(cores, CONSTRUCTS, PLACES):
+                if ("'" in construct and place.startswith('bash -c')) or ('`' in construct and '`' in place):
+                    continue
+                command = place.replace('{k}', construct).replace('{c}', core)
+                with self.subTest(command=command):
+                    self.assertEqual(blocked(command), any(blocked(line) for line in ran_under_fakes(command)))
+
+    @unittest.skipUnless(os.path.exists('/bin/bash'), 'needs /bin/bash')
+    def test_basic_syntax_table_matches_what_real_bash_would_run(self) -> None:
+        with fake_programs() as ran_under_fakes:
+            for core, construct, place in itertools.product(('git pull',), BASIC_CONSTRUCTS, BASIC_PLACES):
+                if "'" in construct and place.startswith('bash -c'):
+                    continue
+                command = place.replace('{k}', construct).replace('{c}', core)
+                with self.subTest(command=command):
+                    self.assertEqual(blocked(command), any(blocked(line) for line in ran_under_fakes(command)))
+
+    def test_what_the_shell_would_not_run_is_not_blocked_and_vice_versa(self) -> None:
+        for command in (
+            'out="$(n=$((1+1)); git pull)"', 'echo "$(echo $((1+1)) && git pull)"', 'cat <<EOF\n$(echo $((1+1)); git pull)\nEOF',
+            'if ((1<<4)); then echo y; fi\ngit pull', 'while ((n<3)); do n=1; done\ngit pull', 'for ((i=0;i<2;i++)); do :; done; git pull',
+            '(( n = $(git pull) ))', 'git -C wt$((1+1)) pull', 'echo $((cd x && git pull) )', 'echo ${#x}; git pull',
+            'if [ ${#x} -gt 0 ]; then git pull; fi', 'echo "${#a[@]}"; git pull', 'echo ${#}; git pull', 'echo "${x% #*}"; git pull',
+            "bash -c 'echo ${#x}; git pull'", 'echo $(( $(git pull) ))', 'echo $[ $(git pull) ]', 'echo $[1<<4]\ngit pull',
+            'x=$((( 1+1 )); git pull)', 'cat <<EOF\n${x:-it\'s}\n$(git pull)\nEOF', 'function f { git pull; }; f',
+            'echo $(case x in (x) git pull;; esac)', 'echo $(case x in x) git pull;; esac)', 'bash - <<EOF\ngit pull\nEOF', 'bash -s a <<EOF\ngit pull\nEOF',
+            'echo "`bash -c \\"git pull\\"`"',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(blocked(command))
+        for command in (
+            'pnpm install --child-concurrency=$((8/2)) --offline', 'echo "${x:+now; git pull}"', 'a=(git pull)', 'echo $((1+1)) git pull',
+            'echo $((cd x && echo "git pull") )', 'echo $(( 1 << 2 )) ${#x} "$[1+1]"; git status', 'case x in git) git status;; esac',
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(blocked(command))
 
     def test_env_vars_and_marker_files_do_not_unblock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

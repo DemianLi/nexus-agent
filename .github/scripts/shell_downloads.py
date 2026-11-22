@@ -41,6 +41,7 @@ PNPM_VALUE_OPTIONS = frozenset({
 ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\+?=')
 SHELL_VALUE_OPTIONS = frozenset({'-o', '+o', '-O', '+O', '--rcfile', '--init-file'})
 SHELL_C_CLUSTER = re.compile(r'-[A-Za-z]*c[A-Za-z]*$')
+SHELL_S_CLUSTER = re.compile(r'-[A-Za-z]*s[A-Za-z]*$')
 DELIMITER_END = ' \t\n;&|()<>'
 
 
@@ -66,33 +67,118 @@ class Scanner:
         self.segments += other.segments
         self.heredocs += other.heredocs
 
-    def skip_balanced_parens(self) -> str:
+    def match_paren(self, start: int) -> int:
         depth = 0
-        start = self.i
-        while self.i < self.n:
-            c = self.s[self.i]
+        j = start
+        while j < self.n:
+            c = self.s[j]
+            if c == '\\':
+                j += 2
+                continue
+            if c == "'":
+                j = self.s.index("'", j + 1) + 1
+                continue
+            if c == '"':
+                j += 1
+                while j < self.n and self.s[j] != '"':
+                    j += 2 if self.s[j] == '\\' else 1
+                j += 1
+                continue
             if c == '(':
                 depth += 1
             elif c == ')':
                 depth -= 1
                 if depth == 0:
-                    self.i += 1
-                    return self.s[start:self.i]
-            self.i += 1
-        raise ValueError('unclosed arithmetic')
+                    return j
+            j += 1
+        raise ValueError('unclosed parenthesis')
 
-    def arithmetic(self) -> None:
-        self.i += 1
-        inner = self.skip_balanced_parens()
-        sub = Scanner(inner)
+    def paren_kind(self, at: int) -> tuple[bool, int]:
+        end = self.match_paren(at)
+        arithmetic = end - 1 > at + 1 and self.s[end - 1] == ')' and self.match_paren(at + 1) == end - 1
+        return arithmetic, end
+
+    def arithmetic_body(self, at: int, end: int) -> None:
+        sub = Scanner(self.s[at + 2:end - 1])
         sub.read_dq(None)
         self.absorb(sub)
+        self.i = end + 1
 
-    def backtick(self) -> None:
+    def bracket_arithmetic(self) -> None:
+        depth = 0
+        j = self.i + 1
+        while j < self.n:
+            if self.s[j] == '[':
+                depth += 1
+            elif self.s[j] == ']':
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if j >= self.n:
+            raise ValueError('unclosed $[')
+        sub = Scanner(self.s[self.i + 2:j])
+        sub.read_dq(None)
+        self.absorb(sub)
+        self.i = j + 1
+
+    def literal_until(self, terminator: str, in_dq: bool) -> None:
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c == terminator:
+                self.i += 1
+                return
+            if c == '\\':
+                self.i += 2
+            elif c == '"':
+                self.i += 1
+                self.read_dq('"')
+            elif c == "'" and not in_dq:
+                self.i = self.s.index("'", self.i + 1) + 1
+            elif c in '$`' and self.expand(in_dq):
+                pass
+            else:
+                self.i += 1
+        raise ValueError(f'unclosed {terminator}')
+
+    def expand(self, in_dq: bool) -> bool:
+        s = self.s
+        i = self.i
+        if s.startswith('$((', i):
+            arithmetic, end = self.paren_kind(i + 1)
+            if arithmetic:
+                self.arithmetic_body(i + 1, end)
+            else:
+                self.i += 2
+                self.scan_list(')')
+        elif s.startswith('$(', i):
+            self.i += 2
+            self.scan_list(')')
+        elif s.startswith('${', i):
+            self.i += 2
+            self.literal_until('}', in_dq)
+        elif s.startswith('$[', i):
+            self.bracket_arithmetic()
+        elif s[i] == '`':
+            self.backtick(in_dq)
+        else:
+            return False
+        return True
+
+    def command_arithmetic(self, leading: list[Word]) -> bool:
+        if not self.s.startswith('((', self.i) or not all(w.text in LEADING_KEYWORDS and not w.quoted for w in leading):
+            return False
+        arithmetic, end = self.paren_kind(self.i)
+        if arithmetic:
+            self.arithmetic_body(self.i, end)
+        return arithmetic
+
+    def backtick(self, in_dq: bool) -> None:
         j = self.i + 1
         out: list[str] = []
+        escapable = '`\\$"' if in_dq else '`\\$'
         while j < self.n and self.s[j] != '`':
-            if self.s[j] == '\\' and j + 1 < self.n and self.s[j + 1] in '`\\$':
+            if self.s[j] == '\\' and j + 1 < self.n and self.s[j + 1] in escapable:
                 out.append(self.s[j + 1])
                 j += 2
                 continue
@@ -116,20 +202,7 @@ class Scanner:
                 if self.s[self.i + 1] != '\n':
                     out.append(self.s[self.i + 1])
                 self.i += 2
-            elif self.s.startswith('$((', self.i):
-                self.i += 1
-                self.arithmetic()
-                out.append(PLACEHOLDER)
-            elif self.s.startswith('$(', self.i):
-                self.i += 2
-                self.scan_list(')')
-                out.append(PLACEHOLDER)
-            elif self.s.startswith('${', self.i):
-                self.i += 2
-                self.scan_list('}')
-                out.append(PLACEHOLDER)
-            elif c == '`':
-                self.backtick()
+            elif c in '$`' and self.expand(True):
                 out.append(PLACEHOLDER)
             else:
                 out.append(c)
@@ -181,13 +254,21 @@ class Scanner:
         state = {'quoted': False, 'in_word': False, 'skip': False}
         pending: list[tuple[str, bool, bool]] = []
         depth = 0
+        case = {'open': 0, 'pattern': False}
 
         def flush() -> None:
             if state['in_word']:
                 if state['skip']:
                     state['skip'] = False
                 else:
-                    cur.append(Word(''.join(buf), state['quoted']))
+                    word = Word(''.join(buf), state['quoted'])
+                    cur.append(word)
+                    if not word.quoted:
+                        if word.text == 'in' and len(cur) == 3 and cur[0].text == 'case':
+                            case['open'] += 1
+                            case['pattern'] = True
+                        elif word.text == 'esac' and len(cur) == 1 and case['open']:
+                            case['open'] -= 1
             buf.clear()
             state['quoted'] = False
             state['in_word'] = False
@@ -206,7 +287,11 @@ class Scanner:
         s = self.s
         while self.i < self.n:
             c = s[self.i]
-            if end is not None and c == end and not (c == ')' and depth):
+            if case['pattern'] and not cur and state['in_word'] and not state['quoted'] and ''.join(buf) == 'esac' and c in ' \t\n;)':
+                case['open'] -= 1
+                case['pattern'] = False
+                state['skip'] = True
+            if end is not None and c == end and not (c == ')' and (depth or case['pattern'])):
                 cut()
                 self.i += 1
                 return
@@ -231,20 +316,7 @@ class Scanner:
                     raise ValueError("unclosed $'")
                 piece(s[self.i + 2:j], True)
                 self.i = j + 1
-            elif s.startswith('$((', self.i):
-                self.i += 1
-                self.arithmetic()
-                piece(PLACEHOLDER, False)
-            elif s.startswith('$(', self.i):
-                self.i += 2
-                self.scan_list(')')
-                piece(PLACEHOLDER, False)
-            elif s.startswith('${', self.i):
-                self.i += 2
-                self.scan_list('}')
-                piece(PLACEHOLDER, False)
-            elif c == '`':
-                self.backtick()
+            elif c in '$`' and self.expand(False):
                 piece(PLACEHOLDER, False)
             elif c in '<>' and s.startswith('(', self.i + 1):
                 self.i += 2
@@ -262,14 +334,27 @@ class Scanner:
             elif c in ' \t':
                 flush()
                 self.i += 1
-            elif c == '(' and s.startswith('((', self.i) and not cur and not state['in_word']:
-                self.skip_balanced_parens()
+            elif c == '(' and not state['in_word'] and self.command_arithmetic(cur):
+                pass
+            elif c == '(' and state['in_word'] and ASSIGNMENT.fullmatch(''.join(buf)):
+                self.i += 1
+                self.literal_until(')', False)
+                piece(PLACEHOLDER, False)
+            elif c == '(' and case['pattern']:
+                self.i += 1
+            elif c == ')' and case['pattern']:
+                cut()
+                case['pattern'] = False
+                self.i += 1
             elif c in ';&|()' and not (c == '&' and s.startswith('>', self.i + 1)):
                 depth += 1 if c == '(' else -1 if c == ')' and depth else 0
                 cut()
+                start = self.i
                 self.i += 1
                 while c in ';&|' and self.i < self.n and s[self.i] in ';&|':
                     self.i += 1
+                if case['open'] and s[start:self.i] in (';;', ';&', ';;&'):
+                    case['pattern'] = True
             elif c in '<>' or c == '&':
                 if c == '&':
                     self.i += 1
@@ -317,6 +402,8 @@ def _strip_prefix(words: list[Word]) -> list[Word]:
         name = w.rsplit('/', 1)[-1]
         if ASSIGNMENT.match(w) or (not words[i].quoted and w in LEADING_KEYWORDS):
             i += 1
+        elif w == 'function' and not words[i].quoted:
+            i += 2
         elif name in WRAPPER_VALUE_OPTIONS:
             values = WRAPPER_VALUE_OPTIONS[name]
             i += 1
@@ -392,6 +479,7 @@ def _check_pnpm(args: list[str]) -> str | None:
 
 def _shell_script(args: list[str]) -> tuple[str | None, bool]:
     c_mode = False
+    s_mode = False
     i = 0
     while i < len(args):
         a = args[i]
@@ -405,10 +493,12 @@ def _shell_script(args: list[str]) -> tuple[str | None, bool]:
             continue
         if not a.startswith(('--', '+')) and SHELL_C_CLUSTER.match(a):
             c_mode = True
+        if not a.startswith(('--', '+')) and SHELL_S_CLUSTER.match(a):
+            s_mode = True
         i += 1
     if c_mode:
         return (args[i] if i < len(args) else None), False
-    return None, i >= len(args)
+    return None, s_mode or i >= len(args) or args[i] == '-'
 
 
 def _check_segment(words: list[Word], depth: int) -> tuple[str | None, bool]:
