@@ -1,29 +1,20 @@
 /**
  * `ask_user_question`：模型自己判斷該問人的時候，停下來問一組結構化的問題。
  *
- * 形狀**照抄 dsh**（`references/deepseek-harness/packages/interaction/tool-ask-user/src/index.ts`
- * 與 `packages/interaction/user-questions/src/types.ts`，SHA `d347e70`；那兩個路徑與
- * `origin/master` `5dda764` **逐位元組相同**，整棵樹之間有 5459 個檔案的差異，所以這不是
- * diff 機器沒在動）。逐格對照：
+ * 模型面的形狀：
  *
- * - **模型面五個欄位**：`id`、`question`、`header?`、`options?: {label, description?}[]`、
- *   `multi_select?`。dsh 的 `AskUserQuestionItem` **型別上還有 `detail?` 與 `intent?`**，
- *   但它的**工具 schema 沒有這兩個**——那條路只給 `ctx.userQuestions.ask()` 的內部呼叫者
- *   （plan-review）用。模型看得到的那一面就是這五格，所以我們照這五格。我們的 plan-review 是
- *   `@nexus/plugin-plan-mode` 的 `exit_plan_mode`，#652 起由它填這兩格；一題的形狀因此搬進
- *   `@nexus/core` 的 `QuestionInterruptItem`，兩個生產者讀同一份。
- * - **`multi_select` 是蛇形，內部是 `multiSelect`**。dsh 兩邊也是這樣分的，不是筆誤。
- * - **回程 `{ answers: [{ id, selected: string[], custom? }] }`**，欄位名與巢狀都一樣。
+ * - **五個欄位**：`id`、`question`、`header?`、`options?: {label, description?}[]`、
+ *   `multi_select?`。`QuestionInterruptItem` 型別上另有 `detail?` 與 `intent?`，但工具 schema
+ *   不給模型這兩格。一題的形狀放在 `@nexus/core` 的 `QuestionInterruptItem`，各個生產者讀同一份。
+ * - **`multi_select` 是蛇形，內部是 `multiSelect`**，不是筆誤。
+ * - **回程 `{ answers: [{ id, selected: string[], custom? }] }`**。
  * - **不加型別、不加必填、不加格式**（[#231](https://github.com/DemianLi/nexus-agent/issues/231)
- *   第 1 項）。dsh 自己有 JSON Schema 機制卻刻意不用在這條路上——那是「標準沒有那個功能」，
- *   不是「我們表達不出來」。**代價明講：日期打成 `2026/13/45` 這一面不會擋。**
+ *   第 1 項）。**代價明講：日期打成 `2026/13/45` 這一面不會擋。**
  *
- * ## 唯一的偏離：一條通道加一個判別式
+ * ## 一條通道加一個判別式
  *
- * dsh 用**兩條獨立的事件通道**（`approval/request` 與 `user-questions/request`），從不判別。
- * LangGraph 只給我們一顆 `interrupt()`，兩條通道表達不出來，所以依 AGENTS.md 的偏離條款
- * 退到最接近的實作：**同一顆中斷，酬載明著帶 `kind`**。判別式的另一半在
- * `@nexus/wire` 的 `reduceInputRequested`。
+ * LangGraph 只給一顆 `interrupt()`，各種請求走同一條，所以**同一顆中斷，酬載明著帶
+ * `kind`**。判別式的另一半在 `@nexus/wire` 的 `reduceInputRequested`。
  *
  * ## fail-closed 用的是核准那條路的同一個判準
  *
@@ -39,7 +30,7 @@
  *
  * ## 子代理不問人（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）
  *
- * 照 dsh，子代理叫這個工具一律被拒，碼是 `DELEGATED_CALLER`（{@link DELEGATED_CALLER_ERROR}）。載體是
+ * 子代理叫這個工具一律被拒，碼是 `DELEGATED_CALLER`（{@link DELEGATED_CALLER_ERROR}）。載體是
  * `rootOnly`：fold 把每個子代理那一份換成拒絕樁，句與碼由這裡帶。所以上面那個判準只管 root。
  *
  * ## 遷上 Cordis 樹（[#1458](https://github.com/DemianLi/nexus-agent/issues/1458)，Part of #1385）
@@ -87,7 +78,7 @@ import type {
 } from '@nexus/tools';
 import { z } from 'zod';
 
-/** 模型看到的工具名。與 dsh 同名。 */
+/** 模型看到的工具名。 */
 export const ASK_USER_QUESTION_TOOL_NAME = 'ask_user_question';
 
 /**
@@ -141,25 +132,20 @@ export type AskUserAnswer = QuestionReply;
  * 人放棄整組問題時回給模型的話。
  *
  * **與「每一題都跳過」是兩件事**：全跳過仍然回傳一份答案（每題空陣列），模型可以據此
- * 繼續；放棄則是這一則錯誤，模型該知道人不打算走這條路了。dsh 的對應是 `ASK_CANCELLED`
- * （`ui-user-questions` 的 `slots.ts:186`）。
+ * 繼續；放棄則是這一則錯誤，模型該知道人不打算走這條路了。
  */
 export const CANCELLED_MESSAGE = `人放棄了這一組問題，沒有任何一題被回答。不要重問同一組——先講清楚你卡在哪，或換一條不需要這些資料的路。`;
 
 /**
  * 人放棄整組時那則錯誤的碼，給會話日誌的 `tool/result` 讀
- * （[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。照 dsh 的
- * `UserQuestionError` 與 `ASK_CANCELLED`（`packages/plan/plan-mode/src/index.ts:325`）。
+ * （[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。
  *
- * **其餘三個錯誤出口不標**：沒有人可以回答、空清單、看不懂的回覆。dsh 的 `EMPTY_QUESTIONS`
- * 在 `ask()` 那一層、我們這裡是工具本體先擋，不是同一個時刻；另外兩格 dsh 沒有對應的碼。
+ * **其餘三個錯誤出口不標**：沒有人可以回答、空清單、看不懂的回覆。
  */
 export const CANCELLED_ERROR: ToolErrorInfo = { name: 'UserQuestionError', code: 'ASK_CANCELLED' };
 
 /**
- * 子代理叫到這個工具時那則錯誤的碼。照 dsh `ctx.userQuestions.ask()` 對不是 runtime root 的呼叫方拋的
- * `UserQuestionError`／`DELEGATED_CALLER`（`packages/interaction/user-questions/src/index.ts:101-106`，
- * `c291e79`；`tool-ask-user.spec.ts:270-299` 釘住拒絕的樣子）。
+ * 子代理叫到這個工具時那則錯誤的碼。
  */
 export const DELEGATED_CALLER_ERROR: ToolErrorInfo = {
   name: 'UserQuestionError',
@@ -177,10 +163,10 @@ export const DELEGATED_CALLER_MESSAGE =
  */
 export { CHANNEL_SERVICE };
 
-/** 空的問題清單。dsh 在 `ask()` 當場拋 `EMPTY_QUESTIONS`，我們照做。 */
+/** 空的問題清單：工具本體當場擋下，不問任何人。 */
 export const EMPTY_QUESTIONS_MESSAGE = `${ASK_USER_QUESTION_TOOL_NAME} 至少要有一題，收到的是空清單，所以沒有問任何人。`;
 
-/** 這次組裝沒有人提供答題管道（{@link CHANNEL_SERVICE} 沒人 provide）時的拒絕。對應 dsh 的 `NO_PROVIDER`。 */
+/** 這次組裝沒有人提供答題管道（{@link CHANNEL_SERVICE} 沒人 provide）時的拒絕。 */
 export const NO_CHANNEL_MESSAGE = `這次組裝沒有指定問答管道，${ASK_USER_QUESTION_TOOL_NAME} 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。`;
 
 export function noAnswererMessage(channel: ApprovalChannel): string {
@@ -224,8 +210,7 @@ export function createAskUserTool(
         ...(error !== undefined && { error }),
       });
       // **沒人提供就是沒有答題者，不是「有人在」**（#669）：以前缺席時退成 `{ kind: 'human' }`，一份不掛 host-services 的
-      // 組裝會拿到一顆以為有人在答的工具，問了就停在一個沒人接的中斷上。照 dsh：`tool-ask-user` 硬注入 `userQuestions`，
-      // 沒有任何答題者接下請求時以 `NO_PROVIDER` 拋錯（`packages/interaction/user-questions/src/index.ts:132`）。
+      // 組裝會拿到一顆以為有人在答的工具，問了就停在一個沒人接的中斷上。
       const channel = channelOf(exec);
       if (channel === undefined) return failed(NO_CHANNEL_MESSAGE);
       if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
@@ -281,9 +266,7 @@ export function createAskUserTool(
  * 登記時帶的選項（#1458 Q3 (a)）：樹上的列與相容層外殼用同一份。
  *
  * - `outputSchema`：成功那一條的輸出形狀（#252）。
- * - `rootOnly`：**子代理不停下來問人**（#324，照 dsh 的 `DELEGATED_CALLER`）：fold 把每個子代理那一份換成拒絕樁。dsh 是在
- *   `ask()` 裡查呼叫方；我們照 goal 那三顆的對應退到 `rootOnly`（理由見 `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`），
- *   句與碼照 dsh 帶。
+ * - `rootOnly`：**子代理不停下來問人**（#324）：fold 把每個子代理那一份換成拒絕樁，句與碼由這裡帶。
  */
 export const ASK_USER_REGISTER_OPTIONS: ToolRegisterOptions = {
   outputSchema: ASK_USER_OUTPUT_SCHEMA,
