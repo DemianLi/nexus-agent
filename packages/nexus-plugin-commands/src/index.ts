@@ -1,10 +1,7 @@
 /**
  * `@nexus/plugin-commands`——**人打的斜線命令**：解析、執行、記日誌。
  *
- * 形狀照 dsh 的 `@deepseek-ai/dsh-commands`
- * （`references/deepseek-harness/packages/interaction/commands/src/index.ts`，對讀版本
- * `cd5ef8148158c3a752a658978873241fdf8e2bbc`）。詞彙在 `@nexus/core` 的
- * {@link @nexus/core!CommandDefinition}，這裡是**執行那一半**。
+ * 詞彙在 `@nexus/core` 的 {@link @nexus/core!CommandDefinition}，這裡是**執行那一半**。
  *
  * ## 兩件看起來像細節其實是語意的事
  *
@@ -15,8 +12,7 @@
  *    量詞是貪婪的，拿掉 lookahead 之後 `/planning` 照樣整個吃成 `planning`（2026-10-11 實測：
  *    拿掉之後 `index.test.ts` 的路徑、標點、冒號、大寫四條紅，`/planning` 那條照綠）。
  * 2. **收不下的行不記日誌。** 語法不符或名字不認得的，回 `undefined`、**日誌裡不留
- *    任何痕跡**（dsh 的原話：「Admission misses (syntax or unknown name) log nothing —
- *    they never entered a handler.」）。發派的那一側收到 `undefined` 就照原樣把那行
+ *    任何痕跡**（它們從來沒進過 handler）。發派的那一側收到 `undefined` 就照原樣把那行
  *    送去該去的地方——在 CLI 就是送給模型，跟今天 `/foo` 的行為一樣。
  *
  * @see [#118](https://github.com/DemianLi/nexus-agent/issues/118)
@@ -245,7 +241,7 @@ export interface CommandExecutor {
    * @param line - 完整的候選命令行。
    * @param signal - 發派它的那次請求擁有的取消訊號。
    * @param submission - 這一行帶的附件（#732），沒有就省略。**命令沒宣告 `input.attachments` 就落定成 `error`**（在 handler 與收下之前），
-   *   照 dsh 的 `execute`：這一行已經記了 `command/run`。
+   *   這一行已經記了 `command/run`。
    * @returns 落定的執行，或語法／名字不認得時的 `undefined`。
    * @throws handler 自己拋的錯誤，或執行前後被中止。**兩種都已經在日誌裡落定成
    *   `kind: 'error'`** 才往外拋。
@@ -273,8 +269,8 @@ export interface CommandExecutor {
 export function createCommandExecutor(options: CommandExecutorOptions): CommandExecutor {
   const { commands, sessionLog } = options;
   const warn = options.onWarn ?? ((message: string) => console.warn(message));
-  // 實例 token ＋ 單調計數：同一份日誌被續上時，重啟前後的 id 不會撞。照 dsh 的
-  // `cmd-${instanceToken}-${seq}`。
+  // 實例 token ＋ 單調計數：同一份日誌被續上時，重啟前後的 id 不會撞：
+  // id 長成 `cmd-${instanceToken}-${seq}`。
   const instanceToken = randomUUID().slice(0, 8);
   let seq = 0;
 
@@ -329,12 +325,12 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
       sessionLog.append('command/run', {
         commandId,
         name: parsed.name,
-        // 照 dsh：命令自己的 domain 事件帶著這段輸入時不再記一次（`session-log.ts` 的 `command/run`）。
+        // 命令自己的 domain 事件帶著這段輸入時不再記一次（`session-log.ts` 的 `command/run`）。
         ...(definition.recordInput === false ? {} : { args: parsed.rawInput }),
         source: { kind: 'user' },
       });
 
-      // 附件（#732）。照 dsh 的 `execute`：命令沒宣告收附件，就在收下之前、handler 之前落定成 `error`——沒有任何東西被寫。
+      // 附件（#732）。命令沒宣告收附件，就在收下之前、handler 之前落定成 `error`——沒有任何東西被寫。
       let admitted: CommandAdmittedAttachments | undefined;
       if (submission !== undefined) {
         if (definition.input?.attachments !== true) {
@@ -375,7 +371,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
         if (executeOptions?.busy === true) {
           throw new Error(`命令 "/${parsed.name}" 這次是在一輪跑著時執行的，不能 steer。`);
         }
-        // 照 dsh 的 `hasPromptContent`：文字空白但帶著附件，這一句仍有內容（`/plan` 只貼圖）。
+        // 文字空白但帶著附件，這一句仍有內容（`/plan` 只貼圖）。
         const hasAttachments = steerAttachments !== undefined && steerAttachments.length > 0;
         if (typeof text !== 'string' || (text.trim().length === 0 && !hasAttachments)) {
           throw new TypeError(
@@ -433,19 +429,17 @@ declare module '@nexus/core' {
     /**
      * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
      *
-     * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`
-     * （我們自己的那一對在下面，模型的工具呼叫記在那裡）。
+     * 與 `command/done` 靠 `commandId` 配對，形狀同 `tool/call`↔`tool/result`
+     * （那一對在下面，模型的工具呼叫記在那裡）。
      * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
      * 所以讀日誌的人不必再解析一次。
      *
      * **收不下的行不記**：語法不符或名字不認得的，從來沒進過 handler，日誌裡不留痕跡。
-     * 這一條照 dsh 的 `execute`：「Admission misses log nothing」。
      *
      * **`args` 是使用者原話，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
      * `session-telemetry-coordinator.ts`）。
      *
-     * **命令宣告 `recordInput: false` 時整個不放 `args`**，照 dsh
-     * （`packages/interaction/commands/src/index.ts:376`，`c291e79`）：那段輸入由命令自己的 domain 事件
+     * **命令宣告 `recordInput: false` 時整個不放 `args`**：那段輸入由命令自己的 domain 事件
      * 帶著，這裡再記一次就是同一段話在日誌裡出現兩次。今天只有 `/feedback` 這樣宣告
      * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）；v8 以前每一顆都帶這一格。
      */
