@@ -3,8 +3,7 @@ import { fileURLToPath } from 'node:url';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 /**
- * 每個套件的 `vitest.config.ts` 共用的模組解析（照 dsh 根目錄 `vitest.config.ts` 的 `pathsPlugin` 與 `docs/testing.md`
- * 「Test resolution: source plane only」）：測試裡的裸 workspace 名一律解析到 `src/`，不經 `exports` 走到建出來的 `lib/`，
+ * 每個套件的 `vitest.config.ts` 共用的模組解析：測試裡的裸 workspace 名一律解析到 `src/`，不經 `exports` 走到建出來的 `lib/`，
  * 否則 `lib/` 過期時會載到第二份模組單例。
  *
  * 這一份讀 `tsconfig.runtime.json` 而不是 `tsconfig.base.json`：兩份由 `scripts/gen-tsconfig-paths.ts` 一起寫、
@@ -20,23 +19,18 @@ export const pathsPlugin = (): ReturnType<typeof tsconfigPaths> =>
   tsconfigPaths({ projects: [RUNTIME_TSCONFIG] });
 
 /**
- * **偏離 dsh，理由 1（基座表達不出來）。** dsh 處理 workspace 裸名插件只有兩種做法：開子行程
- * （`loader-smoke/src/index.ts:100-127`），或在 `mkdtemp` 底下手寫 `node_modules`（`app-boot.spec.ts` 約 `:934-990`）。
- * 兩種都表達不出 `apps/harness` 那 99 個測試檔（#1650 在 959e9af7 實測，分類見該卡）對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、
- * ctx 服務物件）；要表達只能重寫斷言。`plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，
- * 看不到 vite 的 `paths` 外掛，要經 tsx 的 resolve hook 才會照 `paths` 解析。
- *
- * 退到最接近的做法：只在 vitest worker 的 `execArgv` 裝 tsx 的 ESM hook（dsh 的 source-launch 筆記
- * `2026-07-29-dsh-source-launch-tsx-esm.zh.md` 的機制），`TSX_TSCONFIG_PATH` 指到上面那份 tsconfig。
- * 子行程的**啟動指令**不動。`docs/testing.md:49` 管的是載入 Cordis 設定的子行程，不管 worker。
+ * `plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，看不到 vite 的 `paths` 外掛，
+ * 要經 tsx 的 resolve hook 才會照 `paths` 解析。所以只在 vitest worker 的 `execArgv` 裝 tsx 的 ESM hook，
+ * `TSX_TSCONFIG_PATH` 指到上面那份 tsconfig。
  *
  * **影響範圍比「只動 worker」寬一格**：這個函式在 vitest **主行程**設 `process.env.TSX_TSCONFIG_PATH`，所以測試裡開的
  * `node --import tsx` 子行程，沒自己給 `env` 的（例如 `entry-main.test.ts`）會繼承它，實際解析改走 runtime 那份 tsconfig，
  * 即使啟動指令沒改。自己給 `env`、又沒展開 `process.env` 的不會繼承，要明確帶上（例如 `conversation-process.test.ts`），否則 tsx 把 `@nexus/*`
- * 解到 `lib/`，在乾淨的樹（CI）上找不到。這是退到的做法的一部分，不是副作用：子行程測試也因此能把 `@nexus/*` 解到 `src/`。
+ * 解到 `lib/`，在乾淨的樹（CI）上找不到。這是刻意的：子行程測試也因此能把 `@nexus/*` 解到 `src/`。
  * 要在子行程裡驗「沒有 tsx 蓋著」的情況，用 `scripts/smoke-built-bin.ts`（它清掉 `NODE_OPTIONS`、`NODE_PATH` 與這個變數）。
  *
- * 撤除條件：這批測試改走子行程或 `lib` 模式的那一天，就拿掉這個函式。
+ * 撤除條件：`apps/harness` 那批對行程內物件下斷言（函式身分、樹上的列、middleware 鏈、ctx 服務物件）的測試改走子行程或 `lib` 模式的那一天，
+ * 就拿掉這個函式（那批測試的分類與不能改的理由見 `docs/plugin-contract.md` 裡 vitest worker 的 `execArgv` 那一列）。
  * @returns 要放進 `test.execArgv` 的參數。
  */
 export const sourceHook = (): string[] => {
