@@ -11,7 +11,8 @@
  *
  * - **回一個 `string`，不是 `ContentBlock[]`。** `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。
  * - **吃 `GoalSnapshot`，不是 `GoalView`。** 這個 renderer 只讀 `objective` 與
- *   `maxGoalRounds`，兩格都在快照裡。
+ *   `maxGoalRounds`，兩格都在快照裡。伴生（`invariant.ts`）手上只有自己折出來的快照，
+ *   沒有只活在行程裡的 `activation`；吃視圖就得替它造一份假的。
  *
  * @module
  */
