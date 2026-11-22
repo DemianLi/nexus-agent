@@ -91,7 +91,7 @@ agent 做的下載都要 operator 核可。唯一的常設核可：**開分支�
 - 其他下載：把指令和用途寫在卡上，停下，等 operator 核可。核可後由 operator 在終端自己跑；agent 與 PM 不代跑，也沒有 agent 自己能開的放行路。PM 不能代核。
 - 「是否在開分支前」script 判不了，只有文件。
 
-`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash 與 Terminal 面板的 `run_in_terminal` 用同一套判斷：擋 `git pull`、不是 `git fetch origin develop` 的 `git fetch`、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`；引號、註解與 heredoc 裡的字串不算指令。它只看指令字串，環境變數與 marker 檔都不影響結果。看不到的：腳本或別的程式裡的下載、解析不了的指令（出錯就放行）。
+`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash 與 Terminal 面板的 `run_in_terminal` 用同一套判斷：擋 `git pull`、`git remote update`、不是 `git fetch origin develop` 的 `git fetch`、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`；引號、註解與 heredoc 裡的字串不算指令，但 `sh -c`、`eval` 的參數與 `$(…)`、反引號裡的指令照樣查。它只看指令字串，環境變數與 marker 檔都不影響結果。看不到的：腳本或別的程式裡的下載、解析不了的指令（出錯就放行）。
 
 **分支開了之後需要本機沒有的物件時，不放寬，逐次核可：**
 
@@ -218,7 +218,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 收尾第一句寫可封存、不可封存或還在等 | `Stop` hook（`.github/scripts/session_hooks.py`；只看前綴與 `還在等：` 是否一行，擋一次、出錯放行） |
 | engineer、verifier 照角色表的 `model`、`effort` 開，不帶 `cwd`、`host`，`use_worktree: false`，開場有「不讀不寫共用 notes 目錄」 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到；沒有 prompt 時不查最後一項） |
 | 下載：不 pull、只 `git fetch origin develop`、`pnpm install`／`deploy` 帶 `--offline`，其餘先核可 | `PreToolUse` hook（`session_hooks.py pre-download`，管 Bash 與 `run_in_terminal`）擋這幾個指令形狀；腳本裡的下載、是否在開分支前、解衝突與跑 `worktree-audit.sh` 前先申請核可：只有文件 |
-| engineer、verifier 的開場有下載規則那一句 | `PreToolUse` hook（同上，沒有 prompt 時不查） |
+| engineer、verifier 的開場有下載規則那一句 | `PreToolUse` hook（`session_hooks.py pre-start-session`，沒有 prompt 時不查） |
 | 子 session 不傳訊息給 PM、PM 開在主 checkout | 只有文件（hook 看不到訊息與 PM 所在的資料夾） |
 | 開 session 被 app 拒絕時先用備案、再提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
 | 備案的 verifier 一位只判一次 | 只有文件 |

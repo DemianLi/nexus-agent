@@ -21,9 +21,6 @@ class Word(NamedTuple):
     quoted: bool = False
 
 
-SEPARATOR = object()
-
-
 def _substitutions(text: str) -> list[str]:
     found = re.findall(r'\$\(([^()]*)\)', text)
     found += re.findall(r'`([^`]*)`', text)
