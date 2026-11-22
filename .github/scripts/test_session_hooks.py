@@ -25,6 +25,9 @@ def run(argv: list[str], event: object) -> tuple[int, str]:
     return code, err.getvalue()
 
 
+FAKE_PREFIX = 'fake'
+FAKE_PROGRAMS = ('git', 'pnpm')
+
 BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。下載只有開分支前一次 git fetch origin develop，其餘寫在卡上等 operator 核可。'}
 
 
@@ -199,16 +202,18 @@ class DownloadTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp, 'ran.log')
-            for tool in ('git', 'pnpm'):
-                stub = Path(tmp, tool)
+            for tool in FAKE_PROGRAMS:
+                stub = Path(tmp, f'{FAKE_PREFIX}{tool}')
                 stub.write_text('#!/bin/sh\necho "$(basename "$0") $*" >> "$STUBLOG"\n', encoding='utf-8')
                 stub.chmod(0o755)
             env = {'PATH': f'{tmp}:/usr/bin:/bin', 'STUBLOG': str(log), 'HOME': tmp}
             for wrapper, core, shape in itertools.product(wrappers, cores, shapes):
                 command = shape.replace('{{', '{').replace('}}', '}').replace('{c}', wrapper + core)
                 log.write_text('', encoding='utf-8')
-                subprocess.run(['/bin/bash', '-c', command], cwd=tmp, env=env, capture_output=True, timeout=10, stdin=subprocess.DEVNULL, check=False)
-                really_ran = [line for line in log.read_text(encoding='utf-8').splitlines() if line.strip()]
+                renamed = re.sub(rf'\b({"|".join(FAKE_PROGRAMS)})\b', rf'{FAKE_PREFIX}\1', command)
+                self.assertNotRegex(renamed, rf'\b({"|".join(FAKE_PROGRAMS)})\b')
+                subprocess.run(['/bin/bash', '-c', renamed], cwd=tmp, env=env, capture_output=True, timeout=10, stdin=subprocess.DEVNULL, check=False)
+                really_ran = [line.replace(FAKE_PREFIX, '') for line in log.read_text(encoding='utf-8').splitlines() if line.strip()]
                 with self.subTest(command=command):
                     self.assertEqual(blocked(command), any(blocked(line) for line in really_ran))
 
