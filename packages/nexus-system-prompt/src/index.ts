@@ -17,7 +17,7 @@
  * `section()` 的登記跟著**呼叫它的那一列**走，那一列卸載就撤；今天登記身分與前後綴三段的是提供者這一列自己。宿主若每次模型呼叫都問活服務，serve 中合法地改一次這一列
  * （`next-thread`），舊列卸載、段被撤，**開著的 thread 下一次呼叫就靜靜少了身分與 persona**。所以宿主在組 thread 的臨界區裡
  * （無樹的路徑則在單獨掛載卸載之前）`assemble()` 一次，留下 {@link SystemPromptAssembly}——各段的**原文**（還沒代入變數）與
- * 已登記的變數**名字**——之後只拿這份資料渲染，不再碰服務。`assemble()` 因此是 async，而且不可以碰 `this.ctx`。
+ * 已登記的變數**名字**——之後只拿這份資料渲染，不再碰服務。`assemble()` 是 async，而且不可以碰 `this.ctx`。
  *
  * **活的服務不折進 thread 的 `registry.services`**：相容層的插件拿到行程級的活服務就能呼叫 `section()`，段會跨 thread 越疊越多。
  *

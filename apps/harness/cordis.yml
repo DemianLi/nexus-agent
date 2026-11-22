@@ -228,7 +228,7 @@
 # `cwd` 變數（`packages/core/system-prompt/README.md:78`，loop 只登記 `provider` 與 `model`）。
 # 順序是身分句 → 前綴 → 其餘（含組裝點傳的那句指引）→ 後綴，**後綴永遠是最後一段**。
 #
-# 這一列是樹上的函式插件，**提供 `systemPrompt` 服務**（`@nexus/system-prompt` 1.0.0）：三格設定是服務自己的設定，建好之後自己登記三段。
+# 這一列是樹上的函式插件，**提供 `systemPrompt` 服務**（`@nexus/system-prompt` 1.2.0）：三格設定是服務自己的設定，建好之後自己登記三段。
 # 宿主在組 thread 時取一次快照，之後每次模型呼叫只代入變數（`apps/harness/src/system-prompt-middleware.ts`）。
 #
 # - `includeHarnessIdentity`：最前面一句 "You are an AI agent powered by nexus-agent."。

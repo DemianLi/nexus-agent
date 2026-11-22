@@ -11,10 +11,9 @@
  *
  * ## 形狀（#1477：第十一顆搬上 Cordis 樹的插件，第一顆必掛列）
  *
- * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。相依只有 `@nexus/sdk` 與 `@nexus/system-prompt`
- * （服務的定義）：**沒有一行 `@nexus/core`**（決議 §3-4 第 17 條；#1420 的 lint 規則擋它）。
+ * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。相依是 `@nexus/sdk`、`@nexus/system-prompt`（服務的定義）、`@nexus/cordis` 與 `zod`：**沒有一行 `@nexus/core`**（決議 §3-4 第 17 條；#1420 的 lint 規則擋它）。
  *
- * - **提供一個服務**：`systemPrompt`（`@nexus/system-prompt` 1.0.0）。`apply` 裡 `new` 一個繼承 `ContractService` 的類別，建構時
+ * - **提供一個服務**：`systemPrompt`（`@nexus/system-prompt` 1.2.0）。`apply` 裡 `new` 一個繼承 `ContractService` 的類別，建構時
  *   `provide`；用 `new` 不用 `ctx.plugin(Class)`（後者開子 fiber），歸屬（`.provider`）是這一列的 id，宿主據此只把服務折給 active 的這一列。
  *   **三格設定是服務自己的設定**：這個服務建好之後自己登記三段（`harness:identity`、`deployment:persona-prefix`、
  *   `deployment:persona-suffix`），日後 `plan-mode`、`sandbox-policy`、`goal` 遷移時對同一個服務登記它們自己的段。
