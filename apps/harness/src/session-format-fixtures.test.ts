@@ -609,7 +609,7 @@ describe('規則（驗收 D）', () => {
     }
   });
 
-  it('readerBranch 指到的檔裡，有且只有一行是那條分支的錨點', () => {
+  it('readerBranch 指到的檔裡，有且只有一行是那條分支的錨點，各邊的檔與錨點互不相同', () => {
     const anchors = new Map<number, string>([
       [9, 'if (logged === undefined) {'],
       [10, "if ('messageId' in stored) {"],
@@ -617,30 +617,58 @@ describe('規則（驗收 D）', () => {
       [29, 'if (open) {'],
       [33, "          if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
-      [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
-      [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
+      [
+        45,
+        'const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;',
+      ],
+      [
+        51,
+        "header.origin === 'subagent' || (header.parentSession !== undefined && header.isSeeded !== true)",
+      ],
       [52, "if (site.layout === 'two-file') {"],
       [55, "if (field(event, 'modelCall') !== undefined) {"],
       [56, "const tool = mention.tool ?? 'task';"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);
-    for (const edge of branched) {
-      const file = join(REPO, edge.readerBranch!);
-      expect(existsSync(file), edge.readerBranch).toBe(true);
-      const anchor = anchors.get(edge.to)!;
+    const entries = branched.map((edge) => ({
+      file: edge.readerBranch!,
+      anchor: anchors.get(edge.to)!,
+    }));
+    expect(anchorTableProblem(entries)).toBeUndefined();
+    for (const { file, anchor } of entries) {
+      expect(existsSync(join(REPO, file)), file).toBe(true);
       expect(
-        anchorProblem(readFileSync(file, 'utf8'), anchor),
-        `${edge.readerBranch}：${anchor}`,
+        anchorProblem(readFileSync(join(REPO, file), 'utf8'), anchor),
+        `${file}：${anchor}`,
       ).toBeUndefined();
     }
   });
 });
 
+function anchorTableProblem(
+  entries: readonly { file: string; anchor: string }[],
+): string | undefined {
+  const seen = new Set<string>();
+  for (const { file, anchor } of entries) {
+    const key = `${file}\n${anchor.trim()}`;
+    if (seen.has(key)) return `兩條邊共用同一個檔與錨點：${file}：${anchor.trim()}`;
+    seen.add(key);
+  }
+  return undefined;
+}
+
 function anchorProblem(text: string, anchor: string): string | undefined {
-  const lines = text.split('\n').filter((line) => line.includes(anchor));
-  if (lines.length === 0) return '錨點不見了';
-  if (lines.length > 1) return `錨點出現在 ${String(lines.length)} 行`;
+  const same = (line: string): boolean =>
+    anchor.startsWith(' ') ? line.trimEnd() === anchor : line.trim() === anchor;
+  const matched: number[] = [];
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    if (same(line)) matched.push(offset + line.length - line.trimStart().length);
+    offset += line.length + 1;
+  }
+  if (matched.length === 0) return '錨點不見了';
+  if (matched.length > 1) return `錨點出現在 ${String(matched.length)} 行`;
   const source = ts.createSourceFile('anchor.ts', text, ts.ScriptTarget.Latest, true);
   const opaque: [number, number][] = [];
   const visit = (node: ts.Node): void => {
@@ -649,42 +677,51 @@ function anchorProblem(text: string, anchor: string): string | undefined {
       ...(ts.getTrailingCommentRanges(text, node.end) ?? []),
     ])
       opaque.push([range.pos, range.end]);
-    if (
-      ts.isStringLiteralLike(node) ||
-      ts.isTemplateLiteralToken(node) ||
-      ts.isRegularExpressionLiteral(node)
-    )
-      opaque.push([node.getStart(source), node.end]);
+    if (ts.isTemplateLiteralToken(node)) opaque.push([node.getStart(source), node.end]);
     for (const child of node.getChildren(source)) visit(child);
   };
   visit(source);
-  for (let at = text.indexOf(anchor); at !== -1; at = text.indexOf(anchor, at + 1)) {
-    if (!opaque.some(([start, end]) => at > start && at < end)) return undefined;
-  }
-  return '錨點只剩在註解或字串內容裡';
+  const at = matched[0]!;
+  return opaque.some(([start, end]) => at > start && at < end)
+    ? '錨點只剩在註解或樣板字串內容裡'
+    : undefined;
 }
 
-describe('錨點只比內容，不比行號，而且要在程式碼裡', () => {
+describe('錨點登記整行，不比行號，而且要在程式碼裡', () => {
   const anchor = 'if (x) {';
   const code = `function f() {\n  ${anchor}\n    return 1;\n  }\n}\n`;
   it.each([
     ['上方插註解', `// 新註解\n// 再一行\n${code}`],
     ['整行搬到別處', `function g() {}\n${code}`],
+    ['縮排變了', `function f() {\n\t\t${anchor}\n  }\n`],
   ])('%s：照樣是剛好一行', (_name, text) => {
     expect(anchorProblem(text, anchor)).toBeUndefined();
   });
 
+  const hidden = '錨點只剩在註解或樣板字串內容裡';
   it.each([
     ['不見', 'function f() {}\n', '錨點不見了'],
     ['兩行', `${code}${code}`, '錨點出現在 2 行'],
-    ['一行在程式碼、一行在註解', `${code}// ${anchor}\n`, '錨點出現在 2 行'],
-    ['只剩整行註解', `function f() {}\n// ${anchor}\n`, '錨點只剩在註解或字串內容裡'],
-    ['只剩行尾註解', `const a = 1; // ${anchor}\n`, '錨點只剩在註解或字串內容裡'],
-    ['只剩區塊註解', `/* 舊的：\n${anchor}\n*/\n`, '錨點只剩在註解或字串內容裡'],
-    ['只剩字串內容', `const a = "${anchor}";\n`, '錨點只剩在註解或字串內容裡'],
-    ['只剩樣板字串內容', `const a = \`x\n${anchor}\`;\n`, '錨點只剩在註解或字串內容裡'],
+    ['一行在程式碼、一行在區塊註解', `${code}/*\n${anchor}\n*/\n`, '錨點出現在 2 行'],
+    [
+      '原地改成更長的一句，另一處有同樣字的另一句',
+      `if (x === 1) {\n} else ${anchor}\n`,
+      '錨點不見了',
+    ],
+    ['只剩整行註解', `function f() {}\n// ${anchor}\n`, '錨點不見了'],
+    ['只剩行尾註解', `const a = 1; // ${anchor}\n`, '錨點不見了'],
+    ['只剩區塊註解', `/* 舊的：\n${anchor}\n*/\n`, hidden],
+    ['只剩 token 之間的註解', `f(/*\n${anchor}\n*/);\n`, hidden],
+    ['只剩樣板字串內容', `const a = \`x\n${anchor}\n\`;\n`, hidden],
+    ['只剩帶 ${} 的樣板字串內容', `const a = \`x\n${anchor}\n\${y}\`;\n`, hidden],
   ])('%s：紅', (_name, text, problem) => {
     expect(anchorProblem(text, anchor)).toBe(problem);
+  });
+
+  it('縮排登記的錨點：只認同樣縮排的那一行', () => {
+    const indented = `    ${anchor}`;
+    expect(anchorProblem(`a\n${indented}\n  ${anchor}\n`, indented)).toBeUndefined();
+    expect(anchorProblem(`a\n  ${anchor}\n`, indented)).toBe('錨點不見了');
   });
 
   it('32→33 的錨點靠縮排區分同文字的另外兩行', () => {
@@ -692,6 +729,17 @@ describe('錨點只比內容，不比行號，而且要在程式碼裡', () => {
     const turnClose = "if (turnOpen || suspended) close(event.time, { event: 'completed' });";
     expect(anchorProblem(text, turnClose)).toBe('錨點出現在 3 行');
     expect(anchorProblem(text, `          ${turnClose}`)).toBeUndefined();
+  });
+});
+
+describe('各邊的檔與錨點互不相同', () => {
+  it('同一個檔、同一個錨點登記給兩條邊就紅；同檔不同錨點、不同檔同錨點都可以', () => {
+    const a = { file: 'a.ts', anchor: 'if (x) {' };
+    expect(anchorTableProblem([a, { file: 'a.ts', anchor: '  if (x) {  ' }])).toBe(
+      '兩條邊共用同一個檔與錨點：a.ts：if (x) {',
+    );
+    expect(anchorTableProblem([a, { file: 'a.ts', anchor: 'if (y) {' }])).toBeUndefined();
+    expect(anchorTableProblem([a, { file: 'b.ts', anchor: 'if (x) {' }])).toBeUndefined();
   });
 });
 
