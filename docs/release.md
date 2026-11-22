@@ -1,6 +1,6 @@
 # 發版與升級指南
 
-版號怎麼跳、Release 怎麼跑、不相容變更怎麼寫升級指南。[`AGENTS.md`](../AGENTS.md)〈發版〉只留觸發條件，細節在這裡。
+版號怎麼跳、Release 怎麼跑、不相容變更怎麼寫升級指南。[contributing](contributing.md)只留觸發條件，細節在這裡。
 
 ## 發版
 

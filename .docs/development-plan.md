@@ -248,7 +248,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 
 ## 5. 開發階段
 
-每個 PR 照 repo 流程：`<type>/<kebab-case>` 分支 → squash 進 develop，PR 標題 `<type>: <中文描述>`（見 [AGENTS.md](../AGENTS.md)）。以下 PR 切分為建議粒度。
+每個 PR 照 repo 流程：`<type>/<kebab-case>` 分支 → squash 進 develop，PR 標題 `<type>: <中文描述>`（見 [AGENTS.md](../docs/contributing.md)）。以下 PR 切分為建議粒度。
 
 ### Phase 0 — 技術驗證（spike，2 個 PR）
 
@@ -317,7 +317,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
   - **天真的圍堵會把 HITL 的中斷吃掉。** 實測工具內 `interrupt()` 撞上不分辨的 `try/catch`：`__interrupt__` 消失，變成一則假的 error ToolMessage。加 `isGraphBubbleUp(e) → throw` 之後中斷回來、`Command({ resume })` 續跑正常。這條直接撞上 #71 釘的那些行為，要有對照組。
   - **校驗器自己炸掉同樣致命，而外圍內驗剛好接得住。** `wrapToolCall` body 裡的 bug 一樣讓整場 reject。把圍堵註冊在最外、校驗器在最內，實測順序 `containment-in → validator-in → containment-caught`，整場沒拋。dsh 對這件事的答案是 fail-closed：渲染器／投影器自己失敗也「转为 JSON 安全的 `isError`」，不是靜默放行。（當時圍堵是用 `prepend: true` 掛在這個 plugin 上的。**[#159](https://github.com/DemianLi/nexus-agent/issues/159) 之後它歸 `@nexus/core`**，由 fold 打底在整份陣列的第 0 格——這個排法因此被保住而且放大了：連 `prepend` 的 registry middleware 都在它裡面，而且不再取決於清單有沒有掛這個 plugin。）
   - **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時 `wrapToolCall` 收到的就是 `Command`，`ToolMessage.isInstance` 為 false（實測），ToolMessage 在 `update.messages` 裡。`if (!ToolMessage.isInstance(r)) return r;` 會讓所有 Command 工具整個跳過校驗，而所有回字串的測試都照過。基座自己的 `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
-  - **兩條偏離**（[AGENTS.md](../AGENTS.md) 要求標註）：①dsh 的 `defineTool` 要求每個工具**強制**宣告 `output`、註冊表在註冊時驗，但 LangChain 的 `StructuredTool` 沒有輸出 schema 這個欄位（`ToolParams` 只有 `responseFormat`），表達不出來 → 退到 plugin 這一層逐工具選加，沒宣告的明文放行。②dsh 在渲染成 content **之前**驗 canonical value，基座的 `ToolNode` 先 `JSON.stringify` 再交出來（`:244-248`），值救不回來 → 退到對 content 字串 `JSON.parse` 再驗，宣告了 schema 卻不是合法 JSON 本身即失敗。
+  - **兩條偏離**（[AGENTS.md](../docs/contributing.md) 要求標註）：①dsh 的 `defineTool` 要求每個工具**強制**宣告 `output`、註冊表在註冊時驗，但 LangChain 的 `StructuredTool` 沒有輸出 schema 這個欄位（`ToolParams` 只有 `responseFormat`），表達不出來 → 退到 plugin 這一層逐工具選加，沒宣告的明文放行。②dsh 在渲染成 content **之前**驗 canonical value，基座的 `ToolNode` 先 `JSON.stringify` 再交出來（`:244-248`），值救不回來 → 退到對 content 字串 `JSON.parse` 再驗，宣告了 schema 卻不是合法 JSON 本身即失敗。
   - **排序缺口，記著不補。** `MiddlewareRegistrationPoint` 只有 `prepend` 一根槓桿，給的是「最外」；「最內」現在只是「沒 prepend 而且剛好註冊在最後」，沒有任何 plugin 有義務尊重它。這一版釘住現況，加槓桿留給真的有第二個 plugin 要搶位置的時候。**2026-09-13（[#252](https://github.com/DemianLi/nexus-agent/issues/252)）這個缺口跟著校驗器一起收掉**：它搬進 core、由 fold 打底，位置不再靠註冊順序。偏離①的載體從「plugin 的一張表」換成「註冊時選帶」，偏離本身照舊。
 - 驗收：**破壞性操作必須人工核准才執行**（已有可執行證據，見上）；~~LangSmith 能看到完整 trace~~ **→ tracing 開沒開、送去哪、送出去的東西脫敏到什麼程度，這三件事說得出來**（已有可執行證據，見上——原句驗過之後發現它問錯方向了）；~~校驗失敗的工具結果會帶錯誤回饋給 agent 重試~~ **→ 工具失敗（拋錯或輸出不合宣告的 schema）都變成帶更正回饋的 error ToolMessage，而且那一輪不會因此中止**（已有可執行證據，見上——原句預設了「回饋」是要加的東西，實測它本來就在，被我們自己踩掉了）。
 

@@ -90,7 +90,7 @@ pnpm build        # vite build
 ```
 
 程式碼規範見 [`docs/standards.md`](docs/standards.md)。分支策略、PR 標題格式、發版流程與設計方法論
-（含怎麼參照 DeepSeek Harness 選做法）見 [AGENTS.md](AGENTS.md)。
+（含怎麼參照 DeepSeek Harness 選做法）見 [項目規則](docs/contributing.md)。
 
 CI 只有 `gate` 一個 required status check，無條件觸發，`gate` 只是把其他 job 的結果收斂成單一燈號。
 功能分支 → `develop` 的 PR 走輕的模式：`plan` job 只做擋樹的檢查（PR 標題與格式、CI 腳本的測試、lockfile 新版本的發布年齡、受影響套件的型別檢查、異動檔的

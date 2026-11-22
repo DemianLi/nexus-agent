@@ -249,7 +249,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 ## 與 dsh 的偏離
 
 技術實現以 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的
-`packages/mcp/mcp-client` 為標準（見 [AGENTS.md](../../../AGENTS.md)）。這裡同 dsh 直接接
+`packages/mcp/mcp-client` 為標準（見 [contributing](../../../docs/contributing.md#技術實現標準)）。這裡同 dsh 直接接
 SDK client（`@modelcontextprotocol/client`），每顆工具是一份 `NexusTool`（#2353）：原樣的 `inputSchema` 當參數上線
 （dsh `packages/mcp/mcp-client/src/tools.ts:260`），`taskSupport: 'required'` 當場拒絕（`:137`、`:280`）。結果的轉換與 elicitation
 跟 `@langchain/mcp-adapters` 2.0.0 同形，由 `harness/apps/harness/src/mcp-migration.test.ts` 的對照組釘住。重連是自己包的 supervisor（指數退避與穩定期重置照 dsh）。

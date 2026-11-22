@@ -54,7 +54,7 @@
 
 ## 2. dsh 標準怎麼做
 
-依 [AGENTS.md](../AGENTS.md)「技術實現標準」先查 dsh。
+依 [AGENTS.md](../docs/contributing.md)「技術實現標準」先查 dsh。
 
 - **dsh 有 web 前端**：`apps/web`（`@deepseek-ai/dsh-web-frontend`）是 `vite build` 包一層 `@deepseek-ai/dsh-client-web`，React `^18.2.0`、Vite `^6`（`apps/web/package.json`）。
 - **樣式是 CSS Modules，沒有 shadcn、沒有 Tailwind**：`packages/client` 下 141 個 `.css`；全 repo 的 `package.json` 搜 `tailwindcss|shadcn|@radix-ui` 零筆，`pnpm-lock.yaml` 搜 `tailwindcss|@radix-ui` 也是零筆。

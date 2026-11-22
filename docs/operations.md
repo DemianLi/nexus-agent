@@ -1,7 +1,7 @@
 # 操作指南
 
 跑起來之後會撞到的事：圍堵、會話日誌、瀏覽器會話的安全約束、執行上限、評測。
-怎麼安裝與怎麼起一條 agent 見 [README.md](../README.md)；協作流程見 [AGENTS.md](../AGENTS.md)。
+怎麼安裝與怎麼起一條 agent 見 [README.md](../README.md)；項目規則見 [contributing](contributing.md)。
 
 ## 檔案圍堵
 

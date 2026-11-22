@@ -50,7 +50,7 @@
 
 - **shadcn＋Tailwind 是基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，修改寫在後載入、layer 外的覆寫檔，逐條登記在該目錄 README 的「本地修改」（[#1468 的拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q1、Q4、Q9）。**外觀類照 SG，機制類保留**（Q8）；碰到本份 §5、§7、§8 的無障礙門檻時以門檻為準（Q5）。`ui/` 的元件也是 SG 的：primitive 以 Base UI 為主（command 用 cmdk、toast 用 sonner、對話捲動與提問用 `@shadcn/react`），`apps/web/src/components/ui/` 是它們的 nexus 層，轉出 vendor 的原檔。
 - **視覺、設計 token、動效的數值以這份標準為準**（§13）：SG 是值的來源，第一版凍結自畫面上實際的值（SG 加既有覆寫）；之後 SG 與標準不一致時照標準，用覆寫蓋掉（demian 2026-11-15 定，[#2756](https://github.com/DemianLi/nexus-agent/issues/2756#issuecomment-6880263876)）。**[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當元件多樣性與交互模式的參考**，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是「模仿對象：元件多樣性、交互體驗、動效呈現」）。最後長成我們自己的系統風格。
-- **dsh 在 UI/UX 上最多只參考元件多樣性**，不寫對照 dsh 的紀錄（[AGENTS.md「技術實現標準」](../AGENTS.md)）。先前以「照 dsh」寫下的 UI 行為（markdown 自建、工具依名分類、1024 收側欄、觸控 44px、核准獨立成卡）照舊，只是依據不再是 dsh。
+- **dsh 在 UI/UX 上最多只參考元件多樣性**，不寫對照 dsh 的紀錄（[AGENTS.md「技術實現標準」](../docs/contributing.md)）。先前以「照 dsh」寫下的 UI 行為（markdown 自建、工具依名分類、1024 收側欄、觸控 44px、核准獨立成卡）照舊，只是依據不再是 dsh。
 - **動到執行語意的仍照 dsh**，唯一寫明的例外是提問面板的 ❌（§4.3）。
 - **完全內網**：字型、動效 CSS 等資源一律打包進本地，執行期不打外部 CDN。
 - Libraries.dev 讀的是 `b300ff8`（inventory 調研時 `44fef85`）；標題字 Saans 沒附授權，**不拿**。

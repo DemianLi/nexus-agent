@@ -282,7 +282,7 @@
 
 **Notes**：
 
-- 技術標準照 [AGENTS.md](../AGENTS.md)，UI **行為**照 dsh（`references/deepseek-harness` `e459e32`），元件庫選型見 [agent-ui-library-survey.md](agent-ui-library-survey.md)，清單與 token 見本檔。
+- 技術標準照 [AGENTS.md](../docs/contributing.md)，UI **行為**照 dsh（`references/deepseek-harness` `e459e32`），元件庫選型見 [agent-ui-library-survey.md](agent-ui-library-survey.md)，清單與 token 見本檔。
 - 已定的 RWD：1024px 收側欄、觸控目標 44px、核准卡獨立（#317）。
 - 動效 token 來自 Libraries.dev `site.css`，**不拿 Saans 字型**。
 

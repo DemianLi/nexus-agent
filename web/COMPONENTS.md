@@ -210,7 +210,7 @@ pnpm --filter @nexus/web run catalog
 
 每個合進 `develop` 的 commit，合併後那一輪的「視覺差異（只報告）」會把這個 commit 與上一個 commit 的 `guard/` 測試頁各拍一次（總覽與每個子頁、亮暗），在那一輪的摘要列出畫面有差的，前、後與標出差異的圖放在 artifact `visual-diff`。
 
-- **不紅，但要有人確認**：畫面本來就會改，有差不等於壞掉，所以它不讓這一輪變紅、不走撤回。有差（或多了、少了畫面）時那一輪會在對應的 PR 留言列出來，作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`docs/agents/collab-mode.md`](../docs/agents/collab-mode.md)〈合併與撤回〉）。
+- **不紅，但要有人確認**：畫面本來就會改，有差不等於壞掉，所以它不讓這一輪變紅、不走撤回。有差（或多了、少了畫面）時那一輪會在對應的 PR 留言列出來，作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`docs/contributing.md`](../docs/contributing.md)）。
 - 擋的是人不是機器：沒人回，CI 不會紅。不放在 PR 上擋是因為兩邊各 build、各拍一次要將近三分鐘，功能 PR 的檢查要壓在一分鐘內（[#2088](https://github.com/DemianLi/nexus-agent/issues/2088)）。
 - 不存基準圖：兩邊都是同一台 runner 當場拍的，字型與 Chrome 版本一定相同。
 - 容差：只數跟另一個不同像素相鄰的像素，不超過 30 個算雜訊（`visual/compare.ts`）。小於這個的改動報不出來。
