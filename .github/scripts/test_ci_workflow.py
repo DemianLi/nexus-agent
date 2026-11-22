@@ -1334,10 +1334,34 @@ class EditedPullRequest(unittest.TestCase):
                 self.assertNotIn('gate', job.get('name', '').lower())
 
     def test_reruns_only_for_what_gate_reads(self) -> None:
+        job = self.wf['jobs']['rerun']
+        self.assertEqual(job['if'], 'github.event.changes.title || github.event.changes.base || github.event.changes.body')
         self.assertEqual(
-            self.wf['jobs']['rerun']['if'],
-            "github.event.changes.title || github.event.changes.base || (github.event.changes.body && github.base_ref == 'main')",
+            job['env']['SCOPE_FIRST'],
+            "${{ github.event.changes.body && !github.event.changes.title && !github.event.changes.base && github.base_ref != 'main' }}",
         )
+
+    def test_body_only_edit_of_a_feature_pr_reruns_only_when_in_scope(self) -> None:
+        """只改內文的功能 PR：先用 check_dsh_cleanup.py 判範圍，範圍外不重跑（#3125）。"""
+        steps = self.wf['jobs']['rerun']['steps']
+        checkout = steps[0]
+        self.assertTrue(checkout['uses'].startswith('actions/checkout@'))
+        self.assertEqual(checkout['if'], "env.SCOPE_FIRST == 'true'")
+        self.assertEqual(checkout['with']['fetch-depth'], 0)
+        scope = next(s for s in steps if s.get('id') == 'scope')
+        self.assertEqual(scope['if'], "env.SCOPE_FIRST == 'true'")
+        self.assertIn('check_dsh_cleanup.py --in-scope', scope['run'])
+        rerun = next(s for s in steps if 'rerun' in s.get('name', ''))
+        self.assertEqual(rerun['if'], "env.SCOPE_FIRST != 'true' || steps.scope.outputs.in_scope == 'true'")
+
+    def test_gate_checks_the_cleanup_evidence_on_feature_prs(self) -> None:
+        step = next(s for s in load(PLAN_CHECKS)['runs']['steps'] if 'check_dsh_cleanup.py' in str(s.get('run', '')))
+        self.assertEqual(step['if'], "github.event_name == 'pull_request' && github.base_ref != 'main'")
+        self.assertIn('jq -r \'.body // ""\' "$RUNNER_TEMP/pr.json"', step['run'])
+        self.assertIn('check_dsh_cleanup.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"', step['run'])
+        self.assertNotIn('BODY', step.get('env', {}))
+        names = [s.get('name') for s in load(PLAN_CHECKS)['runs']['steps']]
+        self.assertLess(names.index('檢查 PR 標題與內文'), names.index(step['name']))
 
     def test_gate_reads_title_body_and_base_from_api(self) -> None:
         """rerun 沿用觸發時的事件；從事件讀的話，改了標題重跑還是驗舊的。"""

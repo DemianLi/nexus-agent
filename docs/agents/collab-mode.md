@@ -71,7 +71,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 - 一張卡最多 `FAIL` 三次：前兩次 `FAIL` 退回同一位 engineer 修（它的 worktree 與分支就是要接續的狀態），第三次 `FAIL` 就停。每一次 `FAIL` 都算，解衝突之後的重判也算，不然解壞了可以一直退回。停下時 PM 標 `needs-info`、拿掉 `ready-for-agent`，在卡上寫明卡在哪，交給 operator；engineer 不封存，留著它的 worktree 等 operator 回覆。
 - 修 `FAIL` 理由的 commit，就算只改註解或文件，也一律由 PM 開新的 verifier 判新的 head。
 - 判定只記在 PR 上，卡上只放那則留言的連結。
-- `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate（`develop → main` 例外，由 `pr-edited.yml` 重跑），改標題會。
+- `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate，例外是 `develop → main` 與清 dsh 對照的 PR（階段 1，見〈對照 dsh〉）：它們的 gate 讀內文，由 `pr-edited.yml` 重跑，改標題也會重跑。
 - **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，再由同一位 engineer 修好、重新開 PR，照常走 verifier。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回）之前，不開下一張 PR。
 - 合併後那一輪的「視覺差異」有差時會在 PR 留言，它不讓這一輪變紅、不走撤回；作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`apps/web/COMPONENTS.md`](../../apps/web/COMPONENTS.md)〈視覺差異〉）。
 - `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。緊急修補同樣先進 `develop`。
@@ -109,6 +109,14 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 
 比較結果寫在 PR 內文 Summary 的「對照 dsh」；符合下面 ADR 條件的寫成 ADR，「對照 dsh」只放一行連結。不寫進程式碼與註解。operator 事後不同意，走上面的導正。
 
+**清掉程式碼註解裡的 dsh 對照的 PR**（階段 1：dsh 計數下降，而且除了註解與字串內容，程式碼沒變）有三條規則，gate 會讀這張 PR 的內文（`.github/scripts/check_dsh_cleanup.py`）：
+
+1. 帶 dsh 對照的句子預設整句刪。要留或改寫，內文逐句附 nexus 實作的 `path:line`；改寫與新增的每一句，內文都要有一列（整句加 `path:line`，在 head 上要存在）。
+2. 階段 1 不改段名（註解裡的 `##` 標題與表格的名稱格；含 dsh 的段名不在此限，括號裡的說明不算）。改名留給階段 2，跟所有指向它的地方同一張 PR 改。
+3. 刪掉一段或段名之前，找全 repo 指向它的地方；script 列出候選，每一個要在這張 PR 改掉，或在內文有一列寫明為什麼仍成立。
+
+本機跑 `python3 .github/scripts/check_dsh_cleanup.py` 印出第 1、3 條要填的列，貼進內文再補。補完內文不用推 commit，gate 會用新內文重判（`pr-edited.yml`）。句子是真是假、理由成不成立，script 判不了，由 verifier 判。
+
 ## ADR
 
 三個條件都成立才寫：**難以撤回、少了背景會讓人意外、是真的取捨過的結果**。少一個就不寫，比較留在 PR 內文。
@@ -145,6 +153,10 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | Evidence 只寫實際跑過的 | verifier（重跑每一條） |
 | 跨套件型別收緊先實測拆不拆得開 | verifier |
 | 註解規則 | engineer 跑 no-comments ＋ verifier |
+| 清 dsh 對照的 PR：改寫與新增的每句註解，內文有一列整句加存在的 `path:line` | gate（`check_dsh_cleanup.py`） |
+| 清 dsh 對照的 PR：那一行撐不撐得起那一句 | verifier |
+| 清 dsh 對照的 PR 不改註解裡原有的段名（含 dsh 的除外） | gate（`check_dsh_cleanup.py`） |
+| 刪掉一段或段名之前，找全 repo 指向它的地方；每個候選指向改掉或在內文寫為什麼仍成立 | gate（`check_dsh_cleanup.py` 列候選、查內文有一列）＋ verifier（理由對不對、script 找不到的寫法） |
 | verifier `PASS` 才合併 | 只有文件（ruleset 不要求 approval） |
 | 合併後那一輪紅了：重跑一次，還是紅就撤回 | 只有文件（engineer 照 Shipping 做） |
 | 內文寫 `Refs #N`，不寫 Closes | 只有文件 |

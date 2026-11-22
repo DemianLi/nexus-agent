@@ -5,6 +5,8 @@ name: PR 編輯後重驗
 #   - 改標題：gate 驗標題。
 #   - 改 base：gate 驗 base 跟這一輪決定範圍時的一樣，不一樣就紅，要推一個 commit 或關閉再打開 PR 重新觸發。
 #   - develop → main 的 PR 改內文：gate 驗內文的段落。
+#   - 功能 PR 改內文：只有清外部對照的 PR（只動註解與字串內容、對照詞計數下降，.github/scripts/check_dsh_cleanup.py 判）的 gate 讀內文，
+#     所以先用同一支腳本判範圍，在範圍內才重跑；其餘功能 PR 改內文照舊不重跑。
 #
 # job 不能叫 gate：只改功能 PR 內文時它被跳過，跳過的 required check 算成通過。
 on:
@@ -21,13 +23,33 @@ permissions:
 jobs:
   rerun:
     name: 重跑 CI
-    if: github.event.changes.title || github.event.changes.base || (github.event.changes.body && github.base_ref == 'main')
+    if: github.event.changes.title || github.event.changes.base || github.event.changes.body
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       actions: write
+    env:
+      # 只改內文的功能 PR 才要先判範圍；改標題、改 base、改 main 的 PR 的內文一律重跑。
+      SCOPE_FIRST: ${{ github.event.changes.body && !github.event.changes.title && !github.event.changes.base && github.base_ref != 'main' }}
     steps:
+      - uses: actions/checkout@v7
+        if: env.SCOPE_FIRST == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 判斷內文是不是 gate 會讀的
+        id: scope
+        if: env.SCOPE_FIRST == 'true'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          echo "in_scope=$(python3 .github/scripts/check_dsh_cleanup.py --in-scope --base "$(git merge-base "origin/$BASE_REF" HEAD)")" >> "$GITHUB_OUTPUT"
+
       - name: rerun 這個 head 最新的一輪
+        if: env.SCOPE_FIRST != 'true' || steps.scope.outputs.in_scope == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

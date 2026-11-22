@@ -28,7 +28,7 @@ type：`feat` `fix` `refactor` `perf` `test` `docs` `ci` `chore`，`develop → 
 
 ## PR 內文
 
-- **feature → develop**：`mattpocock-skills:pr` 照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，段落標題與欄位名用英文、內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md)。Summary 的圖優先用文字樹或 diff 草圖。第一行 `Refs #N`，不寫 Closes。`gh pr create --body` 不會套模板，要自己照填。Evidence **寫實際跑過的，沒跑過就寫沒跑過**。這種 PR 的內文 gate 不檢查。
+- **feature → develop**：`mattpocock-skills:pr` 照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，段落標題與欄位名用英文、內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md)。Summary 的圖優先用文字樹或 diff 草圖。第一行 `Refs #N`，不寫 Closes。`gh pr create --body` 不會套模板，要自己照填。Evidence **寫實際跑過的，沒跑過就寫沒跑過**。一般功能 PR 的內文 gate 不檢查；清掉註解裡 dsh 對照的 PR（階段 1，規則見 [collab-mode](docs/agents/collab-mode.md#對照-dsh)）例外，內文要附逐句證據，本機跑 `python3 .github/scripts/check_dsh_cleanup.py` 印出要填的列。
 - 開 PR 與每次推更新之前，對 diff 跑 [no-comments](.agents/skills/pstack/skills/no-comments/SKILL.md)，刪掉的註解列進內文。
 - **develop → main**：內文要有 `## 變更內容` 與 `## 驗證方式`（gate 檢查）；驗證方式同樣只寫實際跑過的。
 

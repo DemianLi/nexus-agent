@@ -3,8 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [develop, main]
-    # 不收 edited：只改 PR 內文不重跑、也不取消正在跑的這一輪。改標題、改 base，以及 develop → main 改內文時，
-    # 由 pr-edited.yml 重跑這一輪（rerun）。
+    # 不收 edited：只改 PR 內文不重跑、也不取消正在跑的這一輪。改標題、改 base，以及 develop → main 與清外部對照的 PR
+    # （.github/scripts/check_dsh_cleanup.py 判範圍）改內文時，由 pr-edited.yml 重跑這一輪（rerun）。
   # push 只留 main：develop 的 push 會與 develop → main 的 PR 落在同一個 sha 上，產生兩個 gate，合併時要等兩輪。
   # 合進 develop 之後的完整一輪見下方「兩種模式」。
   push:

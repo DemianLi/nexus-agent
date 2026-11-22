@@ -20,6 +20,10 @@ EXEMPT = {'.github/scripts/check_ratchets.py', '.github/scripts/test_check_ratch
 DSH = re.compile(r'(?i)(?<![a-z0-9_])dsh(?![a-z0-9_])|deepseek[-_ ]?harness')
 COMMENT_OR_INLINE_SLASHES = re.compile(r'^\s*(?://|/\*|\*|#)|\s//\s')
 NARRATIVE = re.compile(r'這張 ?PR|這張卡|本 ?PR|原本寫|(?<!還)原先')
+def reference_lines(text: str) -> int:
+    return sum(1 for line in text.split('\n') if DSH.search(line))
+
+
 RULES = {'dsh': '程式碼裡的 dsh 引用', 'narrative': '註解裡的變更敘事用語'}
 Counts = dict[str, dict[str, int]]
 

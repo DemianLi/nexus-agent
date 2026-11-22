@@ -1,7 +1,7 @@
 name: 異動與格式檢查
 description: >-
   算出這一輪的異動檔（寫進 changed.txt），再跑不用安裝相依的檢查：main 的 PR 來源、PR 標題與內文、升級指南、
-  Markdown 相對連結、ADR 格式、只降不升的計數、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
+  Markdown 相對連結、ADR 格式、只降不升的計數、清外部對照 PR 的內文證據、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
 
 outputs:
   count:
@@ -69,6 +69,18 @@ runs:
         fi
         TITLE=$(jq -r .title "$RUNNER_TEMP/pr.json") BODY=$(jq -r '.body // ""' "$RUNNER_TEMP/pr.json") \
           python3 .github/scripts/check_pr.py
+
+    # 清外部對照的 PR（只動註解與字串內容、對照詞計數下降）要在內文附證據：改寫的每句註解、消失的段名、指向它們的地方（#3125）。
+    # 規則與範圍見 .github/scripts/check_dsh_cleanup.py；develop → main 的 PR 不看。內文從 API 讀當下的值，補完內文不推 commit 也會重判。
+    - name: 檢查清對照 PR 的內文證據
+      if: github.event_name == 'pull_request' && github.base_ref != 'main'
+      shell: bash
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        BODY=$(jq -r '.body // ""' "$RUNNER_TEMP/pr.json") \
+          python3 .github/scripts/check_dsh_cleanup.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"
 
     # 升級指南的格式（#1537，規則見 AGENTS.md「發版」）。版本目錄要對到已存在的 tag，靠 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
     - name: 檢查升級指南
