@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import session_hooks
-from session_hooks import ROLES, SKILL_MD, check_closing, check_start_session, main
+from session_hooks import ROLES, SKILL_MD, check_closing, check_download, check_start_session, main
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -21,7 +21,7 @@ def run(argv: list[str], event: object) -> tuple[int, str]:
     return code, err.getvalue()
 
 
-BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。'}
+BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。下載只有開分支前一次 git fetch origin develop，其餘寫在卡上等 operator 核可。'}
 
 
 def ok_input(name: str, model: str, effort: str, **more: object) -> dict:
@@ -101,9 +101,105 @@ class StartSessionTest(unittest.TestCase):
         no_prompt = {k: v for k, v in ok.items() if k != 'prompt'}
         self.assertIsNone(check_start_session(no_prompt))
 
+    def test_prompt_must_state_download_rule(self) -> None:
+        ok = ok_input('eng-1', 'sonnet', 'medium')
+        notes_only = '開場。不讀不寫 app 給的共用 notes 目錄。'
+        reason = check_start_session({**ok, 'prompt': notes_only})
+        self.assertIsNotNone(reason)
+        self.assertIn('下載', reason)
+        self.assertIsNone(check_start_session({**ok, 'prompt': notes_only + '下載先寫在卡上等 operator 核可。'}))
+
     def test_hook_exit_codes(self) -> None:
         self.assertEqual(run(['pre-start-session'], {'tool_input': {'name': 'ver-1'}})[0], 2)
         self.assertEqual(run(['pre-start-session'], {'tool_input': ok_input('ver-1', 'opus', 'medium')})[0], 0)
+
+
+def blocked(command: str) -> bool:
+    return check_download({'command': command}) is not None
+
+
+class DownloadTest(unittest.TestCase):
+    def test_pull_and_wide_fetch_are_blocked(self) -> None:
+        for command in (
+            'git pull', 'git pull --ff-only', 'git -C /x pull', 'git fetch', 'git fetch origin', 'git fetch --all',
+            'git fetch origin main', 'git fetch origin develop:develop', 'git fetch origin refs/heads/develop',
+            'git fetch upstream develop', 'git fetch origin develop --depth=1', 'git fetch --prune origin develop',
+            'git remote update', 'git -c a=b fetch origin pull/1/head',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(blocked(command))
+
+    def test_only_origin_develop_fetch_passes(self) -> None:
+        for command in (
+            'git fetch origin develop', 'git -C /x fetch origin develop', 'git fetch -q origin develop',
+            'git fetch origin develop 2>&1', 'git fetch origin develop && git merge --ff-only FETCH_HEAD',
+            'git status', 'git push origin HEAD:refs/heads/x', 'git log --grep=pull',
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(blocked(command))
+
+    def test_pnpm_install_and_deploy_need_offline(self) -> None:
+        for command in ('pnpm install', 'pnpm i', 'pnpm deploy out', 'pnpm -C a --filter b install', 'pnpm install --prefer-offline', 'pnpm install --offline=false'):
+            with self.subTest(command=command):
+                self.assertTrue(blocked(command))
+        for command in ('pnpm install --offline', 'pnpm --filter b deploy --offline out', 'pnpm run test', 'pnpm exec vitest run', 'pnpm add --offline x'):
+            with self.subTest(command=command):
+                self.assertFalse(blocked(command))
+
+    def test_found_through_wrappers_and_compound_commands(self) -> None:
+        for command in (
+            'rtk git pull', 'FOO=1 git pull', 'env X=1 git pull', 'timeout 5 git pull', 'cd x && git pull', 'git status | head; git pull',
+            'if true; then git pull; fi', 'bash -c "git pull"', "sh -c 'cd x && pnpm install'", 'echo $(git pull)', 'echo "$(git pull)"',
+            'x=`git pull`', 'cat <<E\nx\nE\ngit pull', 'git status\ngit pull', '(git pull)', '/usr/bin/git pull',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(blocked(command))
+
+    def test_quoted_text_and_heredoc_bodies_are_not_commands(self) -> None:
+        for command in (
+            'echo "git pull"', "grep 'git pull' f", 'git commit -m "run pnpm install"', "cat <<'E'\ngit pull\nE\ngit status",
+            'git fetch origin develop # git pull', 'echo "pnpm install" > notes.txt',
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(blocked(command))
+
+    def test_env_vars_and_marker_files_do_not_unblock(self) -> None:
+        for command in (
+            'ALLOW_DOWNLOAD=1 git pull', 'NEXUS_APPROVED=1 pnpm install', 'touch .download-approved && git pull',
+            'echo approved > /tmp/approved; git fetch --all', 'export OK=1; git pull',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(blocked(command))
+
+    def test_message_tells_operator_to_run_it(self) -> None:
+        reason = check_download({'command': 'git pull'})
+        self.assertIn('operator', reason)
+        self.assertIn('不代跑', reason)
+
+    def test_non_command_input_passes(self) -> None:
+        self.assertIsNone(check_download({}))
+        self.assertIsNone(check_download({'command': 5}))
+
+    def test_hook_exit_codes_for_bash_and_terminal_inputs(self) -> None:
+        for tool_name in ('Bash', 'mcp__terminal__run_in_terminal'):
+            with self.subTest(tool_name=tool_name):
+                self.assertEqual(run(['pre-download'], {'tool_name': tool_name, 'tool_input': {'command': 'git pull'}})[0], 2)
+                self.assertEqual(run(['pre-download'], {'tool_name': tool_name, 'tool_input': {'command': 'git status'}})[0], 0)
+
+    def test_unparsable_command_passes_with_warning(self) -> None:
+        code, err = run(['pre-download'], {'tool_input': {'command': "git pull 'oops"}})
+        self.assertEqual(code, 0)
+        self.assertIn('放行', err)
+
+
+class SettingsTest(unittest.TestCase):
+    def test_download_hook_covers_bash_and_terminal_panel(self) -> None:
+        settings = json.loads((REPO / '.claude/settings.json').read_text(encoding='utf-8'))
+        entries = [e for e in settings['hooks']['PreToolUse'] if any('pre-download' in h['command'] for h in e['hooks'])]
+        self.assertEqual(len(entries), 1)
+        for tool in ('Bash', 'mcp__terminal__run_in_terminal'):
+            with self.subTest(tool=tool):
+                self.assertRegex(tool, f'^(?:{entries[0]["matcher"]})$')
 
 
 class RoleTableTest(unittest.TestCase):

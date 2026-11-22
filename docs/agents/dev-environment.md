@@ -6,7 +6,7 @@
 
 ## clone 之後設 `fetch.prune`
 
-PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。clone 之後各自設定一次，讓 `git fetch`／`git pull` 自動清掉：
+PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。clone 之後各自設定一次，讓 `git fetch`／`git pull` 自動清掉（這份文件講人手動的操作；agent session 不用 `git pull`，也不用不帶 refspec 的 `git fetch`，見 [collab-mode 〈下載〉](collab-mode.md#下載)）：
 
 ```bash
 git config fetch.prune true
@@ -45,7 +45,7 @@ fatal: couldn't find remote ref <branch>
 
 `~/.claude/stop-hook-git-check.sh:39-45` 用 `git rev-parse "origin/$branch"` 決定 upstream，而 `rev-parse` **只看本地的 remote-tracking ref**。本 repo 設定為 squash merge ＋ 合併後刪除分支，於是：遠端分支沒了、本地 ref 停在 squash 前、agent 照規矩把分支重設到更新後的 `develop`。HEAD 不是那個舊 ref 的後代，`$upstream..HEAD`（`:116`）就數出一個不存在的未推送 commit。
 
-**清理的陷阱**：`git fetch --prune origin <branch>` **清不掉**那個 ref——refspec 限制了 prune 的範圍。要用 `git remote prune origin`，或不帶 refspec 的 `git fetch --prune`。
+**清理的陷阱**（人手動的做法；agent session 不跑 `git remote prune` 與不帶 refspec 的 `git fetch --prune`，要清先照 [collab-mode 〈下載〉](collab-mode.md#下載)申請核可）：`git fetch --prune origin <branch>` **清不掉**那個 ref——refspec 限制了 prune 的範圍。要用 `git remote prune origin`，或不帶 refspec 的 `git fetch --prune`。
 
 ### 當場繞過
 

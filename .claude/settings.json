@@ -9,6 +9,15 @@
             "command": "f=\"$CLAUDE_PROJECT_DIR/.github/scripts/session_hooks.py\"; [ ! -f \"$f\" ] || python3 \"$f\" pre-start-session"
           }
         ]
+      },
+      {
+        "matcher": "Bash|mcp__terminal__run_in_terminal",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.github/scripts/session_hooks.py\"; [ ! -f \"$f\" ] || python3 \"$f\" pre-download"
+          }
+        ]
       }
     ],
     "Stop": [
