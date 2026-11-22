@@ -51,7 +51,7 @@ def check_dir(d: Path, root: Path) -> list[str]:
 def check(root: Path) -> list[str]:
     errors = [
         f'{d.relative_to(root).as_posix()}：套件不放 ADR，決策歸到根目錄的 docs/adr/。'
-        for d in sorted(root.glob('packages/*/docs/adr'))
+        for d in sorted(root.glob('harness/packages/*/docs/adr'))
         if d.is_dir()
     ]
     for d in adr_dirs(root):

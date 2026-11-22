@@ -83,7 +83,7 @@
 
 [#1291](https://github.com/DemianLi/nexus-agent/issues/1291)。先講結論：**檔案 fence 與三個權限組合是防「失手」的政策圍欄，
 不是擋惡意模型的安全邊界。** 它防的是模型手滑把檔寫到工作區外、或在 `read-only` 下改了東西；一個存心繞過的模型、
-或任何能在你機器上跑程式的路徑，不在它的設計範圍內（`apps/harness/src/contained-backend.ts` 檔頭同一個說法：policy fence，
+或任何能在你機器上跑程式的路徑，不在它的設計範圍內（`harness/apps/harness/src/contained-backend.ts` 檔頭同一個說法：policy fence，
 不是 kernel boundary）。下面三條是今天實測到的邊界，不是待補清單。
 
 **1. 讀取面只擋經符號連結出根的路。** 讀之前路徑會 canonicalize，落在工作區根外就拒，碼是 `FS_SANDBOX_DENIED`
@@ -101,15 +101,15 @@
   - 路徑含 `..` 或以 `~` 開頭 → `Path traversal not allowed`；
   - 主機絕對路徑（如 `/etc/hosts`）被當成工作區底下的子路徑 → `ENOENT`，讀不到真的那個檔。
 - **`danger-full-access` 不擋**，跟寫入一致。
-- 這幾條由 `apps/harness/src/contained-backend.test.ts` 的〈讀取面的圍堵〉釘住，工具層與日誌上的樣子在
-  `apps/harness/src/read-containment-tools.test.ts`。
+- 這幾條由 `harness/apps/harness/src/contained-backend.test.ts` 的〈讀取面的圍堵〉釘住，工具層與日誌上的樣子在
+  `harness/apps/harness/src/read-containment-tools.test.ts`。
 - 這是 policy fence，不是 kernel boundary：檢查與開檔之間，祖先目錄被換成連結的那一瞬間（TOCTOU）擋不到。要擋惡意的程式，用作業系統層的隔離。
 - 出貨的設定沒有能寫 deny 規則的列，營運者擋不了根內的單一路徑：不要模型讀寫的檔，就不要放進工作區。deny 規則只有插件能在 `apply` 裡呼叫 `registry.permissions.deny()` 加，出貨沒有這樣的插件。插件加的規則也比經符號連結解開之後的位置：連結指到被擋的路徑，經連結讀、寫、改、刪，以及經目錄連結列目錄與搜尋，同樣被拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)；遷移見 `docs/upgrade-guide/v0.6.0/deny-rules-follow-symlinks/guide.md`）。
 
 **2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
 backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MCP 讀來的資料經由內建 `write_file` 寫進工作區」那一條。
 要圍堵 MCP server 本身，只能從**啟動它的方式**下手（例如把 server 跑在容器裡，`command` 指向 `docker run …`）；我們沒有
-包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)
+包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`harness/packages/nexus-plugin-mcp/README.md`](../harness/packages/nexus-plugin-mcp/README.md)
 的「明文限制」。
 
 **3. 出廠兩個組合，加上部署方可以加回的全開，對內建檔案工具都是政策，不是隔離。** 工具子行程另見第 4 條。 `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
@@ -169,7 +169,7 @@ connection:
 - 在 Linux 容器裡起 serve；
 - 在本機的 `--patch` 覆寫檔把 `danger-full-access` 加回權限表（寫法見上面〈權限組合〉那一節），用它起。非 Linux 上這一格直接 spawn，不套 OS 沙箱。
 
-從原始碼起的 serve 沒有產物裡那支 spawner，在 Linux 上也回 `SANDBOX_UNAVAILABLE`，要先把編好的執行檔放到 repo 根的 `native/nexus-sandbox-spawner`（編法見 [`native/sandbox-spawner/README.md`](../native/sandbox-spawner/README.md)）。
+從原始碼起的 serve 沒有產物裡那支 spawner，在 Linux 上也回 `SANDBOX_UNAVAILABLE`，要先把編好的執行檔放到 repo 根的 `native/nexus-sandbox-spawner`（編法見 [`harness/native/sandbox-spawner/README.md`](../harness/native/sandbox-spawner/README.md)）。
 
 ### serve：key 與 home 不能跟工作區重疊
 
@@ -371,7 +371,7 @@ curl -sS -m 5 <名單外的內部位址>                                        
 
 容器的形狀（寫在 patch 檔裡，`insert` 一列 MCP；起法見〈用 systemd 常駐〉。`--dump-config` 不載 plugin，驗不到這一列的欄位，載得進來與否看 serve 起動後的快照）：
 
-<!-- mcp-container-example:begin（apps/harness/src/operations-mcp-container.test.ts 讀這一段，改了要一起過） -->
+<!-- mcp-container-example:begin（harness/apps/harness/src/operations-mcp-container.test.ts 讀這一段，改了要一起過） -->
 ```yaml
 - insert:
     - id: mcp-crm
@@ -593,7 +593,7 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個會話目錄：`<
 那是遷移做到一半，讀方要拿舊日誌核對。`serve` 吃同一個旗標、同一個預設，
 會話根按目錄分，底下一條 thread 一個檔——**所以重開 `serve` 之後，網頁的 thread 清單會帶回同一個目錄底下以前的對話**。
 兩者共用同一個根：run 目錄以時間戳開頭，`serve` 那一格以 `--` 開頭，撞不到。eval 那條路沒有會話日誌，而那是一個登記過的決定
-（理由與絆索見 `apps/harness/src/eval/runner.ts` 的檔頭）。
+（理由與絆索見 `harness/apps/harness/src/eval/runner.ts` 的檔頭）。
 
 header（世代檔的第一行；舊兩檔是 `.header.json`）自格式 30 起記下**寫這份日誌的是誰**（#1025）：程式碼的 commit 與工作樹有沒有未提交的改動、疊完的插件清單
 （每一列的 `name`、`id`、是否停用，**不含設定內容**）、整份設定的雜湊，以及 root 用的模型型錄 id（只在 `--live`）。`serve` 記的是
@@ -1434,7 +1434,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文，以及 `licenses/sandbox-spawner/` 底下沙箱 spawner 連進去的程式碼的授權全文）、`native/nexus-sandbox-spawner`（沙箱 spawner 的執行檔，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
 以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這些檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
 閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
-（`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
+（`harness/apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
 
 <!-- verify-install:start -->
 ```bash
@@ -1476,7 +1476,7 @@ if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆
 ```
 <!-- verify-install:end -->
 
-第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
+第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`harness/scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
 沙箱 spawner 那一側，crate 與 C 函式庫（musl、LLVM libunwind）從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`、C 函式庫印成 `<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
 同一件事 CI 的 `packed-install` 跑在每個合進 `develop` 的 commit（合併後完整一輪）、動到 TypeScript 或相依這類要掃的檔的 `develop → main` PR 與 push 到 `main`、動到 `.github/workflows|scripts|actions/` 的功能 PR，其他功能 PR 走輕的模式，不打包；每次 Release 也由 `release:verify-packed-install` 跑一次。主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
 
@@ -1709,7 +1709,7 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 - **記憶體門檻警告不在這裡**：那是 `memory-gauge` 的 `warnAtPercent`（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)），只寫日誌。告警規則與門檻是監控那一側的事。
 - **計數是行程內的**，serve 重啟歸零（Prometheus 的 `rate()` 認得 counter 重置）。
 - **不做的**：推送（OTel metrics、StatsD、remote write）、逐 thread 或逐使用者的指標（thread id 進標籤基數無上限，而且在共用主機上等於公開別人的活動）、逐請求延遲直方圖（SSE 長連線會把直方圖撐歪）、web 的管理畫面（等 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的管理員身分）。
-- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `harness/apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
 - **將來若開 `--host`（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）**，「探針免登入、只在 loopback」的前提要重看；現在 serve 只綁 `127.0.0.1`。
 
 ## 壓縮 HTTP 回應（gzip）
@@ -1926,7 +1926,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now nexus-agent
 ```
 
-<!-- systemd-unit:begin（apps/harness/src/systemd-unit.test.ts 讀這一段，改了要一起過） -->
+<!-- systemd-unit:begin（harness/apps/harness/src/systemd-unit.test.ts 讀這一段，改了要一起過） -->
 ```ini
 [Unit]
 Description=nexus-agent serve
@@ -1974,18 +1974,18 @@ WantedBy=multi-user.target
 ```
 <!-- systemd-unit:end -->
 
-- **`TimeoutStopSec` 要大於收尾的最壞值。** 單行程 serve 的收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
+- **`TimeoutStopSec` 要大於收尾的最壞值。** 單行程 serve 的收尾上限是 `harness/apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
   到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**：退出碼分不出來，要看 journald 裡有沒有 `serve 收尾逾時` 那一行（標準錯誤一行；伺服器日誌的門檻沒調到 `error` 時再一行；[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。
   `--process-model per-thread` 時 serve 會 execve 成監督行程，停機照它自己的順序與寬限（見〈行程模型：`single` 與 `per-thread`〉）：先等前台回「已停准入」（`--admission-timeout-ms`，預設 5 秒），再讓對話行程、宿主、前台依序走拆除梯度（stdin EOF 等 `--eof-grace-ms` 6 秒、SIGTERM 等 `--term-grace-ms` 3 秒，再 SIGKILL）。
   serve 起監督行程時沒有帶這三個旗標，部署出去一定是預設值。每一段都有一個行程不理 EOF 也不理 SIGTERM 的最壞情況是 **5 ＋ 3 × (6 ＋ 3) ＝ 32 秒**（有宿主、不成對；沒有宿主是 23 秒）；成對（組合行程加葉子）多一次梯度，是 41 秒，serve 今天不會這樣起。
   這是照碼算的，沒有量，監督行程每段醒來的間隔沒有算進去（量級是毫秒到幾百毫秒）。45 秒蓋得住 32 秒與 41 秒。
-  `apps/harness/src/systemd-unit.test.ts` 讀這一段與 `native/sandbox-spawner/src/supervisor/args.rs` 的三個預設值：`TimeoutStopSec` 不大於單行程的 5 秒、或不大於監督行程的最壞值就紅。
+  `harness/apps/harness/src/systemd-unit.test.ts` 讀這一段與 `harness/native/sandbox-spawner/src/supervisor/args.rs` 的三個預設值：`TimeoutStopSec` 不大於單行程的 5 秒、或不大於監督行程的最壞值就紅。
 - **`KillMode=mixed`：`SIGTERM` 只給主行程。** systemd 預設的 `KillMode=control-group` 會把停止訊號送給 cgroup 裡**每一個**行程，前台、對話行程、宿主會和監督行程同時收到 SIGTERM，監督行程的停機順序就被繞過。
   `mixed` 是 SIGTERM 只給主行程（serve 或監督行程）、SIGKILL 給 cgroup 裡剩下的全部；**要求停止時，手冊列的 SIGKILL 觸發條件是「主行程已結束」或「`TimeoutStopSec` 到了」**，所以主行程照順序收完自己結束，45 秒只是它卡住時的上限。這一點只來自手冊，沒有實跑。
   依據是 systemd 手冊（`systemd.kill`、`systemd.service`，頁首標 262）：預設值（`control-group`）與 `mixed` 的行為與上面一致；其他 `KillMode` 值這裡沒用到，沒有核。
-  - 單行程 serve：SIGTERM 只給 serve，serve 的收尾（`disposeWith`）會關 MCP 連線池與根（`mcpPool.close()`、`root.dispose()`，見 `apps/harness/src/serve-run.ts`），MCP stdio 子行程是這樣被收掉的，不靠 systemd 直接送訊號給它們；
-    `systemctl stop` 時，收尾逾時（5 秒）serve 強制結束後沒收掉的子行程，靠上面 systemd 的 SIGKILL 收；有包 spawner `--guard` 的 stdio 子行程另靠 `PR_SET_PDEATHSIG` 隨 serve 死（沒包的情況見 `apps/harness/src/mcp-sandbox.ts`）。
+  - 單行程 serve：SIGTERM 只給 serve，serve 的收尾（`disposeWith`）會關 MCP 連線池與根（`mcpPool.close()`、`root.dispose()`，見 `harness/apps/harness/src/serve-run.ts`），MCP stdio 子行程是這樣被收掉的，不靠 systemd 直接送訊號給它們；
+    `systemctl stop` 時，收尾逾時（5 秒）serve 強制結束後沒收掉的子行程，靠上面 systemd 的 SIGKILL 收；有包 spawner `--guard` 的 stdio 子行程另靠 `PR_SET_PDEATHSIG` 隨 serve 死（沒包的情況見 `harness/apps/harness/src/mcp-sandbox.ts`）。
   - `KillSignal` 之後 systemd 一定緊接著送 SIGCONT：`mixed` 下只有主行程收到。harness 的 TypeScript 沒有任何行程註冊 SIGCONT；監督行程只用 signalfd 收 SIGINT、SIGTERM、SIGHUP、SIGCHLD，SIGCONT 落回預設（行程沒被停住就忽略）。
     監督行程自己送給對話行程的 SIGCONT（壓住 CPU 的行程用的，#2496）是另一回事。
   - **沒有在真的 systemd 底下跑過。** 手冊 `systemd.service` 只讀到前半，`Restart=` 那一節沒讀；主行程自己結束（不是被要求停止）時 cgroup 裡剩下的行程怎麼處理，手冊沒有明寫，監督行程直接起的行程另帶 `PR_SET_PDEATHSIG`（監督行程被殺，它們跟著死）；更下一層的行程不一定有。
@@ -2012,7 +2012,7 @@ WantedBy=multi-user.target
   - **跟用量警告（[#1718](https://github.com/DemianLi/nexus-agent/issues/1718)）的關係：** 警告的 heap 分母是 `v8.getHeapStatistics().heap_size_limit`，
     給了旗標之後就是旗標算出來的那個值，**比旗標的數字大一點**（`--max-old-space-size=716` 時印 `728.0 MiB`，2867 時印 `2915.0 MiB`，多出來的是新生代）。
     上表每一組在死之前都先印過至少一行警告（預設的 1g 第 153 條 thread 響 heap，70% 的 1g 在第 202–210 條響 heap、再 1–12 條響 cgroup）。
-  - **改 `MemoryMax` 之後要重算旗標**：`apps/harness/src/systemd-unit.test.ts` 讀這一段，旗標不等於 ⌊`MemoryMax` 的 MiB 數 × 0.7⌋ 就紅。
+  - **改 `MemoryMax` 之後要重算旗標**：`harness/apps/harness/src/systemd-unit.test.ts` 讀這一段，旗標不等於 ⌊`MemoryMax` 的 MiB 數 × 0.7⌋ 就紅。
 - **不是用這份範本起 node 的部署，要自己設上限。** 沒有 systemd 單元的起法（docker／podman、`pnpm --filter @nexus/harness run serve`、自己寫的腳本）不會有人替你設：
   容器照上面的算法，用起動命令的旗標給（`docker run --memory=4g … node --max-old-space-size=2867 …`），或者在**行程環境**放 `NODE_OPTIONS=--max-old-space-size=2867`（`-e`、`Environment=`）。
   **不能放在任何一份 `.env` 裡**：`NODE_OPTIONS` 是兩份 `.env` 都不准設的名字，起動就失敗並指名檔案（見〈金鑰放哪裡〉）。
@@ -2026,7 +2026,7 @@ WantedBy=multi-user.target
   沒有 key 的話 serve 印「缺少環境變數 NVIDIA_API_KEY」就以 1 結束，`Restart=on-failure` 每 5 秒拉一次，滿 `StartLimitBurst` 後單元進 `failed`；
   補上 key 之後 `sudo systemctl reset-failed nexus-agent && sudo systemctl start nexus-agent`。
   代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。`WorkingDirectory` 是 home 時，「目前資料夾」與 home 的 `.env` 是同一份，不會讀兩次；
-  照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
+  照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/harness/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
   裡面不能有代理變數（有就拒絕啟動），代理照樣寫在 home 的那一份。
 - **預設只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條），
   或改聽 Unix socket、經反向代理連進來（〈[放在反向代理後面](#放在反向代理後面)〉）。
@@ -2117,7 +2117,7 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 
 1. **讀升級指南**：Release 說明開頭有連結；也可以直接看 repo 的 `docs/upgrade-guide/v<目前在跑的版本>/`，每一份的「遷移」都要做。
 2. **停 serve，確認沒有行程還在寫這個 home**：`sudo systemctl stop nexus-agent`（或對 serve 的 node 行程送 `SIGTERM`；別對 `pnpm` 送，它會把訊號吃掉）。
-   - 有 `serve.lock` 的版本：跑著的 serve 對 `<home>/serve.lock` 握著 `flock(2)` 的排他鎖（`apps/harness/src/home-lock.ts`），
+   - 有 `serve.lock` 的版本：跑著的 serve 對 `<home>/serve.lock` 握著 `flock(2)` 的排他鎖（`harness/apps/harness/src/home-lock.ts`），
      拿得到代表沒有 serve 握著；CLI 與 `plugin` 指令不拿這把鎖（照 dsh 共用 home），備份前另外確認它們沒在跑：
 
      ```bash
@@ -2144,10 +2144,10 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
    或把舊 home 連權限搬到 `/var/lib/nexus-agent` 並改擁有者。
    **工作目錄要跟舊版一樣**：會話照起動時的目錄分桶，header 也記著那個目錄，換了目錄起，舊對話不在清單上，開舊的 thread id
    只會在新的桶裡建一條空的（實測）；把桶目錄改名也接不回來，續接會因為目錄不同而拒絕。從原始碼 checkout 用
-   `pnpm --filter @nexus/harness run serve` 起的舊版（v0.5.19 都是），目錄是 `<checkout>/apps/harness`，不是〈用 systemd 常駐〉範例裡的 home；
+   `pnpm --filter @nexus/harness run serve` 起的舊版（v0.5.19 都是），目錄是 `<checkout>/harness/apps/harness`，不是〈用 systemd 常駐〉範例裡的 home；
    要沿用舊對話，unit 的 `WorkingDirectory` 寫舊的那個目錄。
    **`--workspace` 也要跟舊版一樣**：舊版給過 `--workspace` 的話，會話 header 記著那個工作區根，新版用不同的根續接會被拒絕，回 `thread_root_mismatch`
-   （`apps/harness/src/resume-guards.ts` 的 `ResumeWorkspaceConflictError`，serve 的日誌指名兩個根）；〈用 systemd 常駐〉範例的
+   （`harness/apps/harness/src/resume-guards.ts` 的 `ResumeWorkspaceConflictError`，serve 的日誌指名兩個根）；〈用 systemd 常駐〉範例的
    `--workspace /srv/nexus-agent/workspace` 要改成舊版給的那個。舊版沒給過的不受影響。
    **升到有私有根的版本之後**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：舊對話照舊把 `--workspace` 當可寫根（接得回來、不隔離），
    只有新開的對話配私有根；`<home>/thread-roots` 是升級後第一次有新 thread 才會建。回滾到沒有這一版的程式時，header 記著私有根的對話會被
@@ -2198,7 +2198,7 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 
 - **新版碰過的對話，舊版讀不了**。新版續寫過或新建的會話日誌，header 的格式版本蓋成新版的號，舊版拒讀：側欄只把它們
   算成「讀不了 N 條」，打開或往裡送話都回「這條 thread 建不起來：會話 "…" 的格式版本是 49，這一版只讀得懂到 14。
-  檔案沒有壞，是比這一版新。」（實測的兩個號；`packages/nexus-core/src/session-store.ts` 的 `SessionFormatUnsupportedError`）。
+  檔案沒有壞，是比這一版新。」（實測的兩個號；`harness/packages/nexus-core/src/session-store.ts` 的 `SessionFormatUnsupportedError`）。
   新版沒碰過的舊對話照常讀得到。格式每一版改了什麼，紀錄在同一個檔的檔頭。
 - **從還沒有變更紀錄的版本（例如 v0.5.19）升上來，再換回去，插件設定靜靜回到出廠**。新版第一次啟動已經把 home 的
   `cordis.patch.yml` 遷進變更紀錄、原檔改名；舊版不認得變更紀錄，也找不到 `cordis.patch.yml`，就照出廠設定跑：
@@ -2243,7 +2243,7 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
   thread id 與還沒落定的工具名。只記，不丟下那顆工具；它落定之後這一輪才收尾。
 - **關掉**（`disabled: true`）就是不限，同沒有這一列時。
 - **確認**：啟動時「一輪的時鐘：…」那一行寫這一次的毫秒數，關掉時寫「不限」。
-- 30 分鐘是暫定值，沒有量過健康長輪的分布；理由在 `apps/harness/src/settings/turn-timeout.ts` 的檔頭。
+- 30 分鐘是暫定值，沒有量過健康長輪的分布；理由在 `harness/apps/harness/src/settings/turn-timeout.ts` 的檔頭。
 
 **同一步平行跑的工具呼叫也有上限**：模型一步吐出很多顆工具呼叫時，同時在跑的最多 10 顆（照 dsh），
 其餘照模型給的順序等空位；一次性與背景子代理同一個值。要改就改清單裡 `agent-loop` 那一列的
@@ -2260,7 +2260,7 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 不會空轉（`serve` 也接受 `--goal-driver`，意思是明講要開；兩個一起給會報錯）。啟動時印的那一行「續行：…」
 講的是這一次實際的狀態。模型從第 `blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
-`apps/harness/src/goal-driver.ts` 的檔頭。
+`harness/apps/harness/src/goal-driver.ts` 的檔頭。
 
 **操作者給的輪數上限：`goal-round-cap` 那一列**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)）。目標自己的
 `max_goal_rounds` 是模型在 `create_goal` 填的，模型在人說話的那一輪也能用 `update_goal` 改高，所以它擋不住一個停不下來的目標。
@@ -2280,7 +2280,7 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 - **確認**：啟動時「續行：…」那一行寫明這一次有哪幾條上限，例如「部署設定（cordis.yml 的 goal-round-cap 那一列）給的 20 輪」，
   關掉時寫「goal-round-cap 那一列關著」。
 - **已知殘差**：續行提示詞裡的 `Round: N/M` 照 dsh 逐字，M 是目標自己的上限、N 是累計輪數，所以這一列比較小時模型看到的 M 偏大，
-  恢復之後 N 也不歸零。20 這個數沒有實測過健康的目標要跑幾輪，是保守的起點，理由在 `apps/harness/src/settings/goal-round-cap.ts` 的檔頭。
+  恢復之後 N 也不歸零。20 這個數沒有實測過健康的目標要跑幾輪，是保守的起點，理由在 `harness/apps/harness/src/settings/goal-round-cap.ts` 的檔頭。
 
 **目標在跑的時候也能暫停，按下去當場停掉這一輪**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)，照 dsh `goal-round-driver` 對暫停的反應）。
 有**兩個入口**，效果一樣：wire 的 `goal.pause`（帶目標的 `goalId` 與看到的 `revision`；`revision` 過期回 `{ ok: false, error: { code: 'goal-stale', current } }`，
@@ -2417,17 +2417,17 @@ dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:35
 
 ## plugin 清單
 
-零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定
+零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `harness/apps/harness/cordis.yml`** 決定
 （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。那份檔案進版控，是「這個
 agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的一顆（host-services）。**`serve` 另有一層專屬的出貨清單**
-（`apps/harness/cordis.serve.yml`），疊在上面那份之後，放 serve 才有的列（今天是 `workspace-changes`：每一輪改了哪些檔；
+（`harness/apps/harness/cordis.serve.yml`），疊在上面那份之後，放 serve 才有的列（今天是 `workspace-changes`：每一輪改了哪些檔；
 沒給 `--workspace` 它什麼都不做）；CLI 不載那一層。 `sandbox-policy` 是清單上的一列：有 `--workspace` 時
 它是檔案政策的全部（升級、`sandbox/mode`；切換入口在 `permission-presets` 那一列），**這時關掉它啟動會失敗**（fence 還在擋，模型卻不知道）；沒有
 `--workspace` 時它只講一句不宣稱圍堵的政策，關掉合法。
 
 要改它不是去編輯那份檔案，而是疊自己的覆寫。**三層，後面的蓋前面的**：
 
-1. 出貨的 `apps/harness/cordis.yml`（serve 另疊 `cordis.serve.yml`）
+1. 出貨的 `harness/apps/harness/cordis.yml`（serve 另疊 `cordis.serve.yml`）
 2. **變更紀錄** `$NEXUS_AGENT_HOME/plugin-journal.jsonl`（預設 `~/.nexus-agent/plugin-journal.jsonl`）：用 `plugin` 寫入口
    停用、啟用、改設定寫進去，只增不改，清單從它導出（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)，
    見下面「後台改清單」）
@@ -2513,7 +2513,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `running` 是啟動時的樣子；組裝期讀的列，已儲存的那份已經在新對話生效，所以是 `next-thread`。列的全集與順序同
   `--dump-config`，磁碟上新插進來的列接在最後（`running` 是 `absent`）。分類依據是
   [`.docs/plugin-reload-classification-2026-10-08.md`](../.docs/plugin-reload-classification-2026-10-08.md)，表在
-  `apps/harness/src/plugin-row-classes.ts`。**不開 wire 路由**：還沒有管理員身分，`/threads` 底下每個登入的人都看得到；
+  `harness/apps/harness/src/plugin-row-classes.ts`。**不開 wire 路由**：還沒有管理員身分，`/threads` 底下每個登入的人都看得到；
   有了之後改走那道閘的只讀路由。
 - **還有哪些對話握著舊設定，看每一列的 `live`**（[#1442](https://github.com/DemianLi/nexus-agent/issues/1442)，版本路由的第一刀）。
   改了設定之後，進行中的對話還握著組裝當下那一份，新對話才用新的；`live` 把「這一列的哪一版設定 → 哪些對話在用」列出來。
@@ -2568,7 +2568,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   沒有工具，啟動時印「警告：N 則外掛掛上時交出的話」指名它與原因。`serve` 照 dsh 在背景照 `reconnect` 退避重試，
   還沒連上的期間組的對話記一行「[組裝] thread "…" 警告：…」，連上之後開的對話就有工具了（已經開著的補不了）。要它連不上就算掉，那一列的
   `config` 寫 `failOnStartupError: true`（掉了之後照上一條，到重啟或改了那一列為止不再連），見
-  [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)。
+  [`harness/packages/nexus-plugin-mcp/README.md`](../harness/packages/nexus-plugin-mcp/README.md)。
 - **`serve` 上一列 MCP 整台一份連線**（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)，照 dsh 的全域實例）：一列 stdio
   的 MCP 就是一個子行程，不管開了幾條對話；對話被逐出或關掉不收它，`serve` 收掉才收。改了那一列的設定，新對話連到新的一份、
   開著的照舊用舊的，**舊的一份留到重啟**——重啟之前出現過幾種設定，最多就有幾個子行程（只改 `approval` 不算）。掉線重連的進度記在
@@ -2586,7 +2586,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   三支資源工具（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`）不經這個閘門，`approval` 管不到讀資源。
   **這是行為改變**：升上來之前插了 MCP 列的部署方，見升級指南
   [`mcp-tools-need-approval`](upgrade-guide/v0.5.19/mcp-tools-need-approval/guide.md)。寫法細節見
-  [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)〈核准〉。
+  [`harness/packages/nexus-plugin-mcp/README.md`](../harness/packages/nexus-plugin-mcp/README.md)〈核准〉。
 - **按停止時，跑到一半的 MCP 呼叫在伺服器那一側也被取消**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）：
   工具呼叫（`tools/call`）與三支資源工具的讀取，都帶著這一輪的停止訊號。人按停止、或 `turn-timeout` 到點，client 送
   `notifications/cancelled`，這次呼叫當場結束，這一輪不等它跑完就收尾；日誌上那一筆 `tool/result` 的碼是 `ABORTED`，同其他被停止
@@ -2633,7 +2633,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
     目錄不再起得來。
 - **`insert` 進來的模組宣告的 nexus 版本範圍要滿足**（[#1137](https://github.com/DemianLi/nexus-agent/issues/1137)、[#1568](https://github.com/DemianLi/nexus-agent/issues/1568)）。
   指到檔案的那一列在 import 之前讀最近的 `package.json`，照 dsh 的 `plugin-compatibility.ts` 判，對的是執行中的版本
-  （`packages/nexus-core/package.json` 的 `version`）：
+  （`harness/packages/nexus-core/package.json` 的 `version`）：
   - 插件有 `engines.nexus` → **只看它**，`peerDependencies` 不看。
   - 否則 `peerDependencies` 裡每一個 `@nexus/*` 套件（`@nexus/core`、`@nexus/sdk`、`@nexus/tools`、`@nexus/session`⋯，**`@nexus/cordis*` 這四個 vendor 的上游套件除外**，它們有自己的版號）
     都要滿足執行中的版本。樹上的函式插件只 peer `@nexus/sdk`／`@nexus/tools`，沒有 `@nexus/core`，一樣被檢查。
@@ -2677,7 +2677,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-出貨清單上這幾列（完整名單與順序以 `apps/harness/cordis.yml` 為準，這裡不寫顆數）：
+出貨清單上這幾列（完整名單與順序以 `harness/apps/harness/cordis.yml` 為準，這裡不寫顆數）：
 
 | id                          | 管什麼                                                                                                                         | 有 `config` 嗎                   | 關得掉嗎                 |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------ |
@@ -2711,7 +2711,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
 **從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
 它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
-`@nexus/core`（值的家在那個套件裡），表上 `thread-title` 以下的其餘各列住在 `apps/harness`
+`@nexus/core`（值的家在那個套件裡），表上 `thread-title` 以下的其餘各列住在 `harness/apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
@@ -2764,7 +2764,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 結構化資料（`meta`），`meta` 的上限是這一格（搜尋、改檔）或它的兩倍（讀檔，
 [#630](https://github.com/DemianLi/nexus-agent/issues/630)）。結果文字自
 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不歸這一格管：它原樣上線，上限在模型面（`spill-policy`
-那一列與讀檔自己的上限），算法寫在 `HISTORY_PAGE_MAX_BYTES` 的說明上。那個關係由 `apps/harness` 的一條測試釘著，
+那一列與讀檔自己的上限），算法寫在 `HISTORY_PAGE_MAX_BYTES` 的說明上。那個關係由 `harness/apps/harness` 的一條測試釘著，
 但**它只釘得住出廠那一份**：你在 patch 裡把 `maxBytes` 改小，一頁能裝的滿版卡就變多，8 MB 那個上限相對
 變鬆；改大則相反。關掉 `spill-policy` 也會讓卡上的文字沒有上限（同 dsh），8 MB 是軟的，超標時 server 只會講一聲。兩邊都
 不會有任何錯誤訊息。這是明著接受的代價（[#538](https://github.com/DemianLi/nexus-agent/issues/538)
@@ -2777,7 +2777,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 指名它——不會拿那個值靜靜跑起來。
 
 **`live-model` 的五格**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)、型錄 [#729](https://github.com/DemianLi/nexus-agent/issues/729)）只在 `--live` 時才用；
-出貨值是原本寫死的那幾個，每個數字怎麼量出來的寫在 `apps/harness/src/live-model.ts` 各常數的檔頭，
+出貨值是原本寫死的那幾個，每個數字怎麼量出來的寫在 `harness/apps/harness/src/live-model.ts` 各常數的檔頭，
 **改之前先讀那一段**。幾件會咬人的事：
 
 - **`models` 是模型型錄，`modelId` 必須在裡面**，不在就起不來（訊息指名那一列與那個 id）。每一筆帶 `id`、
@@ -2921,7 +2921,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 
 **`session-reference`**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）管「引用別的會話」的三個量：一則訊息最多引幾條、輸入框的候選清單最多列幾筆、
 每條被引用的來源最多留幾個位元組。**出廠開著、關不掉**（`disabled: true` 起動當場拋），格式寫壞整個 serve 起不來；理由是關掉只會回到 dsh
-的 20%，讀起來卻像關掉引用。值的家在 schema（`apps/harness/src/settings/session-reference.ts`），只在 `serve` 上有作用，**起動時讀一次**，改了要重啟。
+的 20%，讀起來卻像關掉引用。值的家在 schema（`harness/apps/harness/src/settings/session-reference.ts`），只在 `serve` 上有作用，**起動時讀一次**，改了要重啟。
 
 ```yaml
 - id: session-reference
@@ -2939,7 +2939,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   再沒有就是部署預設），所以使用者在兩次引用之間換模型，下一次引用就吃新那顆的窗口。取不到窗口（腳本模型、沒帶 `--live`）用 64 KiB。
   超過預算的來源會被截，訊息裡帶 `Reference omissions` 標記，模型看得到被截了。
 - **出廠比例是 0.1，不是 dsh 的 0.2**（schema 的預設仍是 0.2）：三條上限大小的中文來源，乘上實測的中文校正 1.10 之後要留在摘要門檻之內。
-  量法與數字在 `apps/harness/cordis.yml` 那一列的註解與 `session-reference-budget.test.ts`；比例調大前先照那個量法重量。
+  量法與數字在 `harness/apps/harness/cordis.yml` 那一列的註解與 `session-reference-budget.test.ts`；比例調大前先照那個量法重量。
 - **patch 是整份替換 `config`，不是深層合併**：在自己的 `cordis.patch.yml` 或 `--patch` 裡只寫 `candidateLimit` 或 `maxReferences` 的話，
   另外幾格由 schema 補，**`referenceContextFraction` 會靜靜回到 schema 的 0.2**，出廠調低的 0.1 就被拿掉了，起動時沒有任何警告。
   所以調任何一格都要把 `referenceContextFraction: 0.1`（或你量出來的值）一起寫進去。
@@ -2947,7 +2947,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
 並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（每條 thread 常駐約 1.2 MB heap，#1983 用短對話量的；只讀歷史也會組一份 agent、佔記憶體，#1464）。
-**出廠兩格都開著**：上限 500 條、閒置 2 小時撤出。出貨清單那一列寫的就是這一組，值的家在 schema（`apps/harness/src/settings/thread-capacity.ts`）。
+**出廠兩格都開著**：上限 500 條、閒置 2 小時撤出。出貨清單那一列寫的就是這一組，值的家在 schema（`harness/apps/harness/src/settings/thread-capacity.ts`）。
 要放寬就把數值調大，放進自己的 `--patch <檔>`（或 `plugin config set thread-capacity --file -`）：
 
 ```yaml
@@ -2963,7 +2963,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   2 GB 的容器 heap 上限約 1 GB，死在 800–826 條；4 GB 約 2 GB，死在 1725–1750 條；兩種都是 heap 先到，容器記憶體只用到約 64%。
   500 對 2 GB 留約四成餘裕，**這四成只對短 thread 成立**。量測條件：Linux aarch64、Node 22、發版包用 `node` 直接起、develop `1cd7606c`；
   每條 thread 一輪短對話（讀一個檔、搜一次），不掛 MCP，逐出關掉。掛 MCP 不會讓每條 thread 多一個子行程：連線由整台 serve 共用
-  （#1677，`packages/nexus-plugin-mcp/src/pool.ts`）；每條 thread 的 heap 因此多多少沒有量。
+  （#1677，`harness/packages/nexus-plugin-mcp/src/pool.ts`）；每條 thread 的 heap 因此多多少沒有量。
   **這是後盾，不是記憶體保證**：長對話每輪還要再加幾 MB，thread 數上限擋得住「thread 很多」，擋不住「thread 很長」。
   定得寬是刻意的：讀歷史也佔名額，定太低的話，一個人在側欄連點很多舊對話就能把其他人擋在外面。
 - **數的是行程裡的 thread 數，含還在組裝中的**。到了上限，**新的** thread 一律拒收：送訊息、開下行、讀歷史、續聊磁碟上的舊
@@ -2978,7 +2978,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   **要放寬，把數值調大；要關閒置逐出，設 `idleEvictAfterMs: 0`**。`maxThreads` 沒有「不限」，最小是 1；寫 0 會被 schema 擋下：**壞設定回到預設、不拒絕啟動**——這一列照「設定驗不過」掉列、
   啟動警告指名它，值回到出廠的 500，到了 500 照樣拒收。
 - **偏離 dsh（登記）**：dsh 沒有 thread 數上限；這是 serve 跑在多人共用主機上才有的產品需求。形狀借的是 dsh 背景工作的准入
-  （`jobs-local` 的 `maxConcurrentJobsPerOwner`），逐點見 `apps/harness/src/settings/thread-capacity.ts` 的檔頭。「有上限就出廠打開、給有限的預設值、
+  （`jobs-local` 的 `maxConcurrentJobsPerOwner`），逐點見 `harness/apps/harness/src/settings/thread-capacity.ts` 的檔頭。「有上限就出廠打開、給有限的預設值、
   沒有『不限』」照 dsh 各入口的上限（背景工作、終端數、背景子代理都是這樣）。
 - web 怎麼顯示這個錯誤碼另開卡給前端，不在這一張。
 
@@ -3124,7 +3124,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **起動時印一行** `模型請求並行上限：…`（沒設就印「不限」），設了卻不確定有沒有生效看這一行。**起動時讀一次，改了要重啟。**
 - **只限同時在跑幾個，不限每分鐘幾次或幾個 token**，也沒有每個使用者一桶：serve 現在沒有使用者身分，等身分上線（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428)／[#1429](https://github.com/DemianLi/nexus-agent/issues/1429)）再另開卡。
 - **偏離 dsh（登記）**：dsh 沒有任何跨 session 的模型請求並行閘（它是一個人用自己的 key）；這是多人共用一把 key 才有的產品需求。形狀借的是 dsh 背景工作的准入
-  （數量從現況現算、訊息寫上限與下一步、預設不限），排隊是 dsh 沒有的部分，對 dsh 決策紀錄否決過的四種形狀的逐條回答見 `apps/harness/src/request-gate.ts` 的檔頭。
+  （數量從現況現算、訊息寫上限與下一步、預設不限），排隊是 dsh 沒有的部分，對 dsh 決策紀錄否決過的四種形狀的逐條回答見 `harness/apps/harness/src/request-gate.ts` 的檔頭。
 
 `observation-policy`、`model-usage`、`session-checkpoint-policy`、`approval-gate` 那四列**不用加
 `config:`**——它們沒有設定，寫了也沒有作用：照 dsh 原樣交下去、那一列照樣掛，啟動時印一句警告指名它。前三列
@@ -3179,10 +3179,10 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 `recursion-limit` 的 `100`
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
 模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，出貨清單（CLI）是 31 輪，serve 是 23 輪。逐段
-實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
+實測見 `harness/apps/harness/src/settings/recursion-limit.ts` 的檔頭。
 `agent-loop` 的 `10` 照 dsh（`maxParallelToolCalls`），最小 1（串行）也同 dsh，**但 1 不是靠 LangGraph 的 `maxConcurrency: 1`**：
 它跑完第一顆就靜靜收掉那一步，其餘工具呼叫沒跑也不報錯。上限 1 時 `maxConcurrency` 仍帶 2，串行由獨佔屏障做
-（每一顆都當獨佔）；理由與絆索在 `apps/harness/src/settings/agent-loop.ts` 的檔頭。
+（每一顆都當獨佔）；理由與絆索在 `harness/apps/harness/src/settings/agent-loop.ts` 的檔頭。
 
 ### 部署方的身分與 persona
 
@@ -3397,7 +3397,7 @@ server、不綁 port：
 pnpm --filter @nexus/harness run cli -- --dump-default-config
 ```
 
-它**只印出貨那一層**（`apps/harness/cordis.yml`），真的不讀 home 覆寫檔，所以壞掉的檔不會擋它，輸出裡也沒有
+它**只印出貨那一層**（`harness/apps/harness/cordis.yml`），真的不讀 home 覆寫檔，所以壞掉的檔不會擋它，輸出裡也沒有
 那個檔的路徑。拿它跟壞掉的那份對照，就知道你的覆寫檔本來該改的是哪幾列。`serve` 也收同一個旗標。
 
 三種印法（`--dump-config`、`--dump-config-schema`、`--dump-default-config`）**一次只能用一種**；
@@ -3445,7 +3445,7 @@ pnpm --filter @nexus/harness run cli -- --dump-config-schema > nexus-config.sche
 pnpm --filter @nexus/harness run serve --patch src/approval.patch.yml
 ```
 
-> **這道指令的 `--patch` 值被測試讀走。** `apps/harness/src/documented-fixture.ts` 會從這一段解析
+> **這道指令的 `--patch` 值被測試讀走。** `harness/apps/harness/src/documented-fixture.ts` 會從這一段解析
 > 出來餵進 `serve.test.ts` 與 `cli.test.ts`，所以這份文件是那個值的唯一來源——改了它，測試會紅，
 > 那是設計不是故障。也因為這樣，只改這份文件的 PR 會觸發 CI 的完整掃描（`ci.yml` 的窄例外）。
 > 整段指令改寫法、或這份文件多出第二道 `run serve --patch`，解析會當場拋並指名該修哪裡。
@@ -3464,7 +3464,7 @@ pnpm --filter @nexus/harness run serve --patch src/approval.patch.yml
 pnpm --filter @nexus/harness exec vitest run src/eval
 ```
 
-資料集在 `apps/harness/src/eval/dataset.ts`，評分器在 `scorers.ts`，跑一條任務的 runner 在
+資料集在 `harness/apps/harness/src/eval/dataset.ts`，評分器在 `scorers.ts`，跑一條任務的 runner 在
 `runner.ts`。**model 是 runner 的參數**，所以 CI 這條（假模型、零憑證、不需要任何 key）與換上真實
 供應商的那條跑的是同一份資料、同一組評分器。
 
@@ -3499,7 +3499,7 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 這一輪的條件（commit 與工作樹有沒有未提交的改動、題庫版本、評分程式版本、取樣溫度與 topP、
 迴圈與時鐘上限），之後每次執行一行（含評分器看到的原始觀測），最後一行是 footer；
 **沒有 footer 的檔是沒跑完的**。比較兩次跑的數字之前，先看兩份檔的題庫版本與評分程式版本是不是同一個。
-格式與讀檔重算在 [`apps/harness/src/eval/result-file.ts`](../apps/harness/src/eval/result-file.ts)。
+格式與讀檔重算在 [`harness/apps/harness/src/eval/result-file.ts`](../harness/apps/harness/src/eval/result-file.ts)。
 
 報表上每個模型都有一行**「這題成功」**，它不是「工具成功率」那一欄：有可判的三欄（工具成功率、
 參數正確性、回覆提到）全是 1.00，而且多叫次數沒超過那一題在資料集裡宣告的容許值
@@ -3525,7 +3525,7 @@ CI 那條（`pnpm --filter @nexus/harness exec vitest run src/eval`）同時擋�
 
 這七題上的分數**當上限、不當實力**（設定與題目是同一批挑的），要拿它挑改動就得在新題上驗過；
 LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
-[`apps/harness/docs/eval-measurement.md`](../apps/harness/docs/eval-measurement.md)。
+[`harness/apps/harness/docs/eval-measurement.md`](../harness/apps/harness/docs/eval-measurement.md)。
 
 ## 點名子代理
 
@@ -3548,7 +3548,7 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
   - **實測**（CI 的 node-compat 兩格加本機，臨時探針在 PR #1772，量完已拿掉）：555 個名字（tzdata 所有 zone 與 link 名）裡有 110 個會被 `Intl` 改寫成別的正規名，例如 `Asia/Kolkata`→`Asia/Calcutta`、`Asia/Ho_Chi_Minh`→`Asia/Saigon`、`Europe/Kyiv`→`Europe/Kiev`、`US/Eastern`→`America/New_York`、`Etc/UTC`→`UTC`。**Node 22.19.0（ICU 77.1、tzdata 2025b）、25.9.0（ICU 78.3、2026a）、26.12.0（ICU 78.3、2026e）三邊逐條相同，沒有換版本會反過來的名字。** 沒量到的：ICU 只有 77.1 與 78.3 兩版（25.9 與 26.12 共用 78.3）；名單取自 tzdata 2026a，之後新增的名字沒量；用系統 ICU（`--with-intl=system-icu`）編的 Node 沒量。所以這是「目前沒看到」，不是保證。
   - **影響範圍**：time-context 只讀**這一輪**的日誌事件（最後一個非 `resume` 的 `turn/start` 起）。升級前記下的名字，新 runtime 讀得到的有兩類：
     - **一個跨過升級的未完成輪**：升級前寫進 `turn/start` 的名字，在那一輪還沒收完時被新 runtime 讀到。
-    - **升級前排著、還沒開跑的項目**（[#1779](https://github.com/DemianLi/nexus-agent/issues/1779)）：排隊中的 `next-turn` 與插話的 `next-step`。佇列不另外存，是從日誌的 `inbox/spliced` 折出來的（`packages/nexus-core/src/inbox.ts`），重開之後還在；項目開成新一輪、或插話被領走時，`pumpInputOf`／`userMessageSourceOf`（`apps/harness/src/thread-pump.ts`）把項目存著的 `source.clientTimeZone` **原樣**抄進新一輪的 `turn/start`／`user/message`，**不重新正規化**。所以升級前排著的每一件，升級後開那一輪（或被領走）時都會撞到；使用者升級後再送的一句排在它們後面。背景子代理的插話也帶時區（`subagent.send`，記在子代理自己的日誌上，退回的輪次與冷復活都跟著帶，見下面 #1734 那條）；**這一條沒有另外驗過子代理的佇列能不能跨過升級**，只確定日誌上記的名字會被同一個檢查讀到。`run-start-client-time-zone.test.ts` 的「升 Node 之前排著的項目」把這個行為釘住（不改行為）。
+    - **升級前排著、還沒開跑的項目**（[#1779](https://github.com/DemianLi/nexus-agent/issues/1779)）：排隊中的 `next-turn` 與插話的 `next-step`。佇列不另外存，是從日誌的 `inbox/spliced` 折出來的（`harness/packages/nexus-core/src/inbox.ts`），重開之後還在；項目開成新一輪、或插話被領走時，`pumpInputOf`／`userMessageSourceOf`（`harness/apps/harness/src/thread-pump.ts`）把項目存著的 `source.clientTimeZone` **原樣**抄進新一輪的 `turn/start`／`user/message`，**不重新正規化**。所以升級前排著的每一件，升級後開那一輪（或被領走）時都會撞到；使用者升級後再送的一句排在它們後面。背景子代理的插話也帶時區（`subagent.send`，記在子代理自己的日誌上，退回的輪次與冷復活都跟著帶，見下面 #1734 那條）；**這一條沒有另外驗過子代理的佇列能不能跨過升級**，只確定日誌上記的名字會被同一個檢查讀到。`run-start-client-time-zone.test.ts` 的「升 Node 之前排著的項目」把這個行為釘住（不改行為）。
     - 只有佇列裡**沒有**升級前舊項目時，下一次 `run.start` 開的新一輪才由新 runtime 重新正規化、不受影響（`@nexus/plugin-time-context` 的測試釘住這一點）。開卡時寫的「每輪都拋錯」是推測，讀碼後不成立。
   - **症狀**：那一輪的 pre-step 拋 `TypeError: browser time zone must be canonical: "<名字>"`，這一輪失敗（listener 拋錯不吞），`turn/failed.message` 就是這句。
   - **升之前先查**：在**新**的 Node 上，把日誌裡記過的時區名逐個問一遍；有不是正規名的，就是升完之後會撞到的那幾個（`$HOME_DIR` 換成 harness home）：
@@ -3629,6 +3629,6 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 **沒有軌跡投影時**：
 
 - 只有順序，沒有時間。一輪是從人說的那一句（或背景子代理的通知與來信）切開的；目標自己排的輪次沒有人話，會黏在前一輪後面。回覆的收尾標記也只認有文字的回覆。
-- **核准或拒絕的決定只存在這個頁面**：重新整理之後看不到當時按了什麼，只剩被拒的工具卡。這是刻意的，不是 bug；`apps/web/src/features/trace/panel.test.tsx` 的「決定只存本地」那條測試釘住這個行為，改它之前先改這裡。
+- **核准或拒絕的決定只存在這個頁面**：重新整理之後看不到當時按了什麼，只剩被拒的工具卡。這是刻意的，不是 bug；`web/src/features/trace/panel.test.tsx` 的「決定只存本地」那條測試釘住這個行為，改它之前先改這裡。
 - 只列出已載入的對話：更早的在對話區往上捲、載入之後才會出現。
 - 重複呼叫的提醒、重試與限流、模型每次呼叫的起訖都看不到，要有軌跡投影才有。

@@ -1,0 +1,286 @@
+# nexus-sandbox-spawner
+
+工具子行程的沙箱（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）：常駐的 Rust 行程，只在 Linux 上跑。
+
+- 啟動時裝一次 seccomp，之後 fork 的子行程都繼承：擋網路（`AF_INET`、`AF_INET6`）、`AF_UNIX`、`AF_VSOCK`、io_uring、namespace 與 mount 系列，`clone3` 回 ENOSYS（`src/seccomp.rs`）。
+- 每個子行程在 exec 之前各自上一份 Landlock。讀根、寫根由 Node 在每次要求裡帶來（`src/landlock.rs`）。全權模式不上 Landlock，seccomp 照樣繼承。
+- Landlock 不能用（none）：spawner 照樣起，只有全權模式的要求起得來，其餘回 `SandboxUnavailable`。seccomp 裝不上：spawner 送 `Unavailable` 後結束。
+- 核心沒有 `pidfd_open`（5.3 以前，ENOSYS）：起動就送 `Unavailable`，連全權模式也起不來。其他錯（例如 fd 用盡）不算，留給那一筆工具的 `Resource` 失敗。
+
+單次模式 `--exec`：替自己上同一份 seccomp 與 Landlock 再 exec，給設定裡宣告要套沙箱的 MCP stdio server 用，一條連線起一次，stdio 由呼叫端接好。沒有 Landlock、seccomp 裝不上、讀根打不開都以 125 結束，不跑。沒有全權模式。讀根寫根要是 realpath，不是就拒絕，重起時這些路徑被換成連結也走不出去。Landlock 不到 ABI 6 時往 stderr 講一句。
+
+單次模式 `--guard`：不上沙箱，只設 `PR_SET_PDEATHSIG` 再 `execvp`，給沒宣告沙箱的 MCP server 用（#2197）。
+
+單次模式 `--flock`：對繼承來的 fd 3 拿 `flock(LOCK_EX | LOCK_NB)` 就結束，不上沙箱，給 harness 的 home 鎖與會話寫租約用（#2253）。鎖屬於 open file description，所以這個行程結束之後還在，呼叫端關掉把手或死掉才放。結束碼：0 拿到、10 別人握著、11 其他失敗（errno 的數字印在 stdout）。
+
+協定（控制通道與 stdio 怎麼接）在 `src/protocol.rs` 與 `src/main.rs` 的檔頭。
+
+監督行程的控制面協定（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，#2339）也放在這個 crate：`src/supervisor_protocol.rs`，跟 spawner 共用框格式；向量檔是 `supervisor-vectors.json`，TS 那一側是 `harness/apps/harness/src/supervisor-protocol.ts`。spawner 的執行檔不用它。
+
+## 監督行程 `nexus-supervisor`
+
+同一個 crate 的第二支執行檔（#2340，`src/bin/nexus-supervisor.rs`，邏輯在 `src/supervisor/`）：起一個前台、按前台的要求每條 thread 起一個對話行程，給了 `--host` 再起一個宿主，管它們的生死，寫稽核紀錄。不裝 seccomp：前台要綁 port、對話行程要開 Unix socket 與連模型端點。不在離線包裡。
+
+```text
+nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]...
+                 --conversation <程式> [--conversation-arg <參數>]...
+                 [--composition <程式> [--composition-arg <參數>]...]
+                 [--eof-grace-ms 6000] [--term-grace-ms 3000] [--front-restart-ms 1000]
+                 [--rss-limit-mb <MiB>] [--rss-poll-ms 250] [--stall-ms 15000] [--start-timeout-ms 30000]
+                 [--capacity <條>] [--warm 1] [--idle-ms 7200000] [--read-only-idle-ms 300000]
+                 [--drain-timeout-ms 5000] [--stats-ms 10000]
+                 [--throttle-ms 2000] [--throttle-run-ms 25] [--throttle-stop-ms 75]
+                 [--admission-timeout-ms 5000]
+                 [--host <程式> [--host-arg <參數>]... [--host-backoff-ms 1000] [--host-backoff-max-ms 30000]
+                  [--host-start-failures 5] [--host-stable-ms 60000] [--host-ready-timeout-ms 30000]]
+```
+
+- 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框。前台的 stderr 照監督行程的；對話行程的 stderr 接到監督行程，由它原樣轉到自己的 stderr，同時找 V8 heap 用完的訊息（見死因）；leader 收屍時再讀最多 1 MiB 就關掉，之後群組外還活著的後代寫的不轉出。**監督行程的 stderr 一定要有人讀**：它是阻塞的而沒人讀時，整個監督行程（計時器、RSS 上限、拆除梯度）都停住；寫不出去（非阻塞而滿了、或壞了）的丟掉、記數，監督行程自己的訊息與轉出的對話行程 stderr 都一樣，下次寫得出去時先講一句丟了多少。
+- 對話行程的 leader 本身要是跑 V8 的 `node`（node 的旗標放在腳本前面；或用 `exec` 換成 node），不能多一層會留下來的外層行程（shell、`tsx` CLI）：外層不是以 SIGABRT 結束，heap 會判成 `crash`，RSS 量到的也是外層。
+- 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <--run-dir>/c<序號>.sock`，有給 `--host` 時再加 `--host-socket <--run-dir>/host.sock`（就是宿主 bind 的那一個）。`--run-dir` 不在就建成 0700；已存在就要是自己擁有、0700 的目錄；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。否則不起。
+- 有給 `--composition` 就每條對話起一對（#2583），見下面〈一對〉；沒給就照上面一條對話一個行程。
+- 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
+- 每條控制通道的第一框都是 `hello`，協定版本是 `src/supervisor_protocol.rs` 的 `PROTOCOL_VERSION`：子行程一起來監督行程先送自己的，給前台與對話行程的帶連宿主用的 token（只在這一框，不放 env 也不放 argv）；子行程送來的第一框也要是版本相等的 `hello`；對話行程的 `hello` 另帶「agent loop 在自己這裡」的宣告，一定要宣告（#2583）。對話行程不是就當場 SIGKILL，死因 `protocol`；前台或宿主送來的解得開卻不是，就不重起，整台停機、回 3。第一框解不開的照壞框處置：前台殺掉重起，宿主殺掉、算一次 `ready` 之前的失敗。
+- 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
+- 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。RSS 超過上限與心跳斷了太久的不走梯度，當場對群組送 SIGKILL。
+- 宿主（`--host`，#2569）：見下面〈宿主 `nexus-host`〉。argv 是 `<程式> <--host-arg>... --socket <--run-dir>/host.sock`，stdin／stdout 是控制通道，stderr 照監督行程的。它送 `ready` 之後，監督行程把身分表（每個前台與對話行程一筆：pid、token、角色、綁的 thread）整張送過去；之後起的行程在 spawn 當下、把 token 交給它之前先送那一筆，指派 thread 時更新，收屍之前撤掉：宿主 `ready` 而且沒在停才送，撤銷寫進給宿主的 pipe 才收屍，500 ms 內寫不進去就殺掉宿主的群組。每一筆另帶一個序號：監督行程每 spawn 一個行程就發一個新的，pid 被重用之後的新行程不同。宿主回報某個 pid 違反協定（`violation`）時帶回那條連線所屬那一筆的序號；監督行程寫一行稽核，pid 與序號都對上現在的前台或對話行程的，就隔離到它結束，宿主重起重送的表裡也不再有它；剛隔離時，宿主 `ready` 而且沒在停的，也經同一條通道再送一次 `revoke`，蓋掉可能還排在監督行程這邊、沒寫出去的那一筆 `grant`。序號對不上的，是同一個 pid 號碼上一個行程的回報，只寫稽核。序號 0 是宿主表上沒有那個 pid 時、還沒送 `hello` 的連線報的：已經隔離的（那一筆撤掉了）照它的身分記；沒被隔離的只寫稽核，因為上一個行程在收屍之前寫進 pipe 的 0，讀到時重用同一個 pid 的新行程正是沒被隔離的。代價是那一筆還沒寫進宿主 pipe 的活行程在 `hello` 之前送壞框不會被隔離：那條連線已經斷了，那一筆到了之後再犯就帶它自己的序號。回報 pid 不在宿主表上（`unregistered`）的，是活著、沒被隔離的前台或對話行程就不算違規（那一筆還沒寫進宿主的 pipe：宿主剛起來或剛重起，或還排在監督行程這邊；或是撤銷之前就連上的連線：pid 被重用、同一個號碼上一個行程留下的，或重用得比宿主讀 pipe 快、新行程先連上的），只在監督行程的 stderr 記一行警告，帶 pid 與宿主的連線編號；其餘照違規記。宿主結束就照退避重起：第一次等 `--host-backoff-ms`，之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、`--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗不算，只退避重起。宿主在 `ready` 之前報 `config-broken`，或回 4（插件清單壞了），稽核那一行的 `error` 是「宿主設定壞了：」接宿主報的那一句（沒收到 `config-broken` 就只有前半）。這個監督行程起來之後宿主還沒 `ready` 過的，設定錯每次重起都一樣，不重起，整台直接停機、回 5；`ready` 過的照退避重起（清單修好，下一次重起就接上），跟 `ready` 之後的失敗一樣不算進連續失敗的次數，不會讓整台停機。
+- 停機（SIGINT／SIGTERM／SIGHUP）：① 送前台 `stop-admission`，等它回 `admission-stopped` 最多 `--admission-timeout-ms`（前台不在、或等的時候結束了就不等）；② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次。停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL。「再一次」指第二輪外部停止訊號：停機若是內部開始的（`hello` 對不上、宿主起不來、宿主設定壞了），第一輪外部訊號只在 stderr 記一行、照拆除梯度的順序走，第二輪才殺。被殺的對話行程（成對時含組合行程）也算停機收的（死因 `shutdown`，已經有死因的不變），在 ① 還沒等完時也一樣。前台照舊等 ① 等完才走 ④。
+- 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`；壓住期間只算放它跑的時間，見下一條）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程每一輪取兩次時間（迴圈開頭與 poll 回來），相鄰兩次之間比准許的晚了超過 `--stall-ms` 的一半時（poll 那一段准許等它的 timeout，其餘不准許），判定自己被停住過（通常是整棵樹一起被凍住：docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從那一刻重新算、記一行訊息；扣掉准許的時間之後，停頓落在一輪的哪裡都算得到。為了讓 poll 那一段准許的時間不蓋掉停頓，有已送出 `bind` 的對話行程時，最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`harness/apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
+- 壓住吃滿 CPU 的對話行程（#2496）：已經 `up`、沒在收、沒在等 `drain` 回答的對話行程，沉默滿 `--throttle-ms`，而且這段期間 leader 一直要 CPU（`/proc/<pid>/schedstat` 的在 CPU 上加上在可執行佇列上等的時間，至少是牆鐘的 0.9 倍），就對 leader 交替送 SIGSTOP（`--throttle-stop-ms`）與 SIGCONT（`--throttle-run-ms`），預設值下它只拿到約 run／(run＋stop)＝四分之一的 CPU。取樣跟著 `--rss-poll-ms`，取樣的跨度不到 `--throttle-ms` 的一半不判。聽到它任何一個框就 SIGCONT、不再壓；開始收（`drain`、拆除梯度）之前也先 SIGCONT。壓住期間 `stalled` 只算放它跑的時間：停住的時間不算沉默，真的卡死的要多等，預設值下約 2＋13×4＝54 s 才被殺。`bind` 到 `bound` 之間（冷開）不壓；沉默但不吃 CPU 的同步等待（`execSync`）不壓。訊號只送 leader，不送群組：監督行程在壓住期間死掉時，leader 靠 `PR_SET_PDEATHSIG` 被殺，群組裡被停住的子行程卻沒人叫醒。`--throttle-ms 0` 是不壓。
+- 容量（設計 `.docs/supervisor-1947-design-2026-11-03.md` §七）：同時活著的對話行程最多 `--capacity` 個，含預熱池、起動中與正在收的。沒給就算：⌊（記憶體上限 − 一半 − 19 − 150）÷ 209⌋（MiB），最少 1；記憶體上限取 `/proc/self/cgroup` 指到的 cgroup v2 目錄與它每一層上層的 `memory.max`，以及 `/proc/meminfo` 的 `MemTotal`，裡面最小的；都讀不到就用 1。起來時記一行算出的容量（或讀不到上限）。19 MiB（監督行程）與 209 MiB（每條對話峰值）是研究量的，150 MiB（前台）是估的。
+- 逐出：名額滿時，排著的每一條都要有一個正在收、或在等 `drain` 回答的行程讓出名額，不夠就挑閒置的送 `drain`：只讀開啟的先，同類裡閒置最久的先；閒置從對話行程回報 `idle` 的時間點（收到的時間減 `idleMs`）與最後一次被 `ensure` 要到的時間兩者較晚的算。挑不到的從最晚排進來的起回 `capacity(thread, current, limit)`。回 `drained` 就走拆除梯度收掉（死因 `evicted`；逾時之後才到的也照收；停機中才回的不算，見死因），收完照排隊順序起排著的；回 `busy` 或 `--drain-timeout-ms` 內沒回答都不收。在等 `drain` 回答時又被 `ensure` 的 thread：回 `busy` 或逾時就回 `up`；回 `drained` 就先收到 `down(evicted)`，再跟其他排著的一起重算名額，沒名額回 `capacity`。等回答的這段期間，它跟自己的行程互抵，不算排著的、也不算讓出名額，不會被回 `capacity`；別的行程結束讓出的名額也不會拿去替它起第二個行程，要等它自己的行程回答（或收完）。這條 thread 的行程回了 `drained`、還在收時又被 `ensure`，也排進隊伍，跟其他排著的一起重算名額：有名額就等它收完，先回 `down(evicted)` 再照排隊順序起；沒名額當場回 `capacity`，收完照樣送 `down(evicted)`。死因是別的（`stalled`、`memory`、`crash`）、正在收、又沒在等 `drain` 回答的不理，收完回的 `down` 就是回答。已經在排的再被 `ensure`（含它自己的行程在等 `drain` 回答、或還在收的期間），只把開啟方式升成 `run`。閒置超過 `--idle-ms`（只讀開啟的 `--read-only-idle-ms`）也送 `drain`；給 0 是不照時間逐出。`release(thread)` 只收只讀開啟的：已經閒置就送 `drain`，還沒閒置（含正在等 `drain` 回答、後來回了 `busy` 或逾時的）就等它回報閒置再送，之間再被 `ensure` 或收到 `turn(begin)` 就作廢。已經轉成一般的（收到過 `ensure(run)` 或 `turn(begin)`；目標輪與背景子代理結算後在主對話開的輪都算，子代理自己的輪不算）不理，照 `--idle-ms` 收：`turn(begin)` 只有監督行程看得到，所以由它判斷；前台只在等 `ensure` 回答時記著送出的開啟方式，回答之後就不記。
+- 只讀開啟：`ensure(thread, read-only)` 起的標成只讀；同一條 thread 收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
+- 預熱池：補到 `--warm` 個還沒綁 thread 的對話行程（含還在起的）（0 是不預熱）；`ensure` 先從池裡拿，拿了再補。有排著的、名額滿、停機中都不補；池裡的沒綁就死了（或起不來），隔「退避起點」才再補，之後每失敗一次等待加倍、最多 30 秒（不放棄，也沒有旗標）。退避起點是 `--front-restart-ms` 與 100 毫秒的較大者：旗標小於 100 毫秒（含 0）時是 100 毫秒，不然 0 乘二還是 0；前台重起的間隔仍是旗標本身。等待回到起點有兩條路：距上一次預熱失敗至少 60 秒；或這個行程到過 `ready`、而且活過 60 秒才死（這一條幾乎被前一條包住）。看的是失敗的時間，不看有沒有行程被指派走：失敗的間隔不到 60 秒就照長，`ensure` 再密也不會讓退避失效。永不 `ready` 的預熱行程每次要活到 `--start-timeout-ms`（預設 30 秒）才死，所以等待長到 30 秒那一輪之後兩次失敗隔滿 60 秒，會回到起點重來；補的間隔仍至少隔一個起動期限。被殺還沒收屍的也佔著池子的位子，不會被別的行程收屍時當場補掉。池裡的沒送 `bind`，不判 stalled。
+- 每條 thread 的重起退避（#2815）：有 thread 的行程（成對是一對）結束或沒起成、死因不是 `evicted`、`shutdown` 的，記這條一次失敗；距這條上一次失敗不到忘記時間才算連續，不然從第一次數（忘記時間 60 秒，`--front-restart-ms` 大過 30 秒時是實際上限的兩倍）。第一次失敗不等；第二次起開一個窗，窗內來的 `ensure` 不起行程、不排隊、不拿預熱池的、不讓位，只回 `down(thread, 上一次的死因)`。窗長從退避起點（`--front-restart-ms` 與 100 毫秒的較大者）起，連續每失敗一次加倍，最多 30 秒（起點比 30 秒大就用它）；不放棄，也沒有旗標。`down` 先送、後記：窗內被擋的 `down` 一定排在那則死訊後面。每個窗只寫一行稽核（`"event":"backoff"`，欄位 `thread`、`cause`、`failures`、`wait_ms`），不是每個被擋的請求一行；被擋的請求不進 `deaths`。閘只在 `ensure`：已經排在隊伍裡、表上沒有窗的 thread，名額出來照起；排著的 thread 自己的行程死了而開出窗，它已經拿到那則 `down`，從隊伍拿掉。表最多 4096 條，滿了丟最舊的。旗標小於 100 毫秒（含 0）時窗長從 100 毫秒起，不是 0。跟預熱池的退避各算各的。
+- `stats(live, warm, rssKib, deaths)`：每 `--stats-ms` 送一次，前台（重）起時也送；`--stats-ms 0` 是不送。`live` 含預熱池、起動中與正在收的，`rssKib` 是各 leader 最近一次輪詢到的 `VmRSS` 加總，`deaths` 是起來以來各類死因的累計（含預熱池裡的與沒起成的）。
+- 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、逐出、RSS 超過上限、心跳斷了太久、送了解不開的框或綁錯 thread、第一框不是對的 `hello`）照那個理由，不再往下判；其餘的依下列：
+  - `memory`：每 `--rss-poll-ms` 讀一次每條對話行程 leader 的 `VmRSS`（`/proc/<pid>/status`），超過 `--rss-limit-mb` 就殺它的群組。不給 `--rss-limit-mb` 就只記不殺。只量 leader（見已知限制）。
+  - `heap`：以 SIGABRT 結束，而且 stderr 裡有一行以 `FATAL ERROR: ` 開頭、含 `JavaScript heap out of memory`、不超過 512 位元組，那一行的結尾又落在 stderr 的最後 16 KiB 內（node heap 用完時印的那一行；它後面還有約 1–3 KiB 的 stack trace）。夾在行中間的（例如轉印的工具輸出）、整行超長的、或印過之後又寫了超過 16 KiB 才死的，都不算。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
+  - `host-oom`：被 SIGKILL、監督行程沒決定收它，而且監督行程啟動時所在 cgroup（v2）的 `memory.events` 裡 `oom_kill` 比啟動時的值加上已經算掉的次數多：多一次只算給一個行程。讀不到 `memory.events`（不是 cgroup v2、沒開記憶體控制器、hybrid 主機的 v2 掛在別處）就一律算 `crash`。監督行程自己送 SIGKILL 的（RSS 超過上限、停機的最後一步）也會先算一次：核心搶先 OOM kill 了它時，那一次在這裡消掉，死因仍照監督行程的理由。
+  - `stalled`：心跳斷了超過 `--stall-ms`；或等 `ready` 超過 `--start-timeout-ms`（成對的是組合行程的 `ready`，不成對的是對話行程自己的；稽核那一行多一個 `error`：`ready 之前逾時`）。
+  - `evicted`：停機之前回了 `drained`、被收掉的（見逐出）。停機開始之後、還沒開始收它之前（停機的 ①）才回 `drained` 的一律不算逐出：照停機收，死因 `shutdown`。停機開始之後也不再送 `drain`（閒置到期、`release` 都不送）。
+  - `protocol`：第一框不是版本相等的 `hello`，或 `hello` 沒宣告 loop 在自己這裡。
+  - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。停機時還排著的 thread 只回 `down(shutdown)`，不寫稽核，也不算進 `deaths`；那條 thread 還有行程（例如在等它回答 `drain`）的，只在那個行程結束時回一次。例外是那個行程已經被逐出、正在收：它回的 `down(evicted)` 前台不當回答，所以停機當場先回一則 `down(shutdown)`，它收完再回自己的 `down(evicted)`，同一條 thread 前台會收到兩則 `down`。
+- 已知限制：
+  - RSS 上限只管 leader：只讀 leader 自己的 `VmRSS`，不含任何子孫行程（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494)）。常駐的 spawner 與 `--guard` 包的 MCP 伺服器不 `setsid`，跟著群組一起被殺；spawner 起的工具與 `--exec` 包的 MCP 伺服器各自 `setsid`，`memory` 的群組 SIGKILL 打不到它們，靠 `PR_SET_PDEATHSIG` 跟著父行程（spawner／對話行程）死。
+  - `host-oom` 的計數涵蓋整個 cgroup（含子 cgroup）：leader 以外的行程（前台、工具）被 OOM 殺掉也會讓計數加一，之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
+  - 同一批收屍的幾條都被 SIGKILL 時，一次 OOM 歸給誰看收屍的順序，不一定是真正被 OOM 殺的那條。
+  - 壓制只管沉默的 leader：CPU 吃在主執行緒以外（worker）時心跳照送，不壓也不殺（讀程式推論，沒量過）。SIGSTOP 只送 leader，同群組裡吃 CPU 的子行程壓不到；觸發也只看 leader 的 schedstat，本來就不看它們。spawner 起的工具與 `--exec` 包的 MCP 伺服器各自 `setsid`，不在同一個群組，更打不到（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494) 同一件事）。沉默 `--throttle-ms` 之前的那一段照樣吃滿 CPU。有 CPU 配額（cgroup `cpu.max`）時，放它跑的那四分之一仍吃同一份配額，鄰居照樣變慢（S4 量的見設計 §6-1）。冷開失敗之後由後來的請求重建 thread 時已經 `up`，那段同步工作沉默滿 `--throttle-ms` 也會被壓，牆鐘約拉長成 4 倍；沉默只算放它跑的時間，所以不會因此被判 `stalled`（讀程式推論，沒量過）。
+  - 只有監督行程在一輪裡比准許的多花了超過 `--stall-ms` 的一半時（例如它自己被 SIGSTOP、卡在寫自己的 fd 2，或處理本身就花了那麼久），也會把所有沉默重算，真的卡死的對話行程要多等最多 `--stall-ms` 才被殺。合法的同步阻塞做到一半時整棵樹被凍住，沉默加上凍住的時間超過 `--stall-ms` 仍會被殺。兩者都是讀程式推論，沒量過。
+  - `--stall-ms` 從 `bind` 起才算，`ready` 之前（載插件、建根）不看它。`ready` 之前由 `--start-timeout-ms` 管（不成對的見下面那一條，成對的見成對那一節）。
+  - 監督行程卡在寫自己的 fd 2 超過 `--stall-ms` 時，就不再讀對話行程的 stderr；對話行程寫滿 64 KiB 的管線之後，如果 node 對管線是同步寫，它的事件迴圈也會卡住。監督行程醒來時會把所有沉默重算，對話行程要在之後的 `--stall-ms` 內恢復送心跳，否則被判成 `stalled`；fd 2 一直卡著時每一輪都重算，真的卡死的也跟著不被殺（讀程式推論，沒量過）。這違反上面「監督行程的 stderr 一定要有人讀」的前提；node 對管線是不是同步寫沒核過。
+  - V8 heap 快用完時，GC 可能連續空轉超過 `--stall-ms`，結果先被判成 `stalled` 而不是 `heap`。沒量過。
+  - 容量算的是行程數，不看實際用掉的記憶體：每條對話實際用得比 209 MiB 多（例如掛了 MCP）時，名額還沒滿記憶體就先滿了。
+  - 正在收的行程照樣佔名額：排著的 thread 要等 `drained` 之後的拆除梯度走完（最長 `--eof-grace-ms` 加 `--term-grace-ms`）才起。
+  - 回 `busy` 或沒回答 `drain` 的，要等它下次回報 `idle` 才會再被挑。對話行程（`harness/apps/harness/src/conversation-control.ts`）在變成閒置時送 `idle`，閒置期間最後活動時間往前推了才再送；所以一直閒著、沒有新活動又沒回答 `drain` 的，之後不會再被逐出。讀程式推論，沒量過。
+  - 名額滿而送出的 `drain` 不撤回：排著的 thread 先被別的行程結束讓出的名額起掉之後，那個 `drain` 仍會照常收掉一條閒置的對話，多逐出一條。對話行程的協定沒有「取消 drain」。
+  - 收到 `turn(begin)` 不清掉閒置記號：正在跑一輪的對話仍可能被挑中送 `drain`，靠對話行程收到 `drain` 時當場再判一次、回 `busy` 擋下（`harness/apps/harness/src/conversation-control.ts`）。讀程式推論，沒量過。
+  - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
+- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`composition`／`front`／`host`）、`pid`、`exit_code`、`signal`；`ready`（結束前送過 `ready` 沒有）只有 `host` 有；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 與 `composition` 有；沒起成的，與宿主 `ready` 之前逾時、插件清單壞了的、成對時等 `ready` 逾時的組合行程，多一個 `error`。宿主回報的違反協定另寫一行：`ts_ms`、`event`（`protocol`）、`pid`、`role`（那個 pid 在身分表上是 `front`、`conversation`，不在表上是 `unknown`）、`thread`、`reason`。欄位與值只加不改，讀的人照 `role` 或 `event` 分辨每一行。
+- 一對裡每個行程結束各寫一行（組合行程一行，每個葉子各一行，含補起的），都多一個 `pair`（這一對的序號，同一對的每一行都相同，就是 socket 檔名 `c<序號>.sock` 的那個數字）：葉子的 `role` 是 `conversation`，組合行程是 `composition`（`turns` 一律是 0）；被同伴連帶收掉的那一個 `cause` 是 `peer`；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也是（那條 thread 的 `down` 在葉子死時回過）。`peer` 只出現在稽核：不回 `down`、不進 `stats` 的死因累計。
+- 結束碼（監督行程 `nexus-supervisor` 自己的；組合行程的另有一張，見〈組合行程 `nexus-composition`〉）：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2；前台或宿主的 `hello` 對不上 3；宿主在 `ready` 之前連續失敗 4；這個監督行程起來之後宿主還沒 `ready` 過、插件清單就壞了 5。
+
+整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`host/examples/fake_conversation.rs`、`examples/fake_host.rs` 三支假程式站在前台、對話行程與宿主的位置，成對的測試另外起真的 `nexus-composition`（驗組合行程 `hello` 的那一支拿 `fake_conversation` 頂替）；真宿主的端到端也在這裡。`fake_conversation` 要用宿主的協定，所以編在宿主那個 package。
+
+### 一對
+
+`--composition` 給的是組合行程（`nexus-composition`，見下面那一節），這時每條對話是一對行程，佔一個名額（`--capacity`、`stats` 的 `live` 與 `capacity` 的 `current` 都數對）：
+
+- 起動：先起組合行程，argv 是 `<程式> <--composition-arg>... --socket <--run-dir>/c<序號>.sock --pair-socket <--run-dir>/c<序號>.p.sock --leaf-socket <--run-dir>/c<序號>.l.sock`；收到它不宣告 loop 的 `hello` 才起葉子（`--conversation`），葉子的 `--socket` 是 `c<序號>.l.sock`、多一個 `--pair-socket c<序號>.p.sock`，並先送組合行程 `leaf{pid}`。兩個行程各有一條控制通道、各自 `hello`；葉子要宣告 loop 在自己這裡，組合行程不能宣告，對不上的死因是 `protocol`。組合行程的 `hello` 帶空的 token：它還不連宿主，身分表上只有葉子。
+- `ready`、`bound` 看組合行程的（葉子在橋上登記完它才 `ready`），葉子在控制通道上送的不理；`bind` 送給組合行程，由它經橋轉給葉子。`up` 的 socket 是組合行程的 `c<序號>.sock`。`turn`、閒置、`drain` 走葉子。預熱池預熱的是一對，到組合行程 `ready` 為止。
+- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子，`up` 的 socket 不變：送 `leaf{pid}`，等組合行程替補起的葉子再回一則 `ready`（它在橋上登記完）才送 `bind`，`--stall-ms` 也從那則 `bind` 起算，跟第一個葉子一樣。等這則 `ready` 的期限見下面 `--start-timeout-ms` 那一條；這一段葉子死了就整對收。葉子在收（或已經不在）時讀到的 `ready` 不理、不送 `bind`，起動期限也照算。第一則之後、不在等補起的葉子時多出來的 `ready` 不理。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
+- 組合行程死了：整對收。先收它的屍、判完死因，才對葉子的群組送 SIGKILL（反過來葉子可能先被收屍，領走那一次 `oom_kill`）。`down` 一對只送一次、死因累計也只進一次：葉子已經在收時照葉子的死因，否則照組合行程的。組合行程開始收之後，這一對不再推進也不再回 `up`：它之後才讀到的 `ready`、`bound` 不理，葉子回 `busy`（或 `drain` 逾時）時排著的那條 thread 不回 `up`，等到的是這一對的 `down`。
+- `--start-timeout-ms`（不成對）：對話行程從 spawn 起到讀到它的 `ready` 一筆期限，預熱池裡的也算。過了就當場對它的群組送 SIGKILL，死因 `stalled`、稽核帶 `error: ready 之前逾時`；已指派 thread 的回 `down(stalled)` 一次，預熱池裡的沒有 thread、不回 `down`，照預熱池的退避再補（見預熱池那一條：永不 `ready` 的一輪是期限加等待，等待從 1 秒（`--front-restart-ms` 預設）長到 30 秒，預設期限 30 秒時最後是約 60 秒一輪）。判之前先讀一次它的控制通道；停機中不判；起算點是 spawn，不是 `ensure`，所以同一條 thread 再被要一次不延後。監督行程被停住過時的重算與 `0` 的意思同下面。
+- `--start-timeout-ms`（成對）：一對從起組合行程到讀到它的 `ready`，整段一筆期限；補葉子時從補的那一刻另算一筆。過了就當場對組合行程的群組送 SIGKILL（不走拆除梯度），葉子等它收完屍連帶收（稽核記 `peer`），死因 `stalled`、`down` 一次，名額讓出來。組合行程沒送 `hello`、葉子沒在橋上登記、組合行程沒替它送 `ready`，從外面分不出來，都算這一條。判之前先讀一次組合行程的控制通道；停機中不判；監督行程判定自己被停住過時（比准許的晚了超過 `--start-timeout-ms` 的一半，跟 `--stall-ms` 開不開無關）從那一刻重新算。預熱池裡的一對逾時不回 `down`，照預熱池的退避再補。短於那一半的停住照樣算進期限；認不認得出來靠 poll 醒得夠勤，有一對時最晚每 `--rss-poll-ms` 醒一次，`--rss-poll-ms` 調到期限的一半以上就認不出來。期限很小（一輪的處理時間就超過它的一半）或監督行程的 fd 2 一直卡著時，每一輪都重算，一直不逾時（讀程式推論，沒量過）。`--start-timeout-ms 0` 是不判。預設 30000 跟 `--host-ready-timeout-ms` 取一樣的值，一對冷起動實際要多久沒有量過。
+- `bind` 之後等 `bound` 沒有期限，靠三件事收：
+  - 葉子回 `attach` 錯（或 `attach` 送不出去）：組合行程以 4 結束，照「組合行程死了」整對收。稽核裡組合行程那一行是 `crash`、`exit_code` 4；葉子這時沒在收的話，`down` 的死因是 `crash`、葉子那一行是 `peer`，已經在收就照葉子的死因。
+  - 葉子結束（含橋斷了它自己以 70 結束；葉子自己的結束碼 70、71 見 [`docs/operations.md`](../../../docs/operations.md)〈成對執行：對話行程連組合行程的橋〉）：還沒 `bound`，整對收。
+  - 葉子或組合行程沒有心跳：`--stall-ms`。真的葉子在綁定裡才開始送心跳，`attach` 還沒走到那裡就停住的，從 `bind` 起算的沉默到了就判。
+  - **已知限制**：葉子心跳照送、`attach` 一直不回（冷開不結束）的一對留在等 `bound`，佔著名額，到停機或葉子自己結束為止（還沒 `up` 的不能逐出）；這段期間同一條 thread 再來的 `ensure` 也拿不到回答；不成對的對話行程 `bind` 之後也一樣沒有期限。冷開最久要多久沒有量過，沒有數字就不設期限。
+- `--stall-ms` 兩個行程各看各的：葉子停住只殺葉子，組合行程停住整對收。組合行程的心跳是 1 秒一次，`--stall-ms` 要超過 4000：監督行程最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值，整棵樹凍住才認得出來（見上面「心跳」那一條）；參數解析不擋，但啟動時 `--stall-ms` 不是 0 又不超過 4000 會在 stderr 警告一行。不超過心跳間隔（1000 上下）時組合行程一送出 `bind` 就會在兩則心跳之間被判 `stalled`，整對收（[#2876](https://github.com/DemianLi/nexus-agent/issues/2876)）。`--rss-limit-mb` 只管葉子；組合行程的 RSS 只記進稽核與 `stats`。壓住吃滿 CPU 的也只有葉子。
+- 拆除與停機都是先葉子後組合行程：葉子收完才開始收組合行程。停機中再收到訊號時不分先後，全部當場 SIGKILL。
+
+## 宿主 `nexus-host`
+
+同一個 workspace 的另一個 package（#2569，`host/`；執行檔 `host/src/main.rs`，邏輯在 `host/src/host/`），由監督行程起、整台一個，聽 `--socket` 給的 Unix socket，驗明連進來的是誰。不裝 seccomp。
+
+```text
+nexus-host [--plugins <檔>] --socket <路徑>
+```
+
+- 插件清單（`--plugins`，`host/src/host/plugins.rs`）：跟監督行程換完 `hello`、bind socket 之前讀。JSON 陣列，一列一個插件：`name`（必填，編進執行檔的插件名；出貨的建置只有 `mcp`，見 [`docs/host-mcp.md`](../../../docs/host-mcp.md)）、`config`（選填，原封不動交給插件，裡面的鍵由插件自己判）、`disabled`（選填，只收字面布林；`null` 當沒寫）。沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了、超過 1 MiB、JSON 壞了（重複的鍵不算壞，取後者），或哪一列少了 `name`、是不認得的鍵、名字對不上、型別不對，整份拒絕：寫一行 stderr、送 `config-broken`（帶同一句錯誤）取代 `ready`、回 4，不 bind。`intercept` 還沒做（#2596），寫了一樣整份拒絕，錯誤指到那張卡。插件自己不收它的 `config` 的，只有那一列沒掛（寫一行 stderr），其他照掛。插件的每一筆事件（狀態轉換、apply 失敗…）寫一行 stderr。整合測試用的 `test-echo` 只在 `test-hooks` 的建置裡有。
+
+- 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`；插件清單壞了的改送 `config-broken`，不 bind（見上一條）。之後收身分表：先是整張表的 `grant`，最後一筆 `synced`（表是空的也送；收到之前不讀客戶端連線），之後是增量的 `grant`／`revoke`；回報 `violation`／`unregistered`。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪 socket、回 0。
+- 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON（`serde_json`：數字收小數；宿主編出來的 payload 裡，物件的鍵照碼位順序；解的時候任何一層重複的鍵都取後者），協定在 `host/src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。版本是 `HOST_PROTOCOL_VERSION`（4），跟控制通道的版本各自獨立；不用 3（那是控制通道的版本）：客戶端送 3 進來會被判版本不對。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條（收監督行程的 `revoke` 時收 backlog 不受這個上限），宿主起來時把開檔數的軟上限拉到硬上限；連上 5 s 內沒送 `hello` 就斷。開檔數還是用完時，排著的連線接下來就關（宿主先留著一個 fd，用完時關掉它騰出位子），不留在 backlog、也不空轉；連那個 fd 都開不回來（整台主機的 fd 用完）、或 backlog 收空了，停 100 ms 不 poll listener 再試（收 `revoke` 時照樣收 backlog）；EMFILE、ENFILE 以外的 accept 錯也一樣停 100 ms。
+- 呼叫（`host/src/host/calls.rs`）：驗過身分之後，客戶端送 `call`（`side`、`id`、`service`、`method`、`payload`）與 `cancel`（`side`、`id`）；宿主回 `chunk`（`seq` 從 0 起）與 `result`（`ok` 或 `error{code,message}`），並主動推 `event`（`service`、`topic`、`payload`）給服務指名的那一條連線（它的某個呼叫所在的連線），不廣播。只傳資料。
+  - 服務是插件用 `Cx::expose` 提供的（`host/src/kernel/remote.rs`），照服務名找；沒有就回 `unknown_service`，沒有那個方法回 `unknown_method`。
+  - 宿主是單執行緒、不忙等：沒當場結束的呼叫，在服務要求的時限（`next_deadline`）或服務的喚醒 fd（`wake_fd`，`host/src/wake.rs` 的自管道，`O_CLOEXEC`、非阻塞，寫滿或讀端先關都不卡）可讀時再 poll；推了塊又回 `Pending` 的呼叫下一輪直接再 poll（連線暫停時等它恢復）。fd 可讀時宿主先叫服務的 `woken` 讓它讀乾淨。
+  - 每個 `id` 剛好一框 `result`，取消的也有（`cancelled`）；`cancel` 已經結束或不存在的 `id` 不回。結束了的 `id` 可以再用。
+  - 一條連線同時最多 64 個呼叫，再來的回 `busy`。一塊或結果編出來超過一框回 `too_large`，大的結果由服務自己切塊串流。排著沒寫出去的到了 1 MiB，先不 poll 那條連線的呼叫，也先不讀它送來的框，排著的降回 1 MiB 以下就恢復；一次讀進來的框照序處理，停下時剩的留著，恢復後接著處理。
+  - 服務在一步裡推的塊加起來超過 1 MiB，超過的那一塊起不送（前面的照送），那個呼叫回 `service_error`，服務還當它在跑的話在服務那邊取消。事件不受讀端暫停管：要推給的連線排著的已經到了 2 MiB、又有事件要推，就斷掉那條連線，不丟掉那個事件；客戶端重連後要再發呼叫，服務才知道新的連線。單一事件編出來超過一框的不送，宿主只記一行 log，連線不斷。
+  - 綁定跟著連線走：連線一斷，它還在跑的呼叫在服務那邊全部取消，宿主不記跨連線的東西。提供服務的插件卸載或換了實體，還在跑的呼叫回 `service_error`。
+  - `side` 是 `id` 由哪一邊發的，`"h"` 保留給宿主發起的請求，宿主收到 `"h"` 的 `call`／`cancel` 判違規。還沒送 `hello` 就送 `call`／`cancel`、還在跑的 `id` 又送一次，也判違規（照下面狀態表「壞框」那一欄）。
+- 驗身分：用 `SO_PEERCRED` 取連線的 pid（uid 要跟宿主相同），驗 `hello` 之前先把控制通道讀乾淨，所以監督行程已經寫進 pipe 的撤銷一定先生效。客戶端報的 thread 不看。
+  - pid 不在表上：回 `rejected`、報 `unregistered`（帶 pid 與連線編號，編號依 accept 的順序從 1 起，宿主自己的 stderr 也寫它），表上沒有它可以撤；算不算違規由監督行程判斷。
+  - token 或版本不對、重複的 `hello`、框太大、JSON 或訊息解不開（送的若是撤過的連線，見下一條）：回 `rejected`、報 `violation`，把那個 pid 從表上拿掉，它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。
+  - 撤過的連線：收到監督行程的 `revoke` 時先把 listen backlog 收完，那個 pid 的連線全部記成撤過（驗過身分的當場斷）；上一條的違規也一樣記，只是不收 backlog。撤過的連線之後送什麼都只回 `rejected`、報 `unregistered`，同一個 pid 號碼再登記也不照新的那一筆驗，也不撤它。pid 被重用得比宿主讀 pipe 還快時，新行程先連上的連線也會這樣被拒，重連就好（不會被隔離）。
+- 整合測試 `host/tests/host.rs` 由測試站在監督行程的位置；`host/examples/host_client.rs` 是另一個 pid 的客戶端，`tests/spawner.rs` 用它驗工具子行程連不了 socket（seccomp 擋 `socket(AF_UNIX)`，回 EPERM）。
+
+### 連線身分的狀態表
+
+一條連線在宿主這邊的狀態：
+
+- **B**：還在 listen backlog，宿主還沒 accept。
+- **U**：已 accept，但身分表還沒到齊（監督行程還沒送 `synced`）。宿主不讀這種連線，`hello` 留在核心的緩衝區；表到齊之後它變成下面 A⁺、A⁻、A⁰ 的其中一種。
+- **A⁺**：已 accept、還沒送 `hello`，pid 在表上。
+- **A⁻**：同上，pid 不在表上。
+- **A⁰**：同上，`SO_PEERCRED` 讀不到 pid、uid 不同或 pid 不是正的（判斷在 `judge_peer`，單元測試 [t28]）。
+- **V**：已驗過身分。
+- **R**：撤過。驗過身分的連線一被撤就斷，所以留在這一格的都還沒送過 `hello`。
+
+宿主每驗一個 `hello`、每判一次違規，都先把控制通道讀乾淨，所以已經寫進 pipe 的 `revoke`／`grant` 一定先生效。表裡的「撤 pid」是宿主自己撤：表上拿掉那一筆，那個 pid 的連線全部記成撤過，驗過身分的當場斷，不收 backlog（這四件事各由哪條測試釘住見 [n8]）。
+
+**宿主這邊**（方括號是釘住這一格的測試，n 開頭的是不測的原因，見下面的清單）
+
+| 狀態 | `hello`，token 與版本都對 | `hello`，token 或版本錯 | 壞框（框太大、解不開） | 重複的 `hello` | 監督行程的 `revoke` | 同 pid 的新登記 | EOF／5 s 沒送 `hello` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B | accept 之後照 A 那幾列 [n5] | 同左 | 同左 | — | 先收進來，記成撤過，變 R [t8]；accept 出錯的除外 [n3] | accept 之後照 A⁺ [n5] | accept 之後照 A [n5] |
+| U | 不讀，`hello` 留著，表到齊後照 A 那幾列 [t21][t22] | 同左 | 同左 | — | 先套用 [n9] | 先套用，到齊後照新的驗 [t21] | 連上滿 5 s 就斷（送了 `hello` 也一樣），不回、不報 [t23]；對方先關的連線也等到那時才收 [n9] |
+| A⁺ | 回 `hello`，變 V，不報 [t1] | 回 `rejected token 不對`／`版本不對`，報 `violation`，撤 pid [t2] | 回 `rejected <理由>`，報 `violation`，撤 pid [t3] | — | 變 R，不回 [t5][t6] | 整筆換掉，之後照新的驗 [t11] | 斷，不報 [t15][n4] |
+| A⁻ | 回 `rejected 沒有登記`，報 `unregistered` [t9][t17] | 同左（不看 token 與版本）[t17][t18] | 回 `rejected <理由>`，報 `violation`，撤 pid [t13] | — | 變 R [t12] | 變 A⁺ [t11] | 斷，不報 [t15][t16] |
+| A⁰ | 回 `rejected 沒有登記`，報 `unregistered`，pid 0 [t24] | 同左 [t25] | 回 `rejected <理由>`，報 `violation`，pid 0、序號 0，沒有 pid 可撤 [t26][n1] | — | 不適用 | 不適用 | 斷，不報 [t27][n4] |
+| V | — | — | 回 `rejected <理由>`，報 `violation`，撤 pid [t14]；撤銷剛好在路上時見 [n6] | 回 `rejected 重複的 hello`，報 `violation`，撤 pid [t1]；token 與版本不看 [t18]；撤銷剛好在路上時見 [n6] | 斷，不回、不報 [t4] | 照樣連著，不重驗 [t11] | 斷，不報 [t15] |
+| R | 回 `rejected 沒有登記`，報 `unregistered` [t5][t6][t8]，不撤表上那一筆 [t12] | 同左（不看 token 與版本）[t18] | 回 `rejected <理由>`，報 `unregistered`（理由照框），不撤表上那一筆 [t7] | — | 照舊是 R [t15] | 照舊是 R，不照新的驗 [t6][t8] | 斷，不報 [t15] |
+
+**監督行程這邊**（宿主的回報 × 那個 pid 是誰）
+
+| 回報 | 活著、沒被隔離的前台或對話行程 [n7] | 已隔離的 | 不是我們的（含 pid 0） |
+| --- | --- | --- | --- |
+| `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 而且沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9]；序號對不上的、序號 0 的照最右邊「不是我們的」那一格 [s10][s12][s13] | 再寫一行稽核，只在剛隔離時送過那一次 `revoke` [s3]；序號 0 的也照它的身分記 [s11]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
+| `unregistered` | 不隔離、不寫稽核；運作 log（監督行程的 stderr）記一行警告，帶 pid 與宿主的連線編號，不帶 token [s6] | 照 `violation` 那一格，稽核的理由是宿主回給連線的 [s4][s7] | 照 `violation` 那一格 [s5][s8] |
+
+**釘住各格的測試**（`host/tests/host.rs` 是 t，`tests/supervisor.rs` 與 `src/supervisor/mod.rs` 的單元測試是 s）
+
+- t1 `a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation`
+- t2 `a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections`
+- t3 `every_invalid_vector_is_rejected_and_the_host_keeps_serving`
+- t4 `a_hello_after_a_revoke_is_always_rejected`
+- t5 `a_revoke_leaves_connections_that_have_not_said_hello_to_be_rejected`
+- t6 `a_connection_from_before_a_revoke_is_not_verified_against_a_later_grant`
+- t7 `a_bad_frame_on_a_revoked_connection_leaves_a_later_grant_alone`
+- t8 `a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later_grant`
+- t9 `unregistered_reports_number_each_connection`
+- t10 `the_host_raises_its_open_file_soft_limit_to_the_hard_limit`（n3 的前提）
+- t11 `a_regrant_replaces_the_token_and_keeps_verified_connections`
+- t12 `a_connection_from_a_pid_not_on_the_table_is_also_marked_by_a_revoke`
+- t13 `a_bad_frame_from_a_pid_that_is_not_on_the_table_is_a_violation`
+- t14 `a_bad_frame_after_hello_quarantines_the_pid`
+- t15 `a_connection_that_closes_reports_nothing_and_leaves_the_grant`（A⁻、A⁺、V、R 的 EOF，與 R 撤兩次再登記）
+- t16 `a_client_that_never_says_hello_is_dropped`（A⁻ 逾時）
+- t17 `an_unsandboxed_mcp_server_with_a_stolen_token_is_rejected`（別的 pid 拿正主的 token）
+- t18 `a_hello_is_judged_by_the_connection_state_before_its_version_or_token`（A⁻、R 送錯版本與 token，V 送錯版本與 token 的重複 `hello`）
+- t19 `a_violation_carries_the_generation_of_the_grant_it_belongs_to`（`violation` 帶的序號：V 是驗它時那一筆的，A⁺ 是表上現在那一筆的；A⁻ 是 0，由 t13）
+- t20 `running_out_of_fds_closes_queued_connections_instead_of_spinning`（n3）
+- t21 `a_hello_is_not_answered_until_the_table_is_synced`（U：`hello` 先到不回、不報；`grant` 來了還是不回；`synced` 到才接受）
+- t22 `an_empty_table_is_also_waited_for_and_then_rejects`（空表也要等 `synced`，到了之後 A⁻ 才被回 `沒有登記`）
+- t23 `a_connection_waiting_for_a_table_that_never_comes_is_dropped_silently`（U 逾時：斷，沒回任何框、沒報）
+- t24 `peer_pid_unreadable::a_hello_with_the_right_token_is_not_registered_and_reports_pid_0`（A⁰：宿主用 `NEXUS_HOST_TEST_NO_PEER_PID` 起，登記在表上的測試行程連上去也是「沒有登記」、pid 0）
+- t25 `peer_pid_unreadable::a_hello_with_a_wrong_token_or_version_is_also_not_registered`（A⁰：不看 token 與版本）
+- t26 `peer_pid_unreadable::a_bad_frame_is_a_violation_of_pid_0_with_nothing_to_revoke`（A⁰：`violation` 帶 pid 0、序號 0；沒有 pid 可撤見 n1）
+- t27 `peer_pid_unreadable::a_connection_that_closes_reports_nothing`（A⁰：先用一條連線送 `hello`，確認宿主讀不到 pid；另一條連線什麼都不送就斷，不報）
+- t28 `host::tests`（`host/src/host/mod.rs`，`judge_peer` 的單元測試：`getsockopt` 失敗、uid 不同、pid 0、pid 為負、正常）
+- s1 `a_violation_revokes_the_live_identity_on_the_host`
+- s2 `conversations_reach_the_host_and_violations_are_audited_and_quarantined`
+- s3 `a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_again`（收屍之後數 `revoke`：隔離一次、收屍一次）
+- s4 `a_quarantined_conversation_is_audited_on_every_later_rejection`
+- s5 `a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown`
+- s6 `an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits`
+- s7 `an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hosts_reason`（假宿主報的理由不是「沒有登記」，理由寫死就紅）
+- s8 `reports_for_a_pid_that_is_not_ours_send_no_revoke`（pid 0；非 0 的表外 pid 走同一道 `role` 判斷，讀碼）
+- s9 `a_quarantined_conversation_is_left_out_of_the_table_sent_to_a_restarted_host`
+- s10 `a_violation_with_a_stale_generation_neither_quarantines_nor_revokes`
+- s11 `a_zero_generation_violation_for_a_quarantined_conversation_keeps_its_role`（序號 0：撤銷之後宿主表上沒有它，還沒送 `hello` 的連線報的就是 0）
+- s12 `a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited`（序號 0：宿主在上一個行程收屍之前回報的，或那一筆還沒寫進宿主 pipe 的活行程）
+- s13 `a_zero_generation_read_after_the_pid_is_reused_does_not_inherit_the_quarantine`（`src/supervisor/mod.rs` 的單元測試：pid 重用在整合測試造不出來，直接建監督行程，P1 隔離、收屍，P2 重用 pid 後讀到 0）
+- s14 `a_second_stop_signal_sends_no_revoke_to_the_host_it_just_killed`（收屍時宿主正在停：不送撤銷，寫端已經關了也不當成收不下而再殺一次）
+- s15 `a_host_that_cannot_take_a_revoke_is_killed_once_per_reap_and_restarts`（同一輪收屍收到兩個身分、宿主收不下：只印一次、只殺一次，之後照退避重起）
+
+**不測的格與原因**
+
+- n1 A⁰：核心真的回報另一個 uid 或另一個 pid namespace 的對端，要另一個 uid 的行程才造得出來，CI 的 `cargo test` 不用 root 跑（`ubuntu-latest` 與 `ubuntu-24.04-arm`、沒有 container）；測試也不另用 sudo 或容器開 uid，那是核心的行為，不是這裡要證的。測的是拿到 `None` 之後的分支（t24–t27，用 `test-hooks` 的 `NEXUS_HOST_TEST_NO_PEER_PID` 讓宿主讀不到任何連線的 pid；開關是整個宿主行程的，所以對照用的連線另開一個宿主），與什麼情況回 `None`（t28，`judge_peer`）。「壞框沒有 pid 可撤」不另測：開關開了之後後面的連線一樣是 A⁰，看不到表上那一筆有沒有被動；它靠 `violate` 裡 `pid` 是 `Option`、`None` 就 `return` 守著。正式環境裡 0700 的 run-dir 先擋掉一般的另一個 uid（`src/supervisor/mod.rs` 建 run-dir 的那一段），A⁰ 實際只會來自 root 或跨 pid namespace 的部署。
+- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：就算送了，寫端關了之後補送的 `revoke` 也直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。收屍時也一樣，宿主正在停就不送撤銷（s14 測的是停機時的 `kill_now`，s15 測的是收屍時自己 `kill_now` 之後那條）。
+- n3 開檔數用完：t20 把宿主的軟硬上限壓到 12 與 13（每條連線 2 個 fd，兩個相鄰的上限裡一定有一個走到 EMFILE），確認排著的連線被關掉、宿主 1 秒內用不到 20 個 tick、fd 空出來之後照常收連線。整台主機的 fd 用完、預留的 fd 開不回來的退避沒有測試：要把整台主機的 fd 用完。
+- n4 A⁺、A⁰、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
+- n5 B 的「accept 之後照 A」沒有專門的測試：每條測試的連線都先經過 backlog 才被 accept。新登記只改表、不碰連線，`hello` 驗的是驗那一刻的表（先讀乾淨控制通道），所以登記在 accept 之前或之後到，結果一樣；accept 不讀資料，EOF 照 A 那幾列的 `retain` 處理（讀碼）。
+- n6 已驗過身分的連線送重複的 `hello` 或壞框時，撤銷剛好已經寫進 pipe、宿主還沒讀：宿主先讀乾淨控制通道，這條連線先變成撤過，結果跟 R 那一列的壞框格一樣：回 `rejected`、報 `unregistered`，理由照違規（`重複的 hello` 或框的錯），不撤表上那一筆。窗口只有幾行程式，測試造不穩。
+- n7 前台的格跟對話行程走同一段程式（`role` 換成 `front`），監督行程這邊的測試只用對話行程。
+- n8 「撤 pid」的前三件在 `Host::revoke`；不收 backlog 是因為違規時 `violate` 直接呼叫它，收監督行程的 `revoke` 時才由 `Host::sync` 先 `accept(usize::MAX)` 再呼叫它。表上拿掉由 t1、t2、t3、t14 釘住；還沒送 `hello` 的記成撤過由 t13、t18；驗過身分的斷由 t2；不收 backlog 沒有測試，要讓連線停在 backlog 得先把連線數撐到上限（t8 的做法），沒另外造。
+- n9 U：`synced` 之前的 `revoke` 照常套用，但協定上它不會比 `synced` 早到（監督行程只對 `ready` 的宿主送 `revoke`，而設 `ready`、送表、送 `synced` 在同一段）；到齊之前連線的 fd 放 `-1`，所以對方先關掉的連線要等 5 s 逾時才收（不是 `POLLHUP` 空轉）；兩者測試都抓不到，靠讀碼。
+
+**已知限制**
+
+- pid 被重用得比宿主讀 pipe 還快時，新行程先連上的連線也會在收到 `revoke` 時被記成撤過，照 R 那一列被拒，要重連；它不會被隔離。
+- 收 `revoke` 時 accept 出錯、又沒能把那條連線接下來關掉（整台主機的 fd 用完，預留的 fd 開不回來；或 EMFILE、ENFILE 以外的錯）而留在 backlog 的連線，不會記成撤過，之後被 accept 時照當下的表驗。它若是死掉的行程留下、還被子孫拿著的，pid 被重用之後送舊 token，報的 `violation` 帶的是新行程那一筆的序號，會落在新行程頭上（還沒送 `hello` 的報 0，只寫稽核）。
+- 收屍時宿主還沒 `ready`（剛起來或剛重起、監督行程還沒處理它的 `ready`）就不送撤銷：新宿主 bind 之後連上、在監督行程處理它的 `ready` 之前就被收屍的行程，它留下的連線不會記成撤過。pid 被重用、新行程那一筆到了之後它才送舊 token 或壞框，報的 `violation` 帶新行程的序號，會落在新行程頭上。
+- 不是我們起、但跟我們同 uid 的行程，它死後留下的 A⁻ 連線送 `hello` 或壞框，報的 `violation` 會落在重用同一個 pid 的新行程頭上。同 uid 的行程本來就在信任範圍內（能讀別的行程的記憶體），不修。
+
+## 一對之間的橋
+
+一個對話是一對行程：Rust 的組合行程與 Node 的葉子行程（#2583）。兩者之間那條連線叫橋。這裡有的是協定與兩端的連線邏輯，都是函式庫；組合行程那一端接進了執行檔 `nexus-composition`（見下一節），葉子那一端只有測試起它。監督行程送 `leaf{pid}` 的那一段、把葉子那一端接進對話行程都還沒做。
+
+- 協定：`host/src/pair_protocol.rs`，檔頭是完整的規則（框的種類、誰能送什麼、哪些算違反協定、背壓、斷線）。TS 那一側是 `harness/packages/nexus-host-bridge/src/pair-protocol.ts`，只有編解碼與切框。兩邊跑同一份 `pair-vectors.json`。
+- 框格式同控制通道（u32 LE 長度＋JSON）。版本是 `PAIR_PROTOCOL_VERSION`（1），跟控制通道、宿主連線的版本各自獨立。`hello` 不帶 token：身分是 `SO_PEERCRED` 的 pid（uid 要跟組合行程相同）等於交給 `Pair::set_leaf` 的那一個。錯誤碼是宿主連線的那一組，測試對著 `host-vectors.json` 的 `errorCodes` 驗。
+- 不收的連線回 `rejected{code, reason}` 再關。`code` 給程式看、是封閉的四個，`reason` 給人看：`retry_later`（等著驗身分的連線滿了、葉子的 pid 逾時還沒到、pid 不是組合行程手上的那一個）葉子退避後重連（每次至少等 250 ms，`RETRY_BACKOFF_MIN`，經驗值、沒量過；每次回 `retry_later` 都是一筆 `Refused` 事件，不退避會把稽核刷滿），最晚到它自己的啟動時限，過了就不再試；`identity`（讀不到身分、uid 不同；線上的 `reason` 都是「身分不對」，組合行程的 `Refused` 事件才分得出是哪一種，uid 不同的會寫出那個 uid）、`version`、`protocol`（違反協定，含同一個 pid 在已經有一條驗過的連線時再連一條）都不重試。pid 不符歸在可重試，是因為組合行程手上的可能還是上一個葉子的 pid（它沒連上就死了，或它的斷線組合行程還沒察覺）、新的葉子比新的 `leaf{pid}` 先連進來；真正的邊界是 uid，pid 只分得出「是不是在等的那一個」。組合行程的 `Refused` 事件只帶 `reason`（pid 不符時是「pid 不對」），不帶 `code`。葉子要把三種結局分開回報：對方不在（到啟動時限，最後一次有結論的嘗試是連不上、connect 成功後至少 5 s（`HELLO_TIMEOUT`）沒收到任何框、或沒收到任何框就斷；這幾種跟 `retry_later` 一樣先退避重連，不是當下的結局）、被拒（`retry_later` 以外的 `rejected`，含 `code` 解不開的）、一直被要求稍後再試（到啟動時限，最後一次有結論的嘗試是 `retry_later`，回報帶試了幾次或經過多久，以及最後一次的 `reason`）——組合行程沒起來，跟組合行程在但一直不收這條連線，要找的人不一樣。判結局以收到的 `rejected` 為準：組合行程可能在讀到 `hello` 之前就回 `rejected` 並關，葉子寫 `hello` 出錯時要先把讀得到的讀完再下結論；寫入出錯之後就讀不到的實作（Node）先讀一輪再寫 `hello`，見下面「葉子那一端」。還沒讀到對方 `hello` 時送出的 `rejected`（收下連線時的拒絕、`hello` 之前的違反協定與逾時）不知道對方的版本，所以永遠只能用版本 1 的這四個 `code`。拒絕碼跟呼叫的錯誤碼是兩組：呼叫的 `busy` 只讓那一次呼叫失敗，連線不動。
+- 組合行程那一端：`host/src/pair.rs` 的 `Pair`。單執行緒、不忙等，呼叫端把 `poll_fds` 與 `deadline` 併進自己的 poll，醒來叫 `step`，拿回一串事件。還沒驗過身分的連線最多留 4 條；比葉子的 pid 先到的，從收下它那一步起最多等 3 s（`PID_WAIT`）；沒送 `hello` 的也是等這麼久。葉子等回覆從 connect 成功起算、至少 5 s（`HELLO_TIMEOUT`），connect 成功到組合行程收下連線、加上組合行程過了時限才判的延遲，合計短於這 2 s 時，`rejected` 會在葉子逾時之前到；這兩段都沒有上限，所以不是保證——太晚時葉子仍會先逾時（算等滿時限沒有回覆，照葉子那一端的規則重連，最晚到啟動時限）。葉子的 pid 還沒到（或斷線之後還沒再給）的期間，這 4 條不看是誰連的：同一個 uid 的別的行程連上來不送 `hello`，可以佔住全部 4 條各 3 s（`PID_WAIT`），這段時間葉子連不進來（葉子要重試）。回了 `rejected` 的連線等它寫出去再關，最多等 5 s（`CLOSE_TIMEOUT`），同時最多留 4 條。`accept` 回 `EMFILE` 這類錯時退避 100 ms 再試，沒有預留 fd 去收掉排隊中的連線。`set_leaf` 與送出的方法造成的事也是下一次 `step` 才交出來，這時 `deadline` 回現在。整合測試 `host/tests/pair.rs` 由測試站在葉子的位置，時間是傳進去的。
+- 葉子那一端：`harness/packages/nexus-host-bridge/src/pair-client.ts` 的 `PairClient`。還沒有生產端的程式呼叫它。`PairClient.connect` 連線、送 `hello`，驗過才回連線，沒進去丟 `PairConnectError`：三種結局之外多一種 `violation`（組合行程在驗過之前違反協定，含葉子還沒送 `hello` 它就送 `hello`、`hello` 的版本不同、送了沒有 `code` 或 `code` 不是字串的 `rejected`），不重試。`code` 不認得的 `rejected` 算被拒；`code` 認得、別的欄位不合的照 `code` 處理。組合行程給的 `reason` 進錯誤、回報、`onRetry` 與斷線的原因之前截到 1024 個 UTF-16 單位，控制字元、行／段分隔符與落單的代理對換成 U+FFFD。`socketPath` 要放在只有本 uid 能寫的目錄：葉子不核對 socket 是誰建的。啟動時限由呼叫端給，必填、沒有預設值，不得短於每條連線等回覆的時間，上限是 Node 計時器的 2^31−1 ms。退避預設從 250 ms 起每次加倍到 2 s（上限可以改，同樣不得超過 2^31−1 ms），不加亂數；再等一次就會過啟動時限時不等、直接回報。每一條連線等回覆預設 5 s，剩下的啟動時間比它短時只等到啟動時限，到了還沒有結論的那一次算被截斷、不拿來判結局。回報帶起了幾次、連上幾次、幾次 `retry_later`、幾次沒收到任何框就斷、幾次等滿沒回覆、有沒有被截斷、經過多久。Node 的 socket 寫入出錯就整條毀掉、不再讀，所以 `hello` 不在 connect 成功的當下寫，先讓事件迴圈讀一輪：組合行程在那一輪之前就拒絕並關的（身分不對、pid 不對、等著驗的滿了），這時 `rejected` 已經讀到，不寫。在那一輪之後、寫下去之前才關的仍會讀不到，那一次算沒收到任何框就斷，由重連再拿一次。驗過之後的呼叫表、上限、背壓與組合行程那一端同一組規則；送端排著的位元組自己數，一次交給 socket 最多 64 KiB、上一段寫完才交下一段，所以停滯是以段為單位看（組合行程那一端是位元組）。驗過之後收到解得開的 `rejected`（組合行程判葉子違反協定）就關連線，斷線的原因是 `rejected`、帶 `code` 與 `reason`，跟組合行程自己違反協定（`violation`）分開。斷線不重連。時間與計時器可以傳進去（`clock`），單元測試 `pair-client.test.ts` 對 TS 寫的假組合行程、不睡。`host/tests/pair_leaf.rs` 由真的 `Pair` 起 node 跑 `pair-leaf-probe.ts`（只給這支測試用，不從 `index.ts` 匯出、不進 `lib/`）對接兩種語言，全標 `#[ignore]`，CI 的 `sandbox-spawner` 與 `sandbox-spawner-arm64` 另跑一步。
+- 上限：一框 1 MiB（暫定，#2571／#2572 要用之前重定）、一塊 128 KiB、每個方向同時 64 個呼叫；送端排到 512 KiB 就先不發自己的 `call`、`chunk`、`result`（`Pair` 回 `Paused`，擁有的一方留著，等 `Resumed` 事件再試），`cancel` 與自動回的錯誤照排（自動回的錯誤是小框：`unknown_method` 只帶回 method 名稱的 UTF-8 前 64 個位元組，落在字元中間就往前退到字元邊界；截法在向量檔的 `methodEchoes`），再排一框會超過 2 MiB 就關連線；對方送來的任何時候都照讀——兩端都「送不出去就不讀」會互等到永遠。有東西排著、連續 30 s（`STALL_TIMEOUT`）一個位元組都沒寫出去也關連線；30 s 是經驗值，#2571／#2572 定單框上限時一起重定。送端這兩個數字是寫死的位元組數，不跟著單框上限變；單框上限調到暫停線加一框排不進 2 MiB（約 1.5 MiB 以上）時，Rust 那一側的編譯期斷言會擋，TS 那一側沒有這條斷言。
+- 記憶體的最壞值（算的，沒量；只算緩衝的位元組數。不算的：已切好的框解成 JSON 值之後的大小（`Value` 比原文大，全是小元素的陣列可以到十倍以上）、解碼時多複製的那一份 payload、擁有的一方手上還沒回的最多 64 個呼叫、還沒驗過身分的 4 條連線各自的緩衝、回了 `rejected` 等著寫完的最多 4 條（違反協定的那一條帶著它排著的，最多 2 MiB）、容器本身）：組合行程那一端每條連線，收端沒切成框的最多 2 MiB＋8（`Chan` 的 2 框），送端最多 2 MiB，合計約 4 MiB。64 GiB 的主機容量是 155 對（`src/supervisor/memory.rs` 的 `capacity_for`），約 620 MiB；葉子那一端送端最多 2 MiB、收端沒切成框的最多一框多一點，一條約 3 MiB、155 對約 470 MiB。兩端合計約 1.1 GiB，條件是每一對的兩個方向同時塞滿。這個數字在多人共用的主機上偏大，重定單框上限時一起重算。
+
+## 組合行程 `nexus-composition`
+
+一對裡 Rust 的那一個（#2583），每條對話一個。現在是骨架：監督行程給了 `--composition` 才起它（見上面〈一對〉）、harness 還沒接、不出貨（打包照檔名只收 `nexus-supervisor` 與 `nexus-host`），只有整合測試（`host/tests/composition.rs` 與 `tests/supervisor.rs`）起它；也還不連宿主。邏輯在 `host/src/composition/`，檔頭是完整的行為。
+
+```text
+nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑>
+```
+
+`--socket` 是前台連的，`--pair-socket` 是橋（葉子連進來），這兩個由它 listen；`--leaf-socket` 是葉子自己 listen 的資料 socket。控制通道是 stdin／stdout，走對話行程那一組訊息（`src/supervisor_protocol.rs`）。單執行緒、一個 poll 迴圈。
+
+- 握手：兩個 socket 都在聽了才送 `hello`，不宣告 loop 在自己這裡（`runs_loop` 是否）；監督行程的第一框要是同一版的 `hello`。
+- `ready` 每個葉子送一次，三件事都到了才送：收到 `leaf{pid}`、那個 pid 的葉子在橋上驗過（交換了 `hello`）、葉子送了第一則 `register`。清單是空的也算，但**葉子一定要送 `register`**，不送就永遠不會 `ready`。換了葉子，新葉子 `register` 之後再送一則。第一則 `ready` 之前不收前台的連線（排在 backlog）。
+- `bind`：經橋對葉子發 `attach`（payload 是 `{"threadId": …}`），葉子回成功才送 `bound`。thread 記第一次的，之後每一則都要相同。葉子換過之後監督行程再送同一條 thread 的 `bind`，就對新葉子再 `attach` 一次、成功再送一次 `bound`；`bind` 比新葉子的 `register` 早到就留著，等 `register` 那一刻才 `attach`。葉子回 `attach` 錯、或 `attach` 送不出去（橋上排著的到了暫停線、或編出來超過一框），記一行、以 4 結束：監督行程不會再送 `bind`，留著只會讓這一對停在等 `bound`。葉子回之前斷線（或要送時已經不在橋上）只記一行，不送 `bound`、不自己重試，行程照活。
+- 心跳：收到第一則 `bind` 起每 1 s 一則（跟對話行程的間隔相同），之後不停。
+- `drain`：loop 不在這裡，記一行、不理。
+- 葉子斷線：行程照活，等下一則 `leaf{pid}`。
+- 協定錯誤，以 3 結束：第一框不是同一版的 `hello`；解不開的框或訊息；第一則 `ready` 之前的 `bind`；thread 跟第一次不同、或不是 UTF-8 的 `bind`；現在的葉子已經綁了、`attach` 還沒回、或已經有一則 `bind` 留著時又來的 `bind`。
+- 結束碼（組合行程 `nexus-composition` 自己的，跟監督行程的那一張各自編號；監督行程不看它的數字，只原樣記進稽核的 `exit_code`）：0 是 stdin 讀到 EOF 或收到 SIGTERM；1 是綁不了 socket（這時還沒送 `hello`）；2 是參數不對；3 是協定錯誤；4 是 `attach` 明確失敗（見上面 `bind` 那一條）。0、3、4 結束前都刪掉兩個 socket。
+- 前台連線的轉送（`host/src/composition/forward.rs`）：`--socket` 上每收一條就對 `--leaf-socket` 連一條，位元組原樣雙向對接，不解析內容。每個方向最多留 64 KiB 還沒寫出去的，留著的寫完之前不讀來源，所以對方不讀時來源那一端會被核心擋住。一邊讀到 EOF，留著的寫完之後只關另一邊寫的方向；兩個方向都結束、或有一邊整條關了而它剩下的都轉完，才整條關。同時最多 64 條，到了就不 accept，多的排在 backlog。連不上葉子（含葉子的 backlog 滿了）就把進來的那一條直接關。
+- 轉送緩衝的最壞值（算的，沒量）：64 條 × 2 個方向 × 64 KiB＝8 MiB，加上共用的一塊 64 KiB 讀取區。心跳間隔、緩衝大小與連線數上限都是暫定的，沒有對著實際負載量過。
+
+## 建置與測試
+
+需要 Linux。Mac 上用容器跑，例如：
+
+```bash
+docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/tmp/target rust:1.98.1-slim-bookworm cargo test --workspace --features test-hooks
+```
+
+- `--workspace`：根是 spawner 與監督行程的 package，cargo 預設只動它；宿主在 `host/`，要一起編、一起測。兩邊的整合測試會起對方的執行檔（從同一個 target 目錄找），只測一個 package 時對方的執行檔可能還沒編出來。
+
+- `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
+- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下、讓第一個子行程故意 panic；宿主那邊的 `NEXUS_HOST_TEST_NO_PEER_PID` 讓它讀不到任何連線的 pid（A⁰）。出貨的建置不帶它。
+- 受管憑證檔（`host/src/credentials/`）：照 [`docs/credentials-file.md`](../../../docs/credentials-file.md) 的契約解析 `.credentials.yaml`，跟 TS 跑同一份 `credentials-vectors.json`；對外 HTTPS 的 TLS 設定在 `host/src/tls.rs`（固定 ring，根憑證只來自設定指定的 PEM 檔），代理政策在 `host/src/proxy.rs`（由 config 交進來，不讀環境變數）。HTTP MCP 的連線、監督者、連線池與插件 `mcp` 在 `host/src/mcp/`，見 [`docs/host-mcp.md`](../../../docs/host-mcp.md)；對話行程那一側還沒接上（#2570）。
+- `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock，或 ABI 不到 6 而驗不到訊號 scope 時，整合測試直接紅，不跳過。CI 會設。
+- 出貨的是 musl 版：要對著它測，先 `rustup target add "$(uname -m)-unknown-linux-musl"` 並裝 `musl-tools`（ring 的 C 要用 `musl-gcc` 編，設 `CC_<arch>_unknown_linux_musl=musl-gcc`），再加 `--target "$(uname -m)-unknown-linux-musl"`。CI 兩種都跑：musl 那輪驗出貨的 libc；不帶 target 的那輪，測試用的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試 `clone3`）拿到 ENOSYS 會退回 `clone`。
+
+CI 的 `sandbox-spawner` job（`.github/workflows/ci.yml`，步驟在 `.github/actions/sandbox-spawner`）在動到這個目錄、動到 TS 那一側的接縫與 client、動到 CI、要打包的一輪（`packed-install` 跑的時候），以及合併後完整一輪時跑。`sandbox-spawner-arm64` 只在合併後完整一輪與發版時跑，在 arm64 的 runner 上原生編與測，不出貨。
+
+## 出貨
+
+Linux 的離線包帶 x64 的 release 執行檔，放在 `native/nexus-sandbox-spawner`：靜態連結 musl 的 static-pie（`x86_64-unknown-linux-musl`），不依賴主機的 glibc。`bundle.sh` 把執行檔與連進去的程式碼的授權全文打成 bundle，`pnpm run release:pack --spawner <目錄>` 原樣放進產物。bundle 的形狀與產物裡的檢查在 `harness/scripts/release/spawner.ts`。授權全文有三個來源：
+
+- crate：`cargo tree -e normal,no-proc-macro` 收到的，從 cargo 的 registry 原始碼複製；
+- 標準函式庫：工具鏈的 `COPYRIGHT-library.html`；
+- 工具鏈自帶、跟著標準函式庫連進執行檔的 C 函式庫：musl 與 LLVM libunwind，授權原文放在 `licenses/<名>-<版本>/`。
+
+改了相依（`Cargo.lock`）就同步改 `harness/scripts/release/spawner.ts` 的 `SPAWNER_CRATES`，再跑 `pnpm run gen-third-party-notices`。換了工具鏈，LLVM 或 musl 的版本跟著變：`bundle.sh` 對不上 `rustc -vV` 的 LLVM 版本就停；要換 `licenses/` 底下的原文與 `SPAWNER_NATIVE_LIBS`，再重產聲明檔。

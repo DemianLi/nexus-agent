@@ -1,30 +1,30 @@
-<!-- 由 scripts/gen-third-party-notices.ts 產生，不要手改。
+<!-- 由 harness/scripts/gen-third-party-notices.ts 產生，不要手改。
      改了相依之後跑 `pnpm run gen-third-party-notices` 重新產生。 -->
 
 # 第三方元件
 
 nexus-agent 用到下列第三方軟體。每個專案各自適用自己的授權，這個檔不改變任何授權條件。
 
-這裡列的是 workspace **直接**宣告的相依。檔案由 `scripts/gen-third-party-notices.ts` 產生，`apps/harness/src/third-party-notices.test.ts` 在測試裡斷言進版控的內容跟重新產生的一致。改了相依跑 `pnpm run gen-third-party-notices`；只想檢查就跑 `pnpm run verify-third-party-notices`。
+這裡列的是 workspace **直接**宣告的相依。檔案由 `harness/scripts/gen-third-party-notices.ts` 產生，`harness/apps/harness/src/third-party-notices.test.ts` 在測試裡斷言進版控的內容跟重新產生的一致。改了相依跑 `pnpm run gen-third-party-notices`；只想檢查就跑 `pnpm run verify-third-party-notices`。
 
 完整的遞移閉包連同精確版本記在 [`pnpm-lock.yaml`](pnpm-lock.yaml)，可以用 `pnpm licenses list` 查看。
 
 ## vendor 的原始碼
 
-### `vendor/`
+### `harness/vendor/`
 
-Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 安裝，改名放在 `@nexus` scope 底下。三個都是 MIT，每個目錄保留上游的 `LICENSE`。上游 commit 與本地修改記在 [`vendor/README.md`](vendor/README.md)。
+Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 安裝，改名放在 `@nexus` scope 底下。三個都是 MIT，每個目錄保留上游的 `LICENSE`。上游 commit 與本地修改記在 [`harness/vendor/README.md`](harness/vendor/README.md)。
 
 | 套件 | 上游套件名 | 來源 | 授權 |
 | --- | --- | --- | --- |
-| `@nexus/cordis` | `cordis` | [vendor/cordis](vendor/cordis/) | MIT |
-| `@nexus/cordis-plugin-loader` | `@cordisjs/plugin-loader` | [vendor/loader](vendor/loader/) | MIT |
-| `@nexus/cordis-plugin-include` | `@cordisjs/plugin-include` | [vendor/include](vendor/include/) | MIT |
-| `@nexus/cordis-plugin-logger-console` | `@cordisjs/plugin-logger-console` | [vendor/logger-console](vendor/logger-console/) | MIT |
+| `@nexus/cordis` | `cordis` | [harness/vendor/cordis](harness/vendor/cordis/) | MIT |
+| `@nexus/cordis-plugin-loader` | `@cordisjs/plugin-loader` | [harness/vendor/loader](harness/vendor/loader/) | MIT |
+| `@nexus/cordis-plugin-include` | `@cordisjs/plugin-include` | [harness/vendor/include](harness/vendor/include/) | MIT |
+| `@nexus/cordis-plugin-logger-console` | `@cordisjs/plugin-logger-console` | [harness/vendor/logger-console](harness/vendor/logger-console/) | MIT |
 
 ### 網頁的 solid-glass
 
-網頁的外觀與元件原樣複製自下列上游，打包進網頁的 `dist`。版本與本地修改記在 [`apps/web/src/vendor/solid-glass/README.md`](apps/web/src/vendor/solid-glass/README.md)。
+網頁的外觀與元件原樣複製自下列上游，打包進網頁的 `dist`。版本與本地修改記在 [`web/src/vendor/solid-glass/README.md`](web/src/vendor/solid-glass/README.md)。
 
 | 上游 | 固定在 | 授權 |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 
 ## 執行期的 npm 相依
 
-安裝來在執行期使用，或打包進網頁 `dist` 的外部套件。網頁打包了哪些，是用 `apps/web` 自己的 vite 設定真的 build 一次收集的，不看它宣告在哪一段。這一層涵蓋每一顆可以從 `cordis.yml` 掛上的插件，不只預設載入的那些。
+安裝來在執行期使用，或打包進網頁 `dist` 的外部套件。網頁打包了哪些，是用 `web` 自己的 vite 設定真的 build 一次收集的，不看它宣告在哪一段。這一層涵蓋每一顆可以從 `cordis.yml` 掛上的插件，不只預設載入的那些。
 
 | 套件 | 授權 |
 | --- | --- |
@@ -162,7 +162,7 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-
 
 ## 沙箱 spawner 連進去的程式碼
 
-`native/sandbox-spawner/` 編成 Linux 產物裡的 `native/nexus-sandbox-spawner`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [`native/sandbox-spawner/Cargo.lock`](native/sandbox-spawner/Cargo.lock) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 `licenses/sandbox-spawner/`；標準函式庫自己內附的第三方程式碼列在那裡的 `rust-std/COPYRIGHT-library.html`；C 函式庫的授權原文也附在本節最後。
+`harness/native/sandbox-spawner/` 編成 Linux 產物裡的 `native/nexus-sandbox-spawner`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [`harness/native/sandbox-spawner/Cargo.lock`](harness/native/sandbox-spawner/Cargo.lock) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 `licenses/sandbox-spawner/`；標準函式庫自己內附的第三方程式碼列在那裡的 `rust-std/COPYRIGHT-library.html`；C 函式庫的授權原文也附在本節最後。
 
 | crate | 版本 | 授權 | 連進執行檔 |
 | --- | --- | --- | --- |

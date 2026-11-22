@@ -32,7 +32,7 @@ class ReadList(unittest.TestCase):
 
     def test_groups_by_app(self) -> None:
         web = 'apps/web/src/x.test.tsx'
-        self.assertEqual(group_by_app([A, web, B]), {'apps/harness': [A, B], 'apps/web': [web]})
+        self.assertEqual(group_by_app([A, web, B]), {'harness/apps/harness': [A, B], 'web': [web]})
         with self.assertRaises(ValueError):
             group_by_app(['packages/x/src/y.test.ts'])
 

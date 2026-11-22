@@ -1,6 +1,6 @@
 # 日誌推回對話歷史：nexus 與 dsh 的對照
 
-對照的是 `packages/nexus-core/src/conversation-replay.ts`（把一份會話日誌推回模型歷史）與 DeepSeek Harness（`deepseek-ai/deepseek-harness`）。所有 dsh 出處已對 `git show 8bd0733:<path>` 核過，行號是那個 SHA 上的；舊註解曾寫 `c291e79`、`477b4f4`，與 `8bd0733` 不同的地方逐條標出。
+對照的是 `harness/packages/nexus-core/src/conversation-replay.ts`（把一份會話日誌推回模型歷史）與 DeepSeek Harness（`deepseek-ai/deepseek-harness`）。所有 dsh 出處已對 `git show 8bd0733:<path>` 核過，行號是那個 SHA 上的；舊註解曾寫 `c291e79`、`477b4f4`，與 `8bd0733` 不同的地方逐條標出。
 
 做法與 dsh 一樣的，只寫一行出處；不一樣的，寫完整的比較。
 
@@ -27,7 +27,7 @@ dsh 的 `interruptedTurnClosers`（`packages/core/session/src/repair.ts:209`，�
 - 記過 `tool/call`、結果沒記下來：`TOOL_OUTCOME_UNKNOWN_TEXT`，等於 `CLOSER_TEXT.interrupted.started`（`repair.ts:34`）。
 - 回覆裡要了、還沒記到 `tool/call`：`TOOL_NOT_STARTED_TEXT`，等於 `CLOSER_TEXT.interrupted.notStarted`（`repair.ts:35`）。
 
-**為什麼這兩句不能隨手改字：** 它們是模型讀得到的文字，措辭就是行為。舊註解寫 `repair.ts:106`、`:107`，`8bd0733` 上這兩句在 `:34`、`:35`（`CLOSER_TEXT` 另有一組 `forked` 的句子，nexus 沒有分叉補結，沒用）。`conversation-replay.test.ts` 有一格把兩個常數的完整字面寫死（不引用常數），改字要同時改那格測試，那是刻意的摩擦；其他測試多半引用常數，另有 `apps/harness/src/background-cold-dangling.test.ts:82` 用字面子字串釘了 `interrupted after it was recorded`。
+**為什麼這兩句不能隨手改字：** 它們是模型讀得到的文字，措辭就是行為。舊註解寫 `repair.ts:106`、`:107`，`8bd0733` 上這兩句在 `:34`、`:35`（`CLOSER_TEXT` 另有一組 `forked` 的句子，nexus 沒有分叉補結，沒用）。`conversation-replay.test.ts` 有一格把兩個常數的完整字面寫死（不引用常數），改字要同時改那格測試，那是刻意的摩擦；其他測試多半引用常數，另有 `harness/apps/harness/src/background-cold-dangling.test.ts:82` 用字面子字串釘了 `interrupted after it was recorded`。
 
 ## 三、續接時把補的事件寫回日誌（照 dsh，少一處）
 
@@ -49,4 +49,4 @@ dsh 的掃描（`repair.ts:53` 的 `openTurnClosers`）只在 `turn/start`、`tu
 
 ## 六、改 `conversation-replay.ts` 的人要知道的
 
-`session-format.ts` 的 `readerBranch` 以「檔:行號」登記讀方分支（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷；行號以 `session-format.ts` 的登記為準），`session-format-fixtures.test.ts` 逐條核錨點。在這個檔上面增減行會讓行號位移，要同批改登記，並在 `apps/harness` 用一般設定與 `vitest.native.config.ts` 各跑一次那支測試。
+`session-format.ts` 的 `readerBranch` 以「檔:行號」登記讀方分支（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷；行號以 `session-format.ts` 的登記為準），`session-format-fixtures.test.ts` 逐條核錨點。在這個檔上面增減行會讓行號位移，要同批改登記，並在 `harness/apps/harness` 用一般設定與 `vitest.native.config.ts` 各跑一次那支測試。

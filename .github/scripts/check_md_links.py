@@ -1,7 +1,7 @@
 """檢查 repo 自寫 Markdown 的相對連結：目標檔要存在，指向 .md 的 `#片段` 要對到那份的標題 slug 或 `<a id>`（#1537）。
 
-- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `vendor/README.md` 與
-  `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
+- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `harness/vendor/README.md` 與
+  `web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
 - 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`、`.agents`）照認；符號連結指到同一份的只掃一次。
 - 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
@@ -32,17 +32,17 @@ ROOT = Path(__file__).resolve().parents[2]
 PATTERNS = [
     'README.md',
     'docs/**/*.md',
-    'packages/*.md',
-    'packages/*/*.md',
-    'packages/*/*/*.md',
+    'harness/packages/*.md',
+    'harness/packages/*/*.md',
+    'harness/packages/*/*/*.md',
     'AGENTS.md',
     'GLOSSARY-MAP.md',
     '.docs/**/*.md',
     '.github/**/*.md',
     'apps/*/*.md',
     'apps/*/*/*.md',
-    'vendor/README.md',
-    'apps/web/src/vendor/solid-glass/README.md',
+    'harness/vendor/README.md',
+    'web/src/vendor/solid-glass/README.md',
     '.agents/skills/**/*.md',
 ]
 # 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。

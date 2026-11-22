@@ -1,0 +1,252 @@
+/**
+ * 一次**圖裡的呼叫**的會話身分：它發生在 root agent 上，還是某一次 subagent 的執行裡。
+ *
+ * **名字比契約窄，那是歷史。** 這個模組出生時只有一種呼叫端（模型工具），
+ * [#153](https://github.com/DemianLi/nexus-agent/issues/153) 之後多了第二種
+ * （記 token 用量的 `wrapModelCall` middleware）。函式名沒有跟著改，所以契約寫在下面
+ * 那張表裡，不寫在名字裡：**認得的是命名空間的形狀，不是誰在叫**。
+ *
+ * ## 為什麼要有這一層
+ *
+ * dsh 的模型工具直接問 `exec.agent.session`——**它自己擁有派發點**，所以身分是被塞進來的
+ * （`packages/core/agent-loop/src/tool-calls.ts:78`，`ToolExecutionInput.agent` 的註解寫著
+ * “set by the agent loop”）。我們的工具跑在 LangGraph 的 ToolNode 裡，那個派發點不是我們的，
+ * 所以身分只能從執行期的 config 推出來。
+ *
+ * **這是 AGENTS.md 那條偏離規則的正例，不是偏好。** [#136](https://github.com/DemianLi/nexus-agent/pull/136)
+ * 刻意避開執行期鍵，靠組裝期把工具換成拒絕樁——那條路走得通，是因為「拒絕 subagent」
+ * **無條件**：不需要知道是哪一個 subagent，也不需要知道是第幾次 spawn。這裡要的是身分
+ * 本身，而身分按定義是 per-run 的；組裝期表達得出的最細粒度是 **subagent 的名字**，
+ * 同一個 subagent 併發兩次會被併成一格。所以退到執行期鍵，退到最接近的那一個。
+ *
+ * ## 鑰匙是 `checkpoint_ns`，而它整個包在這一個檔案裡
+ *
+ * LangGraph 的 `configurable.checkpoint_ns` 是**巢狀的圖命名空間**，用 `|` 分段，每一段是
+ * 一次 task 的 id。實測（2026-09-01，調研見 `.docs/subagent-session-log-survey.md`）：
+ *
+ * | 情境 | `checkpoint_ns` |
+ * | --- | --- |
+ * | root 的工具呼叫 | `tools:<自己的 task id>` |
+ * | subagent 的工具呼叫 | `tools:<父圖那次 task 呼叫的 id>｜tools:<自己的 task id>` |
+ * | root 的模型呼叫 | `model_request:<自己的 task id>` |
+ * | subagent 的模型呼叫 | `tools:<父圖那次 task 呼叫的 id>｜model_request:<自己的 task id>` |
+ *
+ * 後兩列是 2026-09-03 為 [#153](https://github.com/DemianLi/nexus-agent/issues/153) 量的
+ * （`langchain@1.5.10` ＋ `deepagents@1.13.1`）。**它們沒有讓規則變複雜，是同一條規則的
+ * 第二個證人**：最後一段換成 `model_request:` 之後，去尾算出來的 `runId` 與同一次 spawn
+ * 裡的工具呼叫算出來的**是同一個值**。
+ *
+ * **最後一段是「這次呼叫自己」，前面的是「誰在跑」。** 去掉最後一段之後：
+ *
+ * - root 剩下空的 —— 分得出 root（工具與模型兩種呼叫都是）。
+ * - 每一次 spawn 各一個，**循序與併發都各一個** —— 這就是 dsh 的粒度（per-session、
+ *   每次 spawn 一份）。
+ * - **同一次 spawn 裡叫幾次工具都是同一個** —— 前綴不變，變的是最後一段。
+ *
+ * ## 背景子代理不走這條規則，走顯式的鍵（[#823](https://github.com/DemianLi/nexus-agent/issues/823)）
+ *
+ * 背景子代理是拿同一份規格自己編一張圖、由在任何圖的環境之外的迴圈拉起來的（[#738](https://github.com/DemianLi/nexus-agent/issues/738)），
+ * 它是**最上層的圖**，`checkpoint_ns` 只有一段，去尾之後是空的，上面那條規則會把它認成 root——
+ * 它的工具結果併進 root 的日誌、用量記到 root、`turn-cancel` 對它拋 `TurnCancelledError`。想靠傳
+ * `checkpoint_ns` 給它一個穩定的命名空間也不行，最上層的圖自己重寫它。
+ *
+ * 所以拉起它的一方在 `configurable` 放 {@link BACKGROUND_SESSION_CONFIG_KEY}，值是這個背景子代理的穩定編號；
+ * 自訂的 `configurable` 鍵會原樣送到工具與模型請求（探針實測）。有這個鍵就**不看** `checkpoint_ns`：
+ * 結果是 `{ kind: 'subagent', runId: <編號> }`，不新增身分種類，下游照 `kind` 分流的每一處（`turn-cancel`、
+ * `step-inbox`、`max-tokens`、持久化的 `parentSession`）本來就把它當子代理。
+ *
+ * ## 三件要記住的事
+ *
+ * 1. **格式沒有公開承諾。** `|` 這個分隔符查不到 LangGraph 的契約，只查得到它的行為。
+ *    所以解析只准發生在這裡一次，而且 `session-address.test.ts` 逐條釘住上面那張表——
+ *    升版把格式改掉時，紅的是那幾條解析測試，**不是「root 與 subagent 的狀態靜默合成
+ *    一份」**。那個靜默失敗是這整條路上最貴的東西。**四列都要釘**：只釘 `tools:` 的話，
+ *    基座哪天把模型節點改名或多包一層 ns，subagent 的用量會安靜地算到 root 頭上，
+ *    而測試全綠。
+ * 2. **`ls_agent_type` 不是這裡的答案。** 它分得出 root／subagent，但它是 LangSmith
+ *    tracing 的元資料（`ls_` 前綴），而且**它只有兩個值**——分不出「哪一次 spawn」。
+ * 3. **認不出來時回 `undefined`，不要猜。** 沒有 `checkpoint_ns` 的呼叫（例如工具被直接
+ *    叫、不在圖裡）如果被當成 root，兩份狀態就靜默合流了。照 dsh 那句註解的理由：
+ *    “Reject rather than silently no-op”。
+ *
+ * @module
+ */
+
+/**
+ * 一次呼叫屬於哪一個會話。
+ *
+ * 對到 dsh 的 `SessionHeader.origin`——它那側是 `undefined`（root）或 `'subagent'`，外加
+ * `parentSession` 指回去。我們的 `runId` 同時扮演那兩格：它就是父圖裡那一次 `task` 呼叫，
+ * 所以「是子代理」與「誰生的」是同一個值。
+ */
+export type SessionAddress =
+  | { readonly kind: 'root' }
+  | {
+      readonly kind: 'subagent';
+      /** 父圖裡那一次 `task` 呼叫的命名空間。**一次 spawn 一個**。 */
+      readonly runId: string;
+    };
+
+/**
+ * LangGraph 的巢狀圖命名空間分隔符。
+ *
+ * **抽成常數是為了讓它出現在測試的斷言裡。** 寫死在 `split()` 裡的話，升版換掉分隔符
+ * 只會讓解析安靜地退化成「整串都是最後一段」＝所有呼叫都是 root，而那是靜默合流。
+ */
+const CHECKPOINT_NS_SEPARATOR = '|';
+
+/**
+ * 背景子代理的身分鍵：`configurable` 裡的這一格是它的穩定編號（見檔頭）。
+ *
+ * **由拉起背景那一輪的一方放，不是 LangGraph 的東西**——所以不需要像 `checkpoint_ns` 那樣防升版改格式，
+ * 但要防「放壞了卻被當成 root」：鍵在、值卻不是非空字串時，{@link toolCallSessionAddress} 回 `undefined`。
+ */
+export const BACKGROUND_SESSION_CONFIG_KEY = 'nexus_background_session';
+
+/**
+ * 宿主交給 `@nexus/tools` 的 `NexusTool` 的那一份 `ToolExec`（#2351）：身分已經算好，直接讀。
+ * 認法是形狀，因為 core 不相依 `@nexus/tools`：有 `callId`、`threadId`、`agent` 三格，沒有 `configurable`。`agent` 形狀不對就當認不出來，不退回 root。
+ */
+function execIdentity(
+  config: unknown,
+): { readonly threadId: unknown; readonly agent: SessionAddress | undefined } | undefined {
+  if (typeof config !== 'object' || config === null || Object.hasOwn(config, 'configurable')) {
+    return undefined;
+  }
+  if (!['callId', 'threadId', 'agent'].every((key) => Object.hasOwn(config, key))) return undefined;
+  const { threadId, agent } = config as { threadId: unknown; agent: unknown };
+  if (typeof agent !== 'object' || agent === null) return { threadId, agent: undefined };
+  const { kind, runId } = agent as { kind?: unknown; runId?: unknown };
+  if (kind === 'root') return { threadId, agent: { kind: 'root' } };
+  if (kind === 'subagent' && typeof runId === 'string' && runId.length > 0) {
+    return { threadId, agent: { kind: 'subagent', runId } };
+  }
+  return { threadId, agent: undefined };
+}
+
+/** 從一份 `configurable` 裡把命名空間挖出來，形狀不對就當沒有。 */
+function checkpointNamespace(config: unknown): string | undefined {
+  if (typeof config !== 'object' || config === null) return undefined;
+  const configurable = (config as { configurable?: unknown }).configurable;
+  if (typeof configurable !== 'object' || configurable === null) return undefined;
+  const namespace = (configurable as { checkpoint_ns?: unknown }).checkpoint_ns;
+  return typeof namespace === 'string' && namespace.length > 0 ? namespace : undefined;
+}
+
+/** 背景子代理編號的前綴：`bg-` 加隨機（`BackgroundSubagentHost.start` 產的）。前景子代理的 `runId` 是 LangGraph 的命名空間，不會長這樣。 */
+export const BACKGROUND_RUN_PREFIX = 'bg-';
+
+/**
+ * 這個地址是不是背景子代理的。**前景與背景的子代理都是 `kind: 'subagent'`**，要分開（例如核准：前景把中斷冒到人面前，背景背後沒有人，#328）
+ * 就看這個。
+ */
+export function isBackgroundAddress(address: SessionAddress): boolean {
+  return address.kind === 'subagent' && address.runId.startsWith(BACKGROUND_RUN_PREFIX);
+}
+
+/**
+ * 挖出背景身分鍵。
+ *
+ * @returns `undefined`＝沒有這個鍵（走 `checkpoint_ns`）；`null`＝鍵在但值不是非空字串；字串＝編號。
+ */
+function backgroundSessionId(config: unknown): string | null | undefined {
+  if (typeof config !== 'object' || config === null) return undefined;
+  const configurable = (config as { configurable?: unknown }).configurable;
+  if (typeof configurable !== 'object' || configurable === null) return undefined;
+  if (!Object.hasOwn(configurable, BACKGROUND_SESSION_CONFIG_KEY)) return undefined;
+  const id = (configurable as Record<string, unknown>)[BACKGROUND_SESSION_CONFIG_KEY];
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
+ * 這次呼叫是不是背景子代理的（帶了 {@link BACKGROUND_SESSION_CONFIG_KEY}，不論值對不對）。
+ *
+ * 給「背景子代理不走父圖那條路」的消費者問：載體之類是父圖的 `task` 取走的，背景位址沒有人取，記了只是漏
+ * （[#858](https://github.com/DemianLi/nexus-agent/issues/858)）。
+ *
+ * @param config - 一份帶 `configurable` 的呼叫設定（工具的第二個參數，或 `{ configurable: runtime.configurable }`）；`ToolExec` 不收。
+ */
+export function isBackgroundCall(config: unknown): boolean {
+  return backgroundSessionId(config) !== undefined;
+}
+
+/**
+ * 認出一次呼叫的會話身分。**名字說工具，契約說「圖裡的呼叫」**——見檔頭。
+ *
+ * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西，或 `NexusTool` 收到的 `ToolExec`。工具那條路傳的是
+ *   handler 的**第二個參數**（LangChain 的 `ToolRunnableConfig`）——宣告不出第二個參數的
+ *   工具拿不到身分。middleware 那條路傳的是
+ *   `{ configurable: request.runtime.configurable }`。
+ * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡；背景身分鍵放壞了；`ToolExec` 的 `agent` 是 `undefined` 或形狀不對）。
+ */
+export function toolCallSessionAddress(config: unknown): SessionAddress | undefined {
+  const exec = execIdentity(config);
+  if (exec !== undefined) return exec.agent;
+  const background = backgroundSessionId(config);
+  // 鍵在就以它為準，壞掉的鍵也是：退回 `checkpoint_ns` 會把壞掉的背景呼叫悄悄認成 root。
+  if (background !== undefined) {
+    return background === null ? undefined : { kind: 'subagent', runId: background };
+  }
+  const namespace = checkpointNamespace(config);
+  if (namespace === undefined) return undefined;
+  const segments = namespace.split(CHECKPOINT_NS_SEPARATOR);
+  // 最後一段是這次工具呼叫自己的 task，不是「誰在跑」。
+  const owner = segments.slice(0, -1).join(CHECKPOINT_NS_SEPARATOR);
+  return owner.length === 0 ? { kind: 'root' } : { kind: 'subagent', runId: owner };
+}
+
+/**
+ * 這次呼叫在哪一條 LangGraph thread 裡（`configurable.thread_id`）。**身分隨呼叫明確傳進來**，不靠環境式的「目前 thread」
+ * （[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) Q3）。
+ *
+ * `harness/apps/harness/src/thread-id-reaches-handlers.test.ts` 實測過三種呼叫都拿得到：
+ *
+ * - 根 agent：那條 thread 的 id；
+ * - 同步子代理（`task`，在父圖裡跑）：**沿用父 thread 的 id**，子代理是誰靠 {@link toolCallSessionAddress} 的 `checkpoint_ns`；
+ * - 背景子代理：它自己的日誌 id（`<root>/<runId>`），另帶 {@link BACKGROUND_SESSION_CONFIG_KEY}。
+ *
+ * @param config - 同 {@link toolCallSessionAddress}：工具的第二個參數、`ToolExec`，或 `{ configurable: request.runtime.configurable }`。
+ * @returns 非空字串的 `thread_id`；沒有（不在圖裡、手搭的測試呼叫）是 `undefined`。
+ */
+export function callThreadId(config: unknown): string | undefined {
+  const exec = execIdentity(config);
+  if (exec !== undefined) {
+    return typeof exec.threadId === 'string' && exec.threadId.length > 0
+      ? exec.threadId
+      : undefined;
+  }
+  if (typeof config !== 'object' || config === null) return undefined;
+  const configurable = (config as { configurable?: unknown }).configurable;
+  if (typeof configurable !== 'object' || configurable === null) return undefined;
+  const id = (configurable as { thread_id?: unknown }).thread_id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/**
+ * 一次工具呼叫**派出去的子代理**會帶著的 `runId`：就是這次呼叫自己的整串命名空間。
+ *
+ * 同一張表的另一面：子代理那兩列去掉最後一段，剩下的正是父圖裡那次 `task` 呼叫的
+ * `checkpoint_ns`。所以父圖那一側（`task` 的 `wrapToolCall`）與子代理那一側（它的模型呼叫經
+ * {@link toolCallSessionAddress} 算出的 `runId`）拿到的是同一個值，兩邊不必互相通知就對得上。
+ * 解析照規矩只在這個檔裡。
+ *
+ * @param config - 一份帶 `configurable` 的呼叫設定（工具的第二個參數，或 `{ configurable: runtime.configurable }`）；`ToolExec` 不收。
+ * @returns 那個 `runId`；這次呼叫不在圖裡時是 `undefined`。
+ */
+export function spawnedSubagentRunId(config: unknown): string | undefined {
+  return checkpointNamespace(config);
+}
+
+/**
+ * 身分的字串鍵，拿來當 Map 的 key。
+ *
+ * **前綴不能省。** 沒有 `subagent:` 的話，一個 `runId` 剛好等於 `'root'` 的 subagent 會撞上
+ * root 那一格——不可能歸不可能，撞上去的下場是靜默合流，而這整個模組存在的理由就是不要
+ * 有那種東西。
+ *
+ * @param address - 要編碼的身分。
+ * @returns 唯一的字串鍵。
+ */
+export function sessionAddressKey(address: SessionAddress): string {
+  return address.kind === 'root' ? 'root' : `subagent:${address.runId}`;
+}

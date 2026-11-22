@@ -59,9 +59,9 @@
 
 ### 4.1 加元件與更新
 
-（新增自己的元件、改樣式該放哪一層、用哪些值、什麼會被擋：[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)。）
+（新增自己的元件、改樣式該放哪一層、用哪些值、什麼會被擋：[`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)。）
 
-- **`components/ui/` 的元件來自 vendor 的 solid-glass（§3）**：加元件、更新上游照 [vendor README](../apps/web/src/vendor/solid-glass/README.md) 的「清單」與「同步」（`sync.mjs`），不跑 `shadcn add`。`shadcn` 的 CLI 不加成相依。
+- **`components/ui/` 的元件來自 vendor 的 solid-glass（§3）**：加元件、更新上游照 [vendor README](../web/src/vendor/solid-glass/README.md) 的「清單」與「同步」（`sync.mjs`），不跑 `shadcn add`。`shadcn` 的 CLI 不加成相依。
 - **`cn` 只從 `@/lib/utils` 取，自訂的字級與圓角名要登記**：見 `COMPONENTS.md`〈新增自訂 token 要登記 `cn`〉。
 
 **AI Elements 一律不裝**（`tool`、`message`、`question`、`reasoning`…），只參考它有哪些元件。`reasoning`／`message` 會把主 chunk 拉到約 2 MB（streamdown＋mermaid，tree-shake 不掉）。
@@ -181,7 +181,7 @@
 - 三套都用 `@fontsource-variable/*` 打包（OFL）。Geist／Geist Mono **打包 latin 子集**，Geist Mono 另加 **symbols2 子集**（方框字元 U+2500–259F，5.7 KB；程式碼的樹狀圖與框線，demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）：`apps/web/src/styles/fonts.css` 只寫這三條 `@font-face`，不 import 套件入口（入口會帶進 cyrillic 等子集）；Noto Sans TC 照套件入口，自帶 unicode-range 切片。零外部請求。堆疊在 `solid-glass.overrides.css` 的 `@theme inline`，`font-stack.test.ts` 釘住堆疊順序與打包的三條子集。
 - 字級 UI 13、內文 14／23、tooltip 12、微標籤 11（`@theme` 的 `text-ui`／`text-body`／`text-tip`／`text-micro`）；**字重只用 400／500**（`semibold`、`bold` 落在 500）。
 - **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 nexus 層照改；vendor 的 SG 元件（名單在 `src/test/vendor-upstream.ts`）照 SG 原樣用 `text-sm`／`text-xs`，不改（Q8）。要用第五個尺寸，先在這裡加一階，不要寫任意值。
-- **主次**（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)）：**可以點的與當標題的小字用 `text-ui`（13）**（`xs` 按鈕、小字的可展開列、輸入框底列的膠囊鈕、群組與區段標題、卡片標頭）；**小字說明、附註、時間、計數用 `text-tip`（12）**（tooltip、`Badge`、快捷鍵、工具名與摘要、等寬的輸出）；內文 `text-body`（14）與本來就是 14 的按鈕、選單項不變。逐處怎麼判與護欄見 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「字級的主次」。`text-micro`（11）只用在程式碼區塊的語言標籤（`markdown.css` 的 `.md-code-lang` 用 `var(--text-micro)`，從 #419 起），保留（demian 2026-10-12 決定；#1278 拍板第 8 點「沒人用再刪」的前提不成立）。
+- **主次**（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)）：**可以點的與當標題的小字用 `text-ui`（13）**（`xs` 按鈕、小字的可展開列、輸入框底列的膠囊鈕、群組與區段標題、卡片標頭）；**小字說明、附註、時間、計數用 `text-tip`（12）**（tooltip、`Badge`、快捷鍵、工具名與摘要、等寬的輸出）；內文 `text-body`（14）與本來就是 14 的按鈕、選單項不變。逐處怎麼判與護欄見 [`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)「字級的主次」。`text-micro`（11）只用在程式碼區塊的語言標籤（`markdown.css` 的 `.md-code-lang` 用 `var(--text-micro)`，從 #419 起），保留（demian 2026-10-12 決定；#1278 拍板第 8 點「沒人用再刪」的前提不成立）。
 
 **互動狀態**
 - 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；vendor 元件的 `focus-visible:ring-*` 關掉。SG 用 `--focus-line`（灰）畫的焦點全部換回文字色：SG 把 ring 帶回來的選擇器照抄壓回透明，**文字欄位的聚焦是邊框換成文字色**（SG 原本是灰線，Q5 優先於 Q8）。
@@ -393,7 +393,7 @@
 - **依據是這份標準**。素材是 repo 的現況與引入的 shadcn、SG；SG 與標準不一致時照標準，用覆寫蓋掉。
 - **vendor 檔不動**（§3）。上游改了值而標準沒變：釘住畫出來的值的測試會紅，預設蓋回標準的值；要採用上游的新值就改這份。
 - **token 的名字沿用 SG 與 shadcn 的**，只在它們沒有的地方加 nexus 的。
-- **成文在三份**：這份是規範；[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md) 是元件目錄與寫法；[`apps/web/GLOSSARY.md`](../apps/web/GLOSSARY.md) 管用語。
+- **成文在三份**：這份是規範；[`apps/web/COMPONENTS.md`](../web/COMPONENTS.md) 是元件目錄與寫法；[`apps/web/GLOSSARY.md`](../web/GLOSSARY.md) 管用語。
 
 ### 13.2 七個環節
 
@@ -477,25 +477,25 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 共用元件 | 兩處以上共用的自製積木（`COMPONENTS.md`「什麼時候抽共用元件」） | 文件、測試、目錄裡的預覽 |
 | 畫面專屬元件 | 只在一個畫面用的 | 遵守 token 與 §13.4 |
 
-前兩層的每一個元件在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「共用元件一覽」有一列（用在哪、預覽在測試頁的哪一頁），`src/components/ui/components-doc.test.ts` 守著：`ui/` 的檔與列一一對應、預覽的子頁存在。新抽的共用元件沒加列，測試擋不到（`ui/` 之外沒有固定的資料夾可以對）。
+前兩層的每一個元件在 [`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)「共用元件一覽」有一列（用在哪、預覽在測試頁的哪一頁），`src/components/ui/components-doc.test.ts` 守著：`ui/` 的檔與列一一對應、預覽的子頁存在。新抽的共用元件沒加列，測試擋不到（`ui/` 之外沒有固定的資料夾可以對）。
 
 ### 13.6 治理
 
 - **要 demian 核可的**：token 的新增、刪除、改值；新增共用元件。
 - **dev session 自己決定的**：改既有元件的實作、畫面專屬元件。
-- **棄用**：token 或元件標記棄用後保留一個 Release 再刪，步驟在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「棄用」。`<nexus-chat>` 給宿主頁的面照[升級指南](../docs/release.md#升級指南)。
+- **棄用**：token 或元件標記棄用後保留一個 Release 再刪，步驟在 [`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)「棄用」。`<nexus-chat>` 給宿主頁的面照[升級指南](../docs/release.md#升級指南)。
 
 ### 13.7 設計與程式同步
 
 - repo 為準。設計稿放在 claude.ai 的 artifact（私有，只有 demian 的帳號打得開），存 token、元件的預覽、還沒實作的設計稿；規範文字不放那裡。
-- token 與元件預覽那一份由 repo 產出：`pnpm --filter @nexus/web run catalog` 寫出一個帶 commit 戳記的 HTML（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「元件目錄」），上傳到 artifact 由 demian 做。
+- token 與元件預覽那一份由 repo 產出：`pnpm --filter @nexus/web run catalog` 寫出一個帶 commit 戳記的 HTML（[`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)「元件目錄」），上傳到 artifact 由 demian 做。
 - 還沒實作的新設計先在 artifact 出方案，demian 選過再實作（[#1468](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q15）。
 
 ### 13.8 還沒做到的
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 視覺回歸由機器擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁，有差時在對應的 PR 留言，作者要回覆確認（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」）。擋在人身上：不紅、沒有基準圖、沒人回 CI 也不會擋。刻意不放在 PR 上擋（[#2088](https://github.com/DemianLi/nexus-agent/issues/2088) 的一分鐘） | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
+| 視覺回歸由機器擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁，有差時在對應的 PR 留言，作者要回覆確認（[`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)「視覺差異」）。擋在人身上：不紅、沒有基準圖、沒人回 CI 也不會擋。刻意不放在 PR 上擋（[#2088](https://github.com/DemianLi/nexus-agent/issues/2088) 的一分鐘） | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
 清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。
 

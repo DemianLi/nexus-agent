@@ -13,7 +13,7 @@ BASELINE_DIR = '.github/ratchets'
 LEGACY_BASELINE = '.github/ratchets.json'
 SCRIPT = '.github/scripts/check_ratchets.py'
 EXTENSIONS = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.py', '.sh', '.yml', '.yaml', '.css', '.toml')
-EXCLUDED_PREFIXES = ('references/', 'vendor/', 'apps/web/src/vendor/', 'docs/', '.docs/')
+EXCLUDED_PREFIXES = ('references/', 'harness/vendor/', 'web/src/vendor/', 'docs/', '.docs/')
 EXCLUDED_PARTS = ('/fixtures/', '/__snapshots__/')
 EXEMPT = {'.github/scripts/check_ratchets.py', '.github/scripts/test_check_ratchets.py'}
 

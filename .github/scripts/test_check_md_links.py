@@ -72,10 +72,10 @@ class Scope(unittest.TestCase):
             '.docs/x/y/z.md': BAD,
             '.github/a.md': BAD,
             '.github/ISSUE_TEMPLATE/a.md': BAD,
-            'apps/web/GLOSSARY.md': BAD,
+            'web/GLOSSARY.md': BAD,
             'apps/harness/docs/a.md': BAD,
-            'vendor/README.md': BAD,
-            'apps/web/src/vendor/solid-glass/README.md': BAD,
+            'harness/vendor/README.md': BAD,
+            'web/src/vendor/solid-glass/README.md': BAD,
             '.agents/skills/s/SKILL.md': BAD,
             '.agents/skills/s/references/a.md': BAD,
         }
@@ -101,14 +101,14 @@ class Scope(unittest.TestCase):
     def test_verbatim_vendor_markdown_is_not_scanned(self) -> None:
         # 原樣搬來的 vendor 檔裡的壞連結不報；vendor 目錄頂層本地寫的 README 照掃。
         files = {
-            'vendor/README.md': '# vendor\n',
+            'harness/vendor/README.md': '# vendor\n',
             'vendor/lib/README.md': BAD,
             'vendor/lib/docs/a.md': BAD,
-            'apps/web/src/vendor/solid-glass/README.md': '# SG\n',
+            'web/src/vendor/solid-glass/README.md': '# SG\n',
             'apps/web/src/vendor/solid-glass/upstream/README.md': BAD,
         }
         paths, _, violations = scan(files)
-        self.assertEqual(paths, ['apps/web/src/vendor/solid-glass/README.md', 'vendor/README.md'])
+        self.assertEqual(paths, ['web/src/vendor/solid-glass/README.md', 'harness/vendor/README.md'])
         self.assertEqual(violations, [])
 
     def test_symlink_to_same_file_is_scanned_once(self) -> None:
@@ -118,11 +118,11 @@ class Scope(unittest.TestCase):
 
     def test_patterns_are_pinned(self) -> None:
         # 釘住 PATTERNS 的全集：增減時一起改檔頭與 AGENTS.md〈發版〉的掃描範圍。
-        self.assertEqual(sorted(PATTERNS), sorted(['README.md', 'docs/**/*.md', 'packages/*.md', 'packages/*/*.md',
-                                                   'packages/*/*/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md',
+        self.assertEqual(sorted(PATTERNS), sorted(['README.md', 'docs/**/*.md', 'harness/packages/*.md', 'harness/packages/*/*.md',
+                                                   'harness/packages/*/*/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md',
                                                    '.docs/**/*.md', '.github/**/*.md', 'apps/*/*.md', 'apps/*/*/*.md',
-                                                   'vendor/README.md',
-                                                   'apps/web/src/vendor/solid-glass/README.md',
+                                                   'harness/vendor/README.md',
+                                                   'web/src/vendor/solid-glass/README.md',
                                                    '.agents/skills/**/*.md']))
 
 

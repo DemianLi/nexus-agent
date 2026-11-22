@@ -9,7 +9,7 @@ description: 會話日誌的格式從 52 升到 53，新版續接或新開過的
 
 v0.6.0 寫的會話日誌是格式 52，新版是 53（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）。53 多了兩樣：從嵌入的對話框開的
 對話，header 記著 `profile: 'embed'`；嵌入的頁面附在一句話上的畫面情境，記在那一句的 `context`。每一版改了什麼，紀錄在
-[`packages/nexus-core/src/session-store.ts`](../../../../packages/nexus-core/src/session-store.ts) 的檔頭。
+[`packages/nexus-core/src/session-store.ts`](../../../../harness/packages/nexus-core/src/session-store.ts) 的檔頭。
 
 - **新版讀舊檔不用轉換**：52 以前的對話照讀，等於獨立頁面開的、沒附情境。
 - **續接時遷移**：新版接著寫一條 52 的對話時，先把 `<id>/session.v52.jsonl` 的內容原樣複製成同一個目錄裡的 `session.v53.jsonl`，

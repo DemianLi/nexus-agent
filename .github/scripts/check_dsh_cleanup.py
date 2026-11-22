@@ -29,7 +29,7 @@ SLASH = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.css')
 HASH = ('.py', '.sh', '.yml', '.yaml', '.toml')
 LANGS = SLASH + HASH
 IGNORED_PREFIXES = EXCLUDED_PREFIXES + ('.github/ratchets/', '.github/ratchets.json')
-SEARCH_EXCLUDED = ('references/', '.docs/', '.github/ratchets/', 'vendor/', 'apps/web/src/vendor/')
+SEARCH_EXCLUDED = ('references/', '.docs/', '.github/ratchets/', 'harness/vendor/', 'web/src/vendor/')
 SEARCH_EXCLUDED_NAMES = ('pnpm-lock.yaml', 'Cargo.lock')
 
 HEADING = re.compile(r'^#{1,6}\s+(\S.*?)\s*#*$')

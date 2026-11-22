@@ -21,9 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 # 有這些異動才值得掃 TypeScript。非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
-# `docs/operations.md`、`docs/persistence-schema.json` 與 `docs/persistence-changes/`（#1856）、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
-# 以及 web 的樣式（#1512）：`apps/web` 底下的 `.css`（讀 cascade 的護欄、build 後的 check-built-css 與瀏覽器護欄都量它）、
-# 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`，以及 `apps/web/index.html`
+# `docs/operations.md`、`docs/persistence-schema.json` 與 `docs/persistence-changes/`（#1856）、`harness/apps/harness/cordis.yml`、`harness/apps/harness/cordis.serve.yml`、`harness/apps/harness/src/*.patch.yml`，
+# 以及 web 的樣式（#1512）：`web` 底下的 `.css`（讀 cascade 的護欄、build 後的 check-built-css 與瀏覽器護欄都量它）、
+# 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `harness/scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`，以及 `web/index.html`
 # （內嵌的主題腳本：`src/lib/theme.test.tsx` 讀它、瀏覽器護欄的測試頁照抄它）。少了這幾條，
 # 只調 CSS 的 commit 在全跑那一層 static 與 test-web 全部 skipped、gate 照樣綠。
 # 別放寬成所有 `.md` 或所有 `.yml`：「純文件的 PR 不會卡住」是設計。
@@ -34,8 +34,8 @@ TS_RE = re.compile(
     r'|^docs/persistence-schema\.json$'
     r'|^docs/persistence-changes/'
     r'|^apps/harness/cordis(\.serve)?\.yml$'
-    r'|^apps/harness/src/.*\.patch\.yml$'
-    r'|^apps/web/.*\.css$|^apps/web/tokengen/|^apps/web/scripts/.*\.mjs$|^apps/web/guard/'
+    r'|^harness/apps/harness/src/.*\.patch\.yml$'
+    r'|^web/.*\.css$|^web/tokengen/|^web/scripts/.*\.mjs$|^web/guard/'
     r'|^apps/web/index\.html$'
 )
 
@@ -44,7 +44,7 @@ SCAN_RES = [
     re.compile(rx)
     for rx in (
         # vendor 的 Cordis 是容器本身（#1401）。
-        r'^vendor/',
+        r'^harness/vendor/',
         # 相依、工具鏈、workspace 設定：影響每一個套件。
         r'^(pnpm-workspace\.yaml|\.npmrc|\.prettierignore|\.prettierrc.*|prettier\.config\..*)$',
         r'^(eslint\.config\..*|vitest\..*)$',
@@ -54,9 +54,9 @@ SCAN_RES = [
         # 漏洞掃描的例外清單（#1545）：格式由 `.github/scripts/test_check_audit.py` 驗。
         r'^\.github/audit-exceptions\.json$',
         # 已出貨格式的會話日誌夾具（#1529）：`session-format-fixtures.test.ts` 讀它們，副檔名不是 .ts。
-        r'^apps/harness/src/fixtures/session-format/',
+        r'^harness/apps/harness/src/fixtures/session-format/',
         # 重放快照的場景（#1556）：`snapshot/snapshot.test.ts` 讀它們，副檔名是 .jsonl、.json、.yml。
-        r'^apps/harness/src/snapshot/',
+        r'^harness/apps/harness/src/snapshot/',
     )
 ]
 
@@ -73,13 +73,13 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 # 那個 job 編的，develop → main 的 PR 走這一條）、合併後完整一輪（#1827 D55）。跟模式無關，輕的模式也編。
 # per-thread 行程模型（#2341）在 TS 那一側的檔也算接縫（清單見下面 regex 的最後一行）：sandbox-spawner 那個 job 拿同一個 crate 編出的監督行程
 # 跑 `per-thread.integration.test.ts`。serve.ts 與 wire-handler.ts 刻意不算：這兩支常被碰到（量測：2026-11-07 往前 30 天，origin/develop 上碰
-# apps/harness/src 的 434 個 commit 裡 134 個碰到其一），算進來這些 PR 都要編 Rust；只改它們的功能 PR 要等合併後完整一輪才測得到。
+# harness/apps/harness/src 的 434 個 commit 裡 134 個碰到其一），算進來這些 PR 都要編 Rust；只改它們的功能 PR 要等合併後完整一輪才測得到。
 RUST_RE = re.compile(
-    r'^native/sandbox-spawner/'
+    r'^harness/native/sandbox-spawner/'
     r'|^packages/nexus-plugin-workspace-changes/src/git\.'
-    r'|^packages/nexus-host-bridge/'
-    r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
-    r'|^apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|pair-leaf\S*|host-client|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
+    r'|^harness/packages/nexus-host-bridge/'
+    r'|^harness/apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
+    r'|^harness/apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|pair-leaf\S*|host-client|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
 )
 
 
@@ -95,9 +95,9 @@ def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False
 
 # 輕的模式只型別檢查受影響的套件：改到的，加上它的下游（由 pnpm 的 `...` 算）。
 # 這些異動影響每一個套件，一律全查：相依與工具鏈、根的 tsconfig（paths 也在這裡）、vendor 的 Cordis。
-TYPECHECK_ALL_RE = re.compile(r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$|^vendor/')
+TYPECHECK_ALL_RE = re.compile(r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$|^harness/vendor/')
 
-# 型別檢查的範圍是 `packages/*` 與 `apps/*`，跟全跑那一層的 typecheck job 一樣。
+# 型別檢查的範圍是 `harness/packages/*` 與 `apps/*`，跟全跑那一層的 typecheck job 一樣。
 PROJECT_RE = re.compile(r'^((?:packages|apps)/[^/]+)/')
 # 套件裡會改變型別檢查結果的檔：原始碼、`package.json`、`tsconfig*.json`、可被 import 的 JSON。只改 README 不查。
 TYPECHECK_FILE_RE = re.compile(r'\.(ts|tsx|mts|cts|json)$')
@@ -105,47 +105,47 @@ LINT_RE = re.compile(r'\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$')
 TEST_RE = re.compile(r'\.test\.tsx?$')
 SOURCE_RE = re.compile(r'^(.*)\.(ts|tsx|mts|cts)$')
 # 瀏覽器護欄有自己的 vitest 設定，在全跑那一層跑（#2088 決議第 5 條）。
-TEST_EXCLUDE_RE = re.compile(r'^apps/web/guard/')
+TEST_EXCLUDE_RE = re.compile(r'^web/guard/')
 # `*.md` 全在 `.prettierignore`：只改文件的 PR 不必為了 format 安裝相依。
 FORMAT_SKIP_RE = re.compile(r'\.md$')
 
 # 重放快照（#1556）在真的 serve 上重放、比對落盤日誌，同名規則排不到它：改到這些時輕的模式也跑 `SNAPSHOT_TEST`。
 # `snapshot/` 整個目錄（場景、夾具、重放 harness）、重放模型（`llm-replay.ts`、`settings/replay-model.ts`）、真模型提供者與
 # 它的設定列（`live-model.ts`、`settings/live-model.ts`，錄製走它們）、wire，以及會話日誌的寫法與格式。
-SNAPSHOT_TEST = 'apps/harness/src/snapshot/snapshot.test.ts'
+SNAPSHOT_TEST = 'harness/apps/harness/src/snapshot/snapshot.test.ts'
 SNAPSHOT_TRIGGER_RE = re.compile(
-    r'^apps/harness/src/snapshot/'
-    r'|^apps/harness/src/(llm-replay|live-model|jsonl-session-store|session-log-[\w-]+)\.ts$'
-    r'|^apps/harness/src/settings/(replay-model|live-model)\.ts$'
-    r'|^packages/nexus-wire/src/(?!.*\.test\.ts$)'
-    r'|^packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
+    r'^harness/apps/harness/src/snapshot/'
+    r'|^harness/apps/harness/src/(llm-replay|live-model|jsonl-session-store|session-log-[\w-]+)\.ts$'
+    r'|^harness/apps/harness/src/settings/(replay-model|live-model)\.ts$'
+    r'|^harness/packages/nexus-wire/src/(?!.*\.test\.ts$)'
+    r'|^harness/packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
 )
 
-# web 的設計護欄（#2757）：掃原始碼與樣式的測試，改到的檔的同名規則排不到它們。動到 `apps/web/src` 的 tsx、css（測試檔除外）
+# web 的設計護欄（#2757）：掃原始碼與樣式的測試，改到的檔的同名規則排不到它們。動到 `web/src` 的 tsx、css（測試檔除外）
 # 或顏色 token 的產生器時，輕的模式也跑 `web_design_guards()` 那幾檔；真瀏覽器的 `guard/` 留在全跑那一層。
-WEB = 'apps/web'
-WEB_DESIGN_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.test\.tsx$).*\.(tsx|css)$|^apps/web/tokengen/')
+WEB = 'web'
+WEB_DESIGN_TRIGGER_RE = re.compile(r'^web/src/(?!.*\.test\.tsx$).*\.(tsx|css)$|^web/tokengen/')
 
-# web 的結構護欄（#2883）：掃整個 `apps/web/src` 的 import 與檔案配置，改到的檔的同名規則排不到它們。切片的 import 方向、公開入口、循環、
+# web 的結構護欄（#2883）：掃整個 `web/src` 的 import 與檔案配置，改到的檔的同名規則排不到它們。切片的 import 方向、公開入口、循環、
 # `features/tool/` 的檔不按工具名分支、`styles/` 的檔名不重複資料夾名，任何 `.ts`、`.tsx` 的新增、搬動、刪除都可能違反，所以只看 `changed`、
 # 不看檔還在不在（刪檔也會弄壞 import）。測試檔與 `.d.ts` 不觸發。
 WEB_STRUCTURE_GUARDS = [
-    'apps/web/src/architecture.test.ts',
-    'apps/web/src/features/tool/adapter.test.ts',
-    'apps/web/src/styles/naming-deprecation.test.ts',
+    'web/src/architecture.test.ts',
+    'web/src/features/tool/adapter.test.ts',
+    'web/src/styles/naming-deprecation.test.ts',
 ]
-WEB_STRUCTURE_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.(test\.tsx?|d\.ts)$).*\.tsx?$')
+WEB_STRUCTURE_TRIGGER_RE = re.compile(r'^web/src/(?!.*\.(test\.tsx?|d\.ts)$).*\.tsx?$')
 
 
 def web_design_guards(root: Path = ROOT) -> list[str]:
-    """`apps/web/src/styles/*.test.ts` 與 `ui/local-edits.test.ts`，repo 相對路徑。"""
+    """`web/src/styles/*.test.ts` 與 `ui/local-edits.test.ts`，repo 相對路徑。"""
     found = [*(root / WEB / 'src/styles').glob('*.test.ts'), root / WEB / 'src/components/ui/local-edits.test.ts']
     return sorted(f.relative_to(root).as_posix() for f in found if f.is_file())
 
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
-    """`packages/*`、`apps/*` 的目錄 → 套件名。"""
-    manifests = sorted([*root.glob('packages/*/package.json'), *root.glob('apps/*/package.json')])
+    """`harness/packages/*`、`apps/*` 的目錄 → 套件名。"""
+    manifests = sorted([*root.glob('harness/packages/*/package.json'), *root.glob('apps/*/package.json')])
     return {m.parent.relative_to(root).as_posix(): json.loads(m.read_text(encoding='utf-8'))['name'] for m in manifests}
 
 
@@ -189,7 +189,7 @@ def light(
             if exists(c):
                 tests.setdefault(d, set()).add(c[len(d) + 1:])
     if any(SNAPSHOT_TRIGGER_RE.search(p) for p in changed) and exists(SNAPSHOT_TEST):
-        d = 'apps/harness'
+        d = 'harness/apps/harness'
         tests.setdefault(d, set()).add(SNAPSHOT_TEST[len(d) + 1:])
     if design_guards and WEB in names and any(WEB_DESIGN_TRIGGER_RE.search(p) for p in changed):
         tests.setdefault(WEB, set()).update(g[len(WEB) + 1:] for g in design_guards)
@@ -210,7 +210,7 @@ def write_light(scope: dict, out: Path) -> None:
     """寫成 shell 好讀的檔：`typecheck.txt` 是 pnpm 的參數，`lint.tsv`、`tests.tsv` 一行是「目錄<TAB>檔」。"""
     out.mkdir(parents=True, exist_ok=True)
     if scope['typecheck'] == 'all':
-        args = ['--filter=./packages/*', '--filter=./apps/*']
+        args = ['--filter=./harness/packages/*', '--filter=./apps/*']
     else:
         args = [f'--filter=...{name}' for name in scope['typecheck']]
     (out / 'typecheck.txt').write_text(''.join(f'{a}\n' for a in args), encoding='utf-8')

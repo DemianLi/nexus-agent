@@ -1,0 +1,635 @@
+/**
+ * goal 域走**真的通道**：註冊表 → `sessions` 接線 → 服務 → 會話日誌。
+ *
+ * 刻意不直接 `new GoalService(...)`：這個套件宣稱自己是一個 plugin，而「掛上去之後真的
+ * 拿得到一份綁對日誌的服務」正是那個宣稱裡最容易靜靜壞掉的一段。
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  buildForkSeed,
+  createRegistry,
+  createSessionRunner,
+  goalId,
+  SessionLog,
+} from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
+import type { GoalChangeMeta, GoalRef } from '@nexus/core';
+
+import { GOALS_SERVICE } from '@nexus/goal';
+
+import { goalConfigSchema, GoalError } from './index.js';
+import { createGoalPlugin, goalCoreOf, goalPlugin } from './goal-shell.test.helper.js';
+import type { GoalPluginOptions } from './goal-shell.test.helper.js';
+import { GOAL_TOOL_OUTPUT_SCHEMA } from './tools.js';
+import type { GoalCore, GoalService } from './index.js';
+
+/**
+ * 掛一次，回**這一次組裝**的 `goals` 服務。
+ *
+ * 走 `registry.services.use()` 而不是問 plugin 物件——[#459](https://github.com/DemianLi/nexus-agent/issues/459)
+ * 之後查表活在 `apply` 的閉包裡，plugin 物件上沒有那一格（那一格就是兩次組裝串台的來源）。
+ */
+function applyGoalTo(
+  registry: ReturnType<typeof createRegistry>,
+  entry: PluginEntry,
+  id = 'goal#0',
+): GoalCore {
+  const exit = registry.enter({ id, name: 'goal' });
+  entry.plugin.apply(registry, goalConfigSchema.parse(entry.config));
+  exit();
+  return goalCoreOf(registry.services.use(GOALS_SERVICE));
+}
+
+/** 掛一次、接一份日誌，回手上要用的每一個東西。 */
+function attach(options: GoalPluginOptions = {}): {
+  goals: GoalCore;
+  log: SessionLog;
+  service: GoalService;
+  detach: () => void;
+  tick: (to: number) => void;
+} {
+  let clock = 100;
+  let serial = 0;
+  const plugin = createGoalPlugin({
+    now: () => clock,
+    newGoalId: () => `goal-${(serial += 1)}`,
+    ...options,
+  });
+  const registry = createRegistry();
+  const goals = applyGoalTo(registry, plugin);
+  const log = new SessionLog('goal');
+  const detach = createSessionRunner({
+    address: { kind: 'root' },
+    log,
+    rootLog: log,
+    installers: registry.sessions.installers(),
+    warn: (message) => {
+      throw new Error(`不該有 warn：${message}`);
+    },
+  });
+  const service = goals.serviceFor(log);
+  return {
+    goals,
+    log,
+    service,
+    detach,
+    tick: (to) => {
+      clock = to;
+    },
+  };
+}
+
+/** 目前這一份的 CAS 身分。 */
+function refOf(service: GoalService): GoalRef {
+  const view = service.get();
+  if (view === undefined) throw new Error('現在沒有目前的目標');
+  return { id: view.id, revision: view.revision };
+}
+
+describe('掛載', () => {
+  it('只碰 commands、tools 與 services 三個通道，別的一格都不動（包括 sessions）', () => {
+    // **`tools` 這一格翻面了，而且是第二次翻。** 第一版是 `toEqual([])`，守的是「域不裝
+    // 任何人打得到的東西」；`/goal` 落地時翻成「只多掛一個命令」，守的是「掛了 `/goal`
+    // 的 agent 與沒掛的在模型眼裡一模一樣」——因為命令不進模型。
+    //
+    // [#177](https://github.com/DemianLi/nexus-agent/issues/177) 之後那句話**不再成立而且
+    // 不該成立**：模型側的三顆工具就是這張卡要交的東西。所以這一條換成釘住**剛好那三顆、
+    // 而且三顆都是 `rootOnly`**——多一顆、少一顆、或哪天有人把 `rootOnly` 拿掉，這裡紅。
+    // middleware 與配套入口仍然一格都不碰。
+    const registry = createRegistry();
+    applyGoalTo(registry, createGoalPlugin());
+    // #1486：服務是 lazy 的，不再有「每份會話各裝一次」的參與者——這一格是 0。
+    expect(registry.sessions.installers()).toHaveLength(0);
+    expect(registry.commands.list().map((entry) => entry.name)).toEqual(['goal']);
+    const toolNames = [...registry.tools.effective(undefined).keys()].sort();
+    expect(toolNames).toEqual(['create_goal', 'get_goal', 'update_goal']);
+    expect(toolNames.filter((name) => registry.tools.isRootOnly(name))).toEqual(toolNames);
+    // 三顆都隨註冊帶輸出 schema（#252）——拿掉任何一顆的宣告，產品路徑上它就不驗了，而其餘
+    // 每一條測試照樣綠。
+    for (const entry of registry.tools.effective(undefined).values()) {
+      expect(registry.tools.outputSchemaOf(entry.value)).toBe(GOAL_TOOL_OUTPUT_SCHEMA);
+    }
+    expect(registry.middleware.list()).toEqual([]);
+    expect(registry.invariants.companions()).toEqual([]);
+  });
+
+  it('lazy：第一次問才建，同一份日誌永遠同一個，`existingFor` 只看不建', () => {
+    const registry = createRegistry();
+    const goals = applyGoalTo(registry, createGoalPlugin());
+    const log = new SessionLog('goal');
+    expect(goals.existingFor(log)).toBeUndefined();
+    // 看了不會把它弄出來。
+    expect(goals.existingFor(log)).toBeUndefined();
+
+    const service = goals.serviceFor(log);
+    expect(goals.serviceFor(log)).toBe(service);
+    expect(goals.existingFor(log)).toBe(service);
+  });
+
+  it('一份日誌一個服務——兩份日誌的目標互不相干', () => {
+    const registry = createRegistry();
+    const goals = applyGoalTo(registry, createGoalPlugin());
+    const first = new SessionLog('a');
+    const second = new SessionLog('b');
+
+    goals.serviceFor(first).create({ objective: '第一份的目標' });
+    expect(goals.serviceFor(first).get()?.objective).toBe('第一份的目標');
+    expect(goals.serviceFor(second).get()).toBeUndefined();
+    expect(goals.existingFor(first)).not.toBe(goals.existingFor(second));
+  });
+});
+
+describe('create', () => {
+  it('寫一顆 goal/change 進日誌，並回一份已授權的視圖', () => {
+    const { service, log } = attach();
+    const view = service.create({ objective: '把 goal 域做完' });
+    expect(view).toEqual({
+      id: 'goal-1',
+      revision: 1,
+      objective: '把 goal 域做完',
+      phase: 'active',
+      maxGoalRounds: 256,
+      roundsStarted: 0,
+      createdAt: 100,
+      updatedAt: 100,
+      activation: 'armed',
+    });
+    expect(log.events.map((event) => event.type)).toEqual(['goal/change']);
+    expect((log.events[0]?.data as GoalChangeMeta).operation).toBe('create');
+  });
+
+  it('沒指定上限就用預設的 256，指定了就用指定的', () => {
+    expect(attach().service.create({ objective: 'a' }).maxGoalRounds).toBe(256);
+    expect(attach().service.create({ objective: 'a', maxGoalRounds: 4 }).maxGoalRounds).toBe(4);
+    expect(
+      attach({ defaultMaxGoalRounds: 12 }).service.create({ objective: 'a' }).maxGoalRounds,
+    ).toBe(12);
+  });
+
+  it('敘述空的、上限不合法——各自的錯誤碼', () => {
+    const { service } = attach();
+    expect(() => service.create({ objective: '   ' })).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_OBJECTIVE' }),
+    );
+    expect(() => service.create({ objective: 'a', maxGoalRounds: 0 })).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_MAX_ROUNDS' }),
+    );
+    // 一筆都沒進日誌——被拒的變更不留痕跡。
+    expect(attach().log.length).toBe(0);
+  });
+
+  it('敘述前後空白會被正規化掉', () => {
+    expect(attach().service.create({ objective: '  收邊  ' }).objective).toBe('收邊');
+  });
+
+  it('上一個還沒完成就不准建下一個，完成掉的可以被取代', () => {
+    const { service } = attach();
+    service.create({ objective: '第一個' });
+    expect(() => service.create({ objective: '第二個' })).toThrow(
+      expect.objectContaining({ code: 'GOAL_ALREADY_EXISTS' }),
+    );
+    service.complete(refOf(service));
+    expect(service.create({ objective: '第二個' }).id).toBe('goal-2');
+  });
+
+  it('建服務時的預設上限自己也驗', () => {
+    expect(() => attach({ defaultMaxGoalRounds: -1 })).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_MAX_ROUNDS' }),
+    );
+  });
+});
+
+describe('CAS', () => {
+  it('帶舊修訂號的變更被拒，錯誤碼是 GOAL_STALE_REVISION', () => {
+    const { service } = attach();
+    const stale = { id: service.create({ objective: 'a' }).id, revision: 1 };
+    service.pause(stale);
+    expect(() => service.pause(stale)).toThrow(
+      expect.objectContaining({ code: 'GOAL_STALE_REVISION' }),
+    );
+  });
+
+  it('錯誤訊息帶得出目前是哪一號——但那是給人看的，不是給客戶端解析的', () => {
+    const { service } = attach();
+    const view = service.create({ objective: 'a' });
+    expect(() => service.clear({ id: view.id, revision: 9 })).toThrow(/過期了/u);
+  });
+
+  it('沒有目前目標時的變更是 GOAL_NOT_FOUND', () => {
+    const { service } = attach();
+    expect(() => service.pause({ id: goalId('goal-1'), revision: 1 })).toThrow(
+      expect.objectContaining({ code: 'GOAL_NOT_FOUND' }),
+    );
+  });
+});
+
+describe('相位與授權', () => {
+  it('六種操作各走一次，相位與授權都對得上', () => {
+    const { service, tick } = attach();
+    expect(service.create({ objective: '走一輪' }).activation).toBe('armed');
+
+    tick(101);
+    const paused = service.pause(refOf(service));
+    expect([paused.phase, paused.activation]).toEqual(['paused', 'disarmed']);
+
+    tick(102);
+    const resumed = service.resume(refOf(service));
+    expect([resumed.phase, resumed.activation]).toEqual(['active', 'armed']);
+
+    tick(103);
+    const blocked = service.block(refOf(service), { code: 'needs-info', message: '缺資訊' });
+    expect([blocked.phase, blocked.activation]).toEqual(['blocked', 'disarmed']);
+    expect(blocked.blockedReason).toEqual({ code: 'needs-info', message: '缺資訊' });
+
+    tick(104);
+    const edited = service.edit(refOf(service), { objective: '換一個說法' });
+    // edit 不碰授權，也不碰相位與理由。
+    expect([edited.phase, edited.activation, edited.objective]).toEqual([
+      'blocked',
+      'disarmed',
+      '換一個說法',
+    ]);
+    expect(edited.blockedReason).toEqual({ code: 'needs-info', message: '缺資訊' });
+
+    tick(105);
+    const done = service.complete(refOf(service));
+    expect([done.phase, done.activation]).toEqual(['complete', 'disarmed']);
+    // 完成之後理由不再帶著——它只在 blocked 時存在。
+    expect(done.blockedReason).toBeUndefined();
+
+    const tombstone = service.clear({ id: done.id, revision: done.revision });
+    expect(tombstone).toEqual({ id: done.id, revision: done.revision + 1 });
+    expect(service.get()).toBeUndefined();
+    expect(service.disarm()).toBeUndefined();
+  });
+
+  it('被拒的相位轉換各報各的', () => {
+    const { service } = attach();
+    service.create({ objective: 'a' });
+    // 已經 active 而且已授權，resume 沒有意義。
+    expect(() => service.resume(refOf(service))).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_TRANSITION' }),
+    );
+    service.complete(refOf(service));
+    expect(() => service.pause(refOf(service))).toThrow(/相位是 "complete"，pause 不了/u);
+    expect(() => service.block(refOf(service), { code: 'x', message: 'y' })).toThrow(
+      /相位是 "complete"，block 不了/u,
+    );
+    expect(() => service.complete(refOf(service))).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_TRANSITION' }),
+    );
+  });
+
+  it('disarm 收回授權但不動耐久狀態，之後 resume 收得回來', () => {
+    const { service, log } = attach();
+    const created = service.create({ objective: 'a' });
+    const disarmed = service.disarm();
+    expect(disarmed?.activation).toBe('disarmed');
+    expect(disarmed?.revision).toBe(created.revision);
+    // 日誌沒有多一筆——授權不是耐久狀態。
+    expect(log.length).toBe(1);
+    expect(service.resume(refOf(service)).activation).toBe('armed');
+  });
+
+  it('edit 兩格都沒給是 GOAL_INVALID_EDIT，block 的理由不合格是 GOAL_INVALID_BLOCK_REASON', () => {
+    const { service } = attach();
+    service.create({ objective: 'a' });
+    expect(() => service.edit(refOf(service), {})).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_EDIT' }),
+    );
+    expect(() => service.block(refOf(service), { code: 'Needs Info', message: 'x' })).toThrow(
+      expect.objectContaining({ code: 'GOAL_INVALID_BLOCK_REASON' }),
+    );
+  });
+
+  it('別人寫的 goal/change 會把授權打回 disarmed', () => {
+    // 「別人」今天是模型工具與 `/goal`（兩個都改得動同一份域狀態），而這條邊是 dsh 的
+    // 語意：任何一顆不是自己掛的變更都把授權打回 disarmed。**被準入的續行輪次不走這條**
+    // ——它推計數不動授權，理由與那條驗收句見 `service.ts` 的 `#observe`。
+    const { service, log } = attach();
+    const view = service.create({ objective: 'a' });
+    expect(service.get()?.activation).toBe('armed');
+    log.append('goal/change', {
+      kind: 'goal/change',
+      version: 1,
+      operation: 'pause',
+      goal: {
+        id: view.id,
+        revision: 2,
+        objective: view.objective,
+        phase: 'paused',
+        maxGoalRounds: view.maxGoalRounds,
+      },
+      roundsStarted: 0,
+      createdAt: 100,
+      updatedAt: 101,
+    });
+    expect(service.get()?.activation).toBe('disarmed');
+  });
+
+  it('時鐘往回跳也不讓 updatedAt 倒退', () => {
+    const { service, tick } = attach();
+    service.create({ objective: 'a' });
+    tick(50);
+    expect(service.pause(refOf(service)).updatedAt).toBe(100);
+  });
+});
+
+describe('折疊壞掉', () => {
+  it('第一次重放失敗之後，讀與變更一律拒絕，而且丟的不是 GoalError', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    // 只有轉型騙得過型別；真流量上這是另一個生產者寫壞了才會發生的事。
+    log.append('goal/change', {
+      kind: 'goal/change',
+      version: 1,
+      operation: 'pause',
+      goal: {
+        id: goalId('goal-1'),
+        revision: 9,
+        objective: 'a',
+        phase: 'paused',
+        maxGoalRounds: 256,
+      },
+      roundsStarted: 0,
+      createdAt: 100,
+      updatedAt: 101,
+    } as unknown as GoalChangeMeta);
+
+    // **不是 GoalError**：可預期的拒絕與「這個會話的 goal 串壞了」是兩件事。
+    expect(() => service.get()).toThrow(/goal 重放在會話事件 1 失敗/u);
+    expect(() => service.get()).not.toThrow(GoalError);
+    expect(() => service.create({ objective: 'b' })).toThrow(/goal 重放在會話事件 1 失敗/u);
+    expect(() => service.pause({ id: goalId('goal-1'), revision: 1 })).toThrow(/重放/u);
+  });
+
+  it('壞掉之後不再往前折——後面來的事件不會蓋掉第一次的理由', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    const bad = {
+      kind: 'goal/change',
+      version: 1,
+      operation: 'pause',
+      goal: {
+        id: goalId('goal-1'),
+        revision: 9,
+        objective: 'a',
+        phase: 'paused',
+        maxGoalRounds: 256,
+      },
+      roundsStarted: 0,
+      createdAt: 100,
+      updatedAt: 101,
+    } as unknown as GoalChangeMeta;
+    log.append('goal/change', bad);
+    log.append('goal/change', bad);
+    expect(() => service.get()).toThrow(/會話事件 1 失敗/u);
+  });
+});
+
+describe('接上一份已經有內容的日誌', () => {
+  it('安裝當下先重播，折出來的跟一路看著它長大一樣', () => {
+    const first = attach();
+    first.service.create({ objective: '先建起來的' });
+    first.tick(101);
+    first.service.pause(refOf(first.service));
+
+    // 同一份日誌，接第二個 plugin 上去——它沒看過前面那兩筆，只能靠重播。
+    const registry = createRegistry();
+    const later = applyGoalTo(registry, createGoalPlugin(), 'goal#1');
+    createSessionRunner({
+      address: { kind: 'root' },
+      log: first.log,
+      rootLog: first.log,
+      installers: registry.sessions.installers(),
+    });
+
+    const view = later.serviceFor(first.log)?.get();
+    expect(view?.phase).toBe('paused');
+    expect(view?.revision).toBe(2);
+    // **授權不重播**：它是 process 內的東西，重放一段歷史不該讓誰自己動起來。
+    expect(view?.activation).toBe('disarmed');
+  });
+
+  it('分叉的前綴裡有一顆執行中、已授權的 goal：分叉出來的那一份折得出它，但是 disarmed（#1579 驗收 5）', () => {
+    const parent = attach();
+    parent.service.create({ objective: '父會話在跑的' });
+    expect(parent.service.get()?.activation).toBe('armed');
+    parent.log.append('turn/start', { kind: 'message', text: '一' });
+    const end = parent.log.append('turn/end', {});
+
+    // 照 dsh：授權不落盤（`goal/goal/src/fold.ts:337`），分叉之後要人說「繼續」才重新授權。
+    const child = new SessionLog('child', { seed: buildForkSeed(parent.log.events, end.seq) });
+    const registry = createRegistry();
+    const goals = applyGoalTo(registry, createGoalPlugin(), 'goal#1');
+    createSessionRunner({
+      address: { kind: 'root' },
+      log: child,
+      rootLog: child,
+      installers: registry.sessions.installers(),
+    });
+    const view = goals.serviceFor(child).get();
+    expect(view?.objective).toBe('父會話在跑的');
+    expect(view?.phase).toBe(parent.service.get()?.phase);
+    expect(view?.activation).toBe('disarmed');
+  });
+});
+
+describe('roundsStarted', () => {
+  /** 排程器排的那一輪長這樣。真的 append 進日誌，服務靠觀察者收到它。 */
+  function admitRound(log: SessionLog, ref: GoalRef, round: number): void {
+    log.append('turn/start', {
+      kind: 'goal',
+      text: `<goal_round>第 ${round} 輪`,
+      goalId: ref.id,
+      revision: ref.revision,
+      round,
+    });
+  }
+
+  it('一整串 goal/change 推不動它——絆索在 fold.test.ts，這裡釘的是視圖那一面', () => {
+    const { service, tick } = attach();
+    service.create({ objective: 'a', maxGoalRounds: 2 });
+    tick(101);
+    service.pause(refOf(service));
+    tick(102);
+    expect(service.resume(refOf(service)).roundsStarted).toBe(0);
+  });
+
+  it('一顆準入的輪次推得動視圖上的計數', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    admitRound(log, refOf(service), 1);
+    expect(service.get()?.roundsStarted).toBe(1);
+    admitRound(log, refOf(service), 2);
+    expect(service.get()?.roundsStarted).toBe(2);
+  });
+
+  /**
+   * **這一條是整張卡最便宜的真假判準。**
+   *
+   * 服務對每一顆 goal 變更都把授權打回 `disarmed`（見 `service.ts` 的 `#observe`）。
+   * 讓一顆被準入的輪次也走到那一行的話，**排程器排第一輪的那一刻就把自己的授權收掉了**：
+   * 第二輪永遠不會來，而第一輪跑得好好的——一個只跑一輪的驅動器，看起來完全像成功。
+   * 只驗第 1 輪的測試會全綠，所以這一條必須驗到第 2 輪還排得出來。
+   */
+  it('準入一輪**不收回授權**——不然驅動器只跑得動第一輪', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    expect(service.get()?.activation).toBe('armed');
+    admitRound(log, refOf(service), 1);
+    expect(service.get()?.activation).toBe('armed');
+    admitRound(log, refOf(service), 2);
+    expect(service.get()?.activation).toBe('armed');
+  });
+
+  it('人打的輪次與核准恢復都不推它，也不動授權', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    log.append('turn/start', { kind: 'message', text: '動手' });
+    log.append('turn/start', { kind: 'resume' });
+    expect(service.get()?.roundsStarted).toBe(0);
+    expect(service.get()?.activation).toBe('armed');
+  });
+
+  /**
+   * **這條在續行排程器落地之前走不到**（輪次恆為 0，而 `maxGoalRounds` 至少是 1）。
+   * 現在走得到：燒完預算的目標要先調高上限才 resume 得了。
+   */
+  it('燒完預算之後 resume 不了——服務這側現在走得到那條檢查', () => {
+    const { service, log, tick } = attach();
+    service.create({ objective: 'a', maxGoalRounds: 1 });
+    admitRound(log, refOf(service), 1);
+    tick(101);
+    service.pause(refOf(service));
+    tick(102);
+    expect(() => service.resume(refOf(service))).toThrow(/已經用完 1 個輪次/u);
+    // 調高上限之後就過得去——**這一半證明拒絕的是預算不是相位**。
+    tick(103);
+    service.edit(refOf(service), { maxGoalRounds: 4 });
+    tick(104);
+    expect(service.resume(refOf(service)).roundsStarted).toBe(1);
+  });
+
+  it('一顆接不上的輪次把服務扣住——同一顆壞掉的 goal/change', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    log.append('turn/start', {
+      kind: 'goal',
+      text: '假的',
+      goalId: goalId('goal-nope'),
+      revision: 1,
+      round: 1,
+    });
+    expect(() => service.get()).toThrow(/goal 重放在會話事件 1 失敗/u);
+  });
+});
+
+/**
+ * 續接：一份帶 seed 開出來的日誌上，目標的相位與輪次照舊、授權打回 `disarmed`
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ *
+ * **輪次不歸零是一個決定，不是先例**：dsh 也把 `roundsStarted` 折回來，但它的對話跟著回來。
+ * 我們回來的是一個記得用了幾輪、模型卻不記得那幾輪做了什麼的目標——而歸零等於「重開一個
+ * 行程就洗掉上限」，上限就只擋得住不肯重開的人。
+ */
+describe('續接回來的日誌', () => {
+  /** 同一份 plugin 設定，接一份帶 seed 的日誌——下一個行程的樣子。 */
+  function resumeFrom(earlier: SessionLog): GoalService {
+    const registry = createRegistry();
+    const goals = applyGoalTo(
+      registry,
+      createGoalPlugin({ now: () => 200, newGoalId: () => 'goal-後來' }),
+    );
+    const log = new SessionLog('goal', { seed: earlier.events });
+    createSessionRunner({
+      address: { kind: 'root' },
+      log,
+      rootLog: log,
+      installers: registry.sessions.installers(),
+      warn: (message) => {
+        throw new Error(`不該有 warn：${message}`);
+      },
+    });
+    return goals.serviceFor(log);
+  }
+
+  /** 排程器准了一輪的樣子，同上面 `admitRound` 的形狀。 */
+  function admit(log: SessionLog, ref: GoalRef, round: number): void {
+    log.append('turn/start', {
+      kind: 'goal',
+      text: `<goal_round>第 ${round} 輪`,
+      goalId: ref.id,
+      revision: ref.revision,
+      round,
+    });
+    log.append('turn/end', {});
+  }
+
+  it('相位、輪次與上限照舊，授權打回 disarmed——要人重新授權才會再往下走', () => {
+    const { log, service } = attach();
+    service.create({ objective: '把它做完', maxGoalRounds: 3 });
+    admit(log, refOf(service), 1);
+    // 前提：上一個行程裡它是授權著的。不然「打回 disarmed」證不了任何事。
+    expect(service.get()).toMatchObject({ activation: 'armed', roundsStarted: 1 });
+
+    expect(resumeFrom(log).get()).toMatchObject({
+      phase: 'active',
+      activation: 'disarmed',
+      roundsStarted: 1,
+      maxGoalRounds: 3,
+    });
+  });
+
+  it('燒完預算的目標續接之後照樣要先調高上限——重開不會把上限洗掉', () => {
+    const { log, service } = attach();
+    service.create({ objective: '把它做完', maxGoalRounds: 1 });
+    admit(log, refOf(service), 1);
+
+    const resumed = resumeFrom(log);
+    expect(() => resumed.resume(refOf(resumed))).toThrow(/已經用完 1 個輪次/u);
+  });
+});
+
+/**
+ * **服務注入點**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ *
+ * 以前查表掛在 plugin 物件上，而 `harness/apps/harness` 為了問它在模組層級留了一顆 handle——
+ * 於是同一個 process 裡兩次組裝共用一份查表。`serve.ts` 每條 thread 組裝一次
+ * （`:341`），所以那是「一條 thread 的目標被另一條 thread 讀到」。
+ */
+describe('goals 服務', () => {
+  /**
+   * **這一條守的是量具，不是行為**：下面那條隔離測試要量的必須是出貨清單真的
+   * 掛的那顆物件。帶了測試縫的那條路另外包一顆，而幾乎每一個 goal 測試都帶縫——量錯物件
+   * 的話，隔離測試會在一顆沒有人用的 plugin 上綠。
+   */
+  it('不帶測試縫時，條目上的就是模組層級那一顆本身', () => {
+    expect(createGoalPlugin().plugin).toBe(goalPlugin);
+    expect(createGoalPlugin({ defaultMaxGoalRounds: 8 }).plugin).toBe(goalPlugin);
+    // 帶了縫才另外包一顆——兩條路的 `apply` 是同一個函式，差的只有那個閉包。
+    expect(createGoalPlugin({ now: () => 1 }).plugin).not.toBe(goalPlugin);
+  });
+
+  it('兩次組裝各一份查表——第二次沒被問過那份日誌，`existingFor` 不建', () => {
+    const first = createRegistry();
+    const goalsA = applyGoalTo(first, createGoalPlugin(), 'goal#a');
+    const second = createRegistry();
+    const goalsB = applyGoalTo(second, createGoalPlugin(), 'goal#b');
+
+    const log = new SessionLog('shared');
+    expect(goalsA.serviceFor(log)).toBeDefined();
+    expect(goalsA.existingFor(log)).toBeDefined();
+    // **這一條在查表回到模組層級的那一天會紅。**
+    expect(goalsB.existingFor(log)).toBeUndefined();
+  });
+
+  it('提供的是核心本身，`provide` 的時候一份日誌都還沒被問過', () => {
+    const registry = createRegistry();
+    const goals = applyGoalTo(registry, createGoalPlugin());
+    expect(registry.services.provider(GOALS_SERVICE)).toEqual({ id: 'goal#0', name: 'goal' });
+    expect(goals.existingFor(new SessionLog('never-asked'))).toBeUndefined();
+  });
+});

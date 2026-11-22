@@ -176,7 +176,7 @@
 
 **16 ≥ 10，門檻過了。** OpenRouter 那條退路不啟動。
 
-清單落在 [`apps/harness/src/eval/survey.ts`](../apps/harness/src/eval/survey.ts)，
+清單落在 [`apps/harness/src/eval/survey.ts`](../harness/apps/harness/src/eval/survey.ts)，
 跑法是 `pnpm --filter @nexus/harness eval:survey`。
 
 ## 完整題目跑下來之後（2026-08-29，294 次執行）
@@ -335,7 +335,7 @@
 
 **結果：階梯收掉，不是重建。** 尺寸效應那條線在 2026-08-28 已經結案（「沒有效應」，三輪確認），
 所以收的是一個已結案問題留下來的裝置。三條承重的斷言翻面寫成重建的驗收條件，
-放在 [`tiers.ts`](../apps/harness/src/eval/tiers.ts) 的檔頭。
+放在 [`tiers.ts`](../harness/apps/harness/src/eval/tiers.ts) 的檔頭。
 
 ### 對 #85 的意思：**9 < 10，門檻沒過**
 
@@ -345,7 +345,7 @@
 而且 9 這個數字還是寬鬆的算法：扣掉 `poolside/laguna-xs-2.1`（16384 門檻 1/3）就只剩 8，
 再扣掉 2026-08-29 那一輪量到 0–2/21 的 `diffgemma-26b` 與 `minimax-m3` 就剩 6。
 
-[`survey.ts`](../apps/harness/src/eval/survey.ts) 的 `SURVEY_MODELS` **刻意沒有在 #165 裡改** ——
+[`survey.ts`](../harness/apps/harness/src/eval/survey.ts) 的 `SURVEY_MODELS` **刻意沒有在 #165 裡改** ——
 改它就是在替 demian 做那個決定。它今天記的是 2026-08-29 的集合，其中四個已經三次全逾時。
 
 ## 決選（2026-09-04，84 次執行）

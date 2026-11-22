@@ -248,7 +248,7 @@ class HostMcpConformance(unittest.TestCase):
                 names = [s.get('name') for s in steps]
                 step = steps[names.index('宿主的 MCP 符合性測試')]
                 self.assertEqual(step['shell'], 'bash')
-                self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
+                self.assertEqual(step['working-directory'], 'harness/native/sandbox-spawner')
                 self.assertIn('--test mcp_conformance -- --ignored --nocapture', step['run'])
                 self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
                 uses = [s.get('uses') for s in steps]
@@ -267,7 +267,7 @@ class PairLeafInterop(unittest.TestCase):
                 names = [s.get('name') for s in steps]
                 step = steps[names.index('橋對 TS 葉子的對接測試')]
                 self.assertEqual(step['shell'], 'bash')
-                self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
+                self.assertEqual(step['working-directory'], 'harness/native/sandbox-spawner')
                 self.assertEqual(step['run'].splitlines(), [
                     'cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET"'
                     ' --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"',
@@ -435,7 +435,7 @@ class SessionFormatFixtures(unittest.TestCase):
     """會話日誌夾具（#1529）不是 .ts：只改它的 commit 在全跑那一層要觸發掃描，拿掉 SCAN_RES 那一條，讀它的測試就靜靜不跑。"""
 
     def test_fixture_only_change_scans(self) -> None:
-        self.assertEqual(plan_ci.plan(['apps/harness/src/fixtures/session-format/v14/cli.jsonl'], 'push', '')['ts'], 'true')
+        self.assertEqual(plan_ci.plan(['harness/apps/harness/src/fixtures/session-format/v14/cli.jsonl'], 'push', '')['ts'], 'true')
 
 
 class SnapshotScenarios(unittest.TestCase):
@@ -444,8 +444,8 @@ class SnapshotScenarios(unittest.TestCase):
     def test_scenario_only_change_scans(self) -> None:
         for path in (
             'apps/harness/src/snapshot/scenarios/plain-reply/snapshot/session.v52.jsonl',
-            'apps/harness/src/snapshot/scenarios/plain-reply/recorded.json',
-            'apps/harness/src/snapshot/scenarios/approval-resume/patch.yml',
+            'harness/apps/harness/src/snapshot/scenarios/plain-reply/recorded.json',
+            'harness/apps/harness/src/snapshot/scenarios/approval-resume/patch.yml',
         ):
             with self.subTest(path=path):
                 self.assertEqual(plan_ci.plan([path], 'push', '')['ts'], 'true')
@@ -526,7 +526,7 @@ class PostMerge(unittest.TestCase):
         self.assertEqual(job['steps'][0]['with']['fetch-depth'], 2)
         runs = '\n'.join(step.get('run', '') for step in job['steps'])
         self.assertIn('git worktree add --detach "$RUNNER_TEMP/prev" HEAD^', runs)
-        self.assertIn('apps/web/visual/compare.ts', runs)
+        self.assertIn('web/visual/compare.ts', runs)
 
     def test_visual_diff_comments_on_the_pr(self) -> None:
         """有差時在對應的 PR 留言請作者確認：寫 PR 的權限只給這一個 job，commit 訊息經環境變數傳，沒有留言檔或沒有 PR 號就不留。"""
@@ -602,28 +602,28 @@ class SandboxSpawner(unittest.TestCase):
         return plan_ci.plan(changed, event, base, force_full=full)['rust']
 
     def test_builds_only_when_the_spawner_or_ci_changes(self) -> None:
-        self.assertEqual(self.rust(['native/sandbox-spawner/src/main.rs']), 'true')
-        self.assertEqual(self.rust(['native/sandbox-spawner/Cargo.lock']), 'true')
+        self.assertEqual(self.rust(['harness/native/sandbox-spawner/src/main.rs']), 'true')
+        self.assertEqual(self.rust(['harness/native/sandbox-spawner/Cargo.lock']), 'true')
         self.assertEqual(self.rust(['.github/workflows/ci.yml']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
-        self.assertEqual(self.rust(['apps/harness/src/sandbox-protocol.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/sandbox-spawner-client.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/git-sandbox.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/mcp-sandbox.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/kernel-file-lock.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/kernel-file-lock.integration.test.ts']), 'true')
-        self.assertEqual(self.rust(['packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
-        self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
-        self.assertEqual(self.rust(['packages/nexus-host-bridge/src/protocol.ts']), 'true')
-        self.assertEqual(self.rust(['packages/nexus-host-bridge/package.json']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/sandbox-protocol.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/sandbox-spawner-client.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/git-sandbox.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/mcp-sandbox.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/kernel-file-lock.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/kernel-file-lock.integration.test.ts']), 'true')
+        self.assertEqual(self.rust(['harness/packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/tool-process.ts']), 'true')
+        self.assertEqual(self.rust(['harness/apps/harness/src/ripgrep-sandbox.ts']), 'true')
+        self.assertEqual(self.rust(['harness/packages/nexus-host-bridge/src/protocol.ts']), 'true')
+        self.assertEqual(self.rust(['harness/packages/nexus-host-bridge/package.json']), 'true')
         for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
                      'supervisor-protocol', 'conversation-process', 'conversation-control', 'host-client', 'peer-socket-auth',
                      'forwarded-principal', 'per-thread.integration.test', 'pair-leaf', 'pair-leaf.test', 'pair-leaf.process.test'):
-            self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
+            self.assertEqual(self.rust([f'harness/apps/harness/src/{seam}.ts']), 'true', seam)
         # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。
-        self.assertEqual(self.rust(['apps/harness/src/serve.ts']), 'false')
-        self.assertEqual(self.rust(['apps/harness/src/wire-handler.ts']), 'false')
+        self.assertEqual(self.rust(['harness/apps/harness/src/serve.ts']), 'false')
+        self.assertEqual(self.rust(['harness/apps/harness/src/wire-handler.ts']), 'false')
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
 
@@ -657,7 +657,7 @@ class SandboxSpawner(unittest.TestCase):
         """`-t` 篩不到任何一支時 vitest 4 回 exit 0（全部 skipped），測試改名後這一步會靜靜變綠：名字要恰好對到一支 it。"""
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
         name = re.search(r"-t '([^']+)'", step['run']).group(1)
-        source = (ROOT / 'apps/harness/src/serve-thread-search.test.ts').read_text(encoding='utf-8')
+        source = (ROOT / 'harness/apps/harness/src/serve-thread-search.test.ts').read_text(encoding='utf-8')
         titles = re.findall(r"^\s*it\('([^']*)'", source, re.MULTILINE)
         matched = [title for title in titles if name in title]
         self.assertEqual(len(matched), 1, matched)
@@ -777,7 +777,7 @@ class SandboxSpawner(unittest.TestCase):
             self.assertEqual(step['env']['NEXUS_COMPOSITION_BIN'], release + 'nexus-composition', job)
 
     def test_light_mode_still_builds(self) -> None:
-        result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
+        result = plan_ci.plan(['harness/native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
         self.assertEqual((result['mode'], result['rust']), ('light', 'true'))
 
     def test_runs_on_the_plan_flag_not_the_mode(self) -> None:
@@ -979,20 +979,20 @@ class TypecheckCache(unittest.TestCase):
         # 整個目錄：產生的設定、out/（宣告檔與 buildinfo）、沒人引用的套件的 buildinfo，少了哪一份都要從頭查。
         self.assertEqual(
             self.save['with']['path'].split(),
-            [f'packages/*/{TYPECHECK_CACHE}', f'apps/*/{TYPECHECK_CACHE}'],
+            [f'harness/packages/*/{TYPECHECK_CACHE}', f'apps/*/{TYPECHECK_CACHE}'],
         )
 
     def test_full_layer_checks_every_package_from_scratch(self) -> None:
         uses = [str(s.get('uses', '')) for s in self.typecheck['steps']]
         self.assertFalse(any(u.startswith(('actions/cache/restore@', 'actions/cache@')) for u in uses))
         run = next(s['run'] for s in self.typecheck['steps'] if s.get('name') == 'Typecheck')
-        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'")
+        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./harness/packages/*' '--filter=./apps/*'")
 
     def test_root_script_matches_full_layer(self) -> None:
         # 開發時的 `pnpm typecheck` 跟全跑同一支、同一組篩選：宣告檔輸出才有的錯，本機與 CI 一起紅。
         manifest = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
         self.assertEqual(
-            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'"
+            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./harness/packages/*' '--filter=./apps/*'"
         )
 
 
@@ -1125,9 +1125,9 @@ class LightScope(unittest.TestCase):
     """`plan_ci.light` 的範圍（#2088 決議第 5、7 條）。"""
 
     NAMES = {
-        'packages/nexus-core': '@nexus/core',
-        'packages/nexus-plugin-todo': '@nexus/plugin-todo',
-        'apps/web': '@nexus/web',
+        'harness/packages/nexus-core': '@nexus/core',
+        'harness/packages/nexus-plugin-todo': '@nexus/plugin-todo',
+        'web': '@nexus/web',
     }
 
     def scope(self, changed: list[str], existing: set[str] | None = None) -> dict:
@@ -1135,7 +1135,7 @@ class LightScope(unittest.TestCase):
         return plan_ci.light(changed, self.NAMES, lambda p: p in present)
 
     def test_typecheck_changed_packages_with_downstream(self) -> None:
-        scope = self.scope(['packages/nexus-plugin-todo/src/index.ts', 'packages/nexus-core/src/a.ts'])
+        scope = self.scope(['harness/packages/nexus-plugin-todo/src/index.ts', 'packages/nexus-core/src/a.ts'])
         self.assertEqual(scope['typecheck'], ['@nexus/core', '@nexus/plugin-todo'])
         with tempfile.TemporaryDirectory() as out:
             plan_ci.write_light(scope, Path(out))
@@ -1157,58 +1157,58 @@ class LightScope(unittest.TestCase):
         existing = set(changed) | {'packages/nexus-core/src/a.test.ts', 'apps/web/src/c.test.tsx', 'apps/web/src/d.test.tsx'}
         self.assertEqual(
             self.scope(changed, existing)['tests'],
-            {'packages/nexus-core': ['src/a.test.ts', 'src/b.test.ts'], 'apps/web': ['src/c.test.tsx']},
+            {'harness/packages/nexus-core': ['src/a.test.ts', 'src/b.test.ts'], 'web': ['src/c.test.tsx']},
         )
 
     def test_browser_guard_and_deleted_tests_are_left_out(self) -> None:
-        changed = ['apps/web/guard/guard.test.ts', 'packages/nexus-core/src/gone.test.ts']
-        self.assertEqual(self.scope(changed, {'apps/web/guard/guard.test.ts'})['tests'], {})
+        changed = ['web/guard/guard.test.ts', 'packages/nexus-core/src/gone.test.ts']
+        self.assertEqual(self.scope(changed, {'web/guard/guard.test.ts'})['tests'], {})
 
     def test_format_and_lint_only_existing_files(self) -> None:
         changed = ['packages/nexus-core/src/a.ts', 'packages/nexus-core/src/gone.ts', 'README.md', '.github/workflows/ci.yml']
         scope = self.scope(changed, {'packages/nexus-core/src/a.ts', 'README.md', '.github/workflows/ci.yml'})
         self.assertEqual(scope['format'], ['packages/nexus-core/src/a.ts', '.github/workflows/ci.yml'])
-        self.assertEqual(scope['lint'], {'packages/nexus-core': ['src/a.ts']})
+        self.assertEqual(scope['lint'], {'harness/packages/nexus-core': ['src/a.ts']})
 
     def test_snapshot_runs_for_its_inputs(self) -> None:
         """重放快照（#1556）不是改到的檔的同名測試：`snapshot/` 目錄、重放模型、真模型提供者與它的設定列、wire、會話日誌的寫法改了都要排到它。"""
-        snapshot = {'apps/harness': ['src/snapshot/snapshot.test.ts']}
+        snapshot = {'harness/apps/harness': ['src/snapshot/snapshot.test.ts']}
         for path in (
-            'apps/harness/src/snapshot/scenarios/tool-round-trip/input.json',
-            'apps/harness/src/snapshot/scenarios/tool-round-trip/recorded.json',
+            'harness/apps/harness/src/snapshot/scenarios/tool-round-trip/input.json',
+            'harness/apps/harness/src/snapshot/scenarios/tool-round-trip/recorded.json',
             'apps/harness/src/snapshot/scenarios/tool-round-trip/snapshot/session.v52.jsonl',
-            'apps/harness/src/snapshot/scenarios/approval-resume/patch.yml',
-            'apps/harness/src/snapshot/harness.ts',
-            'apps/harness/src/llm-replay.ts',
-            'apps/harness/src/live-model.ts',
-            'apps/harness/src/jsonl-session-store.ts',
-            'apps/harness/src/session-log-budget.ts',
-            'apps/harness/src/settings/replay-model.ts',
-            'apps/harness/src/settings/live-model.ts',
-            'packages/nexus-wire/src/index.ts',
-            'packages/nexus-core/src/session-log.ts',
-            'packages/nexus-core/src/session-store.ts',
+            'harness/apps/harness/src/snapshot/scenarios/approval-resume/patch.yml',
+            'harness/apps/harness/src/snapshot/harness.ts',
+            'harness/apps/harness/src/llm-replay.ts',
+            'harness/apps/harness/src/live-model.ts',
+            'harness/apps/harness/src/jsonl-session-store.ts',
+            'harness/apps/harness/src/session-log-budget.ts',
+            'harness/apps/harness/src/settings/replay-model.ts',
+            'harness/apps/harness/src/settings/live-model.ts',
+            'harness/packages/nexus-wire/src/index.ts',
+            'harness/packages/nexus-core/src/session-log.ts',
+            'harness/packages/nexus-core/src/session-store.ts',
         ):
             with self.subTest(path=path):
                 tests = self.scope([path], {path, plan_ci.SNAPSHOT_TEST})['tests']
-                self.assertIn('src/snapshot/snapshot.test.ts', tests.get('apps/harness', []))
+                self.assertIn('src/snapshot/snapshot.test.ts', tests.get('harness/apps/harness', []))
 
         # `snapshot/` 以外，觸發路徑旁的測試檔或無關的檔不排快照。
-        for path in ('apps/harness/src/live-model.test.ts', 'packages/nexus-wire/src/a.test.ts', 'apps/harness/src/other.ts'):
+        for path in ('harness/apps/harness/src/live-model.test.ts', 'packages/nexus-wire/src/a.test.ts', 'apps/harness/src/other.ts'):
             with self.subTest(path=path):
                 tests = self.scope([path], {path, plan_ci.SNAPSHOT_TEST})['tests']
-                self.assertNotIn('src/snapshot/snapshot.test.ts', tests.get('apps/harness', []))
+                self.assertNotIn('src/snapshot/snapshot.test.ts', tests.get('harness/apps/harness', []))
 
         # 快照測試這一版不在了（例如搬走）就不排，跟同名規則一樣只排存在的檔。
-        self.assertEqual(self.scope(['apps/harness/src/llm-replay.ts'], {'apps/harness/src/llm-replay.ts'})['tests'], {})
+        self.assertEqual(self.scope(['harness/apps/harness/src/llm-replay.ts'], {'harness/apps/harness/src/llm-replay.ts'})['tests'], {})
         self.assertEqual(
             self.scope(['apps/harness/src/snapshot/scenarios/a/input.json'], {plan_ci.SNAPSHOT_TEST})['tests'],
             snapshot,
         )
 
     def test_web_design_guards_run_for_web_source_and_styles(self) -> None:
-        """web 的設計護欄（#2757）不是改到的檔的同名測試：動到 `apps/web/src` 的 tsx、css 或顏色 token 的產生器都要排到它們。"""
-        guards = ['apps/web/src/components/ui/local-edits.test.ts', 'apps/web/src/styles/design-system.test.ts']
+        """web 的設計護欄（#2757）不是改到的檔的同名測試：動到 `web/src` 的 tsx、css 或顏色 token 的產生器都要排到它們。"""
+        guards = ['web/src/components/ui/local-edits.test.ts', 'web/src/styles/design-system.test.ts']
         expected = ['src/components/ui/local-edits.test.ts', 'src/styles/design-system.test.ts']
 
         def tests(path: str) -> dict:
@@ -1216,37 +1216,37 @@ class LightScope(unittest.TestCase):
 
         for path in (
             'apps/web/src/components/composer.tsx',
-            'apps/web/src/vendor/solid-glass/components/ui/button.tsx',
-            'apps/web/src/styles/theme.css',
-            'apps/web/src/index.css',
-            'apps/web/tokengen/generate.mjs',
+            'web/src/vendor/solid-glass/components/ui/button.tsx',
+            'web/src/styles/theme.css',
+            'web/src/index.css',
+            'web/tokengen/generate.mjs',
         ):
             with self.subTest(path=path):
-                self.assertEqual(tests(path), {'apps/web': expected})
+                self.assertEqual(tests(path), {'web': expected})
 
         # 測試檔、不畫畫面的 ts、web 以外的 tsx 與說明文件不排。
         for path in (
             'apps/web/src/components/composer.test.tsx',
             'apps/web/src/lib/thread-title.ts',
-            'apps/web/COMPONENTS.md',
-            'apps/web/guard/main.tsx',
+            'web/COMPONENTS.md',
+            'web/guard/main.tsx',
             'packages/nexus-core/src/a.tsx',
         ):
             with self.subTest(path=path):
-                self.assertNotIn('src/styles/design-system.test.ts', tests(path).get('apps/web', []))
+                self.assertNotIn('src/styles/design-system.test.ts', tests(path).get('web', []))
 
         # 跟同名規則排到的測試併在一起，不重複。
-        changed = ['apps/web/src/styles/design-system.test.ts', 'apps/web/src/c.tsx']
+        changed = ['web/src/styles/design-system.test.ts', 'apps/web/src/c.tsx']
         existing = {*changed, 'apps/web/src/c.test.tsx'}
         self.assertEqual(
             plan_ci.light(changed, self.NAMES, lambda p: p in existing, guards)['tests'],
-            {'apps/web': ['src/c.test.tsx', *expected]},
+            {'web': ['src/c.test.tsx', *expected]},
         )
 
     def test_web_structure_guards_run_for_web_ts_sources(self) -> None:
-        """web 的結構護欄（#2883）掃整個 `apps/web/src`：只改 `.ts` 也要排到，新增、搬動、刪除都算。"""
+        """web 的結構護欄（#2883）掃整個 `web/src`：只改 `.ts` 也要排到，新增、搬動、刪除都算。"""
         guards = plan_ci.WEB_STRUCTURE_GUARDS
-        expected = sorted(g[len('apps/web/') :] for g in guards)
+        expected = sorted(g[len('web/') :] for g in guards)
 
         def tests(changed: list[str], existing: set[str] | None = None) -> dict:
             present = set(guards) if existing is None else existing
@@ -1254,36 +1254,36 @@ class LightScope(unittest.TestCase):
 
         for path in ('apps/web/src/features/x/foo.ts', 'apps/web/src/features/x/foo.tsx', 'apps/web/src/lib/a.ts'):
             with self.subTest(path=path):
-                self.assertEqual(tests([path], {path, *guards}), {'apps/web': expected})
+                self.assertEqual(tests([path], {path, *guards}), {'web': expected})
 
         # 刪檔：檔已不在，護欄照排（刪檔也會弄壞 import）。
-        self.assertEqual(tests(['apps/web/src/features/x/gone.ts']), {'apps/web': expected})
+        self.assertEqual(tests(['apps/web/src/features/x/gone.ts']), {'web': expected})
 
         # 只改測試檔、`.d.ts`、css、web 以外的 ts 都不因此排結構護欄。
         for path in (
             'apps/web/src/features/x/foo.test.ts',
             'apps/web/src/features/x/foo.test.tsx',
             'apps/web/src/env.d.ts',
-            'apps/web/src/styles/theme.css',
+            'web/src/styles/theme.css',
             'apps/harness/src/a.ts',
         ):
             with self.subTest(path=path):
-                result = tests([path], {path, *guards}).get('apps/web', [])
+                result = tests([path], {path, *guards}).get('web', [])
                 self.assertFalse(set(expected) & set(result), result)
 
         # 護欄檔不存在就不排。
         self.assertEqual(tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts'}), {})
         self.assertEqual(
-            tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts', guards[0]}), {'apps/web': ['src/architecture.test.ts']}
+            tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts', guards[0]}), {'web': ['src/architecture.test.ts']}
         )
 
     def test_web_structure_guards_merge_with_design_guards(self) -> None:
-        design = ['apps/web/src/styles/design-system.test.ts']
-        existing = {'apps/web/src/styles/theme.css', *design, *plan_ci.WEB_STRUCTURE_GUARDS}
+        design = ['web/src/styles/design-system.test.ts']
+        existing = {'web/src/styles/theme.css', *design, *plan_ci.WEB_STRUCTURE_GUARDS}
         # css 只排設計護欄。
         self.assertEqual(
-            plan_ci.light(['apps/web/src/styles/theme.css'], self.NAMES, lambda p: p in existing, design)['tests'],
-            {'apps/web': ['src/styles/design-system.test.ts']},
+            plan_ci.light(['web/src/styles/theme.css'], self.NAMES, lambda p: p in existing, design)['tests'],
+            {'web': ['src/styles/design-system.test.ts']},
         )
         # tsx 兩組都排。
         existing.add('apps/web/src/c.tsx')
@@ -1291,8 +1291,8 @@ class LightScope(unittest.TestCase):
         self.assertEqual(
             tests,
             {
-                'apps/web': sorted(
-                    g[len('apps/web/') :] for g in [*design, *plan_ci.WEB_STRUCTURE_GUARDS]
+                'web': sorted(
+                    g[len('web/') :] for g in [*design, *plan_ci.WEB_STRUCTURE_GUARDS]
                 )
             },
         )
@@ -1304,9 +1304,9 @@ class LightScope(unittest.TestCase):
 
     def test_web_design_guards_are_the_style_tests_on_disk(self) -> None:
         guards = plan_ci.web_design_guards()
-        self.assertIn('apps/web/src/styles/design-system.test.ts', guards)
-        self.assertIn('apps/web/src/components/ui/local-edits.test.ts', guards)
-        self.assertTrue(all(g.startswith('apps/web/src/') and g.endswith('.test.ts') for g in guards))
+        self.assertIn('web/src/styles/design-system.test.ts', guards)
+        self.assertIn('web/src/components/ui/local-edits.test.ts', guards)
+        self.assertTrue(all(g.startswith('web/src/') and g.endswith('.test.ts') for g in guards))
 
     def test_docs_only_needs_no_install(self) -> None:
         self.assertFalse(plan_ci.needs_node(self.scope(['docs/a.md', 'AGENTS.md'])))
@@ -1397,7 +1397,7 @@ class NodeModulesCache(unittest.TestCase):
         for part in ('runner.os', 'runner.arch', 'inputs.node-version', "'pnpm-lock.yaml'", "'pnpm-workspace.yaml'"):
             with self.subTest(part=part):
                 self.assertIn(part, key)
-        for manifest in ("'package.json'", "'packages/*/package.json'", "'apps/*/package.json'", "'vendor/*/package.json'"):
+        for manifest in ("'package.json'", "'harness/packages/*/package.json'", "'apps/*/package.json'", "'harness/vendor/*/package.json'"):
             with self.subTest(manifest=manifest):
                 self.assertIn(manifest, key)
 
@@ -1405,7 +1405,7 @@ class NodeModulesCache(unittest.TestCase):
         self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
         self.assertEqual(self.save['with']['key'], '${{ steps.modules.outputs.cache-primary-key }}')
         # 型別檢查的快取由 ci.yml 另外存取，混進來會讓它跟著 lockfile 的鍵走。
-        self.assertIn('!packages/*/node_modules/.cache', self.save['with']['path'].split())
+        self.assertIn('!harness/packages/*/node_modules/.cache', self.save['with']['path'].split())
 
     def test_install_runs_on_both_paths(self) -> None:
         install = next(s for s in self.steps if s.get('name') == '安裝相依套件')
@@ -1418,8 +1418,8 @@ class NodeModulesCache(unittest.TestCase):
 
     def test_vendor_declarations_follow_their_source(self) -> None:
         # 命中時不跑 prepare，宣告檔只能從快取來；鍵若不含 vendor 的 src 與 tsconfig，改了它們仍會命中舊的宣告檔。
-        self.assertIn('vendor/*/lib/types', self.restore['with']['path'].split())
-        for part in ("'vendor/*/tsconfig.json'", "'vendor/*/src/**'"):
+        self.assertIn('harness/vendor/*/lib/types', self.restore['with']['path'].split())
+        for part in ("'harness/vendor/*/tsconfig.json'", "'harness/vendor/*/src/**'"):
             with self.subTest(part=part):
                 self.assertIn(part, self.restore['with']['key'])
 

@@ -1,0 +1,167 @@
+/**
+ * 組裝點這一側的假 MCP server：一個真的走 stdio 的子行程。
+ *
+ * 與 `harness/packages/nexus-plugin-mcp` 那一支分工不同，不是複製品。那一支驗的是 plugin 自己
+ * （命名、註冊、關機）；這一支只提供**外部資料**，讓 [`mcp.test.ts`](./mcp.test.ts) 驗
+ * Phase 2 的主路徑驗收——agent 經 MCP 讀到東西、再經基座內建的 `write_file` 寫進虛擬
+ * 檔案系統。它刻意住在 `harness/apps/harness`：plugin 套件不得 import harness，反向借用測試素材
+ * 也會把那條界線弄糊。
+ *
+ * 由 `mcp.test.ts` 以 `node --import tsx <這個檔>` 啟動。
+ */
+
+import { appendFileSync, writeFileSync } from 'node:fs';
+
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+
+/** 這台 server 手上的「外部資料」。測試斷言它一路到得了對話裡。 */
+export const CHANGELOG = 'deepagents 1.13.1 沒有內建 MCP，接入走 @langchain/mcp-adapters。';
+
+const server = new McpServer({ name: 'nexus-harness-fixture', version: '0.0.0' });
+
+server.registerTool(
+  'fetch_changelog',
+  {
+    description: '從外部取得一則變更紀錄。',
+    inputSchema: { project: z.string().describe('專案名') },
+  },
+  ({ project }) => ({ content: [{ type: 'text', text: `${project}：${CHANGELOG}` }] }),
+);
+
+// MCP 的 `isError`：工具本身失敗（不是協定層的錯）。agent 看到的要帶 `Error: ` 前綴、`status: 'error'`，與其他失敗的工具一致
+// （#1074：plugin 拿 server 的原文拋錯，前綴由圍堵補上）。
+export const FAILURE_TEXT = 'upstream exploded: 503';
+server.registerTool('fail', { description: '一定失敗，回 isError。', inputSchema: {} }, () => ({
+  isError: true,
+  content: [{ type: 'text', text: FAILURE_TEXT }],
+}));
+
+/**
+ * 核准宣告的驗收用（#1622）：量的是 **server 這一側有沒有收到 `tools/call`**，不是 client 看到什麼。`FIXTURE_CALL_LOG` 指一個檔，
+ * 這兩支每被呼叫一次就往裡面附加一行 raw name；沒設就不記。環境變數經那一列的 `connection.env` 傳進來。
+ */
+const CALL_LOG = process.env['FIXTURE_CALL_LOG'];
+const recordCall = (rawName: string): void => {
+  if (CALL_LOG !== undefined) appendFileSync(CALL_LOG, `${rawName}\n`);
+};
+
+/** 會寫東西的那一支：宣告成要問。 */
+export const RECORD_ORDER = 'record_order';
+server.registerTool(
+  RECORD_ORDER,
+  { description: '登記一筆訂單。', inputSchema: { item: z.string().describe('品項') } },
+  ({ item }) => {
+    recordCall(RECORD_ORDER);
+    return { content: [{ type: 'text', text: `已登記：${item}` }] };
+  },
+);
+
+/**
+ * 查詢的那一支，名字刻意帶句點：public name 會被換字並補指紋（`publicToolName`），`exempt` 寫的是 raw name，
+ * 拿 public name 去掉前綴來比就對不上。
+ */
+export const SEARCH_ORDERS = 'orders.search';
+server.registerTool(
+  SEARCH_ORDERS,
+  { description: '查訂單。', inputSchema: { query: z.string().describe('查什麼') } },
+  ({ query }) => {
+    recordCall(SEARCH_ORDERS);
+    return { content: [{ type: 'text', text: `${query}：查無資料` }] };
+  },
+);
+
+/**
+ * 回**空的** `content` 陣列的那一支（#1562）：MCP 允許工具什麼都不回（只做事、沒有可講的結果）。`projectNonText`
+ * （`harness/packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列不換，ToolMessage 的 content 留著 `[]`，模型端點收到的
+ * 工具訊息就是空的——驗收看的是下一個請求裡那則工具訊息被補成 `(no output)`。
+ */
+export const EMPTY_RESULT = 'empty_result';
+server.registerTool(
+  EMPTY_RESULT,
+  { description: '做完就好，沒有東西可以回。', inputSchema: {} },
+  () => ({ content: [] }),
+);
+
+/**
+ * 停止的驗收用（#1985）：一支慢查詢與一份讀很慢的資源，量的是 **server 這一側有沒有收到取消**。只在設了 `FIXTURE_SLOW_LOG`
+ * 時掛上（資源會讓這台多宣告 `resources` 能力）。被呼叫時往那個檔附加 `started`，請求的中止訊號舉起來（client 送了
+ * `notifications/cancelled`）時附加 `cancelled` 並回，否則睡滿 {@link SLOW_QUERY_MS} 才回。
+ */
+export const SLOW_QUERY = 'slow_query';
+export const SLOW_REPORT_URI = 'slow://report';
+export const SLOW_QUERY_MS = 15_000;
+const SLOW_LOG = process.env['FIXTURE_SLOW_LOG'];
+
+/** 等到被取消或睡滿；被取消時記一行。 */
+async function slowly(signal: AbortSignal, log: string): Promise<void> {
+  appendFileSync(log, 'started\n');
+  const cancelled = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), SLOW_QUERY_MS);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      { once: true },
+    );
+  });
+  if (cancelled) appendFileSync(log, 'cancelled\n');
+}
+
+if (SLOW_LOG !== undefined) {
+  server.registerTool(
+    SLOW_QUERY,
+    { description: '一支很慢的查詢。', inputSchema: { query: z.string().describe('查什麼') } },
+    async ({ query }, extra) => {
+      await slowly(extra.signal, SLOW_LOG);
+      return { content: [{ type: 'text', text: `${query}：查完了` }] };
+    },
+  );
+  server.registerResource(
+    'slow-report',
+    SLOW_REPORT_URI,
+    { mimeType: 'text/plain' },
+    async (uri, extra) => {
+      await slowly(extra.signal, SLOW_LOG);
+      return { contents: [{ uri: uri.href, text: '報表產好了' }] };
+    },
+  );
+}
+
+/**
+ * 憑證遮蔽的驗收用（#3000 T7）：把子行程環境裡指名的變數原樣回出來，驗成功結果裡的憑證值有沒有被遮。
+ */
+server.registerTool(
+  'read_env',
+  {
+    description: '回出環境變數的值。',
+    inputSchema: { names: z.array(z.string()).describe('變數名') },
+  },
+  ({ names }) => ({
+    content: [
+      { type: 'text', text: names.map((name) => `${name}=${process.env[name] ?? ''}`).join('\n') },
+    ],
+  }),
+);
+
+/**
+ * 停機整條路的驗收用（#3000 甲）：量的是 **宿主收機時有沒有送 SIGTERM 給這個子行程、它有沒有走完**。`FIXTURE_TERM_DIR` 指一個目錄：
+ * 起來時把 pid 寫進 `pid`，收到 SIGTERM 時寫 `term` 再結束。沒設就不掛。
+ * 設了的夾具不會因 stdin 關閉而自己結束：宿主收線先關 stdin、等 `STDIN_GRACE` 讓子行程自己走，自己走了就不送 SIGTERM；
+ * 這個夾具要靠宿主的 SIGTERM 才停，量得到的才是那一步。
+ */
+const TERM_DIR = process.env['FIXTURE_TERM_DIR'];
+if (TERM_DIR !== undefined) {
+  writeFileSync(`${TERM_DIR}/pid`, String(process.pid));
+  process.on('SIGTERM', () => {
+    writeFileSync(`${TERM_DIR}/term`, 'SIGTERM');
+    process.exit(0);
+  });
+  // 掛著一個計時器，stdin EOF 之後事件迴圈也不會清空。
+  setInterval(() => {}, 1 << 30);
+}
+
+await server.connect(new StdioServerTransport());

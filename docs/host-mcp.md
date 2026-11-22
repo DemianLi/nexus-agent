@@ -1,9 +1,9 @@
 # 宿主的 MCP 連線（HTTP 與 stdio）
 
-Rust 宿主（`native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio）的現有行為（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D）。
+Rust 宿主（`harness/native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio）的現有行為（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D）。
 寫給要改這一層、或要對照 TS 的人。管理者怎麼設一列 MCP，看 [`operations.md`](operations.md)，這裡不重寫。
 
-**現況：`process-model: per-thread` 的對話行程連 MCP 一律走這裡**（#3000）：`packages/nexus-plugin-mcp` 在有宿主時用 `host-pool.ts` 的門面（長得像 SDK `Client`）向 `mcp/client` `open` 一份綁定、用 `call` 送請求，
+**現況：`process-model: per-thread` 的對話行程連 MCP 一律走這裡**（#3000）：`harness/packages/nexus-plugin-mcp` 在有宿主時用 `host-pool.ts` 的門面（長得像 SDK `Client`）向 `mcp/client` `open` 一份綁定、用 `call` 送請求，
 連線在宿主，整台共用。單行程 serve 與 CLI 沒有宿主，仍由 TS 自己連。
 per-thread 的前台與對話行程啟動時的試組都不連線（`mcp-trial-host-bridge.ts`）：只驗設定與組裝，所以起不來的 server 不會讓那一列在試組掉，連得上連不上到 thread 組裝時才知道。
 寫入口（`plugin enable`、`plugin config set` 等，`plugin-trial.ts`）是另一個行程，拿不到 serve 的 `--process-model` 旗標，不分行程模型，試掛時一律自己連一次、組完就收。
@@ -93,7 +93,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 這些出現在送回對話行程的文字裡，一律換成 `[redacted]`。收集的入口只有一個：`Redactor::new`（`host/src/mcp/redact.rs`），`Pool` 把池的秘密（代理帳密）與這一列的合起來交進去；憑證值（stdio 的 `credentialEnv`、HTTP 的 `credentialHeaders`）都走同一個入口。
 每個值連同百分號、form 與 JSON 跳脫形式在原文上一次替換。夠長（至少 8 個 code point）的值遮所有輸出；更短的只可能是設定裡的字面值，只遮錯誤與診斷，不遮成功結果。`Server` 與 `Redactor` 的 `Debug` 不印這些。
 
-**query 一律收：** 設定格式裡網址沒有憑證引用，宿主分不出 query 的哪些值是憑證，所以全部的 query 值當秘密收，代價是字面值也會在成功結果裡被遮，不會漏。header 沒有這個近似：TS 要送 `credentialHeaders`，宿主只收它標的。送的人是 harness 的 `hostHttpConnection`（`apps/harness/src/mcp-host-http-row.ts`）：憑證引用列為憑證，直接寫成字串的 `Authorization`／`Proxy-Authorization`（D359）自動列為憑證（prefix `""`，整個值），其他字串 header 是字面值。判斷只在 `@nexus/plugin-mcp` 的 `hostHeaders` 一處，TS 外掛自己連線的 `redactorFor` 也用它；宿主對這兩個名字另有一道防線（在 `headers` 而沒列就整列拒絕）。送宿主之前 harness 先把每個字面值 header 修掉頭尾空白（整個值），憑證引用只修憑證、prefix 原樣。對話行程那一側由 `mcp-host-row-service.ts` 呼叫它（#3000）。
+**query 一律收：** 設定格式裡網址沒有憑證引用，宿主分不出 query 的哪些值是憑證，所以全部的 query 值當秘密收，代價是字面值也會在成功結果裡被遮，不會漏。header 沒有這個近似：TS 要送 `credentialHeaders`，宿主只收它標的。送的人是 harness 的 `hostHttpConnection`（`harness/apps/harness/src/mcp-host-http-row.ts`）：憑證引用列為憑證，直接寫成字串的 `Authorization`／`Proxy-Authorization`（D359）自動列為憑證（prefix `""`，整個值），其他字串 header 是字面值。判斷只在 `@nexus/plugin-mcp` 的 `hostHeaders` 一處，TS 外掛自己連線的 `redactorFor` 也用它；宿主對這兩個名字另有一道防線（在 `headers` 而沒列就整列拒絕）。送宿主之前 harness 先把每個字面值 header 修掉頭尾空白（整個值），憑證引用只修憑證、prefix 原樣。對話行程那一側由 `mcp-host-row-service.ts` 呼叫它（#3000）。
 
 ## 一代連線
 
@@ -152,12 +152,12 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - **代理照政策走**：政策由呼叫端解析好交進來（`{ httpProxy?, httpsProxy?, noProxy? }`），宿主不讀環境變數；
   直連時也明確關掉 reqwest 讀環境代理，走代理時環境的 `NO_PROXY` 也不讓請求繞過它（`tls_env.rs` 設了 `HTTPS_PROXY`、`NO_PROXY` 驗）。代理只收 `http:`／`https:`，SOCKS 拒絕。
 - **比對規則同 TS `policy.ts`**：迴圈位址一律直連；放行清單只比主機名與埠，開頭的 `.` 或 `*.` 視為同一件事，`*` 放行全部，不比 CIDR。
-  兩邊跑同一份 `native/sandbox-spawner/proxy-vectors.json`（TS 端是 `packages/nexus-core/src/http-proxy/policy-vectors.test.ts`）。
+  兩邊跑同一份 `harness/native/sandbox-spawner/proxy-vectors.json`（TS 端是 `harness/packages/nexus-core/src/http-proxy/policy-vectors.test.ts`）。
 - 代理帳密：網址帶了帳密時送 `Proxy-Authorization`（Basic）。代理拒絕時錯誤不帶帳密，有測試。
 
 ## stdio
 
-宿主收的是 TS 算好的成品（`apps/harness/src/mcp-host-stdio-row.ts` 的 `hostStdioConnection`），不重算政策、不疊自己的環境：
+宿主收的是 TS 算好的成品（`harness/apps/harness/src/mcp-host-stdio-row.ts` 的 `hostStdioConnection`），不重算政策、不疊自己的環境：
 
 | 欄位 | 內容 |
 | --- | --- |
@@ -194,7 +194,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 ## 跟 TS 的差距
 
 - stdio 的探活在宿主做（〈橋〉），TS 那一側的 `probeLiveness` 在宿主路徑上沒有作用：它探的是門面的 `listTools`，回 open 當下的清單，不送到 server。
-- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 也直接失敗，沒有 SSE 可退，`packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`），
+- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 也直接失敗，沒有 SSE 可退，`harness/packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
 - 對話行程那一側的列由 harness 的 `mcp-host-row-service.ts` 產生（`MCP_HOST_ROW_SERVICE`，包 `hostHttpConnection`／`hostStdioConnection`，沒有斜線的 `command` 照 `PATH` 解成絕對路徑）：沒送 `credentialHeaders` 的 HTTP 列，帶任何 header 時在宿主這裡整列拒絕（見〈設定〉）。

@@ -47,7 +47,7 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(typescript@5.9.3)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  apps/harness:
+  harness/apps/harness:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -204,7 +204,7 @@ importers:
         version: link:../../packages/nexus-tools
       '@nexus/web':
         specifier: workspace:*
-        version: link:../web
+        version: link:../../../web
       '@nexus/wire':
         specifier: workspace:*
         version: link:../../packages/nexus-wire
@@ -285,7 +285,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  apps/web:
+  web:
     devDependencies:
       '@base-ui/react':
         specifier: 1.9.0
@@ -301,13 +301,13 @@ importers:
         version: 5.3.0
       '@nexus/core':
         specifier: workspace:*
-        version: link:../../packages/nexus-core
+        version: link:../harness/packages/nexus-core
       '@nexus/plugin-commands':
         specifier: workspace:*
-        version: link:../../packages/nexus-plugin-commands
+        version: link:../harness/packages/nexus-plugin-commands
       '@nexus/wire':
         specifier: workspace:*
-        version: link:../../packages/nexus-wire
+        version: link:../harness/packages/nexus-wire
       '@shadcn/react':
         specifier: ^0.3.1
         version: 0.3.1(@types/react@19.2.18)(react@19.2.8)
@@ -441,7 +441,7 @@ importers:
         specifier: 3.5.44
         version: 3.5.44(typescript@5.9.3)
 
-  packages/nexus-agent-loop:
+  harness/packages/nexus-agent-loop:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -472,7 +472,7 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
-  packages/nexus-approval-channel:
+  harness/packages/nexus-approval-channel:
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -499,7 +499,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-brand:
+  harness/packages/nexus-brand:
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -514,7 +514,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-commands:
+  harness/packages/nexus-commands:
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -544,7 +544,7 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
-  packages/nexus-core:
+  harness/packages/nexus-core:
     dependencies:
       '@eslint-community/regexpp':
         specifier: ^4.12.2
@@ -605,7 +605,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-deque:
+  harness/packages/nexus-deque:
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -620,7 +620,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-feedback:
+  harness/packages/nexus-feedback:
     devDependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -641,7 +641,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-fs:
+  harness/packages/nexus-fs:
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -668,7 +668,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-goal:
+  harness/packages/nexus-goal:
     devDependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -689,7 +689,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-host-bridge:
+  harness/packages/nexus-host-bridge:
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -704,7 +704,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-permission-presets:
+  harness/packages/nexus-permission-presets:
     devDependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -728,7 +728,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-agent-instructions:
+  harness/packages/nexus-plugin-agent-instructions:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -771,7 +771,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-ask-user:
+  harness/packages/nexus-plugin-ask-user:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -820,7 +820,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-commands:
+  harness/packages/nexus-plugin-commands:
     dependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -839,7 +839,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-echo:
+  harness/packages/nexus-plugin-echo:
     dependencies:
       zod:
         specifier: ^4.6.7
@@ -870,7 +870,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-feedback:
+  harness/packages/nexus-plugin-feedback:
     dependencies:
       zod:
         specifier: ^4.6.7
@@ -910,7 +910,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-goal:
+  harness/packages/nexus-plugin-goal:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -965,7 +965,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-mcp:
+  harness/packages/nexus-plugin-mcp:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1032,7 +1032,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-memory:
+  harness/packages/nexus-plugin-memory:
     dependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -1054,7 +1054,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-permission-presets:
+  harness/packages/nexus-plugin-permission-presets:
     dependencies:
       '@nexus/wire':
         specifier: workspace:*
@@ -1109,7 +1109,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-plan-mode:
+  harness/packages/nexus-plugin-plan-mode:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1167,7 +1167,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-present:
+  harness/packages/nexus-plugin-present:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1219,7 +1219,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-quickjs:
+  harness/packages/nexus-plugin-quickjs:
     dependencies:
       quickjs-emscripten:
         specifier: ^0.32.0
@@ -1253,7 +1253,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-sandbox-policy:
+  harness/packages/nexus-plugin-sandbox-policy:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1314,7 +1314,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-skills:
+  harness/packages/nexus-plugin-skills:
     dependencies:
       zod:
         specifier: ^4.6.7
@@ -1354,7 +1354,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-submit-record:
+  harness/packages/nexus-plugin-submit-record:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1406,7 +1406,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-system-prompt:
+  harness/packages/nexus-plugin-system-prompt:
     dependencies:
       zod:
         specifier: ^4.6.7
@@ -1437,7 +1437,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-telemetry-otel:
+  harness/packages/nexus-plugin-telemetry-otel:
     dependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -1477,7 +1477,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-time-context:
+  harness/packages/nexus-plugin-time-context:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1517,7 +1517,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-todo:
+  harness/packages/nexus-plugin-todo:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1563,7 +1563,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-token-meter:
+  harness/packages/nexus-plugin-token-meter:
     dependencies:
       '@nexus/wire':
         specifier: workspace:*
@@ -1603,7 +1603,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-trajectory:
+  harness/packages/nexus-plugin-trajectory:
     dependencies:
       '@nexus/wire':
         specifier: workspace:*
@@ -1646,7 +1646,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-plugin-workspace-changes:
+  harness/packages/nexus-plugin-workspace-changes:
     dependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -1680,7 +1680,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-projections:
+  harness/packages/nexus-projections:
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -1710,7 +1710,7 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
-  packages/nexus-sdk:
+  harness/packages/nexus-sdk:
     dependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -1744,7 +1744,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-session:
+  harness/packages/nexus-session:
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -1771,7 +1771,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-skills:
+  harness/packages/nexus-skills:
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -1801,7 +1801,7 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
-  packages/nexus-subprocess:
+  harness/packages/nexus-subprocess:
     devDependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -1819,7 +1819,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-system-prompt:
+  harness/packages/nexus-system-prompt:
     devDependencies:
       '@nexus/sdk':
         specifier: workspace:*
@@ -1837,7 +1837,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-timeout:
+  harness/packages/nexus-timeout:
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -1852,7 +1852,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-tool-adapter:
+  harness/packages/nexus-tool-adapter:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1892,7 +1892,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-tool-result:
+  harness/packages/nexus-tool-result:
     devDependencies:
       '@nexus/core':
         specifier: workspace:*
@@ -1910,7 +1910,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  packages/nexus-tools:
+  harness/packages/nexus-tools:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -1941,7 +1941,7 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
-  packages/nexus-wire:
+  harness/packages/nexus-wire:
     dependencies:
       '@langchain/protocol':
         specifier: ^0.0.18
@@ -1966,7 +1966,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  vendor/cordis:
+  harness/vendor/cordis:
     dependencies:
       '@standard-schema/spec':
         specifier: ^1.1.0
@@ -1985,7 +1985,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  vendor/include:
+  harness/vendor/include:
     dependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -2010,7 +2010,7 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  vendor/loader:
+  harness/vendor/loader:
     dependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -2026,7 +2026,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  vendor/logger-console:
+  harness/vendor/logger-console:
     dependencies:
       '@nexus/cordis':
         specifier: workspace:*

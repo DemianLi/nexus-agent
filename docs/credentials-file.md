@@ -7,10 +7,10 @@
 格式在 [#1961](https://github.com/DemianLi/nexus-agent/issues/1961) 對齊 dsh，釘在 v1。本文件只記錄現況，不重新設計；
 標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的條目是該 issue 改過的行為。
 
-- 程式：`apps/harness/src/credentials.ts`（解析器與服務）、`apps/harness/src/owner-only.ts`（權限位元）。不帶檔名的 `:行號` 指 `credentials.ts`。
-  Rust 宿主的是 `native/sandbox-spawner/host/src/credentials/`（`mod.rs` 解析器與 `Store`，`scalar.rs` 照 core schema 解純量）。
-- 樣本：[`native/sandbox-spawner/credentials-vectors.json`](../native/sandbox-spawner/credentials-vectors.json)。
-  TS 用 `apps/harness/src/credentials-vectors.test.ts` 跑，Rust 用 `native/sandbox-spawner/host/tests/credentials.rs` 跑同一份，兩邊結果要一樣。
+- 程式：`harness/apps/harness/src/credentials.ts`（解析器與服務）、`harness/apps/harness/src/owner-only.ts`（權限位元）。不帶檔名的 `:行號` 指 `credentials.ts`。
+  Rust 宿主的是 `harness/native/sandbox-spawner/host/src/credentials/`（`mod.rs` 解析器與 `Store`，`scalar.rs` 照 core schema 解純量）。
+- 樣本：[`harness/native/sandbox-spawner/credentials-vectors.json`](../harness/native/sandbox-spawner/credentials-vectors.json)。
+  TS 用 `harness/apps/harness/src/credentials-vectors.test.ts` 跑，Rust 用 `harness/native/sandbox-spawner/host/tests/credentials.rs` 跑同一份，兩邊結果要一樣。
 
 ## 樣本檔
 
@@ -21,10 +21,10 @@
 | `reject[]` | `text` 要被拒絕，原因是 `reason`。有 `code` 的，訊息要以 `YAML 錯誤 <code>` 開頭：`reason` 是 `yaml` 時用它分出是哪一種、釘住〈拒絕〉的先後。有 `secret` 的，拒絕訊息裡不能出現那個字串。 |
 | `modes[]` | 八進位的權限（字串），`accept` 表示一份內容合法的檔在這個權限下能不能讀。 |
 | `mcpValue[]` | MCP 憑證值的檢查（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。`use` 是 `env` 或 `header`，`value` 是原值；`accept` 為真時修剪後的值要等於 `trimmed`，為假時拒絕原因要是 `reason`（`empty`、`too-short`、`nul`、`header-chars`），有 `secret` 的，拒絕訊息裡不能出現它。TS 與 Rust 都跑。 |
-| `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主與 TS 都跑同一組：TS 的遮蔽器是 `packages/nexus-plugin-mcp/src/redact.ts`，執行端在同目錄的 `redact.test.ts`（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。 |
-| `stdioRow[]` | TS 的 `hostStdioConnection`（`apps/harness/src/mcp-host-stdio-row.ts`）輸出的 stdio 那一列（#2570 D2b-2）。`input` 是它的輸入（`credentialEnv` 的每個值是憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。 |
+| `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主與 TS 都跑同一組：TS 的遮蔽器是 `harness/packages/nexus-plugin-mcp/src/redact.ts`，執行端在同目錄的 `redact.test.ts`（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。 |
+| `stdioRow[]` | TS 的 `hostStdioConnection`（`harness/apps/harness/src/mcp-host-stdio-row.ts`）輸出的 stdio 那一列（#2570 D2b-2）。`input` 是它的輸入（`credentialEnv` 的每個值是憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。 |
 | `stdioHost[]` | 只給 Rust：`connection` 直接交 `Server::parse`，`error` 是 `null`（要收）或訊息要含的字。釘宿主自己的拒絕（相對路徑、沒有 credentialEnv、credentialEnv 不在 env、憑證值沒修剪或太短）。 |
-| `httpRow[]` | TS 的 `hostHttpConnection`（`apps/harness/src/mcp-host-http-row.ts`）輸出的 HTTP 那一列（#2570）。`input` 是 `url`、設定的 `headers`（字串或 `{ credential, prefix? }`）與 `credentials`（名字 → 憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。`echoes[]` 是回顯：`scope`（`result` 或 `error`）、`text`、`expect`；TS 用 `redactorFor`（`redactText`／`scrubText`）、Rust 用 `Server::secrets()` 建的 `Redactor` 各遮一次，輸出都要等於同一個 `expect`，所以對話行程自己連與經宿主連，對同一份設定遮出來的字相同。守的是名單與切法一致，不是兩個實作完全等價（網址 query 的短值、成功結果與錯誤出口的差別各自的預期寫在 `echoes` 的 `scope`）。 |
+| `httpRow[]` | TS 的 `hostHttpConnection`（`harness/apps/harness/src/mcp-host-http-row.ts`）輸出的 HTTP 那一列（#2570）。`input` 是 `url`、設定的 `headers`（字串或 `{ credential, prefix? }`）與 `credentials`（名字 → 憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。`echoes[]` 是回顯：`scope`（`result` 或 `error`）、`text`、`expect`；TS 用 `redactorFor`（`redactText`／`scrubText`）、Rust 用 `Server::secrets()` 建的 `Redactor` 各遮一次，輸出都要等於同一個 `expect`，所以對話行程自己連與經宿主連，對同一份設定遮出來的字相同。守的是名單與切法一致，不是兩個實作完全等價（網址 query 的短值、成功結果與錯誤出口的差別各自的預期寫在 `echoes` 的 `scope`）。 |
 | `httpHost[]` | 只給 Rust：同 `stdioHost[]`，釘宿主 HTTP 的拒絕（`headers` 不空卻沒給 `credentialHeaders`、`authorization`／`proxy-authorization` 沒列、header 值不合法）。 |
 | `credentialHeaderNames` | 字串陣列：宿主要求列進 `credentialHeaders` 的 header 名（小寫）。TS 的 `AUTHORIZATION_HEADER_NAMES` 與 Rust 的 `AUTHORIZATION_HEADERS` 各有一支測試與它相等；加名字先改這一行，另一邊馬上紅。 |
 
@@ -178,7 +178,7 @@ refs:
 ## 內容不進環境變數
 
 解析出的值只在服務回傳的物件上，不寫進行程的環境變數，子行程不會順手繼承到（跟兩份 `.env` 不同，那兩份會寫）。
-唯一的例外是 MCP 那一列用 `{ credential: <名字> }` 明著引用的，只交給那一台 server（`packages/nexus-plugin-mcp/src/credentials.ts`）。
+唯一的例外是 MCP 那一列用 `{ credential: <名字> }` 明著引用的，只交給那一台 server（`harness/packages/nexus-plugin-mcp/src/credentials.ts`）。
 
 測試：`credentials.test.ts`「受管檔的值不會被寫進 target」；`mcp-credentials-wire.test.ts`。
 
@@ -206,7 +206,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
     值取原始位元組：能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串。`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）；
   - 網址的 query：整串、每個值的原樣與解碼後，全部收；TS 的 `redactorFor` 同樣收，**唯一不同：不到 8 個 code point 的值不收**，整串、原樣、解碼後各個形式各自算（所以非 ASCII 的短值，百分號編碼後的原樣若有 8 個以上字元就收）。理由是 TS 的斷線判斷讀遮過的訊息，`v=2` 的 `2` 會切斷 `MCP error -32000`；整段 `?…` 的比對仍遮逐字回顯；
   - 代理的帳密；
-  - stdio：`connection.credentialEnv` 標的那幾個環境變數的值，**只有這些**。TS 看得到每個值的來源（`apps/harness/src/mcp-host-stdio-row.ts`），所以 stdio 只收明列的，不像 query 那樣「分不出來就全收」：`PATH`、`HOME` 這類清洗後的父環境與字面值都不進，成功結果不會被遮壞。每個值照上面的值檢查。
+  - stdio：`connection.credentialEnv` 標的那幾個環境變數的值，**只有這些**。TS 看得到每個值的來源（`harness/apps/harness/src/mcp-host-stdio-row.ts`），所以 stdio 只收明列的，不像 query 那樣「分不出來就全收」：`PATH`、`HOME` 這類清洗後的父環境與字面值都不進，成功結果不會被遮壞。每個值照上面的值檢查。
 
   憑證值（stdio 的 `credentialEnv`、HTTP 的 `credentialHeaders`）都走同一個入口。**query：** 宿主收到的是 TS 解好的成品，分不出一個值是憑證還是設定裡寫死的字面值，所以 query 值一律當秘密收（設定格式裡網址沒有憑證引用），字面值也會被遮；header 只收 `credentialHeaders` 標的。
   網址的 `user:password@` 設定時就拒（見 `docs/host-mcp.md`），不進入口；遮蔽器本身不分來源，帶 userinfo 的字串照樣遮（樣本「網址 userinfo 的帳密」）。
@@ -251,7 +251,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 
 ## 沒有寫入路徑
 
-nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harness/src` 與 `packages/*/src` 裡沒有寫入它的程式，`credentials.ts` 只有
+nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`harness/apps/harness/src` 與 `harness/packages/*/src` 裡沒有寫入它的程式，`credentials.ts` 只有
 `statSync` 與 `readFileSync`。
 將來加寫入路徑時，檔以 `0600`、目錄以 `0700` 建立（`owner-only.ts` 的 `PRIVATE_FILE_MODE`、`PRIVATE_DIR_MODE`）。
 
@@ -281,7 +281,7 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harne
   `resolveUsableKey` 呼叫）。修掉頭尾空白，只收可列印 ASCII、不含空白。
 - **MCP 那一列引用的值**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）：`mcp-credential.ts` 的 `assertUsableMcpCredential`，由
   `assembly-root.ts` 的 `mcpCredentialsOf` 呼叫。plugin 那一側把這把憑證代入到哪裡（`env` 或 `header`，看這一列的 transport）傳過來
-  （`packages/nexus-plugin-mcp/src/credentials.ts` 的 `McpCredentials.resolve`）。
+  （`harness/packages/nexus-plugin-mcp/src/credentials.ts` 的 `McpCredentials.resolve`）。
   - 兩條路都修掉頭尾空白（JS 的 `String.prototype.trim`），修完是空的就拒絕。
   - `env`：只擋 NUL。
   - `header`：照 Node http 驗 header 值的規則，只收 `[\t\x20-\x7E\x80-\xFF]`。這裡先擋，是因為 HTTP transport 走 `fetch`，

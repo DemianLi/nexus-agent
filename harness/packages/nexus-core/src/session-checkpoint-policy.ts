@@ -1,0 +1,171 @@
+/**
+ * 一輪之中的**耐久檢查點**：模型請求之前、工具動手之前，先把這次呼叫所屬的那一份
+ * 會話日誌排空到耐久（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。
+ *
+ * ## 照 dsh
+ *
+ * `@deepseek-ai/dsh-session-checkpoint-policy`（`packages/session/session-checkpoint-policy/src/index.ts`，
+ * `477b4f4`），掛在 base bundle 上——cli、web-app、headless、sdk-app、acp-app 都疊在 base 上，
+ * 所以都有；只有自成一棵的 `sdk-minimal` 沒有。三個點：
+ *
+ * 1. **`llm/stream`**：模型請求建起來之前，把記好的請求前綴排空。root 與子代理都是。
+ * 2. **`tools/execute`**：`exec.parent === undefined` 的呼叫都排空（root 與子代理的工具呼叫），之後若這一輪已經
+ *    中止，就回「還沒動手就被中止」，不叫工具本體。`exec.parent` 是 PTC 的內層分派才設的傳輸 token，
+ *    子代理的迴圈直發的呼叫不帶它（dsh `agent-loop/src/tool-calls.ts:68-80`），所以子代理的工具也排空。
+ * 3. **`agent/pre-step`**：每一步之前，把上一步的回覆與工具結果排空。
+ *
+ * 排空被拒時**下游不動手**（fail-closed）：模型不被叫、工具本體不跑。錯誤照常往外拋——模型那一側
+ * 讓這一輪失敗；工具那一側被最外層的圍堵收成一則錯誤結果交給模型（{@link ./containment.ts}）。
+ *
+ * ## 為什麼要有它
+ *
+ * 持久化的寫回窗口（{@link ./session-persistence.ts}，10ms）只限制「有意的批次等待」，不限制
+ * 事件迴圈排不排得到它。實測（#599）：腳本模型一整輪都是 microtask，窗口到一輪結束都沒觸發過；
+ * 行程第一條 thread 還有約 240ms 的同步工作。所以畫面回到就緒的那一刻，**整輪還只在記憶體
+ * 裡**，這時一個強制結束（收尾中的第二次 Ctrl-C、`kill -9`、當機）會讓整輪連檔案都不見。
+ * 有了它，使用者那句話與之前每一步都在模型被叫之前落地，強制結束最多丟最後一步的尾巴——
+ * 同 dsh（它也沒有「一輪結束、回報閒置之前」那一點）。
+ *
+ * ## 偏離
+ *
+ * 1. **三個點併成兩個掛點。** dsh 的 `llm/stream` 與 `agent/pre-step` 在我們這裡是同一個時刻：
+ *    一步就是一次模型呼叫，`wrapModelCall` 在它之前。所以一顆 `wrapModelCall` 兩件都做——排空的
+ *    是這一步之前所有已記的事件。{@link ./model-calls.ts | 起訖紀錄器} 排在這一顆外層，但 `model/start`
+ *    等到請求快照才寫，跟快照一起在送出前由 {@link ./request-snapshot.ts} 再排空一次。
+ * 2. **摘要那次呼叫之前不排空。** dsh 的摘要走 `llm/stream`，所以也會先排空；我們的摘要器在
+ *    自己的 `wrapModelCall` 裡直接 `request.model.invoke`（{@link ./summarization.ts}），不經過
+ *    這一顆。緊接著的那次主呼叫仍會先排空，摘要寫下的事件在那時一起落地。
+ * 3. **載體是 `@nexus/core` 的子路徑**，不是獨立套件；建構與排位由 fold 決定，這個條目只負責
+ *    「在場、可以被 disabled」，同 {@link ./model-usage.ts | modelUsagePlugin}。
+ *
+ * ## 副作用：工具卡多半收到兩顆 `tool-finished`
+ *
+ * 工具那一側多一層 `async` 包在本體外面，本體回來之後，圍堵記 `tool/result` 會晚幾個 microtask；
+ * 而基座那顆 `tool-finished` 是在本體裡發的。所以 `harness/apps/harness` 的 pump 多半先轉發基座那顆、
+ * 日誌判定後到，於是補發一顆同 id 的更正（`thread-pump.ts` 的 `#noteVerdict`，#296）。兩種先後
+ * pump 本來就都處理，卡的終態不變；變的是線上多一顆 frame、卡上的文字晚一拍。實測（#599，腳本
+ * 模型一輪兩次 echo）：關掉這一顆時兩次呼叫分別走「pump 自己收卡」與「判定先到」，開著時兩次都
+ * 走「補發更正」。
+ *
+ * ## 代價
+ *
+ * 每次模型呼叫與每次工具呼叫（root 與子代理）多一次排空：把還在佇列裡的事件交給後端 `append`。
+ * JSONL 後端（`harness/apps/harness/src/jsonl-session-store.ts`）**每一批 `append` 都寫滿並 fsync 一次**
+ * （[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)，同 dsh 的 `appendLines`），所以
+ * fsync 次數等於**批數**：背景窗口的排空與檢查點的排空都算，不是等於檢查點數。排空本身不再多一次
+ * `datasync`——把手已經開著時，{@link ./session-persistence.ts | SessionPersistenceCoordinator.flush}
+ * 往後端的 `flush` 只確認實體化。沒接持久化時（手搭的組裝、多數測試）排空者一位都沒有，立刻 resolve。
+ *
+ * @module
+ */
+
+import { createMiddleware } from 'langchain';
+import type { AgentMiddleware } from './base-types.js';
+import { withModelCallStep } from './model-call-step.js';
+import type { NexusPlugin } from './plugin.js';
+import type { SessionLookup } from './registry.js';
+import type { SessionLog } from './session-log.js';
+import { TOOL_ABORTED_BEFORE_DISPATCH } from './tool-error-codes.js';
+import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
+import { TOOL_ABORTED_BEFORE_DISPATCH_REASON, toolCallAborted } from './turn-cancel.js';
+
+/** middleware 的名字。不撞基座任何一個。 */
+export const SESSION_CHECKPOINT_MIDDLEWARE_NAME = 'nexusSessionCheckpoint';
+
+/**
+ * 這個條目的 plugin 名，照 dsh 的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}，同 {@link ./model-usage.ts | MODEL_USAGE_PLUGIN_NAME}。
+ */
+export const SESSION_CHECKPOINT_PLUGIN_NAME = 'session-checkpoint-policy';
+
+/** 檢查點要的兩件事：問「這次呼叫屬於哪一份」，與把那一份排空。就是註冊表的 `sessions` 通道。 */
+export interface CheckpointSessions {
+  forCall(config: unknown): SessionLookup;
+  flush(log: SessionLog): Promise<void>;
+}
+
+/** 從 middleware 拿到的 request 上讀 `configurable`，包一層給 `forCall`（同 `model-usage.ts`）。 */
+function callConfigOf(request: unknown): { configurable: unknown } {
+  return {
+    configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+  };
+}
+
+/**
+ * 工具那一半：`tools/execute` 的 core 外層監聽者。動手之前排空這次呼叫所屬的那一份日誌，排空之後再問一次中止，
+ * 中止了就短路成「還沒動手就被中止」。找不到日誌就照常放行。無狀態，root 與每個子代理共用同一位。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 掛在 `tools/execute` 外層的監聽者。
+ */
+export function createSessionCheckpointListener(
+  sessions: CheckpointSessions,
+): CoreToolListener<'tools/execute'> {
+  return async (_exec, next, call) => {
+    const found = sessions.forCall({ configurable: call.configurable });
+    // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
+    // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
+    // 日誌上卻沒有那次呼叫。
+    if (found.kind !== 'ok') return next();
+    await sessions.flush(found.log);
+    // 排空要時間，那段時間裡使用者可能按了停止：排空之後再問一次，中止了就不叫工具本體。
+    // 外層的 guard 只在動手前與動手後問，擋不到這一段。
+    if (toolCallAborted(call)) return ABORTED_BEFORE_DISPATCH;
+    return next();
+  };
+}
+
+/** 經 `tools/execute` 造出來之後跟 `turn-cancel.ts` 的 `abortedBeforeDispatch` 逐位元組相同，`session-checkpoint-policy.test.ts` 釘著。 */
+const ABORTED_BEFORE_DISPATCH: PipelineExecuteResult = Object.freeze({
+  kind: 'message',
+  content: `${TOOL_ERROR_PREFIX}${TOOL_ABORTED_BEFORE_DISPATCH_REASON}`,
+  isError: true,
+  error: Object.freeze({ name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH }),
+});
+
+/**
+ * 建模型那一半的 middleware（工具那一半是 {@link createSessionCheckpointListener}）。**無狀態，一份實例走遍 root 與每個子代理**：
+ * 日誌每次從執行期的 `configurable` 現算，同 {@link ./model-calls.ts | createModelCallRecorder}。
+ *
+ * 找不到日誌（`forCall` 不是 `ok`）就不排空、照常放行：那次呼叫本來就沒有日誌可以寫，
+ * 同其他掛在 `forCall` 上的 middleware。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 可以放進 middleware 陣列的實例。
+ */
+export function createSessionCheckpointMiddleware(sessions: CheckpointSessions): AgentMiddleware {
+  return withModelCallStep(
+    async (request, handler) => {
+      const found = sessions.forCall(callConfigOf(request));
+      if (found.kind === 'ok') await sessions.flush(found.log);
+      return handler(request);
+    },
+    (wrapModelCall) =>
+      createMiddleware({
+        name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
+}
+
+/**
+ * 耐久檢查點的**設定條目**。
+ *
+ * **一顆服務都不註冊，`apply` 是空的**，形狀同 {@link ./model-usage.ts | modelUsagePlugin}：
+ * 沒有設定，而且組裝點也沒有旗標，所以只有兩態——條目被明著關掉、或照預設掛著。這一列
+ * 因此**沒有 `config`**：寫了也沒有作用（`parseEntryConfig` 照 dsh 原樣交下去、不驗，產品路徑上啟動時印警告）。
+ *
+ * **關掉它之後**：日誌只在寫回窗口到期與收尾時落地。正常收尾一樣完整，但收尾被打斷時，
+ * 丟的可能是整輪（見檔頭「為什麼要有它」）。沒有任何測試會因此紅——那正是要寫下來的理由。
+ */
+export const sessionCheckpointPlugin: NexusPlugin = {
+  name: SESSION_CHECKPOINT_PLUGIN_NAME,
+  apply() {
+    // 空的，而且是承重的空：這一顆唯一的作用是「在場、可以被 disabled」。
+  },
+};
+
+export default sessionCheckpointPlugin;

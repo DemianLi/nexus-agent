@@ -1,0 +1,471 @@
+/**
+ * 配套入口的**結構規則**：誰該有、長什麼樣、接線接完了沒有。
+ *
+ * 這裡一條產品規則都沒有——它不看檢查寫得對不對，只看**機械判得出來**的東西。這一點是抄
+ * dsh 的，而且是它明說的自我約束：門禁不從方法名或 helper 呼叫推斷語意品質
+ * （`docs/subsystems/invariants.md:59`）。
+ *
+ * **它守的是「發布了配套入口的 package，長得對不對」，不再守「每個 package 都要有」。**
+ * 原本的規則是後者（加第十個 package 的人會被擋下來），所以二十個 package 各有一個配套入口，
+ * 其中十二個是空 installer；#974 把這條規則翻了面：沒有可檢的關係就**不要發布**配套入口，
+ * 空 installer 本身是違規。理由是 dsh 在 `2026-08-28-omit-unneeded-invariant-companions`
+ * 就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量移除
+ * （`.docs/invariant-companions-decision-2026-10-03.md`）。**剩下的八個是暫時保留、觀察中**。
+ * 代價是新增 package 的人不再被這裡擋下來——那條目的消失了，是接受的。
+ *
+ * 對讀日期 2026-08-30，dsh `cd5ef8148158c3a752a658978873241fdf8e2bbc`
+ * （`scripts/package-invariants.ts` 與 `scripts/verify-package-invariants.ts`）。
+ * 與 dsh 逐條的異同見 [#108](https://github.com/DemianLi/nexus-agent/issues/108)。
+ *
+ * **有一條規則現在是反過來的，那是登記過的偏離**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 第一刀）：dsh 的規則是「**不得** default export」，我們是「**必須** default export 一顆
+ * 具名常數」。理由是前提不同，不是口味——dsh 的配套入口把 `name` / `inject` / `apply` 散在
+ * 頂層（`packages/core/session/src/invariant.ts:18`），**模組的 namespace 自己就是那顆
+ * plugin**，而 loader 的 `unwrapExports` 是 `exports.default ?? exports`
+ * （`harness/vendor/loader/src/index.ts:189`），所以在那邊一個 default export 會把真的 plugin 遮掉。
+ * 我們的配套入口匯出的是一顆巢狀的 `NexusPlugin` 常數，namespace 不是 plugin，遮不掉任何
+ * 東西；而 `cordis.yml` 的 `name` 要靠 default export 才指得到它。舊規則的理由（「specifier
+ * 要留得住具名匯出」）沒有被丟掉，它變成「default export 必須是**本檔具名 export 的常數**」
+ * 那一條。
+ *
+ * @module
+ */
+
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import ts from 'typescript';
+
+/**
+ * owner 只在 `harness/packages/*` 裡找。
+ *
+ * `harness/apps/harness` 與 `web` 也是 workspace package，兩個都沒有 `src/invariant.ts`，
+ * 照舊不會被當成 owner。**這是選的，不是 glob 字串默默決定的**：dsh 的 owner 樹在
+ * `packages` 底下**再深一層**，app 本來就不在裡面；而配套入口認領的是「這個 package 擁有的跨筆關係」，
+ * 組裝點與前端不擁有任何人的關係——它們是消費者。理由與另外兩個選項見 #108。
+ */
+const OWNER_ROOT = 'packages';
+
+/** 一個 owner，與它參與規則的那幾個檔案。 */
+export interface PackageInvariantOwner {
+  /** repo 相對的 package 目錄。 */
+  readonly dir: string;
+  /** repo 相對的 `package.json`。 */
+  readonly manifestPath: string;
+  /** repo 相對的配套入口原始檔。 */
+  readonly sourcePath: string;
+  /** manifest 宣告的 package 名。 */
+  readonly packageName: string;
+}
+
+/** 一條違規，路徑一律 repo 相對。 */
+export interface PackageInvariantViolation {
+  readonly path: string;
+  readonly message: string;
+}
+
+interface PackageManifest {
+  name?: string;
+  exports?: Record<string, unknown>;
+}
+
+/**
+ * 找出 repo 根。
+ *
+ * **找不到就拋，不回退。** 這個模組所有規則都建立在「掃得到全部的 package」上，根算錯的話
+ * 底下每一條都會安靜地掃到空的清單，然後回報零違規——一個永遠綠的 gate 比沒有 gate 更糟。
+ *
+ * @returns repo 根的絕對路徑。
+ * @throws 往上找不到 `pnpm-workspace.yaml`，訊息帶著找過的起點。
+ */
+export function repositoryRoot(): string {
+  const start = dirname(fileURLToPath(import.meta.url));
+  let current = start;
+  for (;;) {
+    if (existsSync(join(current, 'pnpm-workspace.yaml'))) return current;
+    const parent = dirname(current);
+    if (parent === current) {
+      throw new Error(`從 ${start} 往上找不到 pnpm-workspace.yaml，無法決定 repo 根`);
+    }
+    current = parent;
+  }
+}
+
+/**
+ * 掃出每一個 owner：**發布了配套入口的 package**。
+ *
+ * 判準是「有 `src/invariant.ts`」**或**「`exports["./invariant"]` 有宣告」，兩者擇一就算。
+ * 只認其中一個的話，另一個忘了寫的那一半會被靜默跳過——所以任何一半在場都先收進來，
+ * 兩半對不對得上留給 {@link collectPackageInvariantViolations}。**什麼都沒有的 package
+ * 不是 owner，也不是違規**：沒有可檢的關係就不要發布（#974）。
+ *
+ * @param root - repo 根，省略即 {@link repositoryRoot} 的結果。
+ * @returns 依目錄名排序的 owner。
+ * @throws 某個 owner 的 `package.json` 沒有 `name`——沒有名字就對不出它該註冊什麼。
+ */
+export function packageInvariantOwners(root: string = repositoryRoot()): PackageInvariantOwner[] {
+  const ownerRoot = resolve(root, OWNER_ROOT);
+  return readdirSync(ownerRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `${OWNER_ROOT}/${entry.name}`)
+    .filter((dir) => existsSync(resolve(root, dir, 'package.json')))
+    .sort()
+    .flatMap((dir) => {
+      const manifestPath = `${dir}/package.json`;
+      const manifest = readManifest(resolve(root, manifestPath));
+      const sourcePath = `${dir}/src/invariant.ts`;
+      const publishes =
+        existsSync(resolve(root, sourcePath)) || manifest.exports?.['./invariant'] !== undefined;
+      if (!publishes) return [];
+      if (manifest.name === undefined || manifest.name === '') {
+        throw new Error(`${manifestPath}：package 必須宣告 name`);
+      }
+      return [{ dir, manifestPath, sourcePath, packageName: manifest.name }];
+    });
+}
+
+/**
+ * 跑完全部規則。
+ *
+ * @param root - repo 根，省略即 {@link repositoryRoot} 的結果。
+ * @returns 全部違規；空陣列代表通過。
+ */
+export function collectPackageInvariantViolations(
+  root: string = repositoryRoot(),
+): PackageInvariantViolation[] {
+  const violations: PackageInvariantViolation[] = [];
+  for (const owner of packageInvariantOwners(root)) {
+    checkManifest(owner, readManifest(resolve(root, owner.manifestPath)), violations);
+    checkSource(owner, root, violations);
+  }
+  return violations;
+}
+
+/** 給命令列印的一行。 */
+export function formatPackageInvariantViolation(violation: PackageInvariantViolation): string {
+  return `${violation.path}: ${violation.message}`;
+}
+
+function readManifest(path: string): PackageManifest {
+  return JSON.parse(readFileSync(path, 'utf8')) as PackageManifest;
+}
+
+function addViolation(
+  violations: PackageInvariantViolation[],
+  path: string,
+  message: string,
+): void {
+  violations.push({ path, message });
+}
+
+/**
+ * manifest 這一側只剩一條。
+ *
+ * dsh 那邊 `checkManifest` 還檢 `files` 要發布 `lib/invariant.js`、註冊表要同時是
+ * `workspace:^` 的 peer 與 dev 相依，`checkBuild` 再檢 bundle entry 與 project references。
+ * **那些規則檢的產物當時在我們這裡不存在**：沒有 `lib/`、沒有 `files`、不發布，`build` 就是
+ * `tsc --noEmit`。整組退到「不檢」，偏離標註見 #108 與該張動工的 PR 內文。#1502 之後有了 `lib/` 與 `files`，
+ * 但 `files` 與 bundle entry 的檢查仍不在這一條：要補是另一張卡。
+ */
+function checkManifest(
+  owner: PackageInvariantOwner,
+  manifest: PackageManifest,
+  violations: PackageInvariantViolation[],
+): void {
+  // 出貨的入口是編好的 `lib/invariant.js`（#1502，由 `src/invariant.ts` 編出）；原始檔在不在由 checkSource 查。
+  const expected = './lib/invariant.js';
+  if (manifest.exports?.['./invariant'] !== expected) {
+    addViolation(
+      violations,
+      owner.manifestPath,
+      `exports["./invariant"] 必須是 ${JSON.stringify(expected)}——沒有它，` +
+        `${JSON.stringify(`${owner.packageName}/invariant`)} 這個 specifier 解析不到`,
+    );
+  }
+}
+
+function checkSource(
+  owner: PackageInvariantOwner,
+  root: string,
+  violations: PackageInvariantViolation[],
+): void {
+  const absolute = resolve(root, owner.sourcePath);
+  if (!existsSync(absolute)) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      `缺配套入口——manifest 宣告了 exports["./invariant"]，但這個檔不存在；` +
+        '沒有可檢的關係就把那一格也拿掉',
+    );
+    return;
+  }
+  const sourceText = readFileSync(absolute, 'utf8');
+  if (sourceText.includes('@generated')) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      '配套入口必須是手寫的，不得帶 @generated 標記——生成出來的檢查沒有人在擁有它',
+    );
+  }
+
+  const sourceFile = ts.createSourceFile(
+    absolute,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const constants = topLevelStringConstants(sourceFile);
+  const registrations: string[] = [];
+  const installerNames: string[] = [];
+  const unresolved: number[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && isInvariantRegistration(node.expression)) {
+      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+      const nameArgument = node.arguments[0];
+      const packageName =
+        nameArgument === undefined ? undefined : stringValue(nameArgument, constants);
+      if (packageName === undefined) unresolved.push(line);
+      else registrations.push(packageName);
+
+      const installer = node.arguments[1];
+      if (installer !== undefined && ts.isIdentifier(installer))
+        installerNames.push(installer.text);
+      else {
+        addViolation(
+          violations,
+          owner.sourcePath,
+          `第 ${line} 行：register 的第二個引數必須是本檔宣告的 InvariantInstaller 常數，` +
+            '不能是就地寫的函式——就地寫的沒有名字，下面每一條都對不到它',
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  for (const line of unresolved) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      `第 ${line} 行：register 的 package 名必須解析得到本檔的頂層字串常數`,
+    );
+  }
+  if (registrations.length !== 1 || registrations[0] !== owner.packageName) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      `必須正好註冊自己的 package 名 ${JSON.stringify(owner.packageName)}，` +
+        `實際看到 ${JSON.stringify(registrations)}`,
+    );
+  }
+  if (!hasExportedPluginFactory(sourceFile)) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      '必須具名 export 一個 create*InvariantPlugin 工廠——沒有它，這個配套入口誰都掛不上',
+    );
+  }
+  const defaultExport = defaultExportOf(sourceFile);
+  if (defaultExport === undefined) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      'default export 缺一個：`cordis.yml` 的 `name` 靠它解析，缺了的話這個配套入口在設定檔裡' +
+        '叫不出名字（#454）。寫成 `export default <那顆 NexusPlugin 常數>;`',
+    );
+  } else if (!topLevelExportedConstants(sourceFile).has(defaultExport)) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      'default export 必須是本檔具名 export 的常數' +
+        `（實際是 ${defaultExport === '' ? '就地寫的宣告或運算式' : JSON.stringify(defaultExport)}）` +
+        '——沒有第二個名字的話，設定檔載到的東西在程式碼裡指不著',
+    );
+  }
+
+  const installerName = installerNames[0];
+  if (installerName !== undefined) {
+    checkInstaller(owner, sourceFile, installerName, violations);
+  }
+}
+
+/**
+ * installer 本身的兩條。
+ *
+ * **dsh 要求那個常數叫 `install`，我們不要求。** `@nexus/core` 的叫 `sessionInvariant`，
+ * 而為了滿足 gate 去改產品程式碼的名字是本末倒置——#108 的拍板選了「規則照我們的約定」。
+ * 這裡改成用 register 實際傳進去的那個識別字去找宣告，效果一樣：檢的還是那個真的被註冊的
+ * 函式，不是碰巧同名的另一個。
+ */
+function checkInstaller(
+  owner: PackageInvariantOwner,
+  sourceFile: ts.SourceFile,
+  installerName: string,
+  violations: PackageInvariantViolation[],
+): void {
+  const declaration = topLevelVariableStatement(sourceFile, installerName);
+  const installer =
+    declaration === undefined ? undefined : installerFunction(declaration.initializer);
+  if (declaration === undefined || installer === undefined) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      `註冊的 ${JSON.stringify(installerName)} 必須是本檔頂層宣告的函式`,
+    );
+    return;
+  }
+
+  if (ts.isBlock(installer.body) && installer.body.statements.length === 0) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      '空 installer 沒有任何檢查——沒有可檢的關係就不要發布配套入口：' +
+        '把這個檔與 manifest 的 exports["./invariant"] 一起拿掉（#974）',
+    );
+    return;
+  }
+
+  const reporter = installer.parameters[1]?.name;
+  if (reporter === undefined || !ts.isIdentifier(reporter)) {
+    addViolation(violations, owner.sourcePath, '非空 installer 的第二個參數必須是綁定的違規回報器');
+    return;
+  }
+  if (!usesIdentifier(installer.body, reporter.text)) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      `非空 installer 必須真的用到它的回報器 ${JSON.stringify(reporter.text)}——` +
+        '觀察了卻不回報，等於沒有檢查',
+    );
+  }
+}
+
+function topLevelVariableStatement(
+  sourceFile: ts.SourceFile,
+  name: string,
+): { statement: ts.VariableStatement; initializer: ts.Expression } | undefined {
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === name &&
+        declaration.initializer !== undefined
+      ) {
+        return { statement, initializer: declaration.initializer };
+      }
+    }
+  }
+  return undefined;
+}
+
+function installerFunction(
+  node: ts.Expression,
+): ts.ArrowFunction | ts.FunctionExpression | undefined {
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return node;
+  // `satisfies` / `as` 包起來的還是同一個函式。
+  if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return installerFunction(node.expression);
+  }
+  return undefined;
+}
+
+function usesIdentifier(node: ts.Node, name: string): boolean {
+  if (ts.isIdentifier(node) && node.text === name) return true;
+  return node.getChildren().some((child) => usesIdentifier(child, name));
+}
+
+function topLevelStringConstants(sourceFile: ts.SourceFile): ReadonlyMap<string, string> {
+  const constants = new Map<string, string>();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        declaration.initializer !== undefined &&
+        ts.isStringLiteral(declaration.initializer)
+      ) {
+        constants.set(declaration.name.text, declaration.initializer.text);
+      }
+    }
+  }
+  return constants;
+}
+
+function stringValue(
+  node: ts.Expression,
+  constants: ReadonlyMap<string, string>,
+): string | undefined {
+  if (ts.isStringLiteral(node)) return node.text;
+  if (ts.isIdentifier(node)) return constants.get(node.text);
+  return undefined;
+}
+
+/** `registry.invariants.register(...)` 這個形狀，不管前面那個物件叫什麼。 */
+function isInvariantRegistration(expression: ts.LeftHandSideExpression): boolean {
+  if (!ts.isPropertyAccessExpression(expression) || expression.name.text !== 'register') {
+    return false;
+  }
+  const target = expression.expression;
+  return ts.isPropertyAccessExpression(target) && target.name.text === 'invariants';
+}
+
+function hasExportedPluginFactory(sourceFile: ts.SourceFile): boolean {
+  return sourceFile.statements.some(
+    (statement) =>
+      ts.isFunctionDeclaration(statement) &&
+      statement.name !== undefined &&
+      /^create.*InvariantPlugin$/.test(statement.name.text) &&
+      hasExportModifier(statement),
+  );
+}
+
+/**
+ * default export 的識別字。
+ *
+ * **三種結果要分得開，因為訊息不一樣**：`undefined` 是「一個 default export 都沒有」，
+ * 空字串是「有 default export 但它不是一個識別字」（`export default { ... }`、
+ * `export default function ...`），其餘是那個識別字。第二種會落到「必須是本檔具名 export
+ * 的常數」那一條——**留得住具名匯出**正是這條規則反過來寫的那一版原本要守的東西
+ * （見 {@link checkSource} 那一段的註解）。
+ *
+ * @param sourceFile - 配套入口的 AST。
+ * @returns 識別字、空字串（有但不是識別字），或 `undefined`（沒有）。
+ */
+function defaultExportOf(sourceFile: ts.SourceFile): string | undefined {
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportAssignment(statement) && statement.isExportEquals !== true) {
+      return ts.isIdentifier(statement.expression) ? statement.expression.text : '';
+    }
+    const isDefaultDeclaration =
+      ts.canHaveModifiers(statement) &&
+      (ts.getModifiers(statement) ?? []).some(
+        (modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword,
+      );
+    if (isDefaultDeclaration) return '';
+  }
+  return undefined;
+}
+
+/** 本檔頂層 `export const` 宣告的名字。 */
+function topLevelExportedConstants(sourceFile: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement) || !hasExportModifier(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+    }
+  }
+  return names;
+}
+
+function hasExportModifier(statement: ts.Statement): boolean {
+  return ts.canHaveModifiers(statement)
+    ? (ts.getModifiers(statement) ?? []).some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      )
+    : false;
+}

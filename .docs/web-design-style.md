@@ -5,9 +5,9 @@
 > 這份給**人**看：nexus 的介面整體長什麼樣、每一條從哪裡來、參考過的元件庫各拿了什麼。它**不是規則的家**：
 >
 > - 值與現行規則在 [`web-ui-spec.md`](web-ui-spec.md)（下稱「規格」）。
-> - 新增元件該放哪、用什麼、什麼會被擋，在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)。
-> - 用詞在 [`apps/web/GLOSSARY.md`](../apps/web/GLOSSARY.md)。
-> - 色碼與對比度在 token 產生器的產物 [`apps/web/tokengen/token-table.md`](../apps/web/tokengen/token-table.md)。
+> - 新增元件該放哪、用什麼、什麼會被擋，在 [`apps/web/COMPONENTS.md`](../web/COMPONENTS.md)。
+> - 用詞在 [`apps/web/GLOSSARY.md`](../web/GLOSSARY.md)。
+> - 色碼與對比度在 token 產生器的產物 [`apps/web/tokengen/token-table.md`](../web/tokengen/token-table.md)。
 >
 > 下文舉的數字只是讓人有感覺，**以上面那幾份為準**。跟它們衝突時，改這份，不改那幾份。
 >

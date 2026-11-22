@@ -8,7 +8,7 @@ description: "審查與維護會話持久化型別變更的確認紀錄、對應
 
 這裡放已確認的會話持久化型別變更，以及每一筆的前驅。每筆紀錄把一個相容性決定綁在確切的生成型別圖上。檢查只用目前 checkout 裡的檔案，把目前的原始碼跟紀錄歷史比。
 
-照 dsh `docs/persistence-changes/README.zh.md`（`687f282e`）寫成；跟 dsh 不同的地方列在 [`persistence-changes.ts`](../../apps/harness/src/persistence-changes.ts) 檔頭。
+照 dsh `docs/persistence-changes/README.zh.md`（`687f282e`）寫成；跟 dsh 不同的地方列在 [`persistence-changes.ts`](../../harness/apps/harness/src/persistence-changes.ts) 檔頭。
 
 ## 目錄
 
@@ -22,7 +22,7 @@ description: "審查與維護會話持久化型別變更的確認紀錄、對應
 <a id="files-and-ownership"></a>
 ## 檔案與職責
 
-[型別圖](../persistence-schema.json)是正規化後的型別，由 [`persistence-schema.ts`](../../apps/harness/src/persistence-schema.ts) 從原始碼抽出。根涵蓋邏輯會話 header（`SessionHeader`）、事件封裝（`SessionEventEnvelope`）與 repo 裡宣告的每一種事件。被引用的型別一變，每個受影響的根的摘要都跟著變。
+[型別圖](../persistence-schema.json)是正規化後的型別，由 [`persistence-schema.ts`](../../harness/apps/harness/src/persistence-schema.ts) 從原始碼抽出。根涵蓋邏輯會話 header（`SessionHeader`）、事件封裝（`SessionEventEnvelope`）與 repo 裡宣告的每一種事件。被引用的型別一變，每個受影響的根的摘要都跟著變。
 
 每一筆帶日期的紀錄是同目錄的兩個檔：
 
@@ -61,7 +61,7 @@ pnpm --filter @nexus/harness run persistence-changes --record 2026-10-23-slug --
 
 一般事件可以加一個帶必填、非負整數 `data.version` 的酬載分支：新版本要比所有既有的酬載版本高，所有既有分支照上面明確允許的同版規則保持可讀。選填屬性的新增與必填改選填可以跟新版本一起引入；每個保留的分支各自比較。其他酬載變更要相容性審查。舊讀方可能拒收新的酬載版本。
 
-每一則同版說明都要講舊紀錄怎麼保持可讀、舊讀方怎麼處理新紀錄，包括不必明確給 `--decision` 的允許情形。日誌沒用到某個功能時要保留舊行為；可捨棄的功能要能安全略過；必要的功能要有有效的拒絕訊號。拒絕不支援的功能不能變成損壞恢復或尾端截斷。必填改選填時，說明讀方怎麼處理缺值。審查的人判斷行為與證據；檢查器驗聲明與型別分類。升版的紀錄同時照 [`session-store.ts`](../../packages/nexus-core/src/session-store.ts) 檔頭的升版紀錄走。
+每一則同版說明都要講舊紀錄怎麼保持可讀、舊讀方怎麼處理新紀錄，包括不必明確給 `--decision` 的允許情形。日誌沒用到某個功能時要保留舊行為；可捨棄的功能要能安全略過；必要的功能要有有效的拒絕訊號。拒絕不支援的功能不能變成損壞恢復或尾端截斷。必填改選填時，說明讀方怎麼處理缺值。審查的人判斷行為與證據；檢查器驗聲明與型別分類。升版的紀錄同時照 [`session-store.ts`](../../harness/packages/nexus-core/src/session-store.ts) 檔頭的升版紀錄走。
 
 讀方按屬性名拒收某個 JSON 欄位時，把那個屬性宣告成選填的 `never`，加上不帶參數的 `@persistenceReserved` 標記。抽取器會保留這個禁止的欄位，所以之後允許 JSON 值就算改既有欄位的型別。必填屬性或允許 JSON 值的屬性不能帶這個標記。沒標記的選填 `never` 與 `undefined` 屬性照舊省略。
 

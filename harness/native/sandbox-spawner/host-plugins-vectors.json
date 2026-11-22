@@ -1,0 +1,135 @@
+{
+  "description": "宿主插件清單的共用樣本（#3000 E4a、E4b）：TS 的 hostPluginRows（harness/apps/harness/src/host-plugins-file.ts）對 env 與 cwd 產生的列，要等於 file；宿主的 plugins::parse 與 mcp 插件的 build 讀同一份 file 都要收。mcp 那一列一律有，沒設 NODE_EXTRA_CA_CERTS 就不帶 roots。",
+  "cwd": "/srv/nexus",
+  "cases": [
+    {
+      "name": "沒設根",
+      "env": {},
+      "file": [
+        {
+          "name": "mcp",
+          "config": {}
+        }
+      ]
+    },
+    {
+      "name": "根只有空白",
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "   "
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {}
+        }
+      ]
+    },
+    {
+      "name": "只設代理沒設根：帶 proxy、不帶 roots",
+      "env": {
+        "HTTPS_PROXY": "http://proxy.corp.test:3128"
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {
+            "proxy": {
+              "httpsProxy": "http://proxy.corp.test:3128",
+              "noProxy": "localhost,127.0.0.1,::1,[::1]"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "只有根，相對路徑照 cwd 解",
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "certs/ca.pem"
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {
+            "roots": "/srv/nexus/certs/ca.pem"
+          }
+        }
+      ]
+    },
+    {
+      "name": "根加 https 代理與放行清單",
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "/etc/nexus/ca.pem",
+        "HTTPS_PROXY": "http://proxy.corp.test:3128",
+        "NO_PROXY": "intranet.corp.test"
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {
+            "roots": "/etc/nexus/ca.pem",
+            "proxy": {
+              "httpsProxy": "http://proxy.corp.test:3128",
+              "noProxy": "intranet.corp.test,localhost,127.0.0.1,::1,[::1]"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "只設 ALL_PROXY：兩個協定都用它",
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "/etc/nexus/ca.pem",
+        "ALL_PROXY": "http://all.corp.test:8080"
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {
+            "roots": "/etc/nexus/ca.pem",
+            "proxy": {
+              "httpProxy": "http://all.corp.test:8080",
+              "httpsProxy": "http://all.corp.test:8080",
+              "noProxy": "localhost,127.0.0.1,::1,[::1]"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "http 與 https 各一個代理",
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "/etc/nexus/ca.pem",
+        "HTTP_PROXY": "http://a.corp.test:3128",
+        "HTTPS_PROXY": "https://b.corp.test:8443"
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {
+            "roots": "/etc/nexus/ca.pem",
+            "proxy": {
+              "httpProxy": "http://a.corp.test:3128",
+              "httpsProxy": "https://b.corp.test:8443",
+              "noProxy": "localhost,127.0.0.1,::1,[::1]"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SOCKS 代理不接受：只有 roots",
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "/etc/nexus/ca.pem",
+        "HTTPS_PROXY": "socks5://proxy.corp.test:1080"
+      },
+      "file": [
+        {
+          "name": "mcp",
+          "config": {
+            "roots": "/etc/nexus/ca.pem"
+          }
+        }
+      ]
+    }
+  ]
+}

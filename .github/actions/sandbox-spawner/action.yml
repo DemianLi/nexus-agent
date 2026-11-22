@@ -1,6 +1,6 @@
 name: 沙箱 spawner
 description: >-
-  編沙箱 spawner（#1946，`native/sandbox-spawner/`，是個 workspace：spawner 與監督行程一個 package，宿主在 `host/` 另一個）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust
+  編沙箱 spawner（#1946，`harness/native/sandbox-spawner/`，是個 workspace：spawner 與監督行程一個 package，宿主在 `host/` 另一個）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust
   與這台架構的 musl target，跑 `cargo fmt --all --check` 與 clippy（警告即錯），編出貨的 release 版（靜態連結 musl），再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。
   給了 `bundle` 就把 release 執行檔與連進去的程式碼的授權全文打成 bundle（`bundle.sh`），包成 tar 上傳：upload-artifact 不保留
   執行權限，tar 保留。
@@ -33,7 +33,7 @@ runs:
   steps:
     - name: 安裝釘住的 Rust
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       run: |
         rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal \
           --component clippy --component rustfmt --target "$(uname -m)-unknown-linux-musl"
@@ -68,14 +68,14 @@ runs:
         path: |
           ~/.cargo/registry
           native/sandbox-spawner/target
-        key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/sandbox-spawner/Cargo.lock', 'native/sandbox-spawner/rust-toolchain.toml') }}
+        key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('harness/native/sandbox-spawner/Cargo.lock', 'harness/native/sandbox-spawner/rust-toolchain.toml') }}
     - if: inputs.cache == 'true' && inputs.test != 'true'
       uses: actions/cache/restore@v6
       with:
         path: |
           ~/.cargo/registry
           native/sandbox-spawner/target
-        key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/sandbox-spawner/Cargo.lock', 'native/sandbox-spawner/rust-toolchain.toml') }}
+        key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('harness/native/sandbox-spawner/Cargo.lock', 'harness/native/sandbox-spawner/rust-toolchain.toml') }}
     - name: 核心與 LSM
       shell: bash
       run: |
@@ -85,17 +85,17 @@ runs:
     - name: 格式
       if: inputs.test == 'true'
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       run: cargo fmt --all --check
     - name: clippy
       if: ${{ !cancelled() && inputs.test == 'true' }}
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       run: cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings
     # 出貨的形狀：不帶 test-hooks。
     - name: 編譯
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       run: cargo build --release --locked --workspace --target "$SPAWNER_TARGET"
     # `--no-fail-fast`：每個測試執行檔都跑完，整步仍以非零結束。cargo 預設遇到第一個紅的執行檔就不跑後面的，lib 一紅整合測試就看不到。
     # 兩輪：musl 那輪對著出貨的 libc 驗；不帶 target 那輪的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試
@@ -103,21 +103,21 @@ runs:
     - name: 測試（musl）
       if: inputs.test == 'true'
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       env:
         NEXUS_REQUIRE_LANDLOCK: '1'
       run: cargo test --locked --workspace --no-fail-fast --features test-hooks --target "$SPAWNER_TARGET"
     - name: 測試（glibc 的子行程）
       if: inputs.test == 'true'
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       env:
         NEXUS_REQUIRE_LANDLOCK: '1'
       run: cargo test --locked --workspace --no-fail-fast --features test-hooks
     - name: 打 bundle
       if: inputs.bundle != ''
       shell: bash
-      working-directory: native/sandbox-spawner
+      working-directory: harness/native/sandbox-spawner
       run: |
         ./bundle.sh "$RUNNER_TEMP/spawner-bundle"
         tar -cf "$RUNNER_TEMP/spawner-bundle.tar" -C "$RUNNER_TEMP/spawner-bundle" .

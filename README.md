@@ -10,7 +10,7 @@ deepagents 覆蓋，自建的是 plugin 統一註冊、結果校驗、可觀測�
 
 ## 架構
 
-**`apps/harness` 是組裝點**——它把一份 plugin 清單摺進 deepagents 的 agent，再接上三個入口。
+**`harness/apps/harness` 是組裝點**——它把一份 plugin 清單摺進 deepagents 的 agent，再接上三個入口。
 
 ```
 plugin 清單 ──fold──▶ agent ──┬──▶ CLI（一次性／REPL）
@@ -20,11 +20,11 @@ plugin 清單 ──fold──▶ agent ──┬──▶ CLI（一次性／REP
 
 | 位置 | 職責 |
 | --- | --- |
-| `packages/nexus-core` | `NexusPlugin` 契約：型別、manifest、`PluginRegistry`、fold、輸出校驗與圍堵 |
+| `harness/packages/nexus-core` | `NexusPlugin` 契約：型別、manifest、`PluginRegistry`、fold、輸出校驗與圍堵 |
 | `packages/nexus-plugin-*` | 各項能力，一個能力一個套件 |
-| `packages/nexus-wire` | harness 與 web 之間的傳輸型別 |
-| `apps/harness` | 組裝點：agent 工廠、訊息標準化、CLI 與 serve |
-| `apps/web` | Vite ＋ React 19 ＋ Tailwind v4 ＋ shadcn/ui |
+| `harness/packages/nexus-wire` | harness 與 web 之間的傳輸型別 |
+| `harness/apps/harness` | 組裝點：agent 工廠、訊息標準化、CLI 與 serve |
+| `web` | Vite ＋ React 19 ＋ Tailwind v4 ＋ shadcn/ui |
 
 pnpm workspace，Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
@@ -33,9 +33,9 @@ pnpm workspace，Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，�
 **開箱就有**，patch 也關不掉（CLI 與 serve 共用同一個組裝函式）：給了 `--workspace` 才掛的檔案圍堵與
 `/permission`（權限組合）、工作區改動紀錄。`ask_user_question` 與 `submit_record` 現在在下面那份清單裡，跟其他列一樣看得見、關得掉。
 
-**在出貨的清單裡**（[`apps/harness/cordis.yml`](apps/harness/cordis.yml)，用 patch 檔改，見 [`docs/operations.md`](docs/operations.md#plugin-清單)）：
+**在出貨的清單裡**（[`harness/apps/harness/cordis.yml`](harness/apps/harness/cordis.yml)，用 patch 檔改，見 [`docs/operations.md`](docs/operations.md#plugin-清單)）：
 
-| 能力 | 一句話 | 細節在 `packages/` |
+| 能力 | 一句話 | 細節在 `harness/packages/` |
 | --- | --- | --- |
 | 計劃模式 | 先探索再動手，計劃交出去等人批准；開關是 `/plan` | `nexus-plugin-plan-mode` |
 | 長期目標 | 一個會話記得住跨多輪的目標；開關是 `/goal` | `nexus-plugin-goal` |
@@ -99,7 +99,7 @@ format 與 lint、改到的測試檔加上同名測試檔），沒東西可查�
 `main` 的 push 一律全跑（判斷邏輯見 [`.github/scripts/plan_ci.py`](.github/scripts/plan_ci.py)）。
 全跑時以 `git diff` 決定要不要掃 TypeScript；有幾個非 TypeScript 的檔會觸發掃描，共通點是「測試會讀這個檔」：
 `docs/operations.md`（測試從它讀核准 fixture 的參數，[#490](https://github.com/DemianLi/nexus-agent/issues/490)）、
-`apps/harness/cordis.yml`（出貨的 plugin 清單，十七個測試檔真的拿它組 agent，
+`harness/apps/harness/cordis.yml`（出貨的 plugin 清單，十七個測試檔真的拿它組 agent，
 [#454](https://github.com/DemianLi/nexus-agent/issues/454)）
-與 `apps/harness/src/*.patch.yml`（patch 檔案，測試疊在出貨清單上組 agent，[#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
+與 `harness/apps/harness/src/*.patch.yml`（patch 檔案，測試疊在出貨清單上組 agent，[#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
 細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
