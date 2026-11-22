@@ -157,7 +157,7 @@ describe('四條出口', () => {
     const { tools } = await mount({ kind: 'human' });
     const entry = tools.entries().find((item) => item.tool.name === ASK_USER_QUESTION_TOOL_NAME);
     expect(entry?.options?.outputSchema).toBe(ASK_USER_OUTPUT_SCHEMA);
-    // `rootOnly` 帶自己的句與碼（照 dsh 的 `DELEGATED_CALLER`），不是 `true`。
+    // `rootOnly` 帶自己的句與碼，不是 `true`。
     expect(entry?.options?.rootOnly).toEqual({
       message: DELEGATED_CALLER_MESSAGE,
       error: DELEGATED_CALLER_ERROR,
