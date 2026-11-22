@@ -78,7 +78,10 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 - 修 `FAIL` 理由的 commit，就算只改註解或文件，也一律由 PM 開新的 verifier 判新的 head。
 - 判定只記在 PR 上，卡上只放那則留言的連結。
 - `gate` 對功能分支 → `develop` 的 PR 只跑跟異動有關的檢查；動到 `.github/workflows|scripts|actions` 的照樣全跑。跑哪些見 `.github/workflows/ci.yml` 檔頭。只改 PR 內文不重跑 gate，例外是 `develop → main` 與清 dsh 對照的 PR（階段 1，見〈對照 dsh〉）：它們的 gate 讀內文，由 `pr-edited.yml` 重跑，改標題也會重跑。
-- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，再由同一位 engineer 修好、重新開 PR，照常走 verifier。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回）之前，不開下一張 PR。
+- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，分兩條路：
+  1. **撤回過得了 gate**：engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，再由同一位 engineer 修好、重新開 PR，照常走 verifier。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。
+  2. **撤回要調高基準才過得了**（在最新 `develop` 上試 `git revert`，基準保留 `develop` 的或改成實際值，`check_ratchets.py --base` 都擋）：改成往前修，不開撤回 PR。同一位 engineer 立刻開修復 PR，只能修這次的紅，這是「不開下一張 PR」的例外；修法可以是修壞掉的地方，也可以是撤掉程式變更、保留已降下來的清理。內文附試撤回被擋的實際輸出。修復 PR 照常要 verifier 與 `gate` 綠，「純 revert 不需要 verifier」不適用。修復 PR 合併後那一輪綠了，原卡才算可以收。修不出來，或 `FAIL` 第三次：標 `needs-info` 交給 operator，engineer 與 worktree 留著。**任何情況都不調高基準、不改 gate 來讓撤回通過。**
+  只有被基準擋下的撤回走往前修；因為別的原因衝突的撤回照第 1 條。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回），或往前修的 PR 那一輪是綠的之前，不開下一張 PR（往前修的 PR 除外）。
 - 合併後那一輪的「視覺差異」有差時會在 PR 留言，它不讓這一輪變紅、不走撤回；作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`apps/web/COMPONENTS.md`](../../apps/web/COMPONENTS.md)〈視覺差異〉）。
 - `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。緊急修補同樣先進 `develop`。
 - 分支合併後由 GitHub 自動刪除；突變、實驗分支在對應的卡結了之後可以清。`develop` 與 `main` 之外的分支同樣不 force push。
@@ -89,7 +92,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 | 角色 | 可封存的時候 | 誰封存 |
 | --- | --- | --- |
-| engineer | 自己合的 PR 合併後那一輪是綠的，Shipping 第 5 步的回報也寫在卡上了。撤回 PR 合了不算：撤回之後它還要修好、重新開 PR | PM |
+| engineer | 自己合的 PR 合併後那一輪是綠的，Shipping 第 5 步的回報也寫在卡上了。撤回 PR 合了不算：撤回之後它還要修好、重新開 PR；往前修的情況，修復 PR 合併後那一輪也綠了才算 | PM |
 | verifier | 判定已經貼在 PR 上，自己開的 worktree 也移除了 | PM |
 | PM | 長駐的不封存；有終點的（例如試跑），交出報告之後 | operator |
 
@@ -175,7 +178,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 清 dsh 對照的 PR 不改註解裡原有的段名（含 dsh 的除外） | gate（`check_dsh_cleanup.py`） |
 | 刪掉一段或段名之前，找全 repo 指向它的地方；每個候選指向改掉或在內文寫為什麼仍成立 | gate（`check_dsh_cleanup.py` 列候選、查內文有一列）＋ verifier（理由對不對、script 找不到的寫法） |
 | verifier `PASS` 才合併 | 只有文件（ruleset 不要求 approval） |
-| 合併後那一輪紅了：重跑一次，還是紅就撤回 | 只有文件（engineer 照 Shipping 做） |
+| 合併後那一輪紅了：重跑一次，還是紅就撤回；撤回要調高基準才過得了就往前修，不調基準、不改 gate | 只有文件（engineer 照 Shipping 做；基準只降不升仍由 `check_ratchets.py` 擋） |
 | 內文寫 `Refs #N`，不寫 Closes | 只有文件 |
 | 分支命名 `<type>/<kebab-case>` | 只有文件 |
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |

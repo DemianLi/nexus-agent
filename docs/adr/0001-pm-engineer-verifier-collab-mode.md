@@ -1,6 +1,6 @@
 # 由 PM、engineer、verifier 自動開發到合進 develop
 
-需求在 `ready-for-agent` 之前由人和 agent 用 `grill`、`grill-with-docs`、`to-spec`／`to-tickets` 釐清；之後全自動。PM 是長駐的 session，只負責派工、追進度、升級，不讀程式碼、不在合併路徑上。每張卡配一位 sonnet engineer 和一個 worktree，照 pstack 的 playbook 開發。PM 另開一位 opus verifier，只給它 issue 和 PR：verifier 審兩軸、重跑 Evidence、對護欄做突變。verifier `PASS` 加上 `gate` 綠，就由 engineer 自己 squash 合進 `develop`；合併後那一輪紅了，重跑一次還是紅，就自動撤回。`main` 與發版仍由人來。人不在事前核可，改成在卡上事後導正。舊流程每一步都在等人放行，產出和協作效率都被卡住；把人移出 `develop` 的合併路徑，是靠「審查的人沒寫過這段程式碼」和「合進 `develop` 用撤回 PR 就能退」這兩件事撐住。執行細節見 [`docs/agents/collab-mode.md`](../agents/collab-mode.md)。
+需求在 `ready-for-agent` 之前由人和 agent 用 `grill`、`grill-with-docs`、`to-spec`／`to-tickets` 釐清；之後全自動。PM 是長駐的 session，只負責派工、追進度、升級，不讀程式碼、不在合併路徑上。每張卡配一位 sonnet engineer 和一個 worktree，照 pstack 的 playbook 開發。PM 另開一位 opus verifier，只給它 issue 和 PR：verifier 審兩軸、重跑 Evidence、對護欄做突變。verifier `PASS` 加上 `gate` 綠，就由 engineer 自己 squash 合進 `develop`；合併後那一輪紅了，重跑一次還是紅，就自動撤回（撤回要調高只降不升的基準才過得了時，改成往前修，不調基準、不改 gate）。`main` 與發版仍由人來。人不在事前核可，改成在卡上事後導正。舊流程每一步都在等人放行，產出和協作效率都被卡住；把人移出 `develop` 的合併路徑，是靠「審查的人沒寫過這段程式碼」和「合進 `develop` 用撤回 PR 就能退」這兩件事撐住。執行細節見 [`docs/agents/collab-mode.md`](../agents/collab-mode.md)。
 
 ## Considered Options
 

@@ -87,7 +87,7 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 **Always pause** for irreversible writes: any force-push, deleting a branch, merging to `main` or running the Release workflow, deploys, data deletion, messages to anyone outside the run, and downloads the repo's rules make you report first.
 
-Merging your own verified PR into `develop` is reversible by a revert PR, so it proceeds under **Shipping**.
+Merging your own verified PR into `develop` is reversible by a revert PR, so it proceeds under **Shipping**. The one exception is a merge whose revert would need a raised ratchet baseline: that one is fixed forward, never reverted, and never by raising the baseline.
 
 **Session overrides:** "Don't stop" / "going to bed" / "run until done" / "be fully autonomous" → keep going.
 

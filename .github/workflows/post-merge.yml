@@ -225,6 +225,6 @@ jobs:
             echo "- PR：$pr_line"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RESULT" != "success" ] || [ "$NATIVE_RESULT" != "success" ]; then
-            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
+            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先試撤回：過得了 gate 就開撤回 PR，修好再重新開；要調高基準才過得了就不撤回，改開修復 PR 往前修（不調基準、不改 gate）。見 docs/agents/collab-mode.md〈合併與撤回〉。"
             exit 1
           fi
