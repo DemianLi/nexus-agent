@@ -81,6 +81,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 - **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（`.github/workflows/post-merge.yml`）。它不擋合併，由合併的 engineer 盯：紅了先只重跑失敗的 job 一次；轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發，開 backlog 卡或在既有的卡上記一筆；還是紅，分兩條路：
   1. **撤回過得了 gate**：engineer 立刻開撤回 PR 讓 `develop` 先恢復綠，再由同一位 engineer 修好、重新開 PR，照常走 verifier。只含 `git revert` 的撤回 PR 不需要 verifier，gate 綠就合。
   2. **撤回要調高基準才過得了**（在最新 `develop` 上試 `git revert`，基準保留 `develop` 的或改成實際值，`check_ratchets.py --base` 都擋）：改成往前修，不開撤回 PR。同一位 engineer 立刻開修復 PR，只能修這次的紅，這是「不開下一張 PR」的例外；修法可以是修壞掉的地方，也可以是撤掉程式變更、保留已降下來的清理。內文附試撤回被擋的實際輸出。修復 PR 照常要 verifier 與 `gate` 綠，「純 revert 不需要 verifier」不適用。修復 PR 合併後那一輪綠了，原卡才算可以收。修不出來，或 `FAIL` 第三次：標 `needs-info` 交給 operator，engineer 與 worktree 留著。**任何情況都不調高基準、不改 gate 來讓撤回通過。**
+
   只有被基準擋下的撤回走往前修；因為別的原因衝突的撤回照第 1 條。engineer 確認自己合併 commit 的那一輪是綠的（或已撤回），或往前修的 PR 那一輪是綠的之前，不開下一張 PR（往前修的 PR 除外）。
 - 合併後那一輪的「視覺差異」有差時會在 PR 留言，它不讓這一輪變紅、不走撤回；作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`apps/web/COMPONENTS.md`](../../apps/web/COMPONENTS.md)〈視覺差異〉）。
 - `main` 只收來自 `develop` 的 PR，由人合併、由人發版（[`docs/release.md`](../release.md)）。緊急修補同樣先進 `develop`。
@@ -109,7 +110,7 @@ PM 在 engineer 可封存時依序做三件事：
 - 開場授權，一次。
 - 刪 worktree 時有未提交或來源不明的內容、或那不是這位 PM 派出去的 session 建的（後者照 #3151 先列清單）。
 - 放寬 gate。
-- 第 3 次 `FAIL`。
+- 第 3 次 `FAIL`，或合併後那一輪紅了、撤回被基準擋下而往前修修不出來。
 
 **沒測過**（不是保證能自動，也不是一定要人）：verifier 停下的回合能不能開 session；PM 自己的背景工作叫醒的回合；平行；連續接續的上限；解衝突後重判；撤回與往前修；開 session 被拒後接備案；Auto-fix 叫醒；PM 不在主 checkout（只寫進規則，不用 hook 擋，擋了備案就不能用）；子 session 傳了訊息是否一定開不了。
 
