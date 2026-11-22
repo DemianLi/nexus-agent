@@ -7,9 +7,9 @@
  * 同一串字，否則伴生驗的是自己。純函式 ＋ 單一擁有者是那個「同一串」唯一撐得住的形狀：
  * 伴生從耐久前綴重建目標、呼叫這裡、逐字比對日誌上那顆。
  *
- * ## 兩處形狀差異
+ * ## 為什麼回 `string`、吃 `GoalSnapshot`
  *
- * - **回一個 `string`，不是 `ContentBlock[]`。** `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。
+ * - **回一個 `string`。** `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。
  * - **吃 `GoalSnapshot`，不是 `GoalView`。** 這個 renderer 只讀 `objective` 與
  *   `maxGoalRounds`，兩格都在快照裡。伴生手上本來就有折疊出來的快照，
  *   吃快照就不必另造視圖。

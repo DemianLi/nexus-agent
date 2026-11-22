@@ -46,7 +46,6 @@ const SNAPSHOT_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 const PHASES: ReadonlySet<string> = new Set(['active', 'paused', 'blocked', 'complete']);
 
-/** lower-kebab-case。 */
 const BLOCK_CODE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 
 /** 重放用的可變累積器。 */
@@ -370,7 +369,6 @@ export function applyGoalChange(state: GoalFoldState, change: GoalChangeMeta): v
 /**
  * 把一顆 goal 來源的輪次套到折疊上，**準入才算**。
  *
- * 四格全部對上才推進計數。
  * 對不上時**拋而不是略過**——一顆對不上的 goal 輪次代表有人在這份日誌裡排了一輪不屬於
  * 目前目標的續行，靜靜跳過它換來的是一個看起來正常、實際上少算了一輪的預算。
  *

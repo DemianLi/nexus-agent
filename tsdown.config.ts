@@ -12,7 +12,7 @@ import { workspacePackages } from './scripts/workspace-packages.ts';
  * - **所有裸 specifier 都不打進去**（`deps.neverBundle: true`）：套件之間、套件與第三方一律在執行期解析。
  *   tsdown 預設只外掛 `dependencies`／`peerDependencies`，devDependencies 裡的 workspace 套件（例如 `@nexus/cordis`）會被內嵌，單例就壞了，
  *   所以用 `neverBundle`：套件之間不內嵌、單例只有一份。
- * - **直接編 TypeScript，不經 `tsc -b`，所以 `files: ["lib"]` 也不逐檔列**：#1502 規定不做 Typert、不產 dts。
+ * - **`files: ["lib"]` 不逐檔列**：#1502 規定不產 dts。
  */
 export default defineConfig(
   workspacePackages().map((pkg) => ({

@@ -12,8 +12,7 @@
  *
  * ## 偏離登記
  *
- * - **持久狀態不走投影**（#1486 Q1 (a)；類別：遷移卡不改行為（暫時））：折疊持在 `GoalService` 的私有欄位上，由第一次被問到某份日誌時 `log.events` 重播、`log.subscribe` 接後續。**行程內的續行授權**
- *   以日誌為鍵放在 `WeakMap`、第一次被問才建。**撤除條件**：`@nexus/projections` 長出插件讀狀態的 `stateOf(log, key)`，且
+ * - **持久狀態不走投影**（#1486 Q1 (a)；類別：遷移卡不改行為（暫時））：折疊持在 `GoalService` 的私有欄位上，由第一次被問到某份日誌時 `log.events` 重播、`log.subscribe` 接後續。**撤除條件**：`@nexus/projections` 長出插件讀狀態的 `stateOf(log, key)`，且
  *   `#pending`（跨同步 append 邊界的授權）在投影的時序下量過同樣成立（今天沒有人量過）；屆時另開卡。
  * - **相依 `@nexus/core`**（照 `@nexus/projections` 的 #1421 Q2 (a)）：目標的詞彙（`GoalSnapshot`、`GoalChangeMeta`、`goalId`、
  *   `GOAL_CHANGE_VERSION`…）與 `goal/change` 的事件擴充留在 `@nexus/core`（`session-log.ts`，同 `todo/write`、`feedback/*`），web 的 wire 與
@@ -72,7 +71,7 @@ export const GOALS_CONTRACT_VERSION = '1.1.0';
 export const GOALS_SERVICE = 'goals';
 
 /**
- * `maxGoalRounds` 沒指定時的預設，是 256。
+ * `maxGoalRounds` 沒指定時的預設。
  *
  * **它進耐久快照，所以是建立當下的那個值**，不是讀取當下的預設：改了這個常數不會追溯到既有的目標身上。消費它的是續行排程器
  * （`apps/harness` 的 `goal-driver.ts`）——用完就記一顆 `round-limit` 的 blocker。它是模型填得動的那條；操作者那條在 harness 的
