@@ -94,7 +94,7 @@ export type { SystemPromptVariables };
 
 /**
  * 身分句。**寫死在這裡，不是設定**：部署方想換說法，
- * 用 `personaPrefix`；想拿掉，用 `includeHarnessIdentity: false`。名字是 nexus-agent。
+ * 用 `personaPrefix`；想拿掉，用 `includeHarnessIdentity: false`。
  */
 export const HARNESS_IDENTITY_SENTENCE = 'You are an AI agent powered by nexus-agent.';
 

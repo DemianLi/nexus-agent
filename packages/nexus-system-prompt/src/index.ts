@@ -29,9 +29,9 @@
  * | 2 | 行程級一層，root 與子代理同一份 | 今天就是這樣（子代理也走那顆 middleware）；逐委派 persona 是 #328 的事 |
  * | 3 | 沒有 `context()`、`tools()`、`suppressRuntimeContext()`、`system-prompt/assemble` waterfall | 沒有消費者；第一個需要的遷移卡再加 |
  * | 4 | 組 thread 時 `assemble` 一次取快照，之後只代入變數 | 決議 §3-2 第 6 條：插件更新只給新對話；列卸載會撤段 |
- * | 5 | section 的 `text` 只收字串，`PromptSection` 的 `complete`、`interpolate` 兩個欄位登記時拋 | 快照要完整；沒有消費者 |
+ * | 5 | section 的 `text` 只收字串；傳進來的物件帶 `complete` 或 `interpolate` 就在登記時拋 | 快照要完整；沒有消費者 |
  * | 6 | `model`、`cwd` 由 `system-prompt` 那一列登記；`variable(name)` **只登記名字**，值由宿主每次模型呼叫交 | #1477 Q2 (a) 與 PM 更正 2：`model` 要跟著那一步實際用的模型走（#723），組 thread 時求值就定死了 |
- * | 7 | Config 三格（身分句開關、前綴、後綴） | 沒有執行期上下文與工具段順序這兩格 |
+ * | 7 | Config 三格（身分句開關、前綴、後綴） | 管執行期上下文與工具段的設定還沒有消費者 |
  * | 8 | 有 `cwd` 變數，而且出貨值（`cordis.yml` 的後綴）依賴它 | 我們的出貨文案引用了 `{{cwd}}`；要不要拿掉不在 #1477。見 `@nexus/plugin-system-prompt` 檔頭 |
  * | 9 | **掛載當下**驗語法與名字（寫壞起不來，#720），渲染照 `interpolateStrict`，訊息是中文 | #1446 Q1 (a)：遷移卡不改行為，#720 由 demian 拍板 |
  * | 10 | section 的 order 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLAN_POLICY` 與 `PLUGIN_POLICY` 中段不算 |
@@ -117,13 +117,13 @@ export interface PromptSection {
   readonly name: string;
   /** 排序值，見 {@link SECTION_ORDERS}。小的在前，同值照登記順序。 */
   readonly order: number;
-  /** 文字原文，可以含 `{{變數}}`。只收字串（偏離第 5 列）。 */
+  /** 文字原文，可以含 `{{變數}}`。只收字串（接縫的限制第 5 列）。 */
   readonly text: string;
 }
 
 /**
  * `assemble()` 的結果：快照。**純資料**——各段（依 order 再依登記順序）與已登記的變數名字（依登記順序）。
- * 變數的值不在裡面（偏離第 6 列），宿主每次模型呼叫才代入。
+ * 變數的值不在裡面（接縫的限制第 6 列），宿主每次模型呼叫才代入。
  */
 export interface SystemPromptAssembly {
   readonly sections: readonly PromptSection[];
@@ -236,7 +236,7 @@ export interface SystemPromptParts {
 }
 
 /**
- * 把快照與這一次呼叫的變數值算成前後兩段。**空的段落不佔位**，段與段之間隔一個空行（丟掉空段、以空行接）。
+ * 把快照與這一次呼叫的變數值算成前後兩段。**空的段落不佔位**，段與段之間隔一個空行。
  *
  * 順序 ≤ `DEPLOYMENT_PERSONA_PREFIX` 的段進前段、≥ `DEPLOYMENT_PERSONA_SUFFIX` 的進後段（中間沒有段，登記時就拒絕）。
  * 只有快照裡登記過名字的變數可用；值是 `values` 裡同名的那一格，沒有就是「沒有值」。
