@@ -1,7 +1,6 @@
 /**
  * 遙測刻意直連，不走對外代理（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
- * 照 dsh 的 `packages/session/session-telemetry-otel/tests/egress.spec.ts`：OTLP 匯出走 `node:http`，不經 `fetch`，
- * 全域派送器管不到，dsh 評估過後維持直連，我們照做。
+ * OTLP 匯出走 `node:http`，不經 `fetch`，全域派送器管不到，所以維持直連。
  *
  * **要有對照組，不然是假綠**：收集端放在 loopback 上，但用一個 `.invalid` 主機名去指它（本機位址一律直連，
  * 用 loopback 位址的話，「沒走代理」什麼都證明不了）。這個主機名**只在遙測那條連線上**被解析回 loopback；
