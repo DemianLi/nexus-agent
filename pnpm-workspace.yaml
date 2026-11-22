@@ -11,7 +11,7 @@ strictPeerDependencies: true
 # （ERR_PNPM_NO_MATURE_MATCHING_VERSION）；已經寫進 lockfile 的版本 `--frozen-lockfile` 不再查，
 # 那一段由 CI 的 `.github/scripts/check_lockfile_age.py` 補上。
 #
-# nexus 留在 pnpm 10.34.5（#1502 的 `pnpm deploy` 旗標照 pnpm 10 定），它沒有 24 小時的預設（沒設就是不擋），
+# nexus 留在 pnpm 10.34.5（#1502 的 `pnpm deploy` 旗標照 pnpm 10 定），它的 `minimumReleaseAge` 沒有預設（沒設就是不擋），
 # 所以明寫 1440 分鐘。
 minimumReleaseAge: 1440
 # 例外只收**精確版本**（`name@x.y.z`），每一條上面寫為什麼不能等。

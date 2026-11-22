@@ -9,10 +9,9 @@
  *
  * ## 兩處形狀差異
  *
- * - **回一個 `string`。** `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。
+ * - **回一個 `string`，不是 `ContentBlock[]`。** `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。
  * - **吃 `GoalSnapshot`，不是 `GoalView`。** 這個 renderer 只讀 `objective` 與
- *   `maxGoalRounds`，兩格都在快照裡。伴生手上本來就有折疊出來的快照，
- *   吃快照就不必另造視圖。
+ *   `maxGoalRounds`，兩格都在快照裡。
  *
  * @module
  */

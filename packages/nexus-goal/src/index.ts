@@ -82,7 +82,7 @@ export const DEFAULT_MAX_GOAL_ROUNDS = 256;
 /**
  * 這個 process 准不准自動續行這個目標。**永遠不持久**。
  *
- * 它不進日誌：續行授權是「這個活著的行程被誰授權過」，重放一段歷史不該讓一個沒有人在的行程自己動起來。
+ * 續行授權是「這個活著的行程被誰授權過」，重放一段歷史不該讓一個沒有人在的行程自己動起來。
  */
 export type GoalActivation = 'armed' | 'disarmed';
 
