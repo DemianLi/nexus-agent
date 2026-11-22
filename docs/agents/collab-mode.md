@@ -26,12 +26,13 @@ pstack 不走 Skill 工具：照 [Claude Code 對照](../../.agents/skills/pstac
 
 ## 開場說明
 
-PM 由 operator 開，開場整段貼：
+PM 由 operator 開在**主 checkout**，開場整段貼：
 
 ```text
 Read .agents/skills/pstack/skills/poteto-mode/SKILL.md and docs/agents/collab-mode.md before anything else.
 你是 PM。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 跑 ready-for-agent 佇列。
 同時進行的 engineer 上限：<N>。
+每張卡各開一個獨立 engineer session，每次要判定時各開一個獨立 verifier session，被叫醒時直接開。
 ```
 
 engineer 由 PM 開，一張卡一個 session、一個 worktree：
@@ -40,6 +41,7 @@ engineer 由 PM 開，一張卡一個 session、一個 worktree：
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md 與 docs/agents/collab-mode.md。
 你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
+不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA。不讀不寫 app 給的共用 notes 目錄。
 ```
 
 verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
@@ -48,18 +50,22 @@ verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md（〈Nexus roles〉的 Verifier）與 docs/agents/collab-mode.md。
 你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
+不傳訊息給 PM：判定貼在 PR 上，收尾第一行帶判定與 PR 號碼。不讀不寫 app 給的共用 notes 目錄。
 ```
 
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
 
-- PM 直接開 engineer 與 verifier，不先問 operator（operator 的常設授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，出錯就放行。app 在自動事件叫醒的回合（例如背景工作跑完）會拒絕開 session；被拒才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。PM 在 engineer 回報 code-ready 的那一輪開 verifier。
-- engineer 與 verifier 都開成 session，不開成 subagent。PM 開 session 時不讓 app 建 worktree（app 會自己取分支名、加前綴，跟 `<type>/<kebab-case>` 不合），讓 session 從主 checkout 起跑，自己照 worker.md 開 worktree，之後只在那個 worktree 裡改。
-- engineer 推出 code-ready 的 head 之後，回報 PM 並結束這一輪，不自己合併。PM 把 verifier 的判定用訊息轉給 engineer；engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。
+- PM 直接開 engineer 與 verifier，不先問 operator（operator 在開場一次授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表。開 session 不帶 `cwd`、`host`，`use_worktree: false`，子 session 因此從 PM 所在的主 checkout 起跑；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合（`model`、`effort`、`cwd`、`host`、`use_worktree`）、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，prompt 沒有「不讀不寫共用 notes 目錄」那一句的也擋（重送提案卡、沒有 prompt 時不查），出錯就放行。
+- **開 session 的回合，分實測過的與沒測過的。** 實測過能開的：operator 開場授權後，子 session 停下、app 叫醒 PM 的回合（code-ready 開 verifier、判定後合併、結卡後開下一位 engineer、FAIL 後開新 verifier），都沒有訊息從子 session 傳給 PM。沒測過：子 session 傳了訊息的回合是否一定開不了（上一版規則說一律開不了，那是 `cross-session-message` 回合的觀察，不是普遍結論）、平行、連續接續的上限。被拒時先用備案：在 operator 說話的回合預開待命的 session，之後用訊息叫醒；備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
+- 自動模式回「no verdict」且附了 hook 產生的輸入時：照那份輸入單獨重送一次；再被擋就停、回報原文，不改用別的做法繞過。
+- engineer 與 verifier 都開成 session，不開成 subagent。app 自己建 worktree 會取分支名、加前綴，跟 `<type>/<kebab-case>` 不合，所以子 session 不用 app 的 worktree，自己照 worker.md 開，之後只在那個 worktree 裡改。
+- engineer 推出 code-ready 的 head 之後，把結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA，然後結束這一輪，不自己合併，也不傳訊息給 PM。PM 被叫醒後核對 PR 與 SHA 再開 verifier；PM 仍用訊息把 verifier 的判定轉給 engineer，engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。修完 `FAIL`、解衝突要重判時，同樣只寫在 PR 或卡上、收尾帶 SHA。
+- engineer 帶著背景工作（例如盯 CI）停下也會叫醒 PM。PM 先核對 PR 與 SHA：沒到 code-ready 或還沒判定，就只記錄，不當成做完。
 - verifier 開背景子代理（例如 code-review 兩軸）之後，先做完自己的部分（重跑 Evidence、突變護欄、核行號）才結束回合，少停幾次；判定貼上之前，自己移除它開的 worktree。
 
 ## worktree 與上下文
 
-- 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。
+- 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。移到一半、目錄還有殘留時：PM 自己派出去的 worktree，卡已結、合併後那一輪綠、沒有人在用，而且剩下的內容都能從 commit 或建置重建（`.DS_Store` 這類系統中繼檔也算），PM 直接刪那一個路徑，刪完確認目錄不在；分支不刪。
 - **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
 - 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
 - engineer 與 verifier 的開場第一行讀主 checkout 的檔，`.env` 也從主 checkout 讀，所以 PM 每次派工前先把主 checkout 同步到 `origin/develop`（`git -C <主 checkout> pull --ff-only`）。
@@ -92,6 +98,17 @@ PM 在 engineer 可封存時依序做三件事：
 1. 拿掉卡上的 `ready-for-agent`，免得下一輪再派一次。
 2. engineer 的回報說卡上要做的都做完了，就結卡；沒做完，就把剩下的寫在卡上，卡留著。
 3. 封存 engineer，再照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它的 worktree。
+
+## 仍需要人的情況
+
+**需要人**（規則本來就停在這裡）：
+
+- 開場授權，一次。
+- 刪 worktree 時有未提交或來源不明的內容、或那是別的 session 建的（後者照 #3151 先列清單）。
+- 放寬 gate。
+- 第 3 次 `FAIL`。
+
+**沒測過**（不是保證能自動，也不是一定要人）：平行；連續接續的上限；解衝突後重判；撤回與往前修；開 session 被拒後接備案；Auto-fix 叫醒；PM 不在主 checkout（只寫進規則，不用 hook 擋，擋了備案就不能用）；子 session 傳了訊息是否一定開不了。
 
 ## 導正
 
@@ -164,8 +181,10 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 上下文只放進版控的檔或共用記憶目錄 | 只有文件 |
 | 開完 PR 開 Auto-fix | 只有文件（工具不在或被權限檢查擋下時，在卡上記一筆，不重試；沒開成，engineer 照 [Babysit](../../.agents/skills/pstack/skills/poteto-mode/playbooks/babysit.md) 自己盯 CI） |
 | 收尾第一句寫可封存、不可封存或還在等 | `Stop` hook（`.github/scripts/session_hooks.py`；只看前綴與 `還在等：` 是否一行，擋一次、出錯放行） |
-| engineer、verifier 照角色表的 `model`、`effort` 開 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到） |
-| 開 session 被 app 拒絕時改成提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
+| engineer、verifier 照角色表的 `model`、`effort` 開，不帶 `cwd`、`host`，`use_worktree: false`，開場有「不讀不寫共用 notes 目錄」 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到；沒有 prompt 時不查最後一項） |
+| 子 session 不傳訊息給 PM、PM 開在主 checkout | 只有文件（hook 看不到訊息與 PM 所在的資料夾） |
+| 開 session 被 app 拒絕時先用備案、再提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
+| 備案的 verifier 一位只判一次 | 只有文件 |
 | engineer 可封存之後拿掉 `ready-for-agent`、結卡、封存 | 只有文件（PM 照〈收尾與封存〉做） |
 | 卡的正文是唯一的規格、寫到的程式碼現況要核過 | verifier（Spec 軸對程式碼核正文的前提） |
 | ADR 的位置、檔名、編號與標題行 | gate（`check_adrs.py`） |
