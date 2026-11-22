@@ -24,14 +24,8 @@
  * 會從靜靜關閉變成在載入時（`loadPlugins`）拋。
  *
  * **二、Resource 上沒有 `user.id`。** 沒有匿名識別可放，**不編一個**——退到不送。
- * 方向是往少送那一邊。
  *
- * **三、（已撤）Config 驗證的時刻。** [#453](https://github.com/DemianLi/nexus-agent/issues/453)
- * 把設定搬進 `Config` 之後，設定不再走工廠函式的參數。`Config` 由
- * `loadPlugins` 在任何 `apply` 之前整份驗完（`@nexus/core` 的 `resolveEntries`），值檢查留在
- * `apply` 建的 {@link OpenTelemetrySessionService} 建構子裡，拋出時 `loadPlugins` 冠上條目 id。
- * 兩個子物件逐欄宣告成 `strictObject`（見 {@link telemetryExporterConfigSchema}），
- * 整份清單先驗完才 `apply`（見 `resolveEntries`）。
+ * **三、（已撤）Config 驗證的時刻。**
  *
  * **四、`feedback-only` 只在回饋時送，這件事不住在這裡。** 協調器從
  * [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起由組裝點
@@ -171,7 +165,7 @@ function fail(message: string): never {
 /**
  * 驗 `exporter.url`。
  *
- * 三條：必填、必須 parse 得動、必須是 http(s)。**在建構子裡拋**（`apply` 建服務的
+ * **在建構子裡拋**（`apply` 建服務的
  * 當下，也就是 `loadPlugins` 之內），不是等到第一筆記錄要送的時候——設定錯了要在載入期爆，
  * 不是在熱路徑上靜靜地掉資料。
  */
@@ -194,7 +188,7 @@ function assertExporterUrl(url: string | undefined): string {
 /**
  * 驗 `processor.maxExportBatchSize`。
  *
- * **這是唯一一個超出 SDK 自己驗證範圍的 processor 欄位**，理由：SDK 收得下
+ * **這是唯一一個超出 SDK 自己驗證範圍的 processor 欄位**：SDK 收得下
  * 非正數的批次大小，但它的關機排空接著會切出一堆空批次而不消耗佇列——**佇列裡還有東西
  * 的話 dispose 會永遠掛住**。設定錯了在載入期就爆。
  */
@@ -231,7 +225,6 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
 
   constructor(options: TelemetryOtelOptions = {}) {
     const mode = options.mode ?? DEFAULT_TELEMETRY_MODE;
-    // 繞過設定檢查直接建構時也擋：`full` 與任何不認得的值都不當成別的模式的別名。
     if (!SUPPORTED_MODES.includes(mode)) {
       throw new Error(
         `telemetry-otel：不支援的模式 ${JSON.stringify(mode)}，只收 ${SUPPORTED_MODES.join('、')}`,
@@ -329,7 +322,7 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
 /**
  * 建一個把會話遙測送去 OTLP 端點的 plugin。
  *
- * **設定分兩層驗**（見模組說明已撤的偏離三）：schema 在載入時驗——`loadPlugins`
+ * **設定分兩層驗**：schema 在載入時驗——`loadPlugins`
  * 在任何 `apply` 之前整份驗完；值檢查在 `apply` 建 {@link OpenTelemetrySessionService} 的
  * 建構子裡，也就是 `loadPlugins` 當下：`disabled` 之外，`exporter.url` 必填、必須合法、
  * 必須 http(s)；`processor.maxExportBatchSize` 必須是正整數；`shutdownTimeoutMillis` 必須在
@@ -352,8 +345,7 @@ export const telemetryOtelPlugin: NexusPlugin<TelemetryOtelConfig> = {
     // `serve.ts` 裡第一條關掉的 thread 會把其他 thread 的遙測一起關掉（改成資料之前就是
     // 這個形狀，因為 plugin 清單是載一次、每條 thread 共用）。一次組裝一份就沒有這回事。
     // **單一佔位，重名當場拋**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：
-    // 兩個後端就是兩份出境資料，而披露那一層只講得出一種策略。那句領域說明
-    // 放在這裡：`services` 的重名訊息是通用的（照 cordis），講不出領域。
+    // 兩個後端就是兩份出境資料，而披露那一層只講得出一種策略。
     registry.services.provide(SESSION_TELEMETRY_SERVICE, new OpenTelemetrySessionService(config));
     // 服務的生命週期歸協調器：`SessionTelemetryCoordinator.dispose()` 會轉發
     // `shutdown()`。這裡**不**再登記一次 `lifecycle.onDispose`，否則排空會跑兩遍。
