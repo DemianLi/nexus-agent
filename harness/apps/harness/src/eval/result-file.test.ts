@@ -415,7 +415,9 @@ describe('parseResultFile 拒絕不認得的東西', () => {
 
 describe('預設目錄', () => {
   it('在 apps/harness/eval-results/，而且被 .gitignore 擋住（結果檔不進版控）', () => {
-    expect(defaultResultDir().replace(/\\/g, '/')).toMatch(/harness\/apps\/harness\/eval-results\/$/);
+    expect(defaultResultDir().replace(/\\/g, '/')).toMatch(
+      /harness\/apps\/harness\/eval-results\/$/,
+    );
     const gitignore = readFileSync(
       fileURLToPath(new URL('../../../../../.gitignore', import.meta.url)),
       'utf8',

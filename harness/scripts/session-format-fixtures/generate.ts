@@ -306,8 +306,13 @@ const git = (...args: string[]): string =>
 const TODAY = {
   head: git('rev-parse', 'HEAD'),
   dirty:
-    git('status', '--porcelain', '--', '.', ':(exclude)harness/apps/harness/src/fixtures/session-format')
-      .length > 0,
+    git(
+      'status',
+      '--porcelain',
+      '--',
+      '.',
+      ':(exclude)harness/apps/harness/src/fixtures/session-format',
+    ).length > 0,
 } as const;
 
 /** 拿掉金鑰的環境，給 `pnpm install`。 */

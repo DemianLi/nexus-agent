@@ -253,7 +253,10 @@ export function bundledCrates(root: string): { name: string; version: string }[]
  * @throws 讀不出 channel。
  */
 export function rustChannel(
-  text: string = readFileSync(join(ROOT, 'harness/native/sandbox-spawner/rust-toolchain.toml'), 'utf8'),
+  text: string = readFileSync(
+    join(ROOT, 'harness/native/sandbox-spawner/rust-toolchain.toml'),
+    'utf8',
+  ),
 ): string {
   const channel = /^channel = "([^"]+)"$/mu.exec(text)?.[1];
   if (channel === undefined)

@@ -11,7 +11,9 @@
       "@nexus/agent-loop": ["./harness/packages/nexus-agent-loop/src/index.ts"],
       "@nexus/agent-loop/provider": ["./harness/packages/nexus-agent-loop/src/provider.ts"],
       "@nexus/approval-channel": ["./harness/packages/nexus-approval-channel/src/index.ts"],
-      "@nexus/approval-channel/provider": ["./harness/packages/nexus-approval-channel/src/provider.ts"],
+      "@nexus/approval-channel/provider": [
+        "./harness/packages/nexus-approval-channel/src/provider.ts"
+      ],
       "@nexus/brand": ["./harness/packages/nexus-brand/src/index.ts"],
       "@nexus/commands": ["./harness/packages/nexus-commands/src/index.ts"],
       "@nexus/commands/provider": ["./harness/packages/nexus-commands/src/provider.ts"],
@@ -24,7 +26,9 @@
       "@nexus/core/session-checkpoint-policy": [
         "./harness/packages/nexus-core/src/session-checkpoint-policy.ts"
       ],
-      "@nexus/core/session-persistence": ["./harness/packages/nexus-core/src/session-persistence.ts"],
+      "@nexus/core/session-persistence": [
+        "./harness/packages/nexus-core/src/session-persistence.ts"
+      ],
       "@nexus/core/summarization": ["./harness/packages/nexus-core/src/summarization.ts"],
       "@nexus/core/tool-result-pruner": ["./harness/packages/nexus-core/src/tool-result-pruner.ts"],
       "@nexus/deque": ["./harness/packages/nexus-deque/src/index.ts"],
@@ -39,7 +43,9 @@
       ],
       "@nexus/plugin-ask-user": ["./harness/packages/nexus-plugin-ask-user/src/index.ts"],
       "@nexus/plugin-commands": ["./harness/packages/nexus-plugin-commands/src/index.ts"],
-      "@nexus/plugin-commands/invariant": ["./harness/packages/nexus-plugin-commands/src/invariant.ts"],
+      "@nexus/plugin-commands/invariant": [
+        "./harness/packages/nexus-plugin-commands/src/invariant.ts"
+      ],
       "@nexus/plugin-echo": ["./harness/packages/nexus-plugin-echo/src/index.ts"],
       "@nexus/plugin-feedback": ["./harness/packages/nexus-plugin-feedback/src/index.ts"],
       "@nexus/plugin-goal": ["./harness/packages/nexus-plugin-goal/src/index.ts"],
@@ -50,25 +56,37 @@
         "./harness/packages/nexus-plugin-permission-presets/src/index.ts"
       ],
       "@nexus/plugin-plan-mode": ["./harness/packages/nexus-plugin-plan-mode/src/index.ts"],
-      "@nexus/plugin-plan-mode/invariant": ["./harness/packages/nexus-plugin-plan-mode/src/invariant.ts"],
+      "@nexus/plugin-plan-mode/invariant": [
+        "./harness/packages/nexus-plugin-plan-mode/src/invariant.ts"
+      ],
       "@nexus/plugin-present": ["./harness/packages/nexus-plugin-present/src/index.ts"],
-      "@nexus/plugin-present/invariant": ["./harness/packages/nexus-plugin-present/src/invariant.ts"],
+      "@nexus/plugin-present/invariant": [
+        "./harness/packages/nexus-plugin-present/src/invariant.ts"
+      ],
       "@nexus/plugin-quickjs": ["./harness/packages/nexus-plugin-quickjs/src/index.ts"],
-      "@nexus/plugin-sandbox-policy": ["./harness/packages/nexus-plugin-sandbox-policy/src/index.ts"],
+      "@nexus/plugin-sandbox-policy": [
+        "./harness/packages/nexus-plugin-sandbox-policy/src/index.ts"
+      ],
       "@nexus/plugin-sandbox-policy/invariant": [
         "./harness/packages/nexus-plugin-sandbox-policy/src/invariant.ts"
       ],
       "@nexus/plugin-skills": ["./harness/packages/nexus-plugin-skills/src/index.ts"],
-      "@nexus/plugin-skills/invocation": ["./harness/packages/nexus-plugin-skills/src/invocation.ts"],
+      "@nexus/plugin-skills/invocation": [
+        "./harness/packages/nexus-plugin-skills/src/invocation.ts"
+      ],
       "@nexus/plugin-submit-record": ["./harness/packages/nexus-plugin-submit-record/src/index.ts"],
       "@nexus/plugin-system-prompt": ["./harness/packages/nexus-plugin-system-prompt/src/index.ts"],
-      "@nexus/plugin-telemetry-otel": ["./harness/packages/nexus-plugin-telemetry-otel/src/index.ts"],
+      "@nexus/plugin-telemetry-otel": [
+        "./harness/packages/nexus-plugin-telemetry-otel/src/index.ts"
+      ],
       "@nexus/plugin-time-context": ["./harness/packages/nexus-plugin-time-context/src/index.ts"],
       "@nexus/plugin-todo": ["./harness/packages/nexus-plugin-todo/src/index.ts"],
       "@nexus/plugin-todo/invariant": ["./harness/packages/nexus-plugin-todo/src/invariant.ts"],
       "@nexus/plugin-token-meter": ["./harness/packages/nexus-plugin-token-meter/src/index.ts"],
       "@nexus/plugin-trajectory": ["./harness/packages/nexus-plugin-trajectory/src/index.ts"],
-      "@nexus/plugin-workspace-changes": ["./harness/packages/nexus-plugin-workspace-changes/src/index.ts"],
+      "@nexus/plugin-workspace-changes": [
+        "./harness/packages/nexus-plugin-workspace-changes/src/index.ts"
+      ],
       "@nexus/plugin-workspace-changes/types": [
         "./harness/packages/nexus-plugin-workspace-changes/src/types.ts"
       ],

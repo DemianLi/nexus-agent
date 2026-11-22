@@ -47,9 +47,7 @@ describe('裸的 cn 解析到 lib/utils.ts（#1523）', () => {
     // 外掛的 `projects` 相對於 Vite 的 `root`（guard/）解析、指錯只印警告；乾淨樹（沒有 lib/）上 build 才會壞，CI 先建 lib 量不到。
     const guard = fileURLToPath(new URL('../guard/vite.config.ts', import.meta.url));
     const { BASE_TSCONFIG } = await import('../guard/vite.config');
-    expect(BASE_TSCONFIG).toBe(
-      fileURLToPath(new URL('../../tsconfig.base.json', import.meta.url)),
-    );
+    expect(BASE_TSCONFIG).toBe(fileURLToPath(new URL('../../tsconfig.base.json', import.meta.url)));
     expect(existsSync(BASE_TSCONFIG)).toBe(true);
     // 外掛實際讀的那份：它在 configResolved 就開始解析 `projects`，解析不了只走 logger.error、不擋 build。收下 logger 的錯誤，
     // 再叫一次它的 resolveId（會等解析做完），斷言沒有錯。外掛那一行與常數任一處指錯都會紅（#1642 PM 審查）。

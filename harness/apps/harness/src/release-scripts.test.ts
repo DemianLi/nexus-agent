@@ -138,7 +138,9 @@ describe('版號', () => {
   it('發版成員共用同一個版本（根、apps、packages）；vendor 不在內', () => {
     const members = releaseMembers();
     expect(members.map((member) => member.manifestPath)).toContain('package.json');
-    expect(members.map((member) => member.manifestPath)).toContain('harness/apps/harness/package.json');
+    expect(members.map((member) => member.manifestPath)).toContain(
+      'harness/apps/harness/package.json',
+    );
     expect(members.some((member) => member.manifestPath.startsWith('harness/vendor/'))).toBe(false);
     expect(() => sharedVersion(members)).not.toThrow();
   });

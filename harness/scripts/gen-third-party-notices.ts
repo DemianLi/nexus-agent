@@ -494,9 +494,14 @@ function collectVendored(): VendoredRow[] {
   const rows = parseVendoredRows(readFileSync(join(ROOT, 'harness/vendor/README.md'), 'utf8'));
   const onDisk = new Map<string, string>();
   for (const entry of readdirSync(join(ROOT, 'harness', 'vendor'), { withFileTypes: true })) {
-    if (!entry.isDirectory() || !existsSync(join(ROOT, 'harness', 'vendor', entry.name, 'package.json')))
+    if (
+      !entry.isDirectory() ||
+      !existsSync(join(ROOT, 'harness', 'vendor', entry.name, 'package.json'))
+    )
       continue;
-    const manifest = readJson<Manifest>(join(ROOT, 'harness', 'vendor', entry.name, 'package.json'));
+    const manifest = readJson<Manifest>(
+      join(ROOT, 'harness', 'vendor', entry.name, 'package.json'),
+    );
     if (manifest.name !== undefined) onDisk.set(manifest.name, entry.name);
   }
   const parsed = new Set(rows.map((row) => row.npmName));
@@ -512,7 +517,9 @@ function collectVendored(): VendoredRow[] {
       throw new Error(
         `gen-third-party-notices：harness/vendor/README.md 列的 ${row.npmName} 沒有 harness/vendor/ 目錄。`,
       );
-    const license = readJson<Manifest>(join(ROOT, 'harness', 'vendor', dir, 'package.json')).license;
+    const license = readJson<Manifest>(
+      join(ROOT, 'harness', 'vendor', dir, 'package.json'),
+    ).license;
     if (license !== 'MIT') {
       throw new Error(
         `gen-third-party-notices：vendor 的 ${row.npmName} 宣告 ${JSON.stringify(license)}；這一段假設全部是 MIT。`,

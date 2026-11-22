@@ -147,7 +147,12 @@ export function findViolations(file: string, text: string): Violation[] {
   return found;
 }
 
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'web/src', 'harness/packages', 'harness/scripts'] as const;
+const SOURCE_ROOTS = [
+  'harness/apps/harness/src',
+  'web/src',
+  'harness/packages',
+  'harness/scripts',
+] as const;
 
 /**
  * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。

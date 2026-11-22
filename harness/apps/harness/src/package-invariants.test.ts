@@ -123,7 +123,9 @@ describe('對著真的 repo', () => {
   it('repo 根找得到，而且是含 pnpm-workspace.yaml 的那一個', () => {
     // 根算錯的話底下兩條都會掃到空清單然後「通過」，所以先釘根。
     expect(repositoryRoot()).toMatch(/nexus/);
-    expect(packageInvariantOwners().map((owner) => owner.dir)).toContain('harness/packages/nexus-core');
+    expect(packageInvariantOwners().map((owner) => owner.dir)).toContain(
+      'harness/packages/nexus-core',
+    );
   });
 
   it('**掃出來的 owner 正好是那八個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
