@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -178,18 +180,18 @@ class RulesTest(unittest.TestCase):
 
     def test_rule1_row_with_existing_path_line_passes(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
-        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/impl.ts:1 |', head), [])
+        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 |', head), [])
 
     def test_rule1_missing_file_or_line_fails(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
         for ref in ('src/none.ts:1', 'src/impl.ts:99', 'src/impl.ts:0'):
             with self.subTest(ref=ref):
-                errors = verify(a, f'| 這一段由插件登記。 | {ref} |', head)
-                self.assertTrue(any('不存在' in e for e in errors), errors)
+                errors = verify(a, f'| 這一段由插件登記。 | src/a.ts 第 5 行 | {ref} |', head)
+                self.assertTrue(any('規則 1' in e for e in errors), errors)
 
     def test_rule1_unfilled_placeholder_fails(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
-        errors = verify(a, '| 這一段由插件登記。 | <填：path:line> |', head)
+        errors = verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | <填：path:line> |', head)
         self.assertTrue(any('規則 1' in e for e in errors))
 
     def test_rule1_deleting_whole_sentences_needs_no_row(self) -> None:
@@ -219,14 +221,14 @@ class RulesTest(unittest.TestCase):
         a, head = self.analyze_head(CLEAN.replace('## 偏離登記', '## 登記'))
         self.assertEqual([(c.path, c.line) for c in a.candidates], [('src/p.ts', 1)])
         self.assertTrue(any('規則 3' in e and 'src/p.ts:1' in e for e in verify(a, '', head)))
-        self.assertEqual([e for e in verify(a, '| src/p.ts:1 | 那是別的檔自己的偏離登記，名字沒變 |', head) if '規則 3' in e], [])
+        self.assertEqual([e for e in verify(a, '| src/p.ts:1 | 偏離登記 | 那是別的檔自己的偏離登記，名字沒變 |', head) if '規則 3' in e], [])
 
     def test_rule3_row_without_reason_fails(self) -> None:
         pointer = '// 偏離登記寫在 a.ts 的檔頭。\nexport const p = 1;\n'
         self.base = self.repo.commit({'src/a.ts': TS_BASE, 'src/p.ts': pointer})
         a, head = self.analyze_head(CLEAN.replace('## 偏離登記', '## 登記'))
-        self.assertTrue(any('規則 3' in e for e in verify(a, '| src/p.ts:1 | |', head)))
-        self.assertTrue(any('規則 3' in e for e in verify(a, '| src/p.ts:1 | <填：理由> |', head)))
+        self.assertTrue(any('規則 3' in e for e in verify(a, '| src/p.ts:1 | 偏離登記 | |', head)))
+        self.assertTrue(any('規則 3' in e for e in verify(a, '| src/p.ts:1 | 偏離登記 | <填：理由> |', head)))
 
     def test_rule3_pointer_changed_in_this_pr_is_not_a_candidate(self) -> None:
         self.base = self.repo.commit({'src/a.ts': TS_BASE, 'src/p.ts': '// 偏離登記寫在 a.ts 的檔頭。\n'})
@@ -236,7 +238,107 @@ class RulesTest(unittest.TestCase):
     def test_body_edit_alone_changes_the_verdict(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
         self.assertTrue(verify(a, '', head))
-        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/impl.ts:1 |', head), [])
+        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 |', head), [])
+
+
+class PrintedTableTest(unittest.TestCase):
+    """照 --print 印出來的表貼上，只動證據那一格：留空、亂填都要紅（#3152 verifier）。"""
+
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+        base = d(TS_BASE.replace('## 偏離登記', '## 偏離登記（@@ 為準）'))
+        self.base = self.repo.commit({'src/a.ts': base, 'src/impl.ts': 'export const real = 1;\n', 'src/p.ts': '// 偏離登記寫在 a.ts 的檔頭。\n'})
+        self.head = self.repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 登記').replace('我們放在插件裡。', '改由插件登記。')})
+        self.a = analyze(self.base, self.head)
+        self.printed = mod.report(self.a)
+
+    def fill(self, evidence: str, reason: str) -> str:
+        return self.printed.replace('<填：path:line>', evidence).replace('<填：理由>', reason)
+
+    def test_the_printed_table_has_both_kinds_of_rows(self) -> None:
+        self.assertTrue(self.a.sentences)
+        self.assertTrue(self.a.candidates)
+
+    def test_pasted_as_printed_fails(self) -> None:
+        self.assertTrue(verify(self.a, self.printed, self.head))
+
+    def test_blank_or_wrong_evidence_and_reason_fail(self) -> None:
+        for evidence, reason in (('', ''), ('x', 'x'), ('src/none.ts:9', 'x'), ('', '那是別的檔自己的偏離登記，名字沒變')):
+            with self.subTest(evidence=evidence, reason=reason):
+                self.assertTrue(verify(self.a, self.fill(evidence, reason), self.head))
+
+    def test_the_sentence_own_location_is_not_evidence(self) -> None:
+        path, u = self.a.sentences[0]
+        errors = verify(self.a, self.fill(f'{path}:{u.line}', '那是別的檔自己的偏離登記，名字沒變'), self.head)
+        self.assertTrue(any('規則 1' in e for e in errors))
+
+    def test_the_hit_term_is_not_a_reason(self) -> None:
+        errors = verify(self.a, self.fill('src/impl.ts:1', '偏離登記'), self.head)
+        self.assertTrue(any('規則 3' in e for e in errors))
+
+    def test_real_evidence_and_reason_pass_rules_1_and_3(self) -> None:
+        errors = verify(self.a, self.fill('src/impl.ts:1', '那是別的檔自己的偏離登記，名字沒變'), self.head)
+        self.assertEqual([e for e in errors if '規則 1' in e or '規則 3' in e], [])
+
+
+class CssAndShortSentenceTest(unittest.TestCase):
+    def test_css_hash_is_not_a_comment(self) -> None:
+        a, _ = scan('a { color: #000; /* 舊 */ }\n', '.css')
+        b, c = scan('a { color: #fff; /* 新 */ }\n', '.css')
+        self.assertNotEqual(a, b)
+        self.assertEqual([x[1] for x in c], [['新']])
+
+    def test_short_sentences_count(self) -> None:
+        _, c = scan('// 會擋。\n', '.ts')
+        self.assertEqual([u.text for u in units(c)], ['會擋。'])
+
+
+class CommandLineTest(unittest.TestCase):
+    """走一次完整的 main()：讓整道 gate 或重跑失效的突變（不讀 BODY、範圍恆 false、錯誤仍 exit 0）要在這裡紅。"""
+
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+        self.base = self.repo.commit({'src/a.ts': d(TS_BASE), 'src/impl.ts': 'export const real = 1;\n'})
+        self.head = self.repo.commit({'src/a.ts': d(TS_BASE).replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。')})
+
+    def cli(self, *args: str, body: str | None = None, head: str | None = None) -> subprocess.CompletedProcess[str]:
+        env = {k: v for k, v in os.environ.items() if k != 'BODY'}
+        if body is not None:
+            env['BODY'] = body
+        return subprocess.run(
+            [sys.executable, str(Path(mod.__file__)), '--root', str(self.repo.root), '--base', self.base, '--head', head or self.head, *args],
+            capture_output=True, text=True, env=env,
+        )
+
+    def test_empty_body_is_read_and_fails(self) -> None:
+        r = self.cli(body='')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn('::error::規則 1', r.stdout)
+
+    def test_filled_body_passes(self) -> None:
+        r = self.cli(body='| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 |')
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn('證據通過', r.stdout)
+
+    def test_no_body_prints_the_rows_only(self) -> None:
+        r = self.cli()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn('規則 1：改寫與新增的註解句', r.stdout)
+
+    def test_in_scope_answers_true_and_false(self) -> None:
+        self.assertEqual(self.cli('--in-scope').stdout.strip(), 'true')
+        later = self.repo.commit({'src/b.ts': 'export const b = 1;\n'})
+        self.assertEqual(self.cli('--in-scope', head=later).stdout.strip(), 'false')
+
+    def test_out_of_scope_pr_passes_without_a_body(self) -> None:
+        later = self.repo.commit({'src/b.ts': 'export const b = 1;\n'})
+        r = self.cli(body='', head=later)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn('不是清外部對照的 PR', r.stdout)
+
+    def test_a_failing_revision_lookup_is_not_swallowed(self) -> None:
+        r = subprocess.run([sys.executable, str(Path(mod.__file__)), '--root', str(self.repo.root), '--head', 'nope', '--in-scope'], capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
 
 
 if __name__ == '__main__':

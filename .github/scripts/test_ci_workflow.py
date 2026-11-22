@@ -7,7 +7,7 @@
 - gate 的 needs 列了每一個 job，判斷段也讀了每一個 job 的結果——只列 needs 不判斷，skipped 會被當成通過；
 - 兩處釘在下限的 Node（packed-install、node-compat 的 22.19）對得上 `engines`；
 - 同時活躍的 job 峰值在上限之內（ci.yml 檔頭的算式）；
-- 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
+- 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate，例外是 develop → main 與清外部對照的 PR（#2090、#3125）；
 - test-harness 與 native agent loop 各自的四片讀同一份耗時（兩者分開存）、合併後那一輪各片存回自己那一份（#2093、#2498）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
 - web 的真瀏覽器 e2e 只在合併後完整一輪跑，是自己 build 的獨立 job，不在 static 裡（#1602、#2517）；
@@ -1314,7 +1314,7 @@ class LightScope(unittest.TestCase):
 
 
 class EditedPullRequest(unittest.TestCase):
-    """只改 PR 內文不重跑 gate、不取消正在跑的那一輪（#2090 第 7 條）。"""
+    """只改 PR 內文不重跑 gate、不取消正在跑的那一輪，例外是 develop → main 與清外部對照的 PR（#2090 第 7 條、#3125）。"""
 
     def setUp(self) -> None:
         self.ci = load(CI)
@@ -1325,7 +1325,7 @@ class EditedPullRequest(unittest.TestCase):
         self.assertNotIn('types', self.ci[True]['pull_request'])
 
     def test_edited_workflow_has_no_gate(self) -> None:
-        """只改內文時這支的 job 被跳過；叫 gate 的話，跳過的 required check 算成通過。"""
+        """這支的 job 或步驟在不用重跑時會被跳過；叫 gate 的話，跳過的 required check 算成通過。"""
         self.assertEqual(self.wf[True]['pull_request']['types'], ['edited'])
         self.assertNotIn('gate', self.wf['name'].lower())
         for job_id, job in self.wf['jobs'].items():
@@ -1354,12 +1354,22 @@ class EditedPullRequest(unittest.TestCase):
         rerun = next(s for s in steps if 'rerun' in s.get('name', ''))
         self.assertEqual(rerun['if'], "env.SCOPE_FIRST != 'true' || steps.scope.outputs.in_scope == 'true'")
 
+    def test_scope_failure_is_not_swallowed_and_output_name_matches(self) -> None:
+        steps = self.wf['jobs']['rerun']['steps']
+        scope = next(s for s in steps if s.get('id') == 'scope')
+        self.assertIn('scope=$(python3 .github/scripts/check_dsh_cleanup.py --in-scope', scope['run'])
+        self.assertIn('echo "in_scope=$scope" >> "$GITHUB_OUTPUT"', scope['run'])
+        self.assertNotIn('|| true', scope['run'])
+        self.assertTrue(scope['run'].startswith('set -euo pipefail'))
+
     def test_gate_checks_the_cleanup_evidence_on_feature_prs(self) -> None:
         step = next(s for s in load(PLAN_CHECKS)['runs']['steps'] if 'check_dsh_cleanup.py' in str(s.get('run', '')))
         self.assertEqual(step['if'], "github.event_name == 'pull_request' && github.base_ref != 'main'")
         self.assertIn('jq -r \'.body // ""\' "$RUNNER_TEMP/pr.json"', step['run'])
         self.assertIn('check_dsh_cleanup.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"', step['run'])
         self.assertNotIn('BODY', step.get('env', {}))
+        self.assertNotIn('|| true', step['run'])
+        self.assertIn('set -euo pipefail', step['run'])
         names = [s.get('name') for s in load(PLAN_CHECKS)['runs']['steps']]
         self.assertLess(names.index('檢查 PR 標題與內文'), names.index(step['name']))
 

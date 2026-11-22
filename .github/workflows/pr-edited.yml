@@ -8,7 +8,7 @@ name: PR 編輯後重驗
 #   - 功能 PR 改內文：只有清外部對照的 PR（只動註解與字串內容、對照詞計數下降，.github/scripts/check_dsh_cleanup.py 判）的 gate 讀內文，
 #     所以先用同一支腳本判範圍，在範圍內才重跑；其餘功能 PR 改內文照舊不重跑。
 #
-# job 不能叫 gate：只改功能 PR 內文時它被跳過，跳過的 required check 算成通過。
+# job 不能叫 gate：這支的 job 或步驟在不用重跑時會被跳過（例如範圍外的內文編輯只跳過 rerun 那一步），跳過的 required check 算成通過。
 on:
   pull_request:
     branches: [develop, main]
@@ -46,7 +46,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
-          echo "in_scope=$(python3 .github/scripts/check_dsh_cleanup.py --in-scope --base "$(git merge-base "origin/$BASE_REF" HEAD)")" >> "$GITHUB_OUTPUT"
+          scope=$(python3 .github/scripts/check_dsh_cleanup.py --in-scope --base "$(git merge-base "origin/$BASE_REF" HEAD)")
+          echo "in_scope=$scope" >> "$GITHUB_OUTPUT"
 
       - name: rerun 這個 head 最新的一輪
         if: env.SCOPE_FIRST != 'true' || steps.scope.outputs.in_scope == 'true'

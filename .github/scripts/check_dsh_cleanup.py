@@ -1,4 +1,4 @@
-"""清外部對照的 PR（階段 1）的證據檢查，規則見 docs/agents/collab-mode.md〈導正〉與 #3125。
+"""清外部對照的 PR（階段 1）的證據檢查，規則見 docs/agents/collab-mode.md 裡清外部對照 PR 的那一段與 #3125。
 
 只對「階段 1 那種 PR」生效：對照詞計數下降，而且除了註解與字串內容，程式碼沒變。三條規則：
 
@@ -84,7 +84,7 @@ def norm(text: str) -> str:
 def scan(text: str, ext: str) -> tuple[str, Comments]:
     """回傳 (去掉註解、字串內容清空、空白壓平後的程式碼, 註解們)。註解是 (起始行, 每行文字, 是不是獨占一行)。"""
     slash = ext in SLASH
-    marker = '//' if slash and ext != '.css' else '#'
+    marker = '' if ext == '.css' else '//' if slash else '#'
     rust = ext == '.rs'
     code: list[str] = []
     comments: Comments = []
@@ -112,7 +112,7 @@ def scan(text: str, ext: str) -> tuple[str, Comments]:
             comments.append((line, cleaned, not has_code))
             line += len(parts) - 1
             i = j
-        elif text.startswith(marker, i) and (slash or i == 0 or text[i - 1] in ' \t\n'):
+        elif marker and text.startswith(marker, i) and (slash or i == 0 or text[i - 1] in ' \t\n'):
             j = text.find('\n', i)
             j = n if j == -1 else j
             body = text[i + len(marker) : j]
@@ -190,7 +190,7 @@ def units(comments: Comments) -> list[Unit]:
                     para_line = start + offset
                 para.append(s)
         flush()
-    return [u for u in out if TABLE_ROW.match(u.text) or (len(norm(u.text)) >= 4 and re.search(r'\w', u.text))]
+    return [u for u in out if TABLE_ROW.match(u.text) or (len(norm(u.text)) >= 2 and re.search(r'\w', u.text))]
 
 
 def is_separator(row: str) -> bool:
@@ -380,52 +380,67 @@ def line_exists(head: str, path: str, line: int) -> bool:
     return bool(text) and 1 <= line <= len(text.rstrip('\n').split('\n'))
 
 
-def valid_refs(row: str, head: str) -> list[tuple[str, int, int]]:
+def valid_refs(row: str, head: str, exclude: tuple[str, int] | None = None) -> list[tuple[str, int, int]]:
     out = []
     for m in REF.finditer(row):
         path, lo = m.group(1), int(m.group(2))
         hi = int(m.group(3) or lo)
+        if exclude and path == exclude[0] and lo <= exclude[1] <= hi:
+            continue
         if lo <= hi and line_exists(head, path, lo) and line_exists(head, path, hi):
             out.append((path, lo, hi))
     return out
 
 
-def reason_of(row: str) -> str:
-    return re.sub(r'[\s|`*\-–:：，。、,.]', '', REF.sub('', row))
+def cells_of(row: str) -> list[str]:
+    return [c.strip() for c in re.split(r'(?<!\\)\|', row.strip().strip('|'))]
+
+
+def reason_of(text: str, term: str) -> str:
+    return re.sub(r'[\s|`*\-–:：，。、,.]', '', REF.sub('', text.replace(term, '')))
+
+
+def table_rows(body: str) -> list[list[str]]:
+    return [cells_of(r) for r in body.split('\n') if TABLE_ROW.match(r.strip()) and PLACEHOLDER not in r]
 
 
 def verify(a: Analysis, body: str, head: str) -> list[str]:
     errors: list[str] = []
-    rows = [norm_row for norm_row in ((norm(r), r) for r in body.split('\n') if r.strip() and PLACEHOLDER not in r)]
+    rows = table_rows(body)
     for path, u in a.sentences:
         key = norm(u.text)
-        hit = [r for k, r in rows if key in k]
+        hit = [r for r in rows if len(r) >= 2 and norm(r[0]) == key]
+        where = f'{path}:{u.line} 的句子「{u.text[:60]}」'
         if not hit:
-            errors.append(f'規則 1：{path}:{u.line} 的句子「{u.text[:60]}」，內文沒有對應的一列。整句刪掉，或在內文附這一句加上 nexus 實作的 path:line。')
-        elif not any(valid_refs(r, head) for r in hit):
-            errors.append(f'規則 1：{path}:{u.line} 的句子「{u.text[:60]}」，內文那一列的 path:line 在 head 上不存在。')
+            errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:line |` 補一列，整句放第一格。')
+        elif not any(valid_refs(' '.join(r[1:]), head, exclude=(path, u.line)) for r in hit):
+            errors.append(f'規則 1：{where}，那一列後面的格子沒有在 head 上存在的 nexus 實作 path:line（句子自己的位置不算）。')
     for path, n, blocking in a.vanished:
         if blocking:
             errors.append(f'規則 2：{path}:{n.line} 的段名「{n.text}」在這個檔消失了。階段 1 不改段名，改名留給階段 2，跟所有指向同一張 PR 改。')
     for c in a.candidates:
         if not any(
-            any(p == c.path and lo <= c.line <= hi for p, lo, hi in valid_refs(r, head)) and len(reason_of(r)) >= MIN_REASON
-            for _, r in rows
+            len(r) >= 3
+            and any(p == c.path and lo <= c.line <= hi for p, lo, hi in valid_refs(r[0], head))
+            and len(reason_of(r[-1], c.term)) >= MIN_REASON
+            for r in rows
         ):
-            errors.append(f'規則 3：{c.path}:{c.line} 可能指向消失的「{c.term}」，要在這張 PR 改掉，或在內文寫一列說明為什麼仍成立。')
+            errors.append(
+                f'規則 3：{c.path}:{c.line} 可能指向消失的「{c.term}」，要在這張 PR 改掉，或照 `| path:line | 詞 | 為什麼仍成立 |` 補一列，理由放最後一格。'
+            )
     return errors
 
 
 def report(a: Analysis) -> str:
     pipe = '\\|'
-    lines = ['## 規則 1：改寫與新增的註解句（貼進內文，補上 nexus 實作的 path:line）', '', '| 句子 | 檔案 | nexus 實作的 path:line |', '| --- | --- | --- |']
-    lines += [f'| {u.text.replace("|", pipe)} | {path}:{u.line} | {PLACEHOLDER}：path:line> |' for path, u in a.sentences] or ['| （沒有） | | |']
+    lines = ['## 規則 1：改寫與新增的註解句（貼進內文，整句放第一格，最後一格補 nexus 實作的 path:line，不用改位置那格）', '', '| 句子 | 位置 | nexus 實作的 path:line |', '| --- | --- | --- |']
+    lines += [f'| {u.text.replace("|", pipe)} | {path} 第 {u.line} 行 | {PLACEHOLDER}：path:line> |' for path, u in a.sentences] or ['| （沒有） | | |']
     lines += ['', '## 規則 2：消失的段名', '']
     lines += [
         f'- {path}:{n.line}「{n.text}」' + ('' if blocking else '（含對照詞或是文件標題，不擋，改走規則 3）')
         for path, n, blocking in a.vanished
     ] or ['- （沒有）']
-    lines += ['', '## 規則 3：可能指向消失段名的地方（每一個要改掉，或在內文留一列說明為什麼仍成立）', '', '| 位置 | 命中的詞 | 為什麼仍成立 |', '| --- | --- | --- |']
+    lines += ['', '## 規則 3：可能指向消失段名的地方（每一個要改掉，或在內文留一列，最後一格寫為什麼仍成立）', '', '| 位置 | 命中的詞 | 為什麼仍成立 |', '| --- | --- | --- |']
     lines += [f'| {c.path}:{c.line} | {c.term} | {PLACEHOLDER}：理由> |' for c in a.candidates] or ['| （沒有） | | |']
     return '\n'.join(lines)
 
@@ -434,11 +449,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--base', help='比對的起點，預設 origin/develop 與 head 的分歧點')
     parser.add_argument('--head', default='HEAD')
+    parser.add_argument('--root', help='要檢查的 repo，預設是這支 script 所在的 repo')
     parser.add_argument('--body-file', help='PR 內文；沒給時讀環境變數 BODY，兩者都沒有就只印出要填的列')
     parser.add_argument('--print', action='store_true', dest='print_rows', help='不驗內文，只印出要填的列')
     parser.add_argument('--in-scope', action='store_true', help='只回答這張 PR 在不在範圍內：印 true 或 false')
     args = parser.parse_args()
 
+    if args.root:
+        globals()['ROOT'] = Path(args.root).resolve()
     head = git('rev-parse', args.head).strip()
     base = args.base or git('merge-base', 'origin/develop', head).strip()
     a = analyze(base, head)
