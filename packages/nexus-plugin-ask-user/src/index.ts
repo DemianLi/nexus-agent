@@ -5,8 +5,7 @@
  *
  * - **五個欄位**：`id`、`question`、`header?`、`options?: {label, description?}[]`、
  *   `multi_select?`。`QuestionInterruptItem` 型別上另有 `detail?` 與 `intent?`，但工具 schema
- *   不給模型這兩格；它們只由 `@nexus/plugin-plan-mode` 的 `exit_plan_mode`（#652）填。
- *   一題的形狀因此放在 `@nexus/core` 的 `QuestionInterruptItem`，兩個生產者讀同一份。
+ *   不給模型這兩格。一題的形狀放在 `@nexus/core` 的 `QuestionInterruptItem`，各個生產者讀同一份。
  * - **`multi_select` 是蛇形，內部是 `multiSelect`**，不是筆誤。
  * - **回程 `{ answers: [{ id, selected: string[], custom? }] }`**。
  * - **不加型別、不加必填、不加格式**（[#231](https://github.com/DemianLi/nexus-agent/issues/231)
@@ -14,7 +13,7 @@
  *
  * ## 一條通道加一個判別式
  *
- * LangGraph 只給一顆 `interrupt()`，核准與問答兩種請求走同一條，所以**同一顆中斷，酬載明著帶
+ * LangGraph 只給一顆 `interrupt()`，各種請求走同一條，所以**同一顆中斷，酬載明著帶
  * `kind`**。判別式的另一半在 `@nexus/wire` 的 `reduceInputRequested`。
  *
  * ## fail-closed 用的是核准那條路的同一個判準
@@ -267,8 +266,7 @@ export function createAskUserTool(
  * 登記時帶的選項（#1458 Q3 (a)）：樹上的列與相容層外殼用同一份。
  *
  * - `outputSchema`：成功那一條的輸出形狀（#252）。
- * - `rootOnly`：**子代理不停下來問人**（#324）：fold 把每個子代理那一份換成拒絕樁，
- *   理由見 `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`，句與碼由這裡帶。
+ * - `rootOnly`：**子代理不停下來問人**（#324）：fold 把每個子代理那一份換成拒絕樁，句與碼由這裡帶。
  */
 export const ASK_USER_REGISTER_OPTIONS: ToolRegisterOptions = {
   outputSchema: ASK_USER_OUTPUT_SCHEMA,
