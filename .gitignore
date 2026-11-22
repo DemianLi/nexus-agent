@@ -45,3 +45,10 @@ eval-results/
 
 # 從原始碼在 Linux 上起 serve 時放編好的 spawner 的位置（#1946）
 /harness/native/nexus-sandbox-spawner
+
+# 搬家前的產物位置：既有 checkout 更新後這些目錄還留在舊路徑（過渡期，#3149）。
+/apps/
+/packages/*/lib/
+/vendor/*/lib/
+/native/
+/scripts/
