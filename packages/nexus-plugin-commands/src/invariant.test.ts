@@ -96,6 +96,27 @@ describe('三條關係各自擋一種缺陷', () => {
     expect(violations[0]).toMatch(/"cmd-1" 還沒落定/);
   });
 
+  it('序列性違規只報序列性——後面的 done 不連帶被報成配不到 run', () => {
+    const { log, violations } = watched();
+    run(log, 'cmd-1');
+    run(log, 'cmd-2');
+    done(log, 'cmd-1');
+    done(log, 'cmd-2');
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatch(/"cmd-1" 還沒落定/);
+  });
+
+  it('緊鄰的上一個沒落定，照舊報序列性', () => {
+    const { log, violations } = watched();
+    run(log, 'cmd-1');
+    run(log, 'cmd-2');
+    run(log, 'cmd-3');
+    done(log, 'cmd-2');
+    const before = violations.length;
+    run(log, 'cmd-4');
+    expect(violations.slice(before)).toEqual([expect.stringContaining('還沒落定')]);
+  });
+
   it('done 配不到任何 run', () => {
     const { log, violations } = watched();
     done(log, 'cmd-幽靈');
