@@ -29,7 +29,8 @@ export const pathsPlugin = (): ReturnType<typeof tsconfigPaths> =>
  * 解到 `lib/`，在乾淨的樹（CI）上找不到。這是刻意的：子行程測試也因此能把 `@nexus/*` 解到 `src/`。
  * 要在子行程裡驗「沒有 tsx 蓋著」的情況，用 `scripts/smoke-built-bin.ts`（它清掉 `NODE_OPTIONS`、`NODE_PATH` 與這個變數）。
  *
- * 撤除條件：這批測試改走子行程或 `lib` 模式的那一天，就拿掉這個函式。
+ * 撤除條件：`apps/harness` 那批對行程內物件下斷言（函式身分、樹上的列、middleware 鏈、ctx 服務物件）的測試改走子行程或 `lib` 模式的那一天，
+ * 就拿掉這個函式（那批測試的分類與不能改的理由見 `docs/plugin-contract.md:586`）。
  * @returns 要放進 `test.execArgv` 的參數。
  */
 export const sourceHook = (): string[] => {
