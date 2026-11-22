@@ -158,7 +158,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 卡的正文是唯一的規格、寫到的程式碼現況要核過 | verifier（Spec 軸對程式碼核正文的前提） |
 | ADR 的位置、檔名、編號與標題行 | gate（`check_adrs.py`） |
 | ADR 只在三個條件都成立時寫 | verifier |
-| 程式碼裡的 dsh 引用數只降不升 | gate（`check_ratchets.py`，基準 `.github/ratchets.json`） |
+| 程式碼裡的 dsh 引用數只降不升 | gate（`check_ratchets.py`，基準在 `.github/ratchets/`） |
 | 註解裡的變更敘事用語只降不升 | gate（同上） |
 
-只降不升的計數以目錄為單位，計法見 `check_ratchets.py` 的 `EXTENSIONS`、`EXCLUDED_PREFIXES`、`EXCLUDED_PARTS`、`EXEMPT`、`DSH`、`COMMENT_OR_INLINE_SLASHES`、`NARRATIVE`。清掉引用的 PR 要在同一張把基準調低：`python3 .github/scripts/check_ratchets.py --write`。基準不能調高，gate 會拿分歧點那一版的基準比。
+只降不升的計數以目錄為單位，計法見 `check_ratchets.py` 的 `EXTENSIONS`、`EXCLUDED_PREFIXES`、`EXCLUDED_PARTS`、`EXEMPT`、`DSH`、`COMMENT_OR_INLINE_SLASHES`、`NARRATIVE`。基準每個目錄一個檔：`.github/ratchets/<目錄，/ 換成 __>.json`，根目錄是 `_root.json`，沒有檔的目錄算 0。清掉引用的 PR 要在同一張把基準調低：`python3 .github/scripts/check_ratchets.py --write`（只重寫數字變了的檔），平行的 PR 改不同目錄就不會互相衝突。基準不能調高，gate 會拿分歧點那一版的基準比：分歧點有新資料夾就比資料夾，只有舊的 `.github/ratchets.json` 就比它，有 `check_ratchets.py` 卻讀不到基準會報錯，連腳本都沒有（例如 `main` 的舊版本）才跳過並印出原因。
