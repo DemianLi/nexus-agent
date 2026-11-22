@@ -56,22 +56,21 @@ export const commandsInvariant: InvariantInstaller = (subject, fail) => {
     if (event.type === 'command/run') {
       const { commandId } = event.data;
       const duplicate = seen.has(commandId);
-      const previous = open;
-      // `fail` 會拋，所以狀態要在它之前記好：不然違規的這一顆 run 沒進 `seen`，
-      // 它的 `command/done` 會被連帶誤報成配不到 run。
+      // `fail` 會拋：`seen` 要在它之前記好，違規那顆 run 的 `command/done` 才不會被連帶
+      // 誤報成配不到 run；`open` 留在上一個沒落定的，之後的 run 才會照舊報序列性。
       seen.add(commandId);
-      open = commandId;
       if (duplicate) {
         fail(
           `command/run（seq ${String(event.seq)}）重複用了 commandId ${JSON.stringify(commandId)}`,
         );
       }
-      if (previous !== undefined) {
+      if (open !== undefined) {
         fail(
-          `command/run（seq ${String(event.seq)}）來的時候 ${JSON.stringify(previous)} 還沒落定` +
+          `command/run（seq ${String(event.seq)}）來的時候 ${JSON.stringify(open)} 還沒落定` +
             `——命令是一次一個，上一個沒有 command/done 就是漏了一顆`,
         );
       }
+      open = commandId;
       return;
     }
     if (event.type !== 'command/done') return;
@@ -82,7 +81,7 @@ export const commandsInvariant: InvariantInstaller = (subject, fail) => {
           `在這份日誌裡配不到任何 command/run`,
       );
     }
-    open = undefined;
+    if (open === commandId) open = undefined;
   });
 };
 
