@@ -67,14 +67,14 @@ runs:
       with:
         path: |
           ~/.cargo/registry
-          native/sandbox-spawner/target
+          harness/native/sandbox-spawner/target
         key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('harness/native/sandbox-spawner/Cargo.lock', 'harness/native/sandbox-spawner/rust-toolchain.toml') }}
     - if: inputs.cache == 'true' && inputs.test != 'true'
       uses: actions/cache/restore@v6
       with:
         path: |
           ~/.cargo/registry
-          native/sandbox-spawner/target
+          harness/native/sandbox-spawner/target
         key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('harness/native/sandbox-spawner/Cargo.lock', 'harness/native/sandbox-spawner/rust-toolchain.toml') }}
     - name: 核心與 LSM
       shell: bash
@@ -131,7 +131,7 @@ runs:
     - name: 包監督行程與宿主
       if: inputs.per-thread-binaries != ''
       shell: bash
-      working-directory: native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release
+      working-directory: harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release
       run: tar -cf "$RUNNER_TEMP/per-thread-binaries.tar" nexus-supervisor nexus-host
     - if: inputs.per-thread-binaries != ''
       uses: actions/upload-artifact@v7

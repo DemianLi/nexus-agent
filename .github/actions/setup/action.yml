@@ -37,13 +37,15 @@ runs:
         path: |
           node_modules
           harness/packages/*/node_modules
-          apps/*/node_modules
+          harness/apps/*/node_modules
+          web/node_modules
           harness/vendor/*/node_modules
           harness/vendor/*/lib/types
           !harness/packages/*/node_modules/.cache
-          !apps/*/node_modules/.cache
+          !harness/apps/*/node_modules/.cache
+          !web/node_modules/.cache
           ~/setup-pnpm
-        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'harness/packages/*/package.json', 'apps/*/package.json', 'harness/vendor/*/package.json', 'harness/vendor/*/tsconfig.json', 'harness/vendor/*/src/**') }}
+        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'harness/packages/*/package.json', 'harness/apps/*/package.json', 'web/package.json', 'harness/vendor/*/package.json', 'harness/vendor/*/tsconfig.json', 'harness/vendor/*/src/**') }}
 
     # 路徑要跟 pnpm/action-setup 沒命中時設的一致：pnpm 執行檔在 $PNPM_HOME 底下，store 也在那裡。
     - name: 接上快取裡的 pnpm
@@ -76,10 +78,12 @@ runs:
         path: |
           node_modules
           harness/packages/*/node_modules
-          apps/*/node_modules
+          harness/apps/*/node_modules
+          web/node_modules
           harness/vendor/*/node_modules
           harness/vendor/*/lib/types
           !harness/packages/*/node_modules/.cache
-          !apps/*/node_modules/.cache
+          !harness/apps/*/node_modules/.cache
+          !web/node_modules/.cache
           ~/setup-pnpm
         key: ${{ steps.modules.outputs.cache-primary-key }}

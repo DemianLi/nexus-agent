@@ -147,7 +147,7 @@ export function findViolations(file: string, text: string): Violation[] {
   return found;
 }
 
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'web/src', 'packages', 'scripts'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'web/src', 'harness/packages', 'harness/scripts'] as const;
 
 /**
  * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。
@@ -169,7 +169,7 @@ function sourceFiles(dir: string): string[] {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === 'dist') continue;
-      if (/^packages\/[^/]+\/lib$/u.test(relative(REPO_ROOT, full))) continue;
+      if (/^harness\/packages\/[^/]+\/lib$/u.test(relative(REPO_ROOT, full))) continue;
       out.push(...sourceFiles(full));
     } else if (isSource(entry.name)) {
       out.push(full);

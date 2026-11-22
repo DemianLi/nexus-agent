@@ -146,7 +146,7 @@ function walk(dir: string, out: string[]): void {
 
 function productFiles(root: string): string[] {
   const files: string[] = [];
-  for (const group of ['packages', 'apps']) {
+  for (const group of ['harness/packages', 'harness/apps']) {
     for (const pkg of readdirSync(join(root, group), { withFileTypes: true })) {
       if (!pkg.isDirectory()) continue;
       const src = join(root, group, pkg.name, 'src');

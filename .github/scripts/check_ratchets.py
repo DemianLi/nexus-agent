@@ -13,7 +13,7 @@ BASELINE_DIR = '.github/ratchets'
 LEGACY_BASELINE = '.github/ratchets.json'
 SCRIPT = '.github/scripts/check_ratchets.py'
 EXTENSIONS = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.py', '.sh', '.yml', '.yaml', '.css', '.toml')
-EXCLUDED_PREFIXES = ('references/', 'harness/vendor/', 'web/src/vendor/', 'docs/', '.docs/')
+EXCLUDED_PREFIXES = ('references/', 'vendor/', 'apps/web/src/vendor/', 'docs/', '.docs/')
 EXCLUDED_PARTS = ('/fixtures/', '/__snapshots__/')
 EXEMPT = {'.github/scripts/check_ratchets.py', '.github/scripts/test_check_ratchets.py'}
 
@@ -32,7 +32,18 @@ class BaselineError(Exception):
     pass
 
 
+MOVES = (('web/', 'apps/web/'), ('harness/apps/harness/', 'apps/harness/'), ('harness/', ''))
+
+
+def original(path: str) -> str:
+    for now, was in MOVES:
+        if path.startswith(now):
+            return was + path[len(now):]
+    return path
+
+
 def directory(path: str) -> str:
+    path = original(path)
     parts = path.split('/')
     if parts[0] in ('apps', 'packages') and len(parts) > 2:
         return '/'.join(parts[:2])
@@ -40,6 +51,7 @@ def directory(path: str) -> str:
 
 
 def scanned(path: str) -> bool:
+    path = original(path)
     if not path.endswith(EXTENSIONS) or path in EXEMPT:
         return False
     if path.startswith(EXCLUDED_PREFIXES):

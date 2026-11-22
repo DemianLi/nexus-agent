@@ -33,10 +33,10 @@ TS_RE = re.compile(
     r'|^docs/operations\.md$'
     r'|^docs/persistence-schema\.json$'
     r'|^docs/persistence-changes/'
-    r'|^apps/harness/cordis(\.serve)?\.yml$'
+    r'|^harness/apps/harness/cordis(\.serve)?\.yml$'
     r'|^harness/apps/harness/src/.*\.patch\.yml$'
     r'|^web/.*\.css$|^web/tokengen/|^web/scripts/.*\.mjs$|^web/guard/'
-    r'|^apps/web/index\.html$'
+    r'|^web/index\.html$'
 )
 
 # 不是 TypeScript、但在全跑那一層也要觸發掃描的異動。
@@ -48,7 +48,7 @@ SCAN_RES = [
         # 相依、工具鏈、workspace 設定：影響每一個套件。
         r'^(pnpm-workspace\.yaml|\.npmrc|\.prettierignore|\.prettierrc.*|prettier\.config\..*)$',
         r'^(eslint\.config\..*|vitest\..*)$',
-        r'^apps/(harness|web)/(package\.json|tsconfig.*\.json|eslint\.config\..*)$',
+        r'^(?:harness/apps/harness/|web/)(package\.json|tsconfig.*\.json|eslint\.config\..*)$',
         # CI 自己。`actions/` 是每個 job 共用的 setup（Node 版本在這裡，#1546）。
         r'^\.github/(workflows|scripts|actions)/',
         # 漏洞掃描的例外清單（#1545）：格式由 `.github/scripts/test_check_audit.py` 驗。
@@ -76,7 +76,7 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 # harness/apps/harness/src 的 434 個 commit 裡 134 個碰到其一），算進來這些 PR 都要編 Rust；只改它們的功能 PR 要等合併後完整一輪才測得到。
 RUST_RE = re.compile(
     r'^harness/native/sandbox-spawner/'
-    r'|^packages/nexus-plugin-workspace-changes/src/git\.'
+    r'|^harness/packages/nexus-plugin-workspace-changes/src/git\.'
     r'|^harness/packages/nexus-host-bridge/'
     r'|^harness/apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
     r'|^harness/apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|pair-leaf\S*|host-client|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
@@ -98,7 +98,7 @@ def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False
 TYPECHECK_ALL_RE = re.compile(r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$|^harness/vendor/')
 
 # 型別檢查的範圍是 `harness/packages/*` 與 `apps/*`，跟全跑那一層的 typecheck job 一樣。
-PROJECT_RE = re.compile(r'^((?:packages|apps)/[^/]+)/')
+PROJECT_RE = re.compile(r'^(web|harness/(?:packages|apps)/[^/]+)/')
 # 套件裡會改變型別檢查結果的檔：原始碼、`package.json`、`tsconfig*.json`、可被 import 的 JSON。只改 README 不查。
 TYPECHECK_FILE_RE = re.compile(r'\.(ts|tsx|mts|cts|json)$')
 LINT_RE = re.compile(r'\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$')
@@ -145,7 +145,7 @@ def web_design_guards(root: Path = ROOT) -> list[str]:
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
     """`harness/packages/*`、`apps/*` 的目錄 → 套件名。"""
-    manifests = sorted([*root.glob('harness/packages/*/package.json'), *root.glob('apps/*/package.json')])
+    manifests = sorted([*root.glob('harness/packages/*/package.json'), *root.glob('harness/apps/*/package.json'), *root.glob('web/package.json')])
     return {m.parent.relative_to(root).as_posix(): json.loads(m.read_text(encoding='utf-8'))['name'] for m in manifests}
 
 
@@ -210,7 +210,7 @@ def write_light(scope: dict, out: Path) -> None:
     """寫成 shell 好讀的檔：`typecheck.txt` 是 pnpm 的參數，`lint.tsv`、`tests.tsv` 一行是「目錄<TAB>檔」。"""
     out.mkdir(parents=True, exist_ok=True)
     if scope['typecheck'] == 'all':
-        args = ['--filter=./harness/packages/*', '--filter=./apps/*']
+        args = ['--filter=./harness/packages/*', '--filter=./harness/apps/*', '--filter=./web']
     else:
         args = [f'--filter=...{name}' for name in scope['typecheck']]
     (out / 'typecheck.txt').write_text(''.join(f'{a}\n' for a in args), encoding='utf-8')

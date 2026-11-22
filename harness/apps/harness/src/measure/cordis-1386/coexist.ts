@@ -35,7 +35,7 @@ import { createToolsProvider } from '@nexus/tools/provider';
 import { STATE, boot, createEntry, fiberOf } from './tree.js';
 
 const REPO = join(import.meta.dirname, '../../../../../..');
-const MCP = join(REPO, 'packages', 'nexus-plugin-mcp');
+const MCP = join(REPO, 'harness', 'packages', 'nexus-plugin-mcp');
 const FIXTURE_SERVER = join(MCP, 'src', 'fixture-server.ts');
 const TOOL = 'mcp__fixture__fetch_release_note';
 

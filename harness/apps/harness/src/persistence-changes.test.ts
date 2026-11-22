@@ -1406,8 +1406,8 @@ function sourceTree(payload: string): string {
       },
     }),
   );
-  mkdirSync(join(root, 'apps', 'harness', 'src'), { recursive: true });
-  mkdirSync(join(root, 'apps', 'web', 'src'), { recursive: true });
+  mkdirSync(join(root, 'harness', 'apps', 'harness', 'src'), { recursive: true });
+  mkdirSync(join(root, 'web', 'src'), { recursive: true });
   put(
     root,
     'harness/apps/harness/src/jsonl-session-store.ts',

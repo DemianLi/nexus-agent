@@ -192,7 +192,7 @@ function isLinkPath(path: string): boolean {
 
 /** 從 repo 的 `harness/vendor/*` 讀出它們的套件名。 */
 export function vendorPackageNames(root: string = ROOT): string[] {
-  const base = join(root, 'vendor');
+  const base = join(root, 'harness', 'vendor');
   if (!existsSync(base)) return [];
   return readdirSync(base, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && existsSync(join(base, entry.name, 'package.json')))

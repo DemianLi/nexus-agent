@@ -34,7 +34,7 @@ import type { CountingProxy } from '../smoke/counting-proxy.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(HERE, '..', '..');
-const ROOT = join(HARNESS, '..', '..');
+const ROOT = join(HARNESS, '..', '..', '..');
 
 /** 量測的命令列參數。`timeoutMs` 是每一題的期限。 */
 export interface EmbedEvalOptions {

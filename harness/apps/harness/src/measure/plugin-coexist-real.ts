@@ -64,7 +64,7 @@ export async function probeRealPlugin(
 ): Promise<RealProbeResult> {
   // 副本放在**套件自己的目錄底下**：它的相依（`diff`、`quickjs-emscripten`、MCP adapter⋯）住在套件自己的
   // `node_modules`，放到別處裸 specifier 就找不到——這本身就是「新版要連同自己的 node_modules 一起裝」的證據。
-  const root = await mkdtemp(join(REPO, 'packages', `nexus-plugin-${pkg}`, '.coexist-real-'));
+  const root = await mkdtemp(join(REPO, 'harness', 'packages', `nexus-plugin-${pkg}`, '.coexist-real-'));
   const failed = (detail: string): RealProbeResult => ({
     pkg,
     status: 'failed',
@@ -78,7 +78,7 @@ export async function probeRealPlugin(
   });
   try {
     for (const version of ['v1', 'v2']) {
-      await cp(join(REPO, 'packages', `nexus-plugin-${pkg}`, 'src'), join(root, version), {
+      await cp(join(REPO, 'harness', 'packages', `nexus-plugin-${pkg}`, 'src'), join(root, version), {
         recursive: true,
         filter: (source) =>
           !/\.test\.ts$/u.test(source) && !/fixture/u.test(relative(REPO, source)),

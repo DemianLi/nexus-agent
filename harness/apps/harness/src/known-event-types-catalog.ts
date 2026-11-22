@@ -129,7 +129,7 @@ export function collectSessionEventTypes(repoRoot: string, roots: readonly strin
         if (topLevel) {
           const exported =
             declaration.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-          if (!/^packages\/nexus-core\/src\//u.test(path)) {
+          if (!/^harness\/packages\/nexus-core\/src\//u.test(path)) {
             violations.push(
               `頂層的 interface SessionEventMap（${here}）不在 ${CORE_MODULE} 裡。改個名字，或改用 declare module '${CORE_MODULE}' 補種類。`,
             );
@@ -188,7 +188,7 @@ export function collectSessionEventTypes(repoRoot: string, roots: readonly strin
 
 /** 預設要掃的目錄（相對於 repo 根）。web 也在內：它不該宣告事件，列進來才擋得住有人在那裡補。 */
 export const EVENT_CATALOG_ROOTS: readonly string[] = [
-  'packages',
+  'harness/packages',
   'harness/apps/harness/src',
   'web/src',
 ];

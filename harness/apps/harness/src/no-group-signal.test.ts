@@ -107,7 +107,7 @@ describe('pid 檔存在不代表有內容', () => {
 /** 整棵測試原始碼（harness 與各套件），略過產物與相依。 */
 function sourceFiles(): string[] {
   const here = fileURLToPath(new URL('.', import.meta.url));
-  const repo = join(here, '..', '..', '..');
+  const repo = join(here, '..', '..', '..', '..');
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
@@ -118,9 +118,9 @@ function sourceFiles(): string[] {
       else if (/\.(test|fixture)\.ts$/u.test(name)) out.push(path);
     }
   };
-  walk(join(repo, 'apps', 'harness', 'src'));
-  for (const pkg of readdirSync(join(repo, 'packages'))) {
-    const src = join(repo, 'packages', pkg, 'src');
+  walk(join(repo, 'harness', 'apps', 'harness', 'src'));
+  for (const pkg of readdirSync(join(repo, 'harness', 'packages'))) {
+    const src = join(repo, 'harness', 'packages', pkg, 'src');
     try {
       walk(src);
     } catch {

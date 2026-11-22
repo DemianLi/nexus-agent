@@ -274,7 +274,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'harness/packages/nexus-core/src/tool-result-eviction.ts › toolResultEvictionWrap request.state': 2,
 };
 
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'harness/packages'] as const;
 
 describe('全樹掃描', () => {
   it('讀 state 的地方與白名單一致', () => {

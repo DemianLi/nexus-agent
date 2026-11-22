@@ -37,9 +37,10 @@ def group_by_app(files: list[str]) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     for f in files:
         parts = f.split('/')
-        if len(parts) < 3 or parts[0] != 'apps':
-            raise ValueError(f'清單只收 apps/<名稱>/ 底下的測試：{f}')
-        groups.setdefault('/'.join(parts[:2]), []).append(f)
+        n = 1 if parts[:1] == ['web'] else 3 if parts[:2] == ['harness', 'apps'] else 0
+        if not n or len(parts) <= n:
+            raise ValueError(f'清單只收 app 底下的測試：{f}')
+        groups.setdefault('/'.join(parts[:n]), []).append(f)
     return groups
 
 

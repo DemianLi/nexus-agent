@@ -423,7 +423,7 @@ describe('出貨的 cordis.yml', () => {
   });
 
   it('出貨檔的路徑指到真的存在的那一份', () => {
-    expect(shippedConfigPath()).toMatch(/apps\/harness\/cordis\.yml$/u);
+    expect(shippedConfigPath()).toMatch(/harness\/apps\/harness\/cordis\.yml$/u);
     expect(() => composeEntries()).not.toThrow();
   });
 });

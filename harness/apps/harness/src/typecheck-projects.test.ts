@@ -19,7 +19,7 @@ import { ROOT } from '../../../scripts/workspace-packages.js';
 
 function manifests(): Map<string, { name: string; deps: string[] }> {
   const found = new Map<string, { name: string; deps: string[] }>();
-  for (const parent of ['packages', 'apps']) {
+  for (const parent of ['harness/packages', 'harness/apps']) {
     for (const name of readdirSync(join(ROOT, parent))) {
       const dir = `${parent}/${name}`;
       let raw: string;

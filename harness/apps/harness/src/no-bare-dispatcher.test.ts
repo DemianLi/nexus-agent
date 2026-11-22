@@ -141,7 +141,7 @@ describe('量具自檢：每一種寫法都抓得到，逃生口與擁有者不�
   });
 });
 
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'web/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'web/src', 'harness/packages'] as const;
 
 describe('全樹掃描', () => {
   it('代理模組以外，沒有任何匯入 undici 或指定 dispatcher 的位置', () => {

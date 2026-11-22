@@ -31,7 +31,7 @@ import {
   type PersistenceSchemaInventory,
 } from './persistence-schema-model.js';
 
-const ROOTS = ['packages', 'harness/apps/harness/src', 'web/src'];
+const ROOTS = ['harness/packages', 'harness/apps/harness/src', 'web/src'];
 
 /** 每次抽取都建一個 program；夾具測試一格最多抽三次。 */
 const EXTRACT_TIMEOUT = 60_000;

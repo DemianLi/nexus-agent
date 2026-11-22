@@ -10,7 +10,7 @@ NAME = re.compile(r'^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$')
 
 def adr_dirs(root: Path) -> list[Path]:
     dirs = [root / 'docs' / 'adr']
-    dirs += sorted(root.glob('apps/*/docs/adr'))
+    dirs += sorted([*root.glob('harness/apps/*/docs/adr'), *root.glob('web/docs/adr')])
     return [d for d in dirs if d.is_dir()]
 
 

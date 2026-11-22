@@ -153,7 +153,7 @@ function isBootstrapOnly(name: string): boolean {
  * @param moduleDir - 本模組所在的目錄，省略即真的位置；測試才傳。
  */
 export function legacyEnvFileFor(moduleDir: string = import.meta.dirname): string | undefined {
-  return isPackedTree(moduleDir) ? undefined : resolve(moduleDir, '../../../.env');
+  return isPackedTree(moduleDir) ? undefined : resolve(moduleDir, '../../../../.env');
 }
 
 /** {@link legacyEnvFileFor} 在真的位置上的答案。 */

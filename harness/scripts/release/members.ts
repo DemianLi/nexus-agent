@@ -31,7 +31,7 @@ export interface ReleaseMember {
  */
 export function releaseMembers(root: string = ROOT): ReleaseMember[] {
   const paths = ['package.json'];
-  for (const group of ['apps', 'packages']) {
+  for (const group of ['harness/apps', 'harness/packages']) {
     const base = join(root, group);
     if (!existsSync(base)) continue;
     for (const entry of readdirSync(base, { withFileTypes: true })) {

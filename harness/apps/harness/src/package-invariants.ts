@@ -45,7 +45,7 @@ import ts from 'typescript';
  * `packages` 底下**再深一層**，app 本來就不在裡面；而配套入口認領的是「這個 package 擁有的跨筆關係」，
  * 組裝點與前端不擁有任何人的關係——它們是消費者。理由與另外兩個選項見 #108。
  */
-const OWNER_ROOT = 'packages';
+const OWNER_ROOT = 'harness/packages';
 
 /** 一個 owner，與它參與規則的那幾個檔案。 */
 export interface PackageInvariantOwner {

@@ -112,7 +112,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           mkdir -p .native-durations
-          cp apps/harness/node_modules/.vite/vitest/*/results.json ".native-durations/results-${{ matrix.shard }}.json"
+          cp harness/apps/harness/node_modules/.vite/vitest/*/results.json ".native-durations/results-${{ matrix.shard }}.json"
       - name: 存這一片的耗時
         if: ${{ !cancelled() }}
         uses: actions/cache/save@v6

@@ -256,7 +256,7 @@ describe('舊位置：安裝樹與原始碼樹', () => {
 
   function sourceTree(): { moduleDir: string; repoEnv: string } {
     const repo = join(root, 'repo');
-    const moduleDir = join(repo, 'apps', 'harness', 'src');
+    const moduleDir = join(repo, 'harness', 'apps', 'harness', 'src');
     mkdirSync(moduleDir, { recursive: true });
     env(repo, 'NVIDIA_API_KEY=old\n');
     return { moduleDir, repoEnv: join(repo, '.env') };

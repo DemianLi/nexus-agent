@@ -463,7 +463,7 @@ async function treeTools(mod: object, config: unknown): Promise<Map<string, Cata
  * @throws {Error} 完整性檢查沒過，見 {@link assertManifestComplete}。
  */
 export async function collectToolCatalog(repoRoot: string): Promise<readonly CatalogSection[]> {
-  const packagesRoot = join(repoRoot, 'packages');
+  const packagesRoot = join(repoRoot, 'harness/packages');
   const dirs = pluginPackageDirs(packagesRoot);
   const facts = await Promise.all(dirs.map((dir) => packageFacts(packagesRoot, dir)));
 
