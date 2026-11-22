@@ -17,7 +17,7 @@ minimumReleaseAge: 1440
 # 例外只收**精確版本**（`name@x.y.z`），每一條上面寫為什麼不能等。
 minimumReleaseAgeExclude: []
 
-# 帶 install script 的相依一律要在 `allowBuilds` 逐項審過，沒列的讓 `pnpm install` 硬錯（ERR_PNPM_IGNORED_BUILDS），
+# 帶 install script 的相依一律要在 `allowBuilds` 逐項審過，沒列的讓 `pnpm install` 硬錯（ERR_PNPM_IGNORED_BUILDS）。
 # 每一項明寫 true／false 並附理由。
 # pnpm 10.34.5 的 `strict-dep-builds` 預設是 false（`dist/pnpm.cjs` 的預設值），所以這裡明設 true。
 strictDepBuilds: true
