@@ -1,8 +1,8 @@
 /**
  * `@nexus/plugin-quickjs`——在 WASM 裡的 QuickJS 直譯器上跑一段 JavaScript。
  *
- * **套件名不叫 `plugin-sandbox`，是刻意的。** 在這個 repo 裡「sandbox」指檔案工具改得動哪裡的政策（`SandboxMode`）。
- * 這個套件是一個沒有 ambient 能力的 JS 直譯器，在行程內的 WASM 裡跑，碰不到檔案系統，也不管那條政策。
+ * **套件名不叫 `plugin-sandbox`，是刻意的。** 這個套件不管檔案工具的 `SandboxMode`，也不提供行程沙箱：
+ * 它是一個沒有 ambient 能力的 JS 直譯器，在行程內的 WASM 裡跑，碰不到檔案系統。
  *
  * **為什麼不走 `SandboxBackendProtocolV2`。** 基座確實有 sandbox backend 協定，但
  * `createFilesystemMiddleware` 在 `permissions` 非空、`execute` 工具開著、而 backend

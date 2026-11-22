@@ -233,7 +233,7 @@ describe('完成值必須是無損的 JSON', () => {
     expect(error.kind).toBe('invalid-output');
   });
 
-  // 快照一邊驗一邊抄、只讀一次：輸出就是驗過的那一份，不再去讀活的值。
+  // 快照一邊驗一邊抄：輸出就是驗過的那一份，不再去讀活的值。
   // 以前驗完再 dump 原本的 handle，原型上的 `toJSON` 與說謊的 Proxy 讓兩次讀到的不一樣，錯的值當成功回去（#1842 審查）。
   describe('驗過的就是輸出的：活的值動不了手腳', () => {
     it('Object.prototype.toJSON 改不了輸出', async () => {
