@@ -3,8 +3,7 @@ import { fileURLToPath } from 'node:url';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 /**
- * 每個套件的 `vitest.config.ts` 共用的模組解析（照 dsh 根目錄 `vitest.config.ts` 的 `pathsPlugin` 與 `docs/testing.md`
- * 「Test resolution: source plane only」）：測試裡的裸 workspace 名一律解析到 `src/`，不經 `exports` 走到建出來的 `lib/`，
+ * 每個套件的 `vitest.config.ts` 共用的模組解析：測試裡的裸 workspace 名一律解析到 `src/`，不經 `exports` 走到建出來的 `lib/`，
  * 否則 `lib/` 過期時會載到第二份模組單例。
  *
  * 這一份讀 `tsconfig.runtime.json` 而不是 `tsconfig.base.json`：兩份由 `scripts/gen-tsconfig-paths.ts` 一起寫、
@@ -20,14 +19,9 @@ export const pathsPlugin = (): ReturnType<typeof tsconfigPaths> =>
   tsconfigPaths({ projects: [RUNTIME_TSCONFIG] });
 
 /**
- * **偏離 dsh，理由 1（基座表達不出來）。** dsh 處理 workspace 裸名插件只有兩種做法：開子行程
- * （`loader-smoke/src/index.ts:100-127`），或在 `mkdtemp` 底下手寫 `node_modules`（`app-boot.spec.ts` 約 `:934-990`）。
- * 兩種都表達不出 `apps/harness` 那 99 個測試檔（#1650 在 959e9af7 實測，分類見該卡）對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、
- * ctx 服務物件）；要表達只能重寫斷言。`plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，
- * 看不到 vite 的 `paths` 外掛，要經 tsx 的 resolve hook 才會照 `paths` 解析。
- *
- * 退到最接近的做法：只在 vitest worker 的 `execArgv` 裝 tsx 的 ESM hook（dsh 的 source-launch 筆記
- * `2026-07-29-dsh-source-launch-tsx-esm.zh.md` 的機制），`TSX_TSCONFIG_PATH` 指到上面那份 tsconfig。
+ * `plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，看不到 vite 的 `paths` 外掛，
+ * 要經 tsx 的 resolve hook 才會照 `paths` 解析。所以只在 vitest worker 的 `execArgv` 裝 tsx 的 ESM hook，
+ * `TSX_TSCONFIG_PATH` 指到上面那份 tsconfig。
  * 子行程的**啟動指令**不動。`docs/testing.md:49` 管的是載入 Cordis 設定的子行程，不管 worker。
  *
  * **影響範圍比「只動 worker」寬一格**：這個函式在 vitest **主行程**設 `process.env.TSX_TSCONFIG_PATH`，所以測試裡開的

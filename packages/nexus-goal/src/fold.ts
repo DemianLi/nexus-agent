@@ -1,9 +1,6 @@
 /**
  * 耐久 goal 變更的**嚴格解碼**與**純折疊**。
  *
- * 照抄 dsh 的 `packages/goal/goal/src/fold.ts`（對讀日期 2026-09-01，版本
- * `0a53fb55bea101816fa226bb964ae2bed71c343b`），一條規則都沒放寬。
- *
  * **嚴格的意思是壞掉的變更讓重放失敗，不是被跳過。** 這一點是這個檔案唯一的價值：
  * 一顆解不開的 `goal/change` 代表這個會話對「目前的目標是什麼」已經沒有答案了，靜靜
  * 跳過它換來的是一個看起來正常、實際上少了一次變更的狀態。所以每一個欄位都逐一驗，
@@ -11,8 +8,7 @@
  *
  * ## `roundsStarted` 是折疊出來的，不是誰寫進 `goal/change` 的
  *
- * dsh 的 `applyGoalEvent` 有第二條分支，從 `user/message` 裡 `source.kind === 'goal'`
- * 的輪次推進 `roundsStarted`；我們的對應物是 `turn/start` 的 `kind: 'goal'`
+ * `roundsStarted` 從 `turn/start` 的 `kind: 'goal'` 輪次推進
  * （[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。**只有被準入的那一顆
  * 會推進計數**——四格全部對上（同一個目標、同一個修訂號、剛好是下一輪、沒超過上限）才
  * 算，任何一格不符是拋不是跳過。
@@ -50,7 +46,7 @@ const SNAPSHOT_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 const PHASES: ReadonlySet<string> = new Set(['active', 'paused', 'blocked', 'complete']);
 
-/** lower-kebab-case，照抄 dsh 的那一條。 */
+/** lower-kebab-case。 */
 const BLOCK_CODE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 
 /** 重放用的可變累積器。 */
@@ -374,7 +370,7 @@ export function applyGoalChange(state: GoalFoldState, change: GoalChangeMeta): v
 /**
  * 把一顆 goal 來源的輪次套到折疊上，**準入才算**。
  *
- * 照 dsh 的 `applyGoalEvent`（`goal/goal/src/fold.ts`）那半條：四格全部對上才推進計數。
+ * 四格全部對上才推進計數。
  * 對不上時**拋而不是略過**——一顆對不上的 goal 輪次代表有人在這份日誌裡排了一輪不屬於
  * 目前目標的續行，靜靜跳過它換來的是一個看起來正常、實際上少算了一輪的預算。
  *
