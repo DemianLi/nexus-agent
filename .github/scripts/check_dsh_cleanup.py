@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -249,6 +250,7 @@ def git(*args: str, check: bool = True) -> str:
     return done.stdout.decode('utf-8', 'replace')
 
 
+@functools.lru_cache(maxsize=None)
 def show(rev: str, path: str) -> str:
     done = subprocess.run(['git', 'show', f'{rev}:{path}'], cwd=ROOT, capture_output=True)
     return done.stdout.decode('utf-8', 'replace') if done.returncode == 0 else ''

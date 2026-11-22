@@ -58,6 +58,7 @@ class Repo:
         run(self.root, 'init', '-q', '-b', 'main')
         run(self.root, 'config', 'user.email', 't@example.com')
         run(self.root, 'config', 'user.name', 't')
+        mod.show.cache_clear()
         self._patch = unittest.mock.patch.object(mod, 'ROOT', self.root)
         self._patch.start()
         test.addCleanup(self._patch.stop)
