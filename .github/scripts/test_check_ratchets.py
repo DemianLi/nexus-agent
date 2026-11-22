@@ -14,6 +14,7 @@ from check_ratchets import (
     LEGACY_BASELINE,
     SCRIPT,
     BaselineError,
+    assemble,
     baseline_at,
     baseline_path,
     compare,
@@ -185,6 +186,10 @@ class BaselineFilesTest(unittest.TestCase):
             write_baseline(root, {'dsh': {}, 'narrative': {}})
             self.assertFalse((root / baseline_path('apps/web')).exists())
 
+    def test_two_files_for_the_same_directory_are_rejected(self) -> None:
+        with self.assertRaises(BaselineError):
+            assemble({f'{BASELINE_DIR}/apps__web.json': entry(1), f'{BASELINE_DIR}/z/apps__web.json': entry(2)})
+
     def test_broken_file_is_an_error(self) -> None:
         for text in ('{', '[]', '{"dsh": 1}', '{"dsh": -1, "narrative": 0}', '{"dsh": true, "narrative": 0}'):
             with tempfile.TemporaryDirectory() as d:
@@ -226,6 +231,14 @@ class BaselineAtTest(RepoTest):
         with redirect_stdout(io.StringIO()) as out:
             self.assertIsNone(baseline_at(self.root, rev))
         self.assertIn(SCRIPT, out.getvalue())
+
+    def test_file_in_a_subdirectory_does_not_override_the_baseline(self) -> None:
+        rev = commit(self.root, {
+            baseline_path('apps/web'): entry(3),
+            f'{BASELINE_DIR}/z/apps__web.json': entry(999),
+            SCRIPT: '',
+        })
+        self.assertEqual(baseline_at(self.root, rev), {'dsh': {'apps/web': 3}, 'narrative': {}})
 
     def test_unknown_revision_is_an_error(self) -> None:
         commit(self.root, {'README.md': 'x'})

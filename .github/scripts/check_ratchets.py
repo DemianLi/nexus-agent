@@ -108,6 +108,9 @@ def parse_file(text: str, label: str) -> dict[str, int]:
 
 def assemble(files: dict[str, str]) -> Counts:
     counts: Counts = {rule: {} for rule in RULES}
+    keys = [key_of(path) for path in files]
+    if len(set(keys)) != len(keys):
+        raise BaselineError(f'有兩個基準檔對到同一個目錄：{sorted(files)}')
     for path, text in sorted(files.items()):
         data = parse_file(text, path)
         for rule in RULES:
@@ -150,7 +153,7 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 
 def baseline_at(root: Path, rev: str) -> Counts | None:
-    listed = git(root, 'ls-tree', '-r', '--name-only', rev, '--', BASELINE_DIR)
+    listed = git(root, 'ls-tree', '--name-only', rev, '--', f'{BASELINE_DIR}/')
     if listed.returncode != 0:
         raise BaselineError(f'讀不到 {rev}：{listed.stderr.decode("utf-8").strip()}')
     paths = [p for p in listed.stdout.decode('utf-8').split('\n') if p.endswith('.json')]
