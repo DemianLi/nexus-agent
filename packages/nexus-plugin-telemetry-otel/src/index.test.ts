@@ -2,9 +2,7 @@
  * OTel 後端：**對著一個 `node:http` 的假 collector、走 SDK 真正的流水線**
  * （BatchLogRecordProcessor → OTLP/HTTP JSON），加上設定的 fail-loud。
  *
- * 測法照 dsh 的
- * `references/deepseek-harness/packages/session/session-telemetry-otel/tests/otel.spec.ts`：
- * `createServer` 綁 `127.0.0.1:0`，收 `/v1/logs`。**零憑證、零外部連線**——缺的從來
+ * 測法：`createServer` 綁 `127.0.0.1:0`，收 `/v1/logs`。**零憑證、零外部連線**——缺的從來
  * 不是憑證，是對手方，而 loopback 假端點就是對手方。
  */
 
@@ -132,7 +130,7 @@ describe('設定驗證', () => {
     );
   });
 
-  // `full` 照 dsh 出廠拒絕、不當別名（#750）：設定檢查、直接建構、載入清單三條路各擋一次。
+  // `full` 拒絕、不當別名（#750）：設定檢查、直接建構、載入清單三條路各擋一次。
   it('設定檢查不收 full', () => {
     expect(telemetryOtelConfigSchema.safeParse({ mode: 'full' }).success).toBe(false);
   });
@@ -299,7 +297,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
     const attributes = resourceAttributes(captures);
     expect(attributes['service.name']).toBe('nexus-agent-test');
     expect(attributes['service.version']).toBe('9.9.9');
-    // dsh 有一個匿名的 `user.id`，我們不編一個——偏離的方向是往少送那一邊。
+    // 不編 `user.id`——方向是往少送那一邊。
     expect(Object.keys(attributes)).not.toContain('user.id');
   });
 
