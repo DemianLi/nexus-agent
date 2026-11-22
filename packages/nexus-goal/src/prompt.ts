@@ -1,9 +1,6 @@
 /**
  * 一輪續行的**模型面文字**：`renderGoalRoundPrompt` 是它唯一的來源。
  *
- * 照抄 dsh 的 `packages/goal/goal-round-driver/src/prompt.ts`（對讀版本
- * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04）。
- *
  * ## 為什麼它是一個純函式，而且住在這個套件
  *
  * 排它的人（`apps/harness` 的排程器）與**驗它的人**（`invariant.ts` 的伴生）必須算得出
@@ -12,11 +9,10 @@
  *
  * ## 兩處形狀差異
  *
- * - **回一個 `string`，不是 `ContentBlock[]`。** dsh 的訊息內容是區塊陣列，我們的
- *   `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。窄一格，表達力相同。
+ * - **回一個 `string`，不是 `ContentBlock[]`。** `turn/start` 帶的是 `text: string`，而 `HumanMessage` 也吃字串。
  * - **吃 `GoalSnapshot`，不是 `GoalView`。** 這個 renderer 只讀 `objective` 與
- *   `maxGoalRounds`，兩格都在快照裡。dsh 吃視圖，於是它的伴生得為此造一份帶假
- *   `activation` 的視圖；吃快照就不必——伴生手上本來就有折疊出來的快照。
+ *   `maxGoalRounds`，兩格都在快照裡。伴生（`invariant.ts`）手上只有自己折出來的快照，
+ *   沒有只活在行程裡的 `activation`；吃視圖就得替它造一份假的。
  *
  * @module
  */

@@ -526,7 +526,7 @@ describe('什麼推得動 roundsStarted', () => {
     // 其他套件用宣告合併補的（`command/*`、`plan/mode`、`sandbox/mode`、`deliverables/presented`、
     // `workspace/changes`、`session/title*`，上面各段決議照舊成立）在這裡看不到，所以多一個那種不會讓這條絆索紅；
     // `todo/write` 在 #1463 之後住在核心的 `SessionEventMap`（Q2 (a)），所以下面的表要列它——它不推輪次，理由同 `tool/result`；
-    // 折疊的 `default` 分支對沒列的種類一律不推。照 dsh：開放詞彙之後，窮舉只能在擁有者那一側做。
+    // `applyGoalEvent` 對 `turn/start`、`goal/change` 以外的種類直接 return，所以沒列的一律不推。
     const KNOWN = [
       'turn/start',
       'turn/end',
