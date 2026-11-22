@@ -151,6 +151,12 @@ class PhaseOneTest(unittest.TestCase):
         b, h = self.head_and_base({'src/a.ts': TS_BASE}, {'src/a.ts': TS_BASE.replace('登記身分', '登記身份')})
         self.assertFalse(analyze(b, h).in_scope)
 
+    def test_added_comment_only_code_file_is_out_of_scope(self) -> None:
+        b, h = self.head_and_base({'src/a.ts': TS_BASE}, {'src/a.ts': TS_HEAD, 'src/new.ts': '// 只有註解\n'})
+        a = analyze(b, h)
+        self.assertFalse(a.in_scope)
+        self.assertIn('新增或刪除', a.reason)
+
     def test_other_file_is_out_of_scope(self) -> None:
         b, h = self.head_and_base({'src/a.ts': TS_BASE, 'package.json': '{}\n'}, {'src/a.ts': TS_HEAD, 'package.json': '{"a":1}\n'})
         self.assertFalse(analyze(b, h).in_scope)
@@ -272,8 +278,13 @@ class PrintedTableTest(unittest.TestCase):
         errors = verify(self.a, self.fill(f'{path}:{u.line}', '那是別的檔自己的偏離登記，名字沒變'), self.head)
         self.assertTrue(any('規則 1' in e for e in errors))
 
+    def test_a_row_with_a_leftover_placeholder_does_not_count(self) -> None:
+        path, u = self.a.sentences[0]
+        row = f'| {u.text} | {path} 第 {u.line} 行 | src/impl.ts:1 {mod.PLACEHOLDER}：確認 |'
+        self.assertTrue(any('規則 1' in e and u.text[:10] in e for e in verify(self.a, row, self.head)))
+
     def test_the_hit_term_is_not_a_reason(self) -> None:
-        errors = verify(self.a, self.fill('src/impl.ts:1', '偏離登記'), self.head)
+        errors = verify(self.a, self.fill('src/impl.ts:1', '偏離登記偏離登記'), self.head)
         self.assertTrue(any('規則 3' in e for e in errors))
 
     def test_real_evidence_and_reason_pass_rules_1_and_3(self) -> None:
