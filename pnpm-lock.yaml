@@ -7,7 +7,7 @@ settings:
 overrides:
   mout@<1.2.4: ^1.2.4
 
-pnpmfileChecksum: sha256-UepMIjKj0TE/vnllUFBGsgNk5OxrYMsOOLna05f6H3o=
+pnpmfileChecksum: sha256-y/xl5iHU8Vq+ovXJmjzyKkXjWu5ZbV/y0yVkSxH0zYw=
 
 importers:
 
@@ -284,162 +284,6 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  web:
-    devDependencies:
-      '@base-ui/react':
-        specifier: 1.9.0
-        version: 1.9.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@fontsource-variable/geist':
-        specifier: 5.3.0
-        version: 5.3.0
-      '@fontsource-variable/geist-mono':
-        specifier: 5.3.0
-        version: 5.3.0
-      '@fontsource-variable/noto-sans-tc':
-        specifier: 5.3.0
-        version: 5.3.0
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../harness/packages/nexus-core
-      '@nexus/plugin-commands':
-        specifier: workspace:*
-        version: link:../harness/packages/nexus-plugin-commands
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../harness/packages/nexus-wire
-      '@shadcn/react':
-        specifier: ^0.3.1
-        version: 0.3.1(@types/react@19.2.18)(react@19.2.8)
-      '@shikijs/langs':
-        specifier: ^4.4.3
-        version: 4.4.3
-      '@tailwindcss/vite':
-        specifier: ^4.1.16
-        version: 4.3.3(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      '@testing-library/react':
-        specifier: ^16.3.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@types/mdast':
-        specifier: ^4.0.4
-        version: 4.0.4
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      '@types/react':
-        specifier: ^19.2.0
-        version: 19.2.18
-      '@types/react-dom':
-        specifier: ^19.2.0
-        version: 19.2.4(@types/react@19.2.18)
-      '@vitejs/plugin-react':
-        specifier: ^5.0.4
-        version: 5.2.0(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      '@vitejs/plugin-vue':
-        specifier: 6.0.10
-        version: 6.0.10(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))(vue@3.5.44(typescript@5.9.3))
-      axe-core:
-        specifier: ^4.13.0
-        version: 4.13.0
-      class-variance-authority:
-        specifier: ^0.7.1
-        version: 0.7.1
-      cmdk:
-        specifier: ^1.1.1
-        version: 1.1.1(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      cn:
-        specifier: ^0.3.0
-        version: 0.3.0
-      colorjs.io:
-        specifier: 0.7.1
-        version: 0.7.1
-      diff:
-        specifier: ^9.0.0
-        version: 9.0.0
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      jsdom:
-        specifier: ^27.0.0
-        version: 27.4.0
-      katex:
-        specifier: ^0.18.2
-        version: 0.18.2
-      lucide-react:
-        specifier: ^0.552.0
-        version: 0.552.0(react@19.2.8)
-      mdast-util-from-markdown:
-        specifier: ^2.0.3
-        version: 2.0.3
-      mdast-util-gfm:
-        specifier: ^3.1.0
-        version: 3.1.0
-      mdast-util-math:
-        specifier: ^3.0.0
-        version: 3.0.0
-      micromark-core-commonmark:
-        specifier: ^2.0.3
-        version: 2.0.3
-      micromark-extension-gfm:
-        specifier: ^3.0.0
-        version: 3.0.0
-      micromark-extension-math:
-        specifier: ^3.1.0
-        version: 3.1.0
-      micromark-factory-space:
-        specifier: ^2.0.1
-        version: 2.0.1
-      micromark-util-character:
-        specifier: ^2.1.1
-        version: 2.1.1
-      micromark-util-classify-character:
-        specifier: ^2.0.1
-        version: 2.0.1
-      micromark-util-sanitize-uri:
-        specifier: ^2.0.1
-        version: 2.0.1
-      micromark-util-symbol:
-        specifier: ^2.0.1
-        version: 2.0.1
-      micromark-util-types:
-        specifier: ^2.0.2
-        version: 2.0.2
-      playwright-core:
-        specifier: 1.64.1
-        version: 1.64.1
-      react:
-        specifier: ^19.2.0
-        version: 19.2.8
-      react-dom:
-        specifier: ^19.2.0
-        version: 19.2.8(react@19.2.8)
-      shiki:
-        specifier: ^4.4.3
-        version: 4.4.3
-      sonner:
-        specifier: ^2.0.8
-        version: 2.0.8(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      tailwindcss:
-        specifier: ^4.1.16
-        version: 4.3.3
-      tw-animate-css:
-        specifier: 1.4.0
-        version: 1.4.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.3.7
-        version: 7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1)
-      vite-tsconfig-paths:
-        specifier: ^6.1.1
-        version: 6.1.1(typescript@5.9.3)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      vue:
-        specifier: 3.5.44
-        version: 3.5.44(typescript@5.9.3)
 
   harness/packages/nexus-agent-loop:
     dependencies:
@@ -2044,6 +1888,162 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  web:
+    devDependencies:
+      '@base-ui/react':
+        specifier: 1.9.0
+        version: 1.9.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@fontsource-variable/geist':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource-variable/geist-mono':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource-variable/noto-sans-tc':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../harness/packages/nexus-core
+      '@nexus/plugin-commands':
+        specifier: workspace:*
+        version: link:../harness/packages/nexus-plugin-commands
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../harness/packages/nexus-wire
+      '@shadcn/react':
+        specifier: ^0.3.1
+        version: 0.3.1(@types/react@19.2.18)(react@19.2.8)
+      '@shikijs/langs':
+        specifier: ^4.4.3
+        version: 4.4.3
+      '@tailwindcss/vite':
+        specifier: ^4.1.16
+        version: 4.3.3(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      '@testing-library/react':
+        specifier: ^16.3.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      '@types/react':
+        specifier: ^19.2.0
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.0
+        version: 19.2.4(@types/react@19.2.18)
+      '@vitejs/plugin-react':
+        specifier: ^5.0.4
+        version: 5.2.0(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      '@vitejs/plugin-vue':
+        specifier: 6.0.10
+        version: 6.0.10(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))(vue@3.5.44(typescript@5.9.3))
+      axe-core:
+        specifier: ^4.13.0
+        version: 4.13.0
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      cmdk:
+        specifier: ^1.1.1
+        version: 1.1.1(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      cn:
+        specifier: ^0.3.0
+        version: 0.3.0
+      colorjs.io:
+        specifier: 0.7.1
+        version: 0.7.1
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      jsdom:
+        specifier: ^27.0.0
+        version: 27.4.0
+      katex:
+        specifier: ^0.18.2
+        version: 0.18.2
+      lucide-react:
+        specifier: ^0.552.0
+        version: 0.552.0(react@19.2.8)
+      mdast-util-from-markdown:
+        specifier: ^2.0.3
+        version: 2.0.3
+      mdast-util-gfm:
+        specifier: ^3.1.0
+        version: 3.1.0
+      mdast-util-math:
+        specifier: ^3.0.0
+        version: 3.0.0
+      micromark-core-commonmark:
+        specifier: ^2.0.3
+        version: 2.0.3
+      micromark-extension-gfm:
+        specifier: ^3.0.0
+        version: 3.0.0
+      micromark-extension-math:
+        specifier: ^3.1.0
+        version: 3.1.0
+      micromark-factory-space:
+        specifier: ^2.0.1
+        version: 2.0.1
+      micromark-util-character:
+        specifier: ^2.1.1
+        version: 2.1.1
+      micromark-util-classify-character:
+        specifier: ^2.0.1
+        version: 2.0.1
+      micromark-util-sanitize-uri:
+        specifier: ^2.0.1
+        version: 2.0.1
+      micromark-util-symbol:
+        specifier: ^2.0.1
+        version: 2.0.1
+      micromark-util-types:
+        specifier: ^2.0.2
+        version: 2.0.2
+      playwright-core:
+        specifier: 1.64.1
+        version: 1.64.1
+      react:
+        specifier: ^19.2.0
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.0
+        version: 19.2.8(react@19.2.8)
+      shiki:
+        specifier: ^4.4.3
+        version: 4.4.3
+      sonner:
+        specifier: ^2.0.8
+        version: 2.0.8(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      tailwindcss:
+        specifier: ^4.1.16
+        version: 4.3.3
+      tw-animate-css:
+        specifier: 1.4.0
+        version: 1.4.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.3.7
+        version: 7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1)
+      vite-tsconfig-paths:
+        specifier: ^6.1.1
+        version: 6.1.1(typescript@5.9.3)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      vue:
+        specifier: 3.5.44
+        version: 3.5.44(typescript@5.9.3)
 
 packages:
 
