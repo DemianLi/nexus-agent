@@ -7,21 +7,18 @@
  *
  * ## 檢哪三條
  *
- * 前兩條照 dsh 的 `packages/interaction/commands/src/invariant.ts`（對讀版本
- * `cd5ef8148158c3a752a658978873241fdf8e2bbc`）：`command/run` 的 `commandId` 在同一份
+ * 前兩條：`command/run` 的 `commandId` 在同一份
  * 日誌裡不得重複、`command/done` 必須配得到前面某一筆 `command/run`。
  *
- * **第三條是我們有而 dsh 沒有的：序列性。** dsh 的註冊表跨 agent（`view(agent)`），
- * 多個 agent 的命令可以並行，所以「上一個還沒落定就來了下一個」在那邊不成立。我們
- * 一個 `CommandExecutor` 一個 REPL、`execute` 回來之前不會有第二次，所以那是一個
- * **真的**關係——形狀跟 `@nexus/core` 那條 `turn/start` 撞上還開著的輪一模一樣。
+ * **第三條：序列性。** 一個 `CommandExecutor` 一個 REPL、`execute` 回來之前不會有
+ * 第二次，所以「上一個還沒落定就來了下一個」是一個**真的**關係——形狀跟 `@nexus/core` 那條 `turn/start` 撞上還開著的輪一模一樣。
  *
- * 它同時補上了 dsh 那份檢查的一個盲點：**只檢「done 配得到 run」的話，漏掉一次
+ * 它同時補上了一個盲點：**只檢「done 配得到 run」的話，漏掉一次
  * `command/done` 是查不出來的**（那是懸空的 run，不是懸空的 done）。序列性讓下一次
  * 執行踩到它。
  *
- * dsh 還檢 `sourceEventSeq` 的合法性；我們的 `CommandResult` 沒有那一格（見
- * `@nexus/core` 的 `commands.ts`），所以那一條沒有指涉對象。
+ * `CommandResult` 沒有 `sourceEventSeq` 那一格（見 `@nexus/core` 的
+ * `commands.ts`），所以沒有檢它的合法性。
  *
  * ## 沒有檢的那一條，與為什麼
  *
@@ -40,8 +37,8 @@ export const COMMANDS_INVARIANT_PACKAGE = '@nexus/plugin-commands';
 /**
  * 命令生命週期的三條關係。
  *
- * trace 放在 closure 裡：一份日誌一次安裝，不需要 dsh 那個
- * `WeakMap<Session, Set<string>>`（同 `@nexus/core` 的 `sessionInvariant`）。
+ * trace 放在 closure 裡：一份日誌一次安裝，不需要跨 session 的
+ * `WeakMap`（同 `@nexus/core` 的 `sessionInvariant`）。
  */
 export const commandsInvariant: InvariantInstaller = (subject, fail) => {
   const seen = new Set<string>();
