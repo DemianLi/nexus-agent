@@ -52,7 +52,7 @@
  *    插件認自己的讀數，靠 `source.plugin` 等於 {@link TIME_CONTEXT_MIDDLEWARE_NAME}，另外在 `additional_kwargs` 放 {@link TIME_CONTEXT_MARKER}。
  *    這是接縫的形狀，不是新做法。撤除條件同第 1 條。
  * 4. **節流狀態不走投影，改重播日誌。** dsh 用 `ctx.sessionProjections.register` 加 `stateOf`（`:157-192`）；`@nexus/projections` 沒有讓插件
- *    讀回狀態的 `stateOf`（goal 同一件事，`packages/nexus-goal/src/index.ts:18-22`）。插件經會話查找拿這條 thread 的 `log.events`，自己照 dsh 的
+ *    讀回狀態的 `stateOf`（goal 同一件事，`packages/nexus-goal/src/index.ts` 的〈偏離登記〉）。插件經會話查找拿這條 thread 的 `log.events`，自己照 dsh 的
  *    `apply` 規則摺出三格。**撤除條件**：`@nexus/projections` 長出 `stateOf(log, key)` 時改走投影，另開卡。
  *    **基線的規則改寫了，不是逐字搬 dsh 的 `apply`**：兩邊日誌的形狀不同。dsh 第 1 步時，這一輪的人話和 agent-instructions 的基線都還在「提議的
  *    批次」裡，沒進 session；我們一輪開頭那句人話記在 `turn/start`（不是 `user/message`），而且同一次 `beforeAgent` 裡 agent-instructions 的基線在

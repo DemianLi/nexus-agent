@@ -15,7 +15,7 @@ strictPeerDependencies: true
 # 所以明寫 1440 分鐘。
 minimumReleaseAge: 1440
 # 例外只收**精確版本**（`name@x.y.z`），每一條上面寫為什麼不能等。
-# 急件安全修補先等；真的等不了才逐條加例外，不放寬上面的政策。
+# 急件安全修補先等，或縮小範圍；真的等不了才逐條加例外，不放寬上面的政策。
 minimumReleaseAgeExclude: []
 
 # 帶 install script 的相依一律要在 `allowBuilds` 逐項審過，沒列的讓 `pnpm install` 硬錯（ERR_PNPM_IGNORED_BUILDS）。
