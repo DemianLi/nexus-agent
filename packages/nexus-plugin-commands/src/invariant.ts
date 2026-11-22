@@ -55,19 +55,23 @@ export const commandsInvariant: InvariantInstaller = (subject, fail) => {
     }
     if (event.type === 'command/run') {
       const { commandId } = event.data;
-      if (seen.has(commandId)) {
+      const duplicate = seen.has(commandId);
+      const previous = open;
+      // `fail` 會拋，所以狀態要在它之前記好：不然違規的這一顆 run 沒進 `seen`，
+      // 它的 `command/done` 會被連帶誤報成配不到 run。
+      seen.add(commandId);
+      open = commandId;
+      if (duplicate) {
         fail(
           `command/run（seq ${String(event.seq)}）重複用了 commandId ${JSON.stringify(commandId)}`,
         );
       }
-      if (open !== undefined) {
+      if (previous !== undefined) {
         fail(
-          `command/run（seq ${String(event.seq)}）來的時候 ${JSON.stringify(open)} 還沒落定` +
+          `command/run（seq ${String(event.seq)}）來的時候 ${JSON.stringify(previous)} 還沒落定` +
             `——命令是一次一個，上一個沒有 command/done 就是漏了一顆`,
         );
       }
-      seen.add(commandId);
-      open = commandId;
       return;
     }
     if (event.type !== 'command/done') return;
