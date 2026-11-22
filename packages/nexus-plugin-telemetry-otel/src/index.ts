@@ -188,9 +188,8 @@ function assertExporterUrl(url: string | undefined): string {
 /**
  * 驗 `processor.maxExportBatchSize`。
  *
- * **這是唯一一個超出 SDK 自己驗證範圍的 processor 欄位**：SDK 收得下
- * 非正數的批次大小，但它的關機排空接著會切出一堆空批次而不消耗佇列——**佇列裡還有東西
- * 的話 dispose 會永遠掛住**。設定錯了在載入期就爆。
+ * 非正數的批次大小 SDK 照收，但關機排空會一直送空批次、不消耗佇列，provider 的關機
+ * 不會結束，dispose 只能等到關機期限才放棄。設定錯了在載入期就爆。
  */
 function assertBatchSize(size: number | undefined): void {
   if (size === undefined) return;
