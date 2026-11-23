@@ -1,10 +1,5 @@
-"""每個 `pnpm --filter` 都要帶 `--fail-if-no-match`。
-
-pnpm 10 篩選比對不到任何專案時只印 "No projects matched" 然後 exit 0，那一步什麼都不跑還是綠的。搬目錄之後寫死舊路徑的篩選
-就是這樣悄悄變成空操作。加了 `--fail-if-no-match` 之後比對不到 exit 1。
-
-掃的範圍：workflow、composite action、每份 `package.json` 的 scripts，以及 `typecheck.sh`（它把呼叫端給的篩選轉給 pnpm，旗標由它加）。
-逐行看（接續行先併起來）；呼叫 `typecheck.sh` 的那一行不用帶，由 `typecheck.sh` 自己帶。掃到 0 份檔案就是紅的。
+"""pnpm 10 篩選比對不到任何專案時只印 "No projects matched" 然後 exit 0，那一步什麼都不跑還是綠的。
+加了 `--fail-if-no-match` 之後比對不到 exit 1。
 """
 
 from __future__ import annotations

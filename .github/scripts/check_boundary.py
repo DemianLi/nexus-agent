@@ -376,7 +376,6 @@ def check(root: Path) -> list[str]:
 
 
 def empty_scans(root: Path) -> list[str]:
-    """web 或 harness 的目錄掃到 0 個檔：路徑搬了這裡沒跟著搬，檢查什麼都沒看就會說通過。"""
     return [
         f'`{base}` 底下掃到 0 個程式檔：目錄搬了，WEB 與 HARNESS 的路徑要一起搬，不能少掃了還說通過。'
         for base in (WEB, HARNESS)

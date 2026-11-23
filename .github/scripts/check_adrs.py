@@ -56,7 +56,6 @@ def check_dir(d: Path, root: Path) -> list[str]:
 
 
 def check(root: Path, files: list[str] | None = None) -> list[str]:
-    """格式。`files` 給了就只查含有這些檔的 ADR 目錄（套件裡的 ADR 照樣擋）。"""
     errors = [
         f'{d.relative_to(root).as_posix()}：套件不放 ADR，決策歸到根目錄的 docs/adr/。'
         for pattern in PACKAGE_ADR_GLOBS
@@ -70,7 +69,6 @@ def check(root: Path, files: list[str] | None = None) -> list[str]:
 
 
 def floor_errors(root: Path) -> list[str]:
-    """全項目的 ADR 目錄掃到 0 份是紅的：目錄搬了或被清空時，不能少掃了還說通過。兩個 app 的可以沒有。"""
     d = root / PROJECT_ADR
     if not d.is_dir() or not any(p.is_file() for p in d.iterdir()):
         return [f'{PROJECT_ADR}：在 {root} 底下掃到 0 份，全項目的 ADR 目錄至少要有 1 份。']

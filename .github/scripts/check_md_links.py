@@ -30,8 +30,6 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
-# 一組是「同一批文件在舊形狀與新形狀（`harness/`、`web/`）的樣子」；`floor` 是這一組在這一版至少要掃到幾份。
-# floor 是 0 的組是會搬到項目倉庫外面的（協作設定與協作文件），只在項目倉庫裡時掃不到是對的。
 GROUPS: list[tuple[str, list[str], int]] = [
     ('README', ['README.md'], 1),
     ('docs', ['docs/**/*.md'], 1),
@@ -60,7 +58,6 @@ INLINE_CODE = re.compile(r'`+[^`]*`+')
 
 
 def matches(root: Path, pattern: str) -> list[Path]:
-    """一個 pattern 在 root 底下配到的檔；萬用字元不配點開頭的段，pattern 裡寫死的段照認。"""
     found = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
     literal = len(pattern.split('*', 1)[0].split('/')) - 1
     return [
@@ -70,7 +67,6 @@ def matches(root: Path, pattern: str) -> list[Path]:
 
 
 def source_paths(root: Path) -> list[Path]:
-    """PATTERNS 撈到的檔，照路徑排序；realpath 相同的只留第一個。"""
     seen: set[str] = set()
     found: list[Path] = []
     for pattern in PATTERNS:
@@ -84,7 +80,6 @@ def source_paths(root: Path) -> list[Path]:
 
 
 def empty_groups(root: Path) -> list[str]:
-    """掃到的份數低於 floor 的組。搬目錄之後 pattern 沒跟著搬時，這裡會紅，而不是少掃了還說通過。"""
     errors = []
     for name, patterns, floor in GROUPS:
         count = len({os.path.realpath(path) for pattern in patterns for path in matches(root, pattern)})

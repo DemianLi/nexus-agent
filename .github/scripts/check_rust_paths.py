@@ -1,16 +1,3 @@
-"""CI 裡 Rust 產物與 vitest 結果檔的路徑，都從一個來源推出來，不各抄一份字面值。
-
-- 沙箱 spawner 的 crate 目錄 = `.github/actions/sandbox-spawner/action.yml` 裡 cargo 步驟的 `working-directory`。
-  同一支 action 的快取路徑（`<crate>/target`）、`hashFiles` 的檔、打包監督行程的 `<crate>/target/.../release`，
-  以及 `ci.yml` 的 `sandbox-spawner`、`sandbox-spawner-arm64` 的 cargo 步驟與 `NEXUS_*_BIN` 的執行檔路徑，都要落在這個目錄底下。
-  crate 目錄在這一版要真的有 `Cargo.toml`。
-- vitest 結果檔 `cp <harness 套件目錄>/node_modules/.vite/vitest/*/results.json`（`ci.yml`、`post-merge.yml`，只在 full 與合併後跑）的
-  套件目錄 = `@nexus/harness` 這一版真的在的目錄（舊形狀與新形狀都認，見 `plan_ci.project_dirs`）。
-
-只改 cargo 的 `working-directory`、或只改執行檔或快取的路徑，都會紅；兩邊一起搬才綠。沙箱整合測試那一步要核對通過的條數不是 0，x64 與 arm64 都要。找不到任何一條要檢查的路徑也是紅的：
-這些路徑是字串，搬目錄時沒有別的東西會替它們報錯，快取那幾行永遠不會因為路徑錯而紅，只是悄悄失效。
-"""
-
 from __future__ import annotations
 
 import re
@@ -109,7 +96,7 @@ def step_block(job: str, name: str) -> str | None:
 
 
 def check_integration_count(root: Path) -> list[str]:
-    """整合測試的 env 沒設時整支跳過、vitest 照樣 exit 0：那一步要核對通過的條數不是 0，x64 與 arm64 都要。"""
+    """整合測試的 env 沒設時整支跳過、vitest 照樣 exit 0。"""
     jobs = jobs_of((root / CI).read_text(encoding='utf-8'))
     errors: list[str] = []
     for name in ('sandbox-spawner', 'sandbox-spawner-arm64'):

@@ -87,10 +87,7 @@ RUST_RE = re.compile(
 
 
 def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False) -> dict[str, str]:
-    """`force_full` 是合併後完整一輪（`post-merge.yml` 呼叫 ci.yml 時帶 `full: true`）：不看異動，一律全跑。
-
-    路徑先換成舊形狀再比（`project_paths.canonical`）。原始碼路徑不在任何認得的位置時範圍算不出來，照全跑（`unknown_source`）。
-    """
+    """`force_full` 是合併後完整一輪（`post-merge.yml` 呼叫 ci.yml 時帶 `full: true`）：不看異動，一律全跑。"""
     unrecognized = any(unknown_source(p) for p in changed)
     changed = [canonical(p) for p in changed]
     feature_pr = event == 'pull_request' and base_ref == 'develop'
@@ -147,14 +144,12 @@ WEB_STRUCTURE_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.(test\.tsx?|d\.ts)$
 
 
 def web_design_guards(root: Path = ROOT) -> list[str]:
-    """`web/src/styles/*.test.ts` 與 `ui/local-edits.test.ts`（舊形狀 `apps/web/...`），回傳舊形狀的路徑。"""
     base = root / actual(WEB, lambda p: (root / p).is_dir())
     found = [*(base / 'src/styles').glob('*.test.ts'), base / 'src/components/ui/local-edits.test.ts']
     return sorted(f'{WEB}/{f.relative_to(base).as_posix()}' for f in found if f.is_file())
 
 
 def project_dirs(root: Path = ROOT) -> dict[str, str]:
-    """舊形狀的專案目錄 → 磁碟上的真目錄。舊形狀與新形狀各認一次，兩種都在時舊形狀先。"""
     found: dict[str, str] = {}
     for prefix in ('', f'{HARNESS_DIR}/'):
         for kind in ('packages', 'apps'):
@@ -167,7 +162,6 @@ def project_dirs(root: Path = ROOT) -> dict[str, str]:
 
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
-    """舊形狀的專案目錄 → 套件名。"""
     return {
         d: json.loads((root / real / 'package.json').read_text(encoding='utf-8'))['name']
         for d, real in sorted(project_dirs(root).items())

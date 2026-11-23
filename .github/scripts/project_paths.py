@@ -1,11 +1,3 @@
-"""項目倉庫的路徑有兩種形狀，這支把兩種對到同一個。
-
-舊形狀：`apps/harness`、`apps/web`、`packages/*`、`native`、`vendor`、`scripts`。
-新形狀：`harness/apps/harness`、`harness/packages/*`、`harness/native`、`harness/vendor`、`harness/scripts`、`web`。
-
-比對、計數、選範圍一律用舊形狀（`canonical`），輸出給 pnpm、vitest、檔案系統的用磁碟上的真路徑。
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -30,7 +22,6 @@ def canonical(path: str) -> str:
 
 
 def actual(path: str, exists: Callable[[str], bool]) -> str:
-    """舊形狀的路徑換成磁碟上真的那個：`exists` 判斷一個路徑在這一版有沒有；兩種都沒有就回舊形狀。"""
     head, _, rest = path.partition('/')
     if head == 'apps' and rest.startswith('web/') or path == 'apps/web':
         candidates = [path, f'{WEB_DIR}/{rest[len("web/"):]}'.rstrip('/')]
@@ -52,6 +43,5 @@ def known(path: str) -> bool:
 
 
 def unknown_source(path: str) -> bool:
-    """原始碼路徑換成舊形狀之後，不在任何認得的位置：範圍沒辦法算，要全跑。"""
     return path.endswith(SOURCE_SUFFIXES) and not known(canonical(path))
 
