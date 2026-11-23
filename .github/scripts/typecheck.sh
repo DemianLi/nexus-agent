@@ -13,8 +13,21 @@ now() { if [ -n "${EPOCHREALTIME:-}" ]; then echo "${EPOCHREALTIME/[.,]/}"; else
 lap() { local us=$(($(now) - $2)); printf '計時：%s %d.%02d\n' "$1" $((us / 1000000)) $((us % 1000000 / 10000)); }
 
 # 直接跑 node_modules/.bin 底下的 tsx，不經 pnpm exec：少一次 pnpm 的啟動。
+# 項目倉庫的目錄有兩種形狀（舊：apps/web、scripts；新：web、harness/scripts），兩種都認得；找不到就報錯，不要靜默略過。
+web_dir=
+for candidate in apps/web web; do
+  if [ -f "$candidate/package.json" ]; then web_dir=$candidate; fi
+done
+gen=
+for candidate in scripts/gen-typecheck-projects.ts harness/scripts/gen-typecheck-projects.ts; do
+  if [ -f "$candidate" ]; then gen=$candidate; fi
+done
+if [ -z "$web_dir" ] || [ -z "$gen" ]; then
+  echo "找不到 web 套件或 gen-typecheck-projects.ts：目錄形狀不是 apps/web 與 scripts，也不是 web 與 harness/scripts" >&2
+  exit 1
+fi
 t=$(now)
-node_modules/.bin/tsx scripts/gen-typecheck-projects.ts
+node_modules/.bin/tsx "$gen"
 lap gen-typecheck-projects "$t"
 t=$(now)
 dirs=$(pnpm "$@" --fail-if-no-match --silent exec pwd)
@@ -28,7 +41,7 @@ projects=()
 web=false
 while IFS= read -r dir; do
   [ -n "$dir" ] || continue
-  if [ "$dir" = "$PWD/apps/web" ]; then
+  if [ "$dir" = "$PWD/$web_dir" ]; then
     web=true
   elif [ -f "$dir/$cache/tsconfig.json" ]; then
     projects+=("$dir/$cache/tsconfig.json")
@@ -48,7 +61,7 @@ fi
 if $web; then
   # 跟 tsc -b 同時跑，輸出先收起來，免得兩邊的錯誤訊息交錯。
   log=$(mktemp)
-  (cd apps/web && "$tsc" --noEmit --incremental --tsBuildInfoFile "$cache/tsconfig.tsbuildinfo") > "$log" 2>&1 || rc=1
+  (cd "$web_dir" && "$tsc" --noEmit --incremental --tsBuildInfoFile "$cache/tsconfig.tsbuildinfo") > "$log" 2>&1 || rc=1
   lap 'tsc web' "$t" >> "$log"
 fi
 if [ -n "$build" ]; then
