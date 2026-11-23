@@ -16,8 +16,8 @@
  *
  * - **`additive`**：比 `to` 舊的檔，今天的讀方直接讀得對。有些靠讀方裡為舊形狀留的分支，記在 `readerBranch`——
  *   那些分支哪天被當成死碼清掉，夾具測試（`apps/harness/src/session-format-fixtures.test.ts`）會紅。限制：這支測試只認登記的那一整行文字，
- *   不認行號；那一行還在、底下的分支內容被改掉，或那一行離開了分支、而同檔程式碼的別處剛好還有一行一模一樣的（同一次變更加的，
- *   或就是那一行整行搬走），它不會紅，要靠夾具的行為斷言與讀方自己的測試擋，不保證每一條都擋得住（#3134）。
+ *   不認行號；那一行還在、底下的分支內容被改掉，它不會紅（基底就是這樣）；分支被拿掉、同一次變更又在同檔程式碼別處加了一行一模一樣的，
+ *   它也不會紅（#3134 核可）。兩者都要靠夾具的行為斷言與讀方自己的測試擋，不保證每一條都擋得住。
  * - **`breaking`**：這一版沒有那一段的遷移，比 `to` 舊的檔一律拒讀（{@link classifyStoredFormatVersion} 回
  *   `older-without-migration`，`parseHeader` 拋 `SessionFormatUnsupportedError`），列表算進讀不懂。今天沒有任何一條，
  *   它是第一次出現非加性變更、而遷移還沒落地時唯一失敗即關閉的選項。真的遷移（`transform`）等 #1529 第四刀。
@@ -33,7 +33,7 @@
  * 2. 在下面的 {@link SESSION_FORMAT_EDGES} 末尾加一條 `{ from: 舊, to: 新, … }`。不加的話這個模組載入就拋。
  * 3. 讀方為舊形狀留了分支的，填 `readerBranch`，並讓 `apps/harness/src/fixtures/session-format/` 裡某一份比 `to` 舊的夾具
  *    含觸發它的事件（夾具的 `expected.json` 的 `triggers` 登記這條邊；規則測試檢查每條 `readerBranch` 都有），並在
- *    規則測試的錨點表登記那一整行（去頭尾空白；縮排也要分辨時保留縮排）。每條邊的檔與錨點要互不相同。
+ *    規則測試的錨點表登記那一整行（去頭尾空白；縮排也要分辨時保留縮排）。每條邊的檔與錨點要互不相同；註解裡寫了同一句也算重複。
  * 4. 要發的版本格式版本是新的，**發版前**另開一張進 `develop` 的 PR，把它加進 {@link RELEASED_SESSION_FORMAT_VERSIONS}，
  *    並用當下 `develop` 那個 commit 的寫入器凍一份夾具（產生器在 `scripts/session-format-fixtures/`；細節見
  *    `docs/standards.md`〈會話日誌格式〉）。`develop → main` 的 PR 不另加 commit、tag 要發完才有，所以不能留到那一步。

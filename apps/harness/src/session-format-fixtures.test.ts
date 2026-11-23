@@ -661,14 +661,20 @@ function anchorTableProblem(
 function anchorProblem(text: string, anchor: string): string | undefined {
   const same = (line: string): boolean =>
     anchor.startsWith(' ') ? line.trimEnd() === anchor : line.trim() === anchor;
+  const quotedInComment = (line: string): boolean => {
+    const comment = /(?:\/\/+|\/\*+|^\s*\*+(?!\/))(.*)$/u.exec(line);
+    return comment !== null && comment[1]!.replace(/\*\/\s*$/u, '').trim() === anchor.trim();
+  };
   const matched: number[] = [];
+  let quoted = 0;
   let offset = 0;
   for (const line of text.split('\n')) {
     if (same(line)) matched.push(offset + line.length - line.trimStart().length);
+    else if (quotedInComment(line)) quoted += 1;
     offset += line.length + 1;
   }
   if (matched.length === 0) return '錨點不見了';
-  if (matched.length > 1) return `錨點出現在 ${String(matched.length)} 行`;
+  if (matched.length + quoted > 1) return `錨點出現在 ${String(matched.length + quoted)} 行`;
   const source = ts.createSourceFile('anchor.ts', text, ts.ScriptTarget.Latest, true);
   const opaque: [number, number][] = [];
   const visit = (node: ts.Node): void => {
@@ -702,6 +708,9 @@ describe('錨點登記整行，不比行號，而且要在程式碼裡', () => {
   it.each([
     ['不見', 'function f() {}\n', '錨點不見了'],
     ['兩行', `${code}${code}`, '錨點出現在 2 行'],
+    ['一行在程式碼、一行在整行註解', `${code}// ${anchor}\n`, '錨點出現在 2 行'],
+    ['一行在程式碼、一行在 JSDoc 行', `${code}/**\n * ${anchor}\n */\n`, '錨點出現在 2 行'],
+    ['一行在程式碼、一行在行尾註解', `${code}const a = 1; // ${anchor}\n`, '錨點出現在 2 行'],
     ['一行在程式碼、一行在區塊註解', `${code}/*\n${anchor}\n*/\n`, '錨點出現在 2 行'],
     [
       '原地改成更長的一句，另一處有同樣字的另一句',
