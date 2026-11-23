@@ -367,7 +367,7 @@ class UpgradeGuideGate(unittest.TestCase):
         self.jobs = load(CI)['jobs']
 
     def test_runs_without_condition(self) -> None:
-        for script in ('check_upgrade_guides.py', 'check_md_links.py', 'check_adrs.py'):
+        for script in ('check_upgrade_guides.py', 'check_md_links.py', 'check_adrs.py', 'check_boundary.py'):
             with self.subTest(script=script):
                 steps = [s for s in self.steps if s.get('run') == f'python3 .github/scripts/{script}']
                 self.assertEqual(len(steps), 1)

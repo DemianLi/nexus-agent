@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** 掃哪些原始碼。 */
-const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const;
+const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;
 
 /** 遞迴列出 `.ts`／`.tsx`，跳過測試、fixture 與建置產物。 */
 function sourceFiles(dir: string): string[] {

@@ -25,8 +25,6 @@
     "@fontsource-variable/geist": "5.3.0",
     "@fontsource-variable/geist-mono": "5.3.0",
     "@fontsource-variable/noto-sans-tc": "5.3.0",
-    "@nexus/core": "workspace:*",
-    "@nexus/plugin-commands": "workspace:*",
     "@nexus/wire": "workspace:*",
     "@shadcn/react": "^0.3.1",
     "@shikijs/langs": "^4.4.3",

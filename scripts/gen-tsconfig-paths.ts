@@ -14,7 +14,7 @@
  * 套件的 `main`／`exports` 直接指 `lib/`（裝進 `node_modules` 之後 Node 要載的是編好的 JS），所以在原始碼樹裡 tsc、tsx 與 vitest
  * 都要靠這份 `paths` 才解得到 `src/`。`--check` 只報漂移不寫檔，接在 gate：新增套件或 subpath 忘了重新產生，CI 當場紅。
  *
- * `apps/web/tsconfig.json` 也寫一份（標記區塊在它的 `paths` 裡，相對 `apps/web` 的路徑）：TS 的 `paths` 不跟 `extends` 的 base 合併，
+ * `apps/web/tsconfig.json` 也寫一份（標記區塊在它的 `paths` 裡，相對 `apps/web` 的路徑），但只收 {@link WEB_SPECIFIERS}：TS 的 `paths` 不跟 `extends` 的 base 合併，
  * web 自己設了 `paths`（`@/*`、`cn`）就會整個蓋掉 base 那份，tsc／編輯器要靠這一份。web 的 vite 與 vitest 外掛則讀根 `tsconfig.base.json`
  * （#1633：外掛只對 tsconfig `include` 內的檔套 `paths`，讀 web 自己的會讓各套件 `src` 的傳遞 import 解到不存在的 `lib/`）。
  *
@@ -32,8 +32,25 @@ import type { Alias } from './workspace-packages.js';
 const BEGIN = '// BEGIN generated package aliases — pnpm run gen-tsconfig-paths';
 const END = '// END generated package aliases';
 
-/** 要寫區塊的 tsconfig（路徑相對這個檔所在目錄寫）。不含 vendor：理由見檔頭。 */
-const TARGETS = ['tsconfig.base.json', 'apps/web/tsconfig.json'] as const;
+/**
+ * web 的 tsconfig 只收這幾條（[#3147](https://github.com/DemianLi/nexus-agent/issues/3147)）：web 只能相依 `@nexus/wire`，
+ * 其餘 workspace 套件不進它的 `paths`，web 的程式碼 import 了就解不到、編不過。
+ * `@nexus/plugin-workspace-changes/types` 是 wire 的原始碼自己 import 的型別（`workspace-changes.ts`），tsc 走進 wire 時要解得到；
+ * wire 還 import 的 `@nexus/core/src/*` 走套件的 `exports['./src/*']`，不需要別名；那幾支 core 檔再 import 的 `@nexus/brand`、`@nexus/tools`，與 `@nexus/tools` 再 import 的 `@nexus/sdk`，要有別名才解得到原始碼（沒建置 `lib/`）。
+ */
+export const WEB_SPECIFIERS: ReadonlySet<string> = new Set([
+  '@nexus/wire',
+  '@nexus/plugin-workspace-changes/types',
+  '@nexus/brand',
+  '@nexus/tools',
+  '@nexus/sdk',
+]);
+
+/** 要寫區塊的 tsconfig（路徑相對這個檔所在目錄寫），與它收哪些說法（沒給就全收）。不含 vendor：理由見檔頭。 */
+const TARGETS: readonly { readonly file: string; readonly only?: ReadonlySet<string> }[] = [
+  { file: 'tsconfig.base.json' },
+  { file: 'apps/web/tsconfig.json', only: WEB_SPECIFIERS },
+];
 
 /** 整份產生的執行期 tsconfig，含 vendor。 */
 const RUNTIME = 'tsconfig.runtime.json';
@@ -52,11 +69,26 @@ function renderAlias(alias: Alias, from: string): string {
  * @param from - 要寫入的 tsconfig 所在目錄。
  * @param indent - 每行縮排。
  * @param withVendor - 要不要含 `vendor/*`。
+ * @param only - 只收這幾個說法；沒給就全收。
  */
-export function renderRegion(from: string, indent: string, withVendor: boolean): string {
+export function renderRegion(
+  from: string,
+  indent: string,
+  withVendor: boolean,
+  only?: ReadonlySet<string>,
+): string {
   const aliases = workspacePackages()
     .filter((pkg) => withVendor || !pkg.vendor)
-    .flatMap((pkg) => pkg.aliases);
+    .flatMap((pkg) => pkg.aliases)
+    .filter((alias) => only === undefined || only.has(alias.specifier));
+  if (only !== undefined) {
+    const missing = [...only].filter(
+      (specifier) => !aliases.some((a) => a.specifier === specifier),
+    );
+    if (missing.length > 0) {
+      throw new Error(`gen-tsconfig-paths：找不到要收的說法 ${missing.join('、')}`);
+    }
+  }
   const seen = new Set<string>();
   for (const alias of aliases) {
     if (seen.has(alias.specifier)) {
@@ -121,11 +153,11 @@ async function formatted(file: string, text: string): Promise<string> {
 /** 預期內容 → 檔案。 */
 async function expectedFiles(): Promise<Map<string, string>> {
   const files = new Map<string, string>();
-  for (const target of TARGETS) {
-    const current = readFileSync(join(ROOT, target), 'utf8');
+  for (const { file, only } of TARGETS) {
+    const current = readFileSync(join(ROOT, file), 'utf8');
     const indent = indentOf(current);
-    const body = renderRegion(join(ROOT, target, '..'), indent, false);
-    files.set(target, await formatted(target, writeRegion(current, body, indent, target)));
+    const body = renderRegion(join(ROOT, file, '..'), indent, false, only);
+    files.set(file, await formatted(file, writeRegion(current, body, indent, file)));
   }
   files.set(RUNTIME, await formatted(RUNTIME, renderRuntime()));
   return files;

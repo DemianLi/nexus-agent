@@ -142,7 +142,6 @@ describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件或生產者',
     try {
       const src = join(root, 'packages', 'probe', 'src');
       mkdirSync(src, { recursive: true });
-      mkdirSync(join(root, 'apps'));
       const member = (name: string) =>
         `  /**\n   * 探針事件。\n   * @mode emit\n   */\n  '${name}'(): void;\n`;
       writeFileSync(

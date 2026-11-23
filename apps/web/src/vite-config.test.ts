@@ -115,9 +115,16 @@ describe('tsconfig 的 @nexus paths（#1633）', () => {
     // 條數與區塊有沒有漂移交給產生器的 `--check`（#1502）；這裡只管每一條都指到某個套件的 src 底下的 .ts。
     const packages = Object.entries(paths).filter(([key]) => key.startsWith('@nexus/'));
     expect(packages.length).toBeGreaterThan(0);
+    expect(packages.map(([key]) => key).sort()).toEqual([
+      '@nexus/brand',
+      '@nexus/plugin-workspace-changes/types',
+      '@nexus/sdk',
+      '@nexus/tools',
+      '@nexus/wire',
+    ]);
     for (const [key, targets] of packages) {
       expect(targets, key).toEqual([
-        expect.stringMatching(/^\.\.\/(\.\.\/packages\/[^/]+|harness)\/src\/.+\.ts$/),
+        expect.stringMatching(/^\.\.\/\.\.\/packages\/[^/]+\/src\/.+\.ts$/),
       ]);
     }
   });

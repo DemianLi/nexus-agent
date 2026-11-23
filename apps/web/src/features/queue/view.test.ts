@@ -3,10 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeCommandDefinition } from '@nexus/core';
-import type { CommandDefinition } from '@nexus/core';
-import { runsWhileBusy } from '@nexus/plugin-commands';
-import { SETTLE_REASONS } from '@nexus/wire';
+import { COMMAND_GRAMMAR_DESCRIPTORS, RUNS_WHILE_BUSY_CASES, SETTLE_REASONS } from '@nexus/wire';
 import type { ConversationStatus, SlashDescriptor, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
@@ -138,28 +135,7 @@ describe('canRunSlash', () => {
   });
 });
 
-/** 照伺服器的寫法登記命令：同一份定義產生閘門查的 definition 與 `slash.list` 送的 descriptor。 */
-function command(name: string, runWhileBusy?: readonly string[], input = true) {
-  const definition: CommandDefinition = {
-    name,
-    description: `${name} 的說明`,
-    ...(input ? { input: { hint: '<參數>' } } : {}),
-    ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
-    handler: () => ({ kind: 'success' }),
-  };
-  return normalizeCommandDefinition(definition);
-}
-// 出貨的命令都宣告了 `input`（`/goal`、`/plan` 收參數）；`compact` 是沒宣告的 bare 命令（#1971），只有第三方會登記這種。
-const REGISTERED = [
-  command('goal', ['pause']),
-  command('plan'),
-  command('demo', ['a b', 'stop']),
-  command('compact', undefined, false),
-];
-const COMMANDS: readonly SlashDescriptor[] = REGISTERED.map((r) => r.descriptor);
-const FIND = {
-  find: (name: string) => REGISTERED.find((r) => r.definition.name === name)?.definition,
-};
+const COMMANDS: readonly SlashDescriptor[] = COMMAND_GRAMMAR_DESCRIPTORS;
 
 describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2 (a)）', () => {
   it('清單上的名字是命令，前後空白不計', () => {
@@ -186,36 +162,8 @@ describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2
 });
 
 describe('slashRunsWhileBusy 跟伺服器的閘門同一套（#1517）', () => {
-  // 拿 `@nexus/plugin-commands` 真的 `runsWhileBusy` 對照同一批輸入：web 這一份分岔了就紅。
-  it.each([
-    '/goal pause',
-    '/goal pause ',
-    '/goal  pause',
-    '/goal\tpause',
-    '/goal\npause',
-    '/goal\u3000pause',
-    '/goal PAUSE',
-    '/goal Pause',
-    '/goal pause 1',
-    '/goal pauses',
-    '/goalpause',
-    '/goal',
-    '/goal ',
-    '/goal edit 新的目標',
-    '/plan',
-    '/plan pause',
-    '/feedback',
-    '/demo a b',
-    '/demo a  b',
-    '/demo stop',
-    '/Demo stop',
-    '/nope pause',
-    'goal pause',
-    ' /goal pause',
-    '/',
-    '',
-  ])('%j', (line) => {
-    expect(slashRunsWhileBusy(COMMANDS, line)).toBe(runsWhileBusy(FIND, line));
+  it.each(RUNS_WHILE_BUSY_CASES)('%j → %s', (line, runs) => {
+    expect(slashRunsWhileBusy(COMMANDS, line)).toBe(runs);
   });
 
   it('對照組裡兩種結果都有，不是全部 false 碰巧一致', () => {

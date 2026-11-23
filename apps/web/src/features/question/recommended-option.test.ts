@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { RECOMMENDED_SUFFIX, splitRecommended } from '@/features/question/recommended-option';
-import { catalogToolSection } from '@/test/tool-catalog';
+import { catalogToolText } from '@/test/tool-catalog';
 
 /** 「（推薦）」字尾（#1306）。 */
 
@@ -20,6 +20,6 @@ describe('splitRecommended', () => {
   });
 
   it('跟插件要模型加的字尾是同一個（讀工具目錄，插件改說法這裡會紅）', () => {
-    expect(catalogToolSection('ask_user_question')).toContain(`「${RECOMMENDED_SUFFIX}」`);
+    expect(catalogToolText('ask_user_question')).toContain(`「${RECOMMENDED_SUFFIX}」`);
   });
 });
