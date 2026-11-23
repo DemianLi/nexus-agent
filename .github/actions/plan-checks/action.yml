@@ -100,6 +100,10 @@ runs:
       shell: bash
       run: python3 .github/scripts/check_pnpm_filters.py
 
+    - name: 檢查 Rust 產物與 vitest 結果檔的路徑
+      shell: bash
+      run: python3 .github/scripts/check_rust_paths.py
+
     - name: 檢查 web 與 harness 的邊界
       shell: bash
       run: python3 .github/scripts/check_boundary.py
