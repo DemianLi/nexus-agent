@@ -50,7 +50,7 @@ export type FailureReason =
    * 這一類**跟 `budget` 一樣是資料損失，不是低分**，但要做的事是「跑慢一點」或
    * 「把重試次數調高」，不是「這個模型不適合」。
    *
-   * dsh 的 [`error.ts`](../../../../references/deepseek-harness/packages/llm/llm/src/error.ts)
+   * dsh 的 [`error.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/8bd073392eef6f54e921a093b95076248eb08cbb/packages/llm/llm/src/error.ts)
    * 把 `RATE_LIMIT` 與 `QUOTA` 分成兩個碼，理由一樣：前者等一下就過，後者重試無效。
    * 配額耗盡的 429 因此**不算這一類**，它落在 `rejected`。
    */

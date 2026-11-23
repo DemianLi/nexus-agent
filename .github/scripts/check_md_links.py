@@ -1,11 +1,9 @@
 """檢查 repo 自寫 Markdown 的相對連結：目標檔要存在，指向 .md 的 `#片段` 要對到那份的標題 slug 或 `<a id>`（#1537）。
 
-- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `vendor/README.md` 與
+- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755）。vendor 只掃 `vendor/README.md` 與
   `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
 - 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
-- 落在 repo 根目錄 `references/` 底下的目標不查（存在與錨點都不查）：那是 AGENTS.md〈技術實現標準〉要各自 clone 的唯讀參照，
-  `.gitignore` 排除、CI 上不存在。代價是指到那裡的路徑打錯了也抓不到。
 
 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job，理由同 `check_upgrade_guides.py`：純文件 PR 會跳過 `static`，
 `plan` 不裝相依，所以沒有 Markdown 解析器，逐行近似。各處往哪一邊偏：
@@ -39,12 +37,8 @@ GROUPS: list[tuple[str, list[str], int]] = [
     ('web-vendor', ['apps/web/src/vendor/solid-glass/README.md', 'web/src/vendor/solid-glass/README.md'], 1),
     ('GLOSSARY-MAP', ['GLOSSARY-MAP.md'], 1),
     ('.github', ['.github/**/*.md'], 1),
-    ('AGENTS', ['AGENTS.md'], 1),
-    ('.agents', ['.agents/skills/**/*.md'], 1),
 ]
 PATTERNS = [pattern for _, patterns, _ in GROUPS for pattern in patterns]
-# 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。
-UNCHECKED_ROOT = 'references'
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
 # 引言符號：最多 3 格縮排、`>`、可有一格空白，可以疊好幾層。
 QUOTE = re.compile(r'^ {0,3}> ?')
@@ -181,8 +175,6 @@ def link_violations(path: Path, root: Path) -> list[str]:
             continue
         raw_path = re.sub(r'[#?].*$', '', url)
         target = path if raw_path == '' else Path(os.path.normpath(path.parent / unquote(raw_path)))
-        if Path(os.path.relpath(target, root)).parts[:1] == (UNCHECKED_ROOT,):
-            continue
         if not target.exists():
             violations.append(f'第 {number} 行的連結 {url} 指到不存在的檔案')
             continue

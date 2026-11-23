@@ -62,7 +62,6 @@ class Scope(unittest.TestCase):
     def test_every_pattern_is_scanned(self) -> None:
         files = {
             'README.md': BAD,
-            'AGENTS.md': BAD,
             'docs/a.md': BAD,
             'docs/x/y/z.md': BAD,
             'packages/a.md': BAD,
@@ -75,8 +74,6 @@ class Scope(unittest.TestCase):
             'apps/harness/docs/a.md': BAD,
             'vendor/README.md': BAD,
             'apps/web/src/vendor/solid-glass/README.md': BAD,
-            '.agents/skills/s/SKILL.md': BAD,
-            '.agents/skills/s/references/a.md': BAD,
         }
         paths, count, violations = scan(files)
         self.assertEqual(paths, sorted(files))
@@ -91,8 +88,6 @@ class Scope(unittest.TestCase):
             'CONTRIBUTING.md': BAD,
             'apps/.a/README.md': BAD,
             'apps/web/src/a/b.md': BAD,
-            '.agents/notes/a.md': BAD,
-            '.agents/skills/.hidden/a.md': BAD,
         }
         self.assertEqual(scan(files), ([], 0, []))
 
@@ -110,7 +105,7 @@ class Scope(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_symlink_to_same_file_is_scanned_once(self) -> None:
-        paths, _, violations = scan({'AGENTS.md': BAD}, {'docs/AGENTS.md': 'AGENTS.md'})
+        paths, _, violations = scan({'README.md': BAD}, {'docs/README.md': 'README.md'})
         self.assertEqual(len(paths), 1)
         self.assertEqual(len(violations), 1)
 
@@ -134,15 +129,14 @@ class Scope(unittest.TestCase):
         self.assertEqual(scan(files), (['harness/vendor/README.md'], 0, []))
 
     def test_patterns_are_pinned(self) -> None:
-        # 釘住 PATTERNS 的全集：增減時一起改檔頭與 AGENTS.md〈發版〉的掃描範圍。
+        # 釘住 PATTERNS 的全集：增減時一起改檔頭與 docs/release.md 的掃描範圍。
         self.assertEqual(sorted(PATTERNS), sorted([
-            'README.md', 'docs/**/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md', '.github/**/*.md',
+            'README.md', 'docs/**/*.md', 'GLOSSARY-MAP.md', '.github/**/*.md',
             'packages/*.md', 'packages/*/*.md', 'packages/*/*/*.md',
             'harness/packages/*.md', 'harness/packages/*/*.md', 'harness/packages/*/*/*.md',
             'apps/*/*.md', 'apps/*/*/*.md', 'harness/apps/*/*.md', 'harness/apps/*/*/*.md', 'web/*.md', 'web/*/*.md',
             'vendor/README.md', 'harness/vendor/README.md',
             'apps/web/src/vendor/solid-glass/README.md', 'web/src/vendor/solid-glass/README.md',
-            '.agents/skills/**/*.md',
         ]))
 
 
@@ -150,7 +144,6 @@ class Floors(unittest.TestCase):
     OLD = {
         'README.md': '', 'docs/a.md': '', 'packages/p/README.md': '', 'apps/harness/README.md': '', 'vendor/README.md': '',
         'apps/web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',
-        'AGENTS.md': '', '.agents/skills/s/SKILL.md': '',
     }
 
     def build(self, files: dict[str, str]) -> Path:
@@ -164,7 +157,6 @@ class Floors(unittest.TestCase):
     NEW = {
         'README.md': '', 'docs/a.md': '', 'harness/packages/p/README.md': '', 'harness/apps/harness/README.md': '',
         'harness/vendor/README.md': '', 'web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',
-        'AGENTS.md': '', '.agents/skills/s/SKILL.md': '',
     }
 
     def test_complete_tree_in_either_layout_has_no_empty_group(self) -> None:
@@ -187,13 +179,6 @@ class Floors(unittest.TestCase):
     def test_no_group_may_be_empty(self) -> None:
         self.assertEqual([name for name, _, floor in GROUPS if floor == 0], [])
         self.assertEqual(empty_groups(self.build(self.OLD)), [])
-
-    def test_agents_or_skills_group_scanning_nothing_is_red(self) -> None:
-        for missing, name in (('AGENTS.md', 'AGENTS'), ('.agents/skills/s/SKILL.md', '.agents')):
-            files = {k: v for k, v in self.OLD.items() if k != missing}
-            errors = empty_groups(self.build(files))
-            self.assertEqual(len(errors), 1, missing)
-            self.assertIn(f'「{name}」', errors[0])
 
     def test_command_line_takes_a_root_and_a_file_scope(self) -> None:
         root = self.build({**self.OLD, 'docs/b.md': '[x](missing.md)\n'})
@@ -254,15 +239,8 @@ class Links(unittest.TestCase):
     def test_link_definition_is_checked(self) -> None:
         self.assertTrue(any('不存在的檔案' in v for v in linked('[參考]\n\n[參考]: nope.md')))
 
-    def test_references_is_not_checked(self) -> None:
-        # repo 根目錄的 references/ 不進版控（見檔頭）：不存在、錨點對不到都不報。
+    def test_references_is_checked_like_any_other_directory(self) -> None:
         for link in ('[dsh](../references/dsh/a.ts)', '[dsh](../references/dsh/README.md#nope)'):
-            with self.subTest(link=link):
-                self.assertEqual(linked(link), [])
-
-    def test_lookalike_of_references_is_checked(self) -> None:
-        # 只認根目錄那一個：名字只是前綴相同、或別的層裡的 references/ 照查。
-        for link in ('[像](../references-x/a.ts)', '[子目錄](references/a.ts)'):
             with self.subTest(link=link):
                 self.assertTrue(any('不存在的檔案' in v for v in linked(link)))
 
