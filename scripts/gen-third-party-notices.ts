@@ -429,7 +429,9 @@ function cssBareImports(webDir: string): Set<string> {
     existsSync(join(webDir, 'node_modules', name, 'package.json'));
   const cssFiles = globSync('src/**/*.css', { cwd: webDir });
   if (cssFiles.length === 0) {
-    throw new Error(`${webDir}/src 底下掃到 0 份 .css：web 搬了，路徑沒跟著搬，打包進 dist 的 CSS 套件會從授權彙整消失`);
+    throw new Error(
+      `${webDir}/src 底下掃到 0 份 .css：web 搬了，路徑沒跟著搬，打包進 dist 的 CSS 套件會從授權彙整消失`,
+    );
   }
   for (const path of cssFiles) {
     for (const name of cssBareImportsIn(readFileSync(join(webDir, path), 'utf8'), installed))

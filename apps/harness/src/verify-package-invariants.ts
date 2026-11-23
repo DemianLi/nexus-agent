@@ -31,6 +31,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log(
-  `verify-package-invariants：${owners.length} 個配套入口全部合格。`,
-);
+console.log(`verify-package-invariants：${owners.length} 個配套入口全部合格。`);
