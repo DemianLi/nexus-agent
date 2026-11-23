@@ -13,15 +13,4 @@
 ## Consequences
 
 - 檔頭與設定要照實寫「暫時保留、觀察中」，見 `packages/nexus-core/src/invariants.ts` 與 `apps/harness/cordis.yml` 的配套入口段。
-- 第二刀的決定條件、八個檢查的清單與當時量到的事實，在 tag [`archive/docs-2026-11`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/invariant-companions-decision-2026-10-03.md) 的原文。
-
-## 重審條件（提議，尚未拍板）
-
-第二刀沒有定義觀察什麼、看多久。當時的提議：先看 `$NEXUS_AGENT_HOME/invariant-log.jsonl`（[#976](https://github.com/DemianLi/nexus-agent/issues/976) 起才有資料，讀法見 [`docs/operations.md`](../operations.md) 的「不變量量測記錄」）這八個有沒有報過違規。任一個成立就重審：
-
-- dsh 公布取代做法，或對讀 dsh 時看到它如何處理 turn 配對這類跨筆關係。
-- 再有一個功能需要改 core 的配對不變量（[#721](https://github.com/DemianLi/nexus-agent/issues/721) 綁住過一次續接補結）。
-- 再發生一次「檢查整個消失而沒有任何東西變紅」（[#668](https://github.com/DemianLi/nexus-agent/issues/668) 那一類）。
-- 八個裡任何一個在實跑中第一次報出真違規。
-
-第二刀的可能走向（沒選）：全部拿掉；只留 `@nexus/core` 的跨筆關係；單筆形狀搬到讀入時驗證、跨筆關係留著。
+- 第二刀的重審條件（提議，尚未拍板）、可能走向、八個檢查的清單與當時量到的事實，在 tag [`archive/docs-2026-11`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/invariant-companions-decision-2026-10-03.md) 的原文。
