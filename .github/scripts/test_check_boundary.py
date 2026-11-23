@@ -35,17 +35,24 @@ class EmptyScanTest(unittest.TestCase):
             tree(Path(d), files)
             return empty_scans(Path(d))
 
-    def test_both_directories_with_code_pass(self) -> None:
-        self.assertEqual(self.scans({'apps/web/src/a.ts': '', 'apps/harness/src/a.ts': ''}), [])
+    def test_all_three_directories_with_code_pass(self) -> None:
+        self.assertEqual(
+            self.scans({'apps/web/src/a.ts': '', 'apps/harness/src/a.ts': '', 'scripts/a.ts': ''}), []
+        )
 
     def test_a_moved_directory_is_red_instead_of_unscanned(self) -> None:
         errors = self.scans({'web/src/a.ts': '', 'harness/apps/harness/src/a.ts': ''})
-        self.assertEqual(len(errors), 2)
+        self.assertEqual(len(errors), 3)
 
     def test_one_empty_side_is_red(self) -> None:
-        errors = self.scans({'apps/web/src/a.ts': ''})
+        errors = self.scans({'apps/web/src/a.ts': '', 'scripts/a.ts': ''})
         self.assertEqual(len(errors), 1)
         self.assertIn('apps/harness', errors[0])
+
+    def test_missing_scripts_is_red(self) -> None:
+        errors = self.scans({'apps/web/src/a.ts': '', 'apps/harness/src/a.ts': ''})
+        self.assertEqual(len(errors), 1)
+        self.assertIn('scripts', errors[0])
 
     def test_this_repo_scans_something_on_both_sides(self) -> None:
         self.assertEqual(empty_scans(check_boundary.ROOT), [])
@@ -186,6 +193,86 @@ class HarnessTest(unittest.TestCase):
 
     def test_web_scanning_the_whole_apps_layer_fails(self) -> None:
         self.assertEqual(len(run({'apps/web/src/a.test.ts': "readdirSync(join(root, 'apps'));\n"})), 1)
+
+
+CONCATENATED_SHAPES = (
+    "join(root, 'apps/')",
+    "const p = `${root}/apps`;",
+    "const p = `${root}/apps/${name}/src`;",
+    "new URL('../..', import.meta.url)",
+    "new URL('../../', import.meta.url)",
+    "join(here, '..', '..', 'web', 'src')",
+    "glob('apps/{web,harness}/src/**/*.ts')",
+)
+
+
+class ConcatenatedPathTest(unittest.TestCase):
+    def test_harness_catches_every_shape(self) -> None:
+        for line in CONCATENATED_SHAPES:
+            with self.subTest(line=line):
+                self.assertEqual(len(run({'apps/harness/src/a.ts': line + '\n'})), 1)
+
+    def test_web_catches_every_shape(self) -> None:
+        for line in (
+            "join(root, 'apps/')",
+            "const p = `${root}/apps`;",
+            "const p = `${root}/apps/${name}/src`;",
+            "new URL('../../..', import.meta.url)",
+            "join(here, '..', '..', '..', 'harness', 'src')",
+            "glob('apps/{web,harness}/src/**/*.ts')",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(len(run({'apps/web/src/a/b.ts': line + '\n'})), 1)
+
+    def test_scripts_side_catches_them_too(self) -> None:
+        self.assertEqual(len(run({'scripts/a.ts': "join(root, 'apps/')\n"})), 1)
+
+    def test_own_side_and_plain_root_are_fine(self) -> None:
+        for line in (
+            "join(root, 'apps/harness/src')",
+            "const p = `${root}/apps/harness/src`;",
+            "new URL('../..', import.meta.url)",
+            "join(here, '..', 'src')",
+            "glob('apps/{harness,foo}/src/**/*.ts')",
+            "symlinkSync('../../', join(root, 'escape'))",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(run({'apps/harness/src/deep/a.ts': line + '\n'}), [])
+
+    def test_relative_url_to_the_repo_root_is_fine(self) -> None:
+        self.assertEqual(run({'apps/harness/src/a.ts': "new URL('../../..', import.meta.url)\n"}), [])
+
+
+class ScriptsTest(unittest.TestCase):
+    def test_scripts_are_scanned_as_harness_side(self) -> None:
+        for line in (
+            "const p = join(root, 'apps', 'web', 'tsconfig.json');",
+            "readdirSync(join(root, 'apps'));",
+            "import x from '@nexus/web/src/x';",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(len(run({'scripts/gen.ts': line + '\n'})), 1)
+
+    def test_clean_scripts_pass(self) -> None:
+        self.assertEqual(run({'scripts/gen.ts': "import { x } from '@nexus/wire';\nconst p = join(root, 'packages');\n"}), [])
+
+    def test_scripts_exemption_is_listed_and_used(self) -> None:
+        item = check_boundary.Exemption('scripts/gen.ts', 'harness-path', '留給拆倉那張卡的例外')
+        self.assertEqual(run({'scripts/gen.ts': "join(root, 'apps', 'web');\n"}, (item,)), [])
+        errors = run({'scripts/gen.ts': 'const x = 1;\n'}, (item,))
+        self.assertIn('沒有任何命中', errors[0])
+
+    def test_exemptions_for_scripts_are_exactly_the_known_four(self) -> None:
+        listed = sorted(item.path for item in check_boundary.EXEMPTIONS if item.path.startswith('scripts/'))
+        self.assertEqual(
+            listed,
+            [
+                'scripts/gen-third-party-notices.ts',
+                'scripts/gen-tsconfig-paths.ts',
+                'scripts/gen-typecheck-projects.ts',
+                'scripts/release/members.ts',
+            ],
+        )
 
 
 class ExemptionTest(unittest.TestCase):
