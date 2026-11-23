@@ -23,16 +23,6 @@
  * 舊的 `NexusPlugin` 外殼（`createTokenMeterPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的
  * `token-meter.fixture.ts`，包同一個 {@link tokenMeterUnit}，讓單元只有一個出處。
  *
- * ## 與 dsh 的偏離
- *
- * dsh 的 `token-meter` 是讀日誌的純折疊（`packages/llm/token-meter/src/turn-usage.ts`），畫在每一輪的尾巴。差別：
- *
- * - **載體**：我們走 #1026 的 `projection` frame（整份取代），所以 view 有上限（最近 20 輪、依工具名／模型有名額）。
- * - **子代理**：單元宣告 `children: true`（#1073），root 與每個子代理各折一份，同 dsh 的投影格子按 session 分。
- * - **等待時間**：從收尾的 `turn/end` 起算，不是卡上寫的 `interrupt/raised`（理由見 `fold.ts` 檔頭）。
- * - **形狀**：dsh 的 `token-meter` 是一個有 `Config` 的 `Service`，在建構子裡登記三個單元（usage、pressure、breakdown）；
- *   這裡是一個單元、沒有設定。這不另外登記偏離：「`inject` 加上 `register`」這個寫法是一樣的。
- *
  * @module
  */
 

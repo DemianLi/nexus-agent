@@ -1124,8 +1124,7 @@ describe('收輪時還開著的呼叫：舊日誌漏帳與今天的續接路徑�
 });
 
 /**
- * 呼叫的起訖與用量不成對（#1571 N1201，PM 審查）：dsh 的 `deriveTurnTokenUsage` 本身是生命週期驗證器（`turn-usage.ts:196-270`），
- * nexus 的 fold 不拒收日誌，所以三種形狀各自記一個旗標，`tokensProven` 看它。每一條的前提都先釘住「`unknownSteps` 是 0 或看不出」，
+ * 呼叫的起訖與用量不成對（#1571 N1201）：fold 不拒收日誌，所以三種形狀都記成 `lifecycleBroken`，`tokensProven` 看它。每一條的前提都先釘住「`unknownSteps` 是 0 或看不出」，
  * 證明靠的是旗標而不是別的條件。
  */
 describe('tokensProven：呼叫起訖與用量不成對的日誌', () => {
@@ -1195,8 +1194,8 @@ describe('tokensProven：呼叫起訖與用量不成對的日誌', () => {
 
   /**
    * 注意：這一條單獨拿掉 `model/end` 那道判斷不會紅——沒有 start 的 end 照加一步、沒有對應的用量，`unknownSteps` 本來就 ≥ 1。
-   * 要讓 `unknownSteps` 看不出來得先有多出來的用量，而多出來的用量自己就會被 `model/usage` 那兩道判斷記壞。所以這道判斷是照 dsh
-   * 狀態機補齊的冗餘防線，不是獨立可觀察的一條（PR 內文如實寫）。
+   * 要讓 `unknownSteps` 看不出來得先有多出來的用量，而多出來的用量自己就會被 `model/usage` 那兩道判斷記壞。所以這道判斷是冗餘防線，
+   * 不是獨立可觀察的一條。
    */
   it('model/end 時沒有開著的呼叫（沒有 start）：false', () => {
     const turn = turnOf([1, 'model/end', {}]);
