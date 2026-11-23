@@ -1,6 +1,6 @@
 /**
  * 共用區讀出來的內容加前綴的那一層（[#1676](https://github.com/DemianLi/nexus-agent/issues/1676)）：路由判斷、成功的判準、形狀。
- * 掛進真的組裝之後的行為在 `apps/harness/src/shared-read-mark-on-tree.test.ts`。
+ * 掛進真的組裝之後的行為在 `harness/apps/harness/src/shared-read-mark-on-tree.test.ts`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

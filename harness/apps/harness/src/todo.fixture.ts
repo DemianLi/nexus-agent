@@ -1,7 +1,7 @@
 /**
  * todo 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)）。
  *
- * todo 本身已經是樹上的函式插件（`packages/nexus-plugin-todo`，`src/index.ts` 沒有一行 `@nexus/core`）。手搭 `PluginEntry`
+ * todo 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-todo`，`src/index.ts` 沒有一行 `@nexus/core`）。手搭 `PluginEntry`
  * 清單、直接 `createNexusAgent` 的測試要一顆「登記 `todo_write`」的 `NexusPlugin`，就走這個外殼——**工具本體取自同一份**
  * （`createTodoTool`、`todoConfigSchema`），所以行為只有一個出處。同 `feedback.fixture.ts`、`ask-user.fixture.ts` 的前例。
  *

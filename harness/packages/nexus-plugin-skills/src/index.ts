@@ -33,7 +33,7 @@
  *   與 `createSkillsMiddlewareQuietWhenEmpty` 那一層都沒動。
  * - 路徑格式與重名在**登記時**就驗（提供者那一側，#1446 Q2 (a)、Q3 (a)），寫錯的列在讀清單那一步就掉，不等組 thread。
  *
- * 舊的 `NexusPlugin` 外殼（`createSkillsPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的 `skills.fixture.ts`。
+ * 舊的 `NexusPlugin` 外殼（`createSkillsPlugin`）不在這裡：它是測試夾具，住在 `harness/apps/harness` 的 `skills.fixture.ts`。
  */
 
 import type { Context } from '@nexus/cordis';
@@ -103,7 +103,7 @@ export const manifest = defineManifest({
  *
  * **這個擴充點的預設失敗模式是「看得到、讀不到」。** 清單是基座用 backend 方法（`ls` / `downloadFiles`）自己掃出來的，
  * **不經過 `permissions`**；而模型要拿到正文得呼叫 `read_file` 工具，**那條經過**。所以一條蓋到 skill 路徑的 deny 規則不會讓
- * skill 消失——它會讓 skill 好端端地列在 prompt 裡，然後模型每次去讀都被拒。`apps/harness` 有測試釘著這個形狀。
+ * skill 消失——它會讓 skill 好端端地列在 prompt 裡，然後模型每次去讀都被拒。`harness/apps/harness` 有測試釘著這個形狀。
  *
  * （順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**不擋**——它對讀只擋 canonicalize 之後落在根外的路徑
  * （#1982），skill 在根內。擋人的自始至終只有 `permissions` 一層。）

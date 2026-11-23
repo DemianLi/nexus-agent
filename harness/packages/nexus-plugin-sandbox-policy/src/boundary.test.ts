@@ -1,7 +1,7 @@
 /**
  * 這條邊界的絆索：**這個套件不得反向依賴 app**。
  *
- * 抽出來之前，這三個模組住在 `apps/harness/src`，彼此之間、以及對 fence 的 import 都是
+ * 抽出來之前，這三個模組住在 `harness/apps/harness/src`，彼此之間、以及對 fence 的 import 都是
  * 相對路徑。抽完之後那些邊只剩型別、而且經 `@nexus/core`。**會把它推回去的不是誰決定
  * 要推回去，是某天有人要一個 harness 裡的東西然後順手加一行 import**——那一行照樣
  * typecheck 得過（pnpm workspace 解析得到 `@nexus/harness`），照樣測試全綠，只有
@@ -30,7 +30,7 @@ const here = dirname(fileURLToPath(import.meta.url));
  * `sandbox-mode.ts` 就在解釋 fence 住在那邊），拿 `includes()` 掃會把那些句子判成違規，
  * 而修法會是刪掉正確的註解。
  */
-const FORBIDDEN = ['apps/harness', '@nexus/harness'] as const;
+const FORBIDDEN = ['harness/apps/harness', '@nexus/harness'] as const;
 
 /** 一份原始碼裡每一個 `from '…'` / `import '…'` 的 specifier。 */
 function specifiers(source: string): readonly string[] {

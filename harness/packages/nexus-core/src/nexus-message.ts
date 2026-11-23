@@ -32,7 +32,7 @@ export type MessageContent = string | Array<ContentBlock>;
  * 一則訊息的欄位。
  *
  * `role`、`name`、`tool_call_id` 是**選填的字串**：落盤前做過一次 JSON 往返，值是 `undefined` 的鍵在那一步就消失。持久化型別圖
- * （`apps/harness/src/persistence-schema.ts`，#1856）要表示得出來，必填卻可以是 `undefined` 的欄位不是 JSON。
+ * （`harness/apps/harness/src/persistence-schema.ts`，#1856）要表示得出來，必填卻可以是 `undefined` 的欄位不是 JSON。
  * `additional_kwargs`、`response_metadata` 照 LangChain 宣告成 `Record<string, any>`，型別圖裡是 `any`；收窄屬
  * [#1883](https://github.com/DemianLi/nexus-agent/issues/1883)。其餘欄位（`tool_calls`、`status`、`artifact`…）不宣告，讀的地方自己收窄。
  */

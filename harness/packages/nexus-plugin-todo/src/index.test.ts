@@ -2,8 +2,8 @@
  * `todo_write` 這顆工具：**驗證、描述，與它寫進哪一份日誌**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463) 起掛在
  * Cordis 樹上）。
  *
- * 這一檔只走樹的這一層——真的跑一次 agent、真的委派給 subagent 的那一半在 `apps/harness/src/todo-tool.test.ts`，因為那需要
- * 基座；樹上兩條 thread 同時活著的每一種呼叫形狀在 `apps/harness/src/todo-on-tree.test.ts`。兩邊不重複：這裡問的是「這顆工具
+ * 這一檔只走樹的這一層——真的跑一次 agent、真的委派給 subagent 的那一半在 `harness/apps/harness/src/todo-tool.test.ts`，因為那需要
+ * 基座；樹上兩條 thread 同時活著的每一種呼叫形狀在 `harness/apps/harness/src/todo-on-tree.test.ts`。兩邊不重複：這裡問的是「這顆工具
  * 自己說了什麼」，那邊問的是「LangGraph 真的把身分帶到它面前了嗎」。
  *
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 造日誌與挑法；`src/index.ts` 不行。
@@ -311,7 +311,7 @@ describe('寫進哪一份', () => {
    * 「沒接線」——把模型送錯東西誤報成接線問題，而那兩件事要修的地方完全不同。
    *
    * **而且它回錯誤訊息不是拋**（見 `TOOL_ERROR_PREFIX`），端到端的驗收在
-   * `apps/harness/src/todo-tool.test.ts`。
+   * `harness/apps/harness/src/todo-tool.test.ts`。
    */
   it('清單壞掉時回的是驗證錯誤，不是接線錯誤——而且沒接線也一樣', async () => {
     const { tool } = await mount(true, pickOver());

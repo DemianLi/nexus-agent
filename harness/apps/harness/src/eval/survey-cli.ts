@@ -52,7 +52,7 @@ const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models
                        ${BENCHMARK.map((entry) => entry.id).join(' / ')}
   --models <label,...> 只跑指定的候選，預設全部 ${SURVEY_MODELS.length} 個。短名見 src/eval/survey.ts：
                        ${SURVEY_MODELS.map((model) => model.label).join(' / ')}
-  --out <dir>          結果檔放哪個目錄，預設 apps/harness/eval-results/（不進版控）。
+  --out <dir>          結果檔放哪個目錄，預設 harness/apps/harness/eval-results/（不進版控）。
                        逐筆寫進一份 .jsonl，開頭記 commit、題庫與評分程式版本、取樣設定。
 
 冒煙（先量一次每題要跑多久，再決定整輪跑不跑得起）：

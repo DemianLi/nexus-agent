@@ -49,13 +49,13 @@
  * | 組裝點沒提供核准管道 | {@link unaskedRefusal}（`no-service`） | 沒有 |
  * | 被拒 | 人給的理由，或 {@link rejectedRefusal} | 有 |
  *
- * **唯讀共用區那一條是偏離 2 的延伸**（[#1800](https://github.com/DemianLi/nexus-agent/issues/1800)，登記在 `apps/harness/src/thread-roots.ts` 檔頭）：
+ * **唯讀共用區那一條是偏離 2 的延伸**（[#1800](https://github.com/DemianLi/nexus-agent/issues/1800)，登記在 `harness/apps/harness/src/thread-roots.ts` 檔頭）：
  * dsh 沒有唯讀共用區，所以沒有對照。serve 把 `--workspace` 掛成 `/shared`，固定唯讀、不接受任何 grant（#1675 Q8 (a)）；對那底下的路徑升級，
  * 核准卡問的是一個不可能成功的問題（核准了、重試仍被擋）。所以判在**加寬之前**——這個目標不論現在是哪一格、要升到哪一格都沒有答案。
  * 判準是前綴，不是被擋下的那一次：共用區的 backend 不接控制器、不記 denial，這裡讀不到「剛才被擋下的是哪個 backend」。
  *
  * **保留清單那一條是同一個理由**（[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)）：舊 thread 的可寫根就是 `--workspace`，根目錄的指示檔與
- * 技能來源不論模式、不認領 grant 都寫不進去（#1960，`apps/harness/src/shared-reserved-writes.ts`），核准了也不會成功，所以同樣判在加寬之前。
+ * 技能來源不論模式、不認領 grant 都寫不進去（#1960，`harness/apps/harness/src/shared-reserved-writes.ts`），核准了也不會成功，所以同樣判在加寬之前。
  * 判斷問 fence 本身（{@link EscalationTargets.reservedReason}），跟擋變更的是同一份規則。
  *
  * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，同

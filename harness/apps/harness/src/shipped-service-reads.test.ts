@@ -1,5 +1,5 @@
 /**
- * **出貨清單上的每一列，在自己的 `apply` 當下讀的服務都由組裝點提供**——守 `apps/harness/cordis.yml`
+ * **出貨清單上的每一列，在自己的 `apply` 當下讀的服務都由組裝點提供**——守 `harness/apps/harness/cordis.yml`
  * 「順序不承載語意」的服務那一半（[#687](https://github.com/DemianLi/nexus-agent/issues/687) 第 2 步）。
  *
  * 載入是一趟到底的（`@nexus/core` 的 `ServiceRegistrationPoint` 偏離登記）：`apply` 當下讀一個由**另一列

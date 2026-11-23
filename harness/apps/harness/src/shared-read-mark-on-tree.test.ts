@@ -3,7 +3,7 @@
  *
  * 量的是產品路徑：真的 `createCliAgent`（新 thread 的形狀：私有根加掛在 `/shared` 的 `--workspace`）、真的 contained backend、
  * 腳本模型。斷言模型拿到的工具訊息、會話日誌的 `tool/result`，以及模型讀到的系統提示詞。前綴那一層自己的規則在
- * `packages/nexus-core/src/shared-read-mark.test.ts`。
+ * `harness/packages/nexus-core/src/shared-read-mark.test.ts`。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */

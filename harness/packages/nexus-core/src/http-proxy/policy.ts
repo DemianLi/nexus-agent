@@ -9,7 +9,7 @@
  */
 
 /**
- * 解析要的唯一一件事：名字進、勝出的值出。`LaunchEnvironment`（`apps/harness/src/launch-env.ts`）結構上
+ * 解析要的唯一一件事：名字進、勝出的值出。`LaunchEnvironment`（`harness/apps/harness/src/launch-env.ts`）結構上
  * 就符合這個形狀，原樣傳進來；測試用物件字面值就建得出一個。
  */
 export interface EnvLookup {

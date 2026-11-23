@@ -52,7 +52,7 @@ export const KNOWN_DIFFERENCE_KINDS = {
     card: 2363,
     reason:
       '這一條掛了一顆沒登記一步的格：基座（deepagents）原版的 `SummarizationMiddleware`（同名取代），或不 import core、' +
-      '直接寫 `wrapModelCall` 的 `.mjs` 插件。native 建構時就拋（`packages/nexus-core/src/native-loop/agent.ts` 的建構檢查）；' +
+      '直接寫 `wrapModelCall` 的 `.mjs` 插件。native 建構時就拋（`harness/packages/nexus-core/src/native-loop/agent.ts` 的建構檢查）；' +
       '出貨組裝沒有這種組法（`native-shipped-cells.test.ts`）。',
   },
 } as const satisfies Record<string, KnownDifferenceKindInfo>;

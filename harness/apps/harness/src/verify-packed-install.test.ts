@@ -1,5 +1,5 @@
 /**
- * `scripts/release/verify-packed-install.ts` 執行期那一半（步驟 3 到 6）的單元紅燈
+ * `harness/scripts/release/verify-packed-install.ts` 執行期那一半（步驟 3 到 6）的單元紅燈
  * （[#1666](https://github.com/DemianLi/nexus-agent/issues/1666)，#1657 的已知缺口）。
  *
  * 這一半原本只有 CI 的 `packed-install` job 護著：哪天有人把某一步的判斷寫錯、`problems.push` 漏掉，job 照樣綠。

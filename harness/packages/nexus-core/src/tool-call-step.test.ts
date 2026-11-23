@@ -1,7 +1,7 @@
 /**
  * `tool-call-step.ts` 的轉接：一步拿到的那次呼叫、往內交時內層拿到的請求（換名字、換工具、換參數）、一步在同一個 tick 被呼叫，
  * 以及 `createToolCallStepMiddleware` 造的那顆登記了這一步、`withToolCallStep` 登記時核對 `wrapToolCall` 就是用那一步造的。
- * 掛進各顆 middleware 之後的行為在各顆自己的測試；兩個 loop 都經這一層，native loop 那一套見 `apps/harness/vitest.native.config.ts`。
+ * 掛進各顆 middleware 之後的行為在各顆自己的測試；兩個 loop 都經這一層，native loop 那一套見 `harness/apps/harness/vitest.native.config.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

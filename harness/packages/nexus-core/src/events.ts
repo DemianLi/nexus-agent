@@ -22,7 +22,7 @@
  * ## 撤銷只撤自己那一筆（同 dsh，不是偏離）
  *
  * dsh 的 `unregister` 是依 callback 找第一筆拿掉，乍看會在「同一個函式被兩位註冊者各掛一次」時誤傷別人。但 dsh 的 `on()` 在登記
- * 之前先做 `listener = this.ctx.reflect.bind(listener)`（`vendor/cordis/src/reflect.ts` 的 `bind` 每次都回一個新的 `Proxy`），所以
+ * 之前先做 `listener = this.ctx.reflect.bind(listener)`（`harness/vendor/cordis/src/reflect.ts` 的 `bind` 每次都回一個新的 `Proxy`），所以
  * 每一次註冊存進表裡的 callback 本來就各不相同，「依 callback 撤」實際上就是「依身分撤」。我們的註冊表也有同一條約定：
  * **撤銷只撤自己那一次註冊，冪等**（`entries.ts`，載入器的回滾靠它，#677）。這裡每一筆註冊是一個獨立的紀錄，以身分撤銷，結果相同。
  *

@@ -1,7 +1,7 @@
 /**
  * glob pattern 大括號上限的單元測試：量法（深度、組合、範圍、略過的字元、沒關的組，各附上限 ±1；長度上限；深度超過就停）、
  * 包 backend 的那一層（超過就不叫 backend），與子行程裡對真的 `fast-glob` 送 `{1..900}{1..900}`（拿掉上限就 OOM）。經 `createNexusAgent` 的
- * 接線在 `apps/harness/src/glob-pattern-limit.test.ts`。
+ * 接線在 `harness/apps/harness/src/glob-pattern-limit.test.ts`。
  */
 
 import { spawn } from 'node:child_process';

@@ -7,13 +7,13 @@
  *
  * 這裡只有表與算法，是純函式，窗口由呼叫端給。量在 `injection-sources.ts`。執行在各源自己那裡：
  * 可延後的源放不下時整項不放、留一行指標（`base-prompt-text.ts` 的兩個 `…Within`，與 agent-instructions、skill-invocation 兩個插件）；
- * 必要的源超過時組裝或載入失敗（`apps/harness` 的 `system-prompt-middleware.ts`、plan-mode 的設定）。插件不 import core，
- * 預設值與算法各抄一份，`apps/harness/src/injection-budget-pins.test.ts` 把兩邊釘成相等。
+ * 必要的源超過時組裝或載入失敗（`harness/apps/harness` 的 `system-prompt-middleware.ts`、plan-mode 的設定）。插件不 import core，
+ * 預設值與算法各抄一份，`harness/apps/harness/src/injection-budget-pins.test.ts` 把兩邊釘成相等。
  *
  * @module
  */
 
-/** 估算一個 token 約幾個 UTF-8 位元組，同 `@` 會話引用的預算（`apps/harness/src/session-reference-budget.ts`）。 */
+/** 估算一個 token 約幾個 UTF-8 位元組，同 `@` 會話引用的預算（`harness/apps/harness/src/session-reference-budget.ts`）。 */
 export const INJECTION_BYTES_PER_TOKEN = 4;
 
 /**

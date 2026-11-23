@@ -5,7 +5,7 @@
  * ——強制結束的三條路（第二次訊號、收尾逾時、致命退出）最後都走這一步。父測試等它結束，看假 git 還在不在。
  *
  * 對照組用裸 `spawn` 起同一支假 git：Node 不替你收子行程，它要還活著，「GitRunner 起的不在了」才有意義。
- * 登記表本身的單元測試在 `packages/nexus-core/src/host-exit-children.test.ts`。
+ * 登記表本身的單元測試在 `harness/packages/nexus-core/src/host-exit-children.test.ts`。
  */
 
 import { execFile } from 'node:child_process';
@@ -71,7 +71,7 @@ afterEach(async () => {
 
 /**
  * 對單一行程送 SIGKILL。pid 不是大於 1 的整數就丟錯、不送：`process.kill(0, …)` 殺整個行程群組（含 vitest 主行程與外層 shell），
- * 而 `Number('')` 就是 0（#1712；`apps/harness/src/test-pids.fixture.ts` 是同一份）。
+ * 而 `Number('')` 就是 0（#1712；`harness/apps/harness/src/test-pids.fixture.ts` 是同一份）。
  */
 function killPid(pid: number): void {
   if (!(Number.isInteger(pid) && pid > 1)) {

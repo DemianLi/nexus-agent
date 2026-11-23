@@ -7,7 +7,7 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件的主入口：token、介面、契約版本，與命令定義的型別 | `@nexus/sdk`，與 `@nexus/core` 的**型別**（見下） |
- * | 提供者 | 樹上一列，行程級的命令登記處：同一個套件的另一個入口 `@nexus/commands/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk`、`@nexus/core` 的 `normalizeCommandDefinition` |
+ * | 提供者 | 樹上一列，行程級的命令登記處：同一個套件的另一個入口 `@nexus/commands/provider`，由宿主（`harness/apps/harness`）掛一列 | 這個套件、`@nexus/sdk`、`@nexus/core` 的 `normalizeCommandDefinition` |
  * | 消費者 | 想登記命令的插件，今天是 `feedback` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * ## 跟 `@nexus/plugin-commands` 的分工
@@ -20,7 +20,7 @@
  * | `@nexus/plugin-commands` | **執行**：解析一行輸入、查命令、寫 `command/run`／`command/done`、呼叫 handler | 兩個發派入口（REPL、wire handler） |
  *
  * 執行器只讀每條 thread 的 `registry.commands`（`find`），不經這個接縫；宿主把樹上登記的命令折進那一張 registry
- * （`apps/harness` 的 `registerFolded`），所以執行那一半一行不用改。
+ * （`harness/apps/harness` 的 `registerFolded`），所以執行那一半一行不用改。
  *
  * ## 偏離登記：這個定義套件相依 `@nexus/core` 的型別（照 `@nexus/projections` 的 #1421 Q2 (a)）
  *
@@ -33,7 +33,7 @@
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（#1421 PM 決策 3）。
  * - **撤除條件**：併入 #1421 Q2 (b)——SDK 與定義套件要發布到私有 registry 之前，型別的實作搬進定義套件。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：沒有 `ScopedLayers`、
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：沒有 `ScopedLayers`、
  * `commands/change` 通知與 `definitionId`（`@nexus/core` 的 `CommandRegistrationPoint` 檔頭已登記為什麼不做）。
  *
  * @module

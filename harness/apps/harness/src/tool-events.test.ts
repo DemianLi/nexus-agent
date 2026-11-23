@@ -2,7 +2,7 @@
  * **工具呼叫與結果進會話日誌**——[#264](https://github.com/DemianLi/nexus-agent/issues/264) 的驗收，
  * 量的是真的跑一場對話之後日誌裡有什麼。
  *
- * 規則（碼從哪裡來、什麼時候整對不記）在 `packages/nexus-core/src/containment.test.ts`。
+ * 規則（碼從哪裡來、什麼時候整對不記）在 `harness/packages/nexus-core/src/containment.test.ts`。
  * 這一份量的是那幾條規則掛進真的組裝之後還成不成立：**每一種錯誤都從它真正的生產者冒出來**
  * ——基座的 ToolNode、超時的 `AbortSignal`、校驗 plugin、核准閘門、`ask_user_question`——
  * 而不是從手搭的假 handler。

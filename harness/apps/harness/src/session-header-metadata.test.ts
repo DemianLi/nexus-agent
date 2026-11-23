@@ -334,10 +334,10 @@ describe('讀的一側：舊版讀得出來，缺的標「—」', () => {
           { name: 'b', id: 'b', disabled: true },
         ],
         configHash: 'hmac-sha256:00112233aabbccdd',
-        modelEntryId: 'vendor/model',
+        modelEntryId: 'harness/vendor/model',
       }),
     ).toBe(
-      '建置 0123456789ab（未提交的改動：有） ｜模型 vendor/model ｜插件 2 列（停用 1） ｜' +
+      '建置 0123456789ab（未提交的改動：有） ｜模型 harness/vendor/model ｜插件 2 列（停用 1） ｜' +
         '設定雜湊 hmac-sha256:00112233aabbccdd',
     );
   });
@@ -650,7 +650,7 @@ describe('serve：寫上磁碟的 header', () => {
       build: { commit: 'f'.repeat(40), dirty: false },
       plugins: [{ name: '@nexus/最初那一列', id: 'first', disabled: false }],
       configHash: 'hmac-sha256:feedfacefeedface',
-      modelEntryId: 'vendor/最初那一筆',
+      modelEntryId: 'harness/vendor/最初那一筆',
     };
     const migratedFrom = await toLegacyTwoFile(directory, 'alpha', original);
 

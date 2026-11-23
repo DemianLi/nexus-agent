@@ -4,7 +4,7 @@
 
 ## 與 Rust 宿主行程（#2568）的分界
 
-這份決定管的是每條 thread 的**容器**，也就是 plugin 的載入、註冊與熱換；今天它仍是 TypeScript：出貨清單 `apps/harness/cordis.yml`，由 `loadPluginConfig`（`apps/harness/src/plugin-config.ts:1688`）載入。[#2568](https://github.com/DemianLi/nexus-agent/issues/2568) 設計的是 Rust 宿主行程（誰起宿主、死了帶走什麼），而這個宿主今天已經有自己的主機級插件樹：內核在 `native/sandbox-spawner/host/src/kernel/mod.rs:1`（#2569），照 `--plugins` 掛編進執行檔的插件（`host/src/host/mod.rs:2`；出貨建置只有 `mcp`，`host/src/host/plugins.rs:28-35`）；每條對話一個的 Rust 組合行程與它共用內核，目前只有骨架、harness 與出貨都還沒接（`host/src/composition/mod.rs:1-3`，#2583）。這份決定**不**授權 Rust 這一側接手每條 thread 容器的載入與註冊；若 #2568 或 [#3024](https://github.com/DemianLi/nexus-agent/issues/3024) 的設計走到那一步，要回到這份決定的重開條件重新決定，並更新這份 ADR。
+這份決定管的是每條 thread 的**容器**，也就是 plugin 的載入、註冊與熱換；今天它仍是 TypeScript：出貨清單 `harness/apps/harness/cordis.yml`，由 `loadPluginConfig`（`harness/apps/harness/src/plugin-config.ts:1688`）載入。[#2568](https://github.com/DemianLi/nexus-agent/issues/2568) 設計的是 Rust 宿主行程（誰起宿主、死了帶走什麼），而這個宿主今天已經有自己的主機級插件樹：內核在 `harness/native/sandbox-spawner/host/src/kernel/mod.rs:1`（#2569），照 `--plugins` 掛編進執行檔的插件（`host/src/host/mod.rs:2`；出貨建置只有 `mcp`，`host/src/host/plugins.rs:28-35`）；每條對話一個的 Rust 組合行程與它共用內核，目前只有骨架、harness 與出貨都還沒接（`host/src/composition/mod.rs:1-3`，#2583）。這份決定**不**授權 Rust 這一側接手每條 thread 容器的載入與註冊；若 #2568 或 [#3024](https://github.com/DemianLi/nexus-agent/issues/3024) 的設計走到那一步，要回到這份決定的重開條件重新決定，並更新這份 ADR。
 
 ## 沒有回答的
 

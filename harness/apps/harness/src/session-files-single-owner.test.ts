@@ -30,9 +30,9 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** 檔名與讀法的擁有者：寫檔名、解 header 是它們的本分。`in-tree/` 複製進舊 tag 的樹裡跑，import 不到新模組。 */
 const OWNERS = [
-  'packages/nexus-core/src/session-filename.ts',
-  'apps/harness/src/jsonl-session-store.ts',
-  'scripts/session-format-fixtures/in-tree/',
+  'harness/packages/nexus-core/src/session-filename.ts',
+  'harness/apps/harness/src/jsonl-session-store.ts',
+  'harness/scripts/session-format-fixtures/in-tree/',
 ] as const;
 
 /** 豁免記號；後面要寫理由。 */
@@ -147,7 +147,7 @@ export function findViolations(file: string, text: string): Violation[] {
   return found;
 }
 
-const SOURCE_ROOTS = ['apps/harness/src', 'packages', 'scripts'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages', 'scripts'] as const;
 
 /**
  * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。
@@ -213,11 +213,11 @@ describe('量具自檢：每一種寫法都抓得到，註解與豁免不算', (
   });
 
   it('擁有者自己的檔整檔不掃（轉出自己、寫檔名是本分），別人的照掃', () => {
-    expect(isOwner('apps/harness/src/jsonl-session-store.ts')).toBe(true);
-    expect(isOwner('packages/nexus-core/src/session-filename.ts')).toBe(true);
-    expect(isOwner('scripts/session-format-fixtures/in-tree/reader.ts')).toBe(true);
-    expect(isOwner('apps/harness/src/session-files.fixture.ts')).toBe(false);
-    expect(isOwner('apps/harness/src/jsonl-session-store.fixture.ts')).toBe(false);
+    expect(isOwner('harness/apps/harness/src/jsonl-session-store.ts')).toBe(true);
+    expect(isOwner('harness/packages/nexus-core/src/session-filename.ts')).toBe(true);
+    expect(isOwner('harness/scripts/session-format-fixtures/in-tree/reader.ts')).toBe(true);
+    expect(isOwner('harness/apps/harness/src/session-files.fixture.ts')).toBe(false);
+    expect(isOwner('harness/apps/harness/src/jsonl-session-store.fixture.ts')).toBe(false);
   });
 
   it('.js 檔一樣掃：以 .jsonl 結尾的字面量會紅', () => {

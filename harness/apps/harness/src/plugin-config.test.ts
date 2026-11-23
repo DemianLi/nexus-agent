@@ -10,7 +10,7 @@
  * 第二份要維護的清單，而它守的是「副本相等」不是「設定是對的」。
  * [#490](https://github.com/DemianLi/nexus-agent/issues/490) 拒絕過這個形狀。
  *
- * **接手的不是另一條等價測試，是出貨檔自己變成了交付物**：`apps/harness/cordis.yml` 現在
+ * **接手的不是另一條等價測試，是出貨檔自己變成了交付物**：`harness/apps/harness/cordis.yml` 現在
  * 由 **17 個測試檔**經 `shippedPlugins()` 真的載進去組裝（`invariant-paths`、
  * `approval-gate-order`、`agent-instructions`、`session-telemetry-paths`、`sandbox-*`、
  * `goal-driver-cli`……），加上 `invariant-companions.test.ts` 與 `package-invariants.test.ts`
@@ -131,7 +131,7 @@ describe('出貨的 cordis.yml', () => {
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
-    // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
+    // `loadPluginConfig`，所以那八列要真的經由 `harness/apps/harness/package.json` 的 `imports`
     // 解析、import、而且長得像一顆 plugin，才數得到 60。拿掉那個 `imports` 區塊，這裡當場紅。
     expect(fromYaml).toHaveLength(61);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
@@ -171,7 +171,7 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('todo')).toEqual({ allowParallelInProgress: true });
 
     // 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
-    // （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
+    // （`harness/packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
     // 所以出貨檔那一行是整棵樹上唯一講這個數字的地方。
     expect(byId.get('feedback')).toEqual({ maxNoteBytes: 8192 });
 
@@ -194,7 +194,7 @@ describe('出貨的 cordis.yml', () => {
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
     // 也沒有 Config schema，替它加一行 `config:` 沒有作用、啟動時印警告。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
-    // harness 自己那八列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `apps/harness`。
+    // harness 自己那八列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `harness/apps/harness`。
     // 前七列的消費者跑在任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期
     // 讀；`recursion-limit` 的消費者在組裝期，所以它跟上面那幾列一樣走服務。
     expect(byId.get('thread-title')).toEqual({
@@ -960,7 +960,7 @@ describe('模組解析', () => {
 describe('--dump-config', () => {
   /**
    * **不做黃金檔比對。** dsh 自己的開發備註寫著這份輸出不承諾跨包版本的位元組穩定性
-   * （`packages/boot/app-boot/README.zh.md` 的「待定：配置 dump 稳定性」）。照抄一個它自己
+   * （`harness/packages/boot/app-boot/README.zh.md` 的「待定：配置 dump 稳定性」）。照抄一個它自己
    * 說不穩定的東西當判準，是把別人的免責聲明變成我們的絆索。所以驗的是結構性質。
    */
   it('印出來的東西讀得回來，而且就是啟動真的會掛的那一份', () => {
@@ -1268,7 +1268,7 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
   /**
    * **這一組守的是一個會安靜載錯模組的缺陷。** 裸的相對 specifier 錨在做 `import()` 的那個
    * 模組上（`plugin-config.ts`），不是使用者手上那個 patch 檔。沒有錨定的話 `./probe.ts`
-   * 會被解析到 `apps/harness/src/probe.ts`——今天那裡沒有這個檔所以是「載不起來」，哪天有了
+   * 會被解析到 `harness/apps/harness/src/probe.ts`——今天那裡沒有這個檔所以是「載不起來」，哪天有了
    * 就變成「載到別的東西，而且不吭聲」。
    */
   function probeModule(root: string, name: string, pluginName: string): string {

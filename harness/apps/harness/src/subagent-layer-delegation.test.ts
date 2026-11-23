@@ -8,7 +8,7 @@
  *
  * 照 dsh：派得出去的就是這個 agent 看得到的（`packages/core/tools/src/index.ts:1230-1252`，派發與 schema 用同一份逐 agent
  * 視圖），看不到的呼叫在派發那一步拋 `ToolNotFoundError`（`:1578-1579`，`5badb15`）。我們這側由最內層把基座的「沒有這顆
- * 工具」標成 `UNKNOWN_TOOL`（#1024，`packages/nexus-core/src/invalid-tool-args.ts`）。
+ * 工具」標成 `UNKNOWN_TOOL`（#1024，`harness/packages/nexus-core/src/invalid-tool-args.ts`）。
  *
  * **全走產品組裝**：`createNexusAgent({ backgroundSubagents })`＋腳本模型＋`ThreadPump`＋`attachSession`，日誌經
  * `attachSessionPersistence` 落到 JSONL，再用離線掃描那一份讀法讀回來。子代理兩種（前景、背景）× 它發的呼叫兩種

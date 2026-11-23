@@ -1,6 +1,6 @@
 /**
  * **模型回覆撞到輸出上限：這一步收掉、這一輪記成截斷**——[#433](https://github.com/DemianLi/nexus-agent/issues/433)
- * 的驗收。規則本身在 `packages/nexus-core/src/max-tokens.test.ts`。
+ * 的驗收。規則本身在 `harness/packages/nexus-core/src/max-tokens.test.ts`。
  *
  * ## 為什麼一定要真的 `ChatOpenAI`
  *

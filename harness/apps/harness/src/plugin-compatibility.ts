@@ -15,7 +15,7 @@
  *
  * **家族的劃法。** dsh 用名字劃出「跟 runtime 同版號」的一家（`@deepseek-ai/dsh` 與 `@deepseek-ai/dsh-*`），Cordis 在家族外：它有自己的版號。
  * nexus 的 vendor 在 #1403 搬進了 `@nexus` scope，版號仍是上游的（`@nexus/cordis` 4.0.0-rc.12 之類），所以用名單把它們排出去；
- * 名單由 `plugin-compatibility.test.ts` 對照 `vendor/` 底下每一份 `package.json` 的 `name` 釘住，多一個少一個都會紅。劃出來的是同一個家族。
+ * 名單由 `plugin-compatibility.test.ts` 對照 `harness/vendor/` 底下每一份 `package.json` 的 `name` 釘住，多一個少一個都會紅。劃出來的是同一個家族。
  *
  * **與 dsh 的偏離（AGENTS.md 的偏離規則）：**
  *
@@ -45,8 +45,8 @@ export class PluginCompatibilityError extends Error {
 }
 
 /**
- * `vendor/` 底下的上游套件：住在 `@nexus` scope 裡，版號是上游的，**不跟 runtime 同版**。
- * `plugin-compatibility.test.ts` 對照 `vendor/` 底下每一份 `package.json` 的 `name` 釘住這份名單。
+ * `harness/vendor/` 底下的上游套件：住在 `@nexus` scope 裡，版號是上游的，**不跟 runtime 同版**。
+ * `plugin-compatibility.test.ts` 對照 `harness/vendor/` 底下每一份 `package.json` 的 `name` 釘住這份名單。
  */
 export const VENDORED_PACKAGE_NAMES: readonly string[] = [
   '@nexus/cordis',

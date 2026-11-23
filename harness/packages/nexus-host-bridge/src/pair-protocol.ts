@@ -1,6 +1,6 @@
 /**
  * 一對裡的組合行程與葉子行程之間那條橋的協定，TS 這一側的編解碼；Rust 那一側與完整的規則在
- * `native/sandbox-spawner/host/src/pair_protocol.rs`，兩邊對同一份向量檔（`native/sandbox-spawner/pair-vectors.json`）測。
+ * `harness/native/sandbox-spawner/host/src/pair_protocol.rs`，兩邊對同一份向量檔（`harness/native/sandbox-spawner/pair-vectors.json`）測。
  *
  * 框是 `u32` LE 長度加內容，內容是一份 JSON 物件，`type` 分種類。葉子連上後先送 `hello`，收到組合行程的 `hello` 才送別的；
  * 重連與結局：收到 `code`（{@link PAIR_REJECT_CODES}）是 `retry_later` 的 `rejected`、連不上、connect 成功後等滿時限（至少 {@link PAIR_HELLO_TIMEOUT_MS}）沒收到任何框、或沒收到任何框就斷，都退避（至少 {@link PAIR_RETRY_BACKOFF_MIN_MS}）後重連；到啟動時限仍沒進去時看最後一次有結論的嘗試：是 `retry_later` 就是「一直被要求稍後再試」，否則是對方不在。其餘的 `rejected`（含 `code` 不認得的）是被拒，不重試（規則在 Rust 那一側的檔頭）。這三種結局要分開回報，以收到的 `rejected` 為準；組合行程在驗過之前違反協定另外回報。葉子這一端的連線在 `./pair-client.ts`。之後兩邊都能發 `call` 與 `cancel`，

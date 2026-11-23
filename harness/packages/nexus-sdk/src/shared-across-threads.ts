@@ -8,7 +8,7 @@
  * ## 為什麼是回呼，不是 registry
  *
  * SDK 不 import `@nexus/core`（決議 §3-4 第 17 條）。「怎麼掛一次」與「怎麼以某條 thread 的身分呼叫」是宿主的事：
- * 今天的相容層插件用 `@nexus/core` 的 registry 寫轉接（見 `packages/nexus-plugin-ask-user`、`nexus-plugin-present`
+ * 今天的相容層插件用 `@nexus/core` 的 registry 寫轉接（見 `harness/packages/nexus-plugin-ask-user`、`nexus-plugin-present`
  * 的測試），日後上樹的插件接 Loader 的形狀（那時加進 {@link checkConformance} 的格子）。這一支只管比對與回報。
  *
  * ## 回傳

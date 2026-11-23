@@ -3,8 +3,8 @@
  * 的第三段）：驗收 B、D、E。量的是產品路徑——真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的寫入口
  * `changePlugin`、真的相容層 `assembly.create`（serve 每條 thread 一次）、真的 `attachSessions`；不手搭 `ctx.plugin`。
  *
- * 驗收 A（SDK lint、一致性套件）在 `packages/nexus-plugin-todo` 與 `migrated-plugin-gate.test.ts`；排除只蓋到 `src/invariant.ts` 的
- * 量法在 `packages/nexus-plugin-todo/src/eslint-exclusion.test.ts`。驗收 C（golden）是一次性錄製，不在這個檔，做法與數字寫在 PR 內文。
+ * 驗收 A（SDK lint、一致性套件）在 `harness/packages/nexus-plugin-todo` 與 `migrated-plugin-gate.test.ts`；排除只蓋到 `src/invariant.ts` 的
+ * 量法在 `harness/packages/nexus-plugin-todo/src/eslint-exclusion.test.ts`。驗收 C（golden）是一次性錄製，不在這個檔，做法與數字寫在 PR 內文。
  *
  * **E 的核心風險**：今天 serve 每條 thread 只綁一張註冊表，`forCall` 根本不讀 `thread_id`；改成行程級之後，行程裡只要活著兩條
  * 以上的 thread，**每一次呼叫都要靠 `thread_id` 認出主人**。所以這一檔所有「第二條 thread 活著」的格子，都先把另一條 thread

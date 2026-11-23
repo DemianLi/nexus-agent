@@ -1,7 +1,7 @@
 /**
  * skills 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1446](https://github.com/DemianLi/nexus-agent/issues/1446)）。
  *
- * skills 本身已經是樹上的函式插件（`packages/nexus-plugin-skills`，沒有一行 `@nexus/core`）。手搭 `PluginEntry` 清單、直接
+ * skills 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-skills`，沒有一行 `@nexus/core`）。手搭 `PluginEntry` 清單、直接
  * `createNexusAgent` 的測試要一顆「登記技能來源」的 `NexusPlugin`，就走這個外殼——**用的是同一份 `Config`**，所以設定的形狀
  * 與預設值只有一個出處。同 `echo.fixture.ts`、`token-meter.fixture.ts` 的前例。
  *

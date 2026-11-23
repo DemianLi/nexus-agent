@@ -64,7 +64,7 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  * 清單本身由 `App` 的 `useThreadDirectory` 持有（#632），這裡掛上時請它重抓；收起來再打開之前，畫的是上一份。
  *
  * **空白會話只列目前這一條**（[#313](https://github.com/DemianLi/nexus-agent/issues/313)），照 dsh 側欄的
- * `sessionVisible`（`packages/client/ui-workspace/src/client/tree.ts`）：別條空白的不是「以前的會話」，是開了沒講話
+ * `sessionVisible`（`harness/packages/client/ui-workspace/src/client/tree.ts`）：別條空白的不是「以前的會話」，是開了沒講話
  * 的——「新對話」會拿它們來重用（`features/threads/new-conversation.ts`）。目前這條要落了盤才在清單上，還沒落盤的不列。
  *
  * **沒有標題的另一種原因照講**（`ThreadSummary.title` 的說明）：有輪次、但全是目標排的。

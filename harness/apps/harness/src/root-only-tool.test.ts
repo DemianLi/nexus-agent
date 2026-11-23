@@ -10,7 +10,7 @@
  * dsh 對這一類工具的政策**——dsh 只有 `tool-todo` 那一類才給 subagent 各自一份。
  *
  * dsh 靠 `exec.agent` 在執行期問出「誰在叫」，那個欄位是它自己的 agent loop 派發時塞的
- * （`packages/core/agent-loop/src/tool-calls.ts:78`），而**我們的派發點是 LangGraph 的
+ * （`harness/packages/core/agent-loop/src/tool-calls.ts:78`），而**我們的派發點是 LangGraph 的
  * ToolNode，插不進去**（見 [`tool-session-log.test.ts`](./tool-session-log.test.ts)）。
  *
  * 我們換的地方是**組裝期**：fold 給每個 subagent 的是一份自己的工具陣列，所以 root-only

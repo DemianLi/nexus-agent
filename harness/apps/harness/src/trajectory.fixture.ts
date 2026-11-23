@@ -1,7 +1,7 @@
 /**
  * trajectory 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）。
  *
- * trajectory 本身已經是樹上的函式插件（`packages/nexus-plugin-trajectory`，沒有一行 `@nexus/core`）。手搭 `PluginEntry`
+ * trajectory 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-trajectory`，沒有一行 `@nexus/core`）。手搭 `PluginEntry`
  * 清單、直接 `createNexusAgent` 的測試要一顆「登記軌跡與請求快照投影」的 `NexusPlugin`，就走這個外殼——**包的是同一組
  * `trajectoryUnit`、`requestSnapshotsUnit`**，所以單元只有一個出處。同 `token-meter.fixture.ts`、`echo.fixture.ts` 的前例。
  *

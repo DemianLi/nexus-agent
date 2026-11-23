@@ -44,11 +44,11 @@ function manifests(): Map<string, { name: string; deps: string[] }> {
 describe('對著真的 repo', () => {
   const projects = typecheckProjects();
 
-  it('packages/* 與 apps/* 除了 web 都有一份', () => {
+  it('harness/packages/* 與 apps/* 除了 web 都有一份', () => {
     expect(projects.length).toBeGreaterThan(0);
-    expect(projects.map((project) => project.dir)).toContain('packages/nexus-core');
+    expect(projects.map((project) => project.dir)).toContain('harness/packages/nexus-core');
     expect(projects.map((project) => project.dir).sort()).toEqual(
-      [...manifests().keys()].filter((dir) => dir !== 'apps/web').sort(),
+      [...manifests().keys()].filter((dir) => dir !== 'web').sort(),
     );
     expect(uncoveredDirs(projects)).toEqual([]);
   });
@@ -62,7 +62,7 @@ describe('對著真的 repo', () => {
         ...new Set(
           (all.get(project.dir)?.deps ?? []).flatMap((name) => {
             const dir = dirOf.get(name);
-            return dir === undefined || dir === project.dir || dir === 'apps/web' ? [] : [dir];
+            return dir === undefined || dir === project.dir || dir === 'web' ? [] : [dir];
           }),
         ),
       ].sort();
@@ -86,9 +86,9 @@ describe('typecheck.sh', () => {
 describe('擋得住', () => {
   it('漏掉的套件會被點名', () => {
     const projects = typecheckProjects().filter(
-      (project) => project.dir !== 'packages/nexus-deque',
+      (project) => project.dir !== 'harness/packages/nexus-deque',
     );
-    expect(uncoveredDirs(projects)).toEqual(['packages/nexus-deque']);
+    expect(uncoveredDirs(projects)).toEqual(['harness/packages/nexus-deque']);
   });
 });
 
@@ -97,9 +97,9 @@ describe('產生的設定', () => {
     expect(
       JSON.parse(
         renderProject({
-          dir: 'packages/nexus-core',
+          dir: 'harness/packages/nexus-core',
           composite: true,
-          references: ['packages/nexus-brand'],
+          references: ['harness/packages/nexus-brand'],
         }),
       ),
     ).toEqual({
@@ -120,7 +120,7 @@ describe('產生的設定', () => {
 
   it('沒人引用的只開 incremental', () => {
     expect(
-      JSON.parse(renderProject({ dir: 'apps/harness', composite: false, references: [] })),
+      JSON.parse(renderProject({ dir: 'harness/apps/harness', composite: false, references: [] })),
     ).toEqual({
       extends: '../../../tsconfig.json',
       compilerOptions: { incremental: true, tsBuildInfoFile: 'tsconfig.tsbuildinfo' },

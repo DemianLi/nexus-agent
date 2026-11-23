@@ -1,6 +1,6 @@
 /**
  * 會話總帳那道折疊的規則。每一條對著一份手寫的事件串驗；真的跑一場對話之後線上收不收得到，在
- * `apps/harness/src/session-totals-wire.test.ts`。
+ * `harness/apps/harness/src/session-totals-wire.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

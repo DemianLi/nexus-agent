@@ -4,7 +4,7 @@
  * 對應 [#111](https://github.com/DemianLi/nexus-agent/issues/111) 的驗收。
  * 這一份只驗純函式那一半（`runApprovalGate`）與 middleware 在**不需要真的問人**時的
  * 行為；「停下來問、恢復之後接得回去」需要真的跑一次 graph，那些在
- * `apps/harness/src/interrupt.test.ts`——那裡才有 checkpointer 與模型。
+ * `harness/apps/harness/src/interrupt.test.ts`——那裡才有 checkpointer 與模型。
  *
  * **理由字串是這組測試的主體，不是裝飾。** 拍板 (b) 選了「兩個都要」，而政策與能力
  * 這兩件事唯一的區別就在模型收到的那句話：收斂成同一句，這一格的價值就沒了。

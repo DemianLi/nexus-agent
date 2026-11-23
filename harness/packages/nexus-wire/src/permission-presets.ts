@@ -4,7 +4,7 @@
  * **這一份只是契約**：型別、method 名字、client 方法。server 端還沒實作，`permission.catalog`
  * 一律回 `not_supported`，`permissions` 這個投影也還不會送；web 據前者把選單藏起來。
  *
- * 照 dsh 的 `permission-presets`（`packages/interaction/permission-presets/src/{types,index}.ts`，`5badb150`）：
+ * 照 dsh 的 `permission-presets`（`harness/packages/interaction/permission-presets/src/{types,index}.ts`，`5badb150`）：
  *
  * - **目錄**（`permission.catalog`）：`{ options, defaultOptions, defaultPreset }`，`options` 是目前可選的組，
  *   依宣告順序；每一組是 `{ value, name, description? }`。這份是整台共用的，與會話歷史無關。

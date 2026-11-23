@@ -1,7 +1,7 @@
 /**
  * 背景子代理也拿 `tool-fs` 的白名單（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：出貨是 continuable 背景模式，
  * 背景圖由 `compileSubagentGraph` 另編，不經 `task`。回歸的話，背景子代理會重新看到 `write_file`。
- * 前景（root、`task` 子代理）在 `tool-fs.test.ts`；選項物件的形狀在 `packages/nexus-core/src/agent-assembly-options.test.ts`。
+ * 前景（root、`task` 子代理）在 `tool-fs.test.ts`；選項物件的形狀在 `harness/packages/nexus-core/src/agent-assembly-options.test.ts`。
  */
 
 import { tmpdir } from 'node:os';

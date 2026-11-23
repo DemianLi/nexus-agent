@@ -13,7 +13,7 @@
  *    （#231 劃在範圍外）；而要只攔「這一次是送出」就得去猜路徑，猜錯的方向是**放行**。
  * 2. **核准卡顯示的是填好的欄位。** 中斷酬載裡的 `actionRequests[0].args` 就是這個工具的
  *    參數，所以人看到的是 `{ file_path, record: { 姓名: "阿明", … } }`——不是一坨已經
- *    escape 過的 CSV 字串。**這條有測試釘著**（`apps/harness/src/submit-record-wire.test.ts`），
+ *    escape 過的 CSV 字串。**這條有測試釘著**（`harness/apps/harness/src/submit-record-wire.test.ts`），
  *    否則這個理由就只是散文。
  * 3. **換目標只換這個工具的身體。** `.xlsx`／MCP 那兩條（#231 都劃在範圍外）換的是
  *    下面 `writeRow` 那幾行，模型面與閘門那一面一個字都不用動。
@@ -24,9 +24,9 @@
  * **而那不會有任何測試紅**——兩邊各自都寫成功了。所以：
  *
  * - **從 `fs` 查找服務（`@nexus/fs`，#1466）拿，工具被叫時才讀**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。查找服務依這次呼叫的 `thread_id` 回**那條 thread 自己的** fs 把手，把手的 `backend()` 是
- *   fold 填的**折後**那一個：組裝點在 fold 之前包的路由（`apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、
+ *   fold 填的**折後**那一個：組裝點在 fold 之前包的路由（`harness/apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、
  *   `/large_tool_results/`）與 plugin `registry.backend.mount()` 掛的路由都在裡面。以前收的是組裝點交給 host-services 的
- *   **折前**那一個，被路由的兩個前綴上兩邊各寫各的。量它的是 `apps/harness/src/submit-record-mounts.test.ts`。
+ *   **折前**那一個，被路由的兩個前綴上兩邊各寫各的。量它的是 `harness/apps/harness/src/submit-record-mounts.test.ts`。
  * - **為什麼要依 thread 挑**：行程裡可以同時活著好幾條 thread，每條各有自己的 backend 與 `--workspace` 的 fence
  *   （`SandboxModeController`，`/permission` 切的就是它）。只讀一份行程級的把手，等於一條 thread 的送出寫進另一條 thread 的
  *   backend、套另一條 thread 的 fence——靜默的。挑法是 `@nexus/core` 的 `pickBoundForCall`，與會話查找同一支。
@@ -55,7 +55,7 @@
  * 出來**。而這個工具每一次執行都在 resume 那一輪，拋出去會從 LangGraph 的 stream mux
  * 逃成 unhandled rejection、整場 run 當場死——第一次寫這條路時就是這樣紅的，症狀是
  * 「檔案沒建出來，而且線上什麼都沒說」。所以 `readRaw` 一定包在 try/catch 裡。
- * 絆索見 `apps/harness/src/submit-record-wire.test.ts` 最後那一段。
+ * 絆索見 `harness/apps/harness/src/submit-record-wire.test.ts` 最後那一段。
  *
  * ## 寫進 backend 就算數，不送 LangGraph 的 state（#2352；https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/agent-loop-off-langchain-design-2026-11-03.md 的 Q11）
  *
@@ -194,7 +194,7 @@ export const SUBMIT_RECORD_NO_BACKEND_MESSAGE =
 /**
  * 組出 `submit_record` 這顆工具。
  *
- * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`apps/harness/src/submit-record.fixture.ts`）都從這裡
+ * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`harness/apps/harness/src/submit-record.fixture.ts`）都從這裡
  * 取，它們之間唯一不同的是「這次呼叫的 fs 把手怎麼來」，所以那一格是參數。
  *
  * @param fsFor - 這次呼叫的 fs 查找。**在呼叫當下才呼叫它**，不在建工具的時候；參數是這次呼叫的 `ToolExec`。

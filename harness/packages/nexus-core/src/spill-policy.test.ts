@@ -1,6 +1,6 @@
 /**
  * 外溢層的預算算術（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：不管內容長什麼樣，換過的那一則
- * **含通知在內不超過預算**，頭尾的暗號留得住，儲存拋錯就原樣交出。組裝與日誌那一半在 `apps/harness/src/spill-policy.test.ts`。
+ * **含通知在內不超過預算**，頭尾的暗號留得住，儲存拋錯就原樣交出。組裝與日誌那一半在 `harness/apps/harness/src/spill-policy.test.ts`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

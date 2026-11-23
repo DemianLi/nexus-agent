@@ -1,6 +1,6 @@
 /**
  * 契約先合、實作還沒做的三塊（#723 模型選擇、#732 上傳與收據、#437 權限組合）的 client 那一半：method 名字、路徑、封包形狀、
- * `not_supported` 怎麼到呼叫端。server 那一半在 `apps/harness` 的 `wire-contract-stubs.test.ts`。
+ * `not_supported` 怎麼到呼叫端。server 那一半在 `harness/apps/harness` 的 `wire-contract-stubs.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

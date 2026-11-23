@@ -5,7 +5,7 @@ import { createMemoryPlugin, DEFAULT_MEMORY_SOURCE, memoryPlugin } from './index
 /**
  * 薄測試，只斷言「`apply` 真的往那兩個註冊點放了東西」，加上這個套件自己拒絕的那一種。
  *
- * 記憶**真的有沒有進到 prompt** 的驗收在組裝點（`apps/harness` 的 `memory.test.ts`）
+ * 記憶**真的有沒有進到 prompt** 的驗收在組裝點（`harness/apps/harness` 的 `memory.test.ts`）
  * ——那裡看的是模型收到的 system prompt，這裡看的是 registry 的內容。兩件事。
  */
 describe('createMemoryPlugin', () => {

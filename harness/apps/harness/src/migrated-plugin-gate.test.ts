@@ -31,7 +31,7 @@ import { repositoryRoot } from './package-invariants.js';
 
 const ROOT = repositoryRoot();
 
-/** 這個 repo 現在有的插件套件數。**寫死**：拿掃描的結果自己比自己驗不出東西。舊插件 18 顆，加上 echo、token-meter、trajectory 與 time-context。agent-instructions、skills、feedback、ask-user、todo、submit-record、present、system-prompt、goal 與 permission-presets 本來就是一個套件，遷出不改總數；`@nexus/skills`、`@nexus/commands`、`@nexus/feedback`、`@nexus/goal`、`@nexus/agent-loop`、`@nexus/system-prompt`、`@nexus/permission-presets`、`@nexus/approval-channel`、`@nexus/tool-result`、`@nexus/session` 與 `@nexus/fs` 一樣是定義套件、不在 `nexus-plugin-*` 底下。`@nexus/session` 不是插件（目錄是 `packages/nexus-session`，不在 `nexus-plugin-*` 底下），掃描器的定義就是目錄前綴，所以總數不因它而動。 */
+/** 這個 repo 現在有的插件套件數。**寫死**：拿掃描的結果自己比自己驗不出東西。舊插件 18 顆，加上 echo、token-meter、trajectory 與 time-context。agent-instructions、skills、feedback、ask-user、todo、submit-record、present、system-prompt、goal 與 permission-presets 本來就是一個套件，遷出不改總數；`@nexus/skills`、`@nexus/commands`、`@nexus/feedback`、`@nexus/goal`、`@nexus/agent-loop`、`@nexus/system-prompt`、`@nexus/permission-presets`、`@nexus/approval-channel`、`@nexus/tool-result`、`@nexus/session` 與 `@nexus/fs` 一樣是定義套件、不在 `nexus-plugin-*` 底下。`@nexus/session` 不是插件（目錄是 `harness/packages/nexus-session`，不在 `nexus-plugin-*` 底下），掃描器的定義就是目錄前綴，所以總數不因它而動。 */
 const EXPECTED_PLUGIN_PACKAGES = 22;
 const EXPECTED_MIGRATED = [
   '@nexus/plugin-agent-instructions',
@@ -91,7 +91,7 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
  *
  * 兩份都是封閉清單：掃到的檔多一個或少一個都紅。
  */
-const PLAN_MODE_SRC = 'packages/nexus-plugin-plan-mode/src';
+const PLAN_MODE_SRC = 'harness/packages/nexus-plugin-plan-mode/src';
 /** 封閉的例外：留在相容層的那一格，檔 → 撤除它的卡。今天是空的，多出任何一格就紅。 */
 const PLAN_MODE_COMPAT_EXCEPTIONS: Readonly<Record<string, string>> = {};
 /** 相容層的配套入口（`plan-mode-invariant` 那一列）。 */
@@ -189,7 +189,7 @@ interface FakeOptions {
   readonly testSource?: string | null;
 }
 
-const SDK_LINT_URL = pathToFileURL(join(ROOT, 'packages/nexus-sdk/src/lint.ts')).href;
+const SDK_LINT_URL = pathToFileURL(join(ROOT, 'harness/packages/nexus-sdk/src/lint.ts')).href;
 
 const CONFIG_WITH_SDK_LINT = `import { pluginLintConfig } from '${SDK_LINT_URL}';
 export default [{ files: ['**/*.ts'] }, ...pluginLintConfig];
@@ -378,9 +378,9 @@ describe('callsCheckConformance：看的是 import 進來的識別字的呼叫',
   });
 });
 
-/** apps/harness/src 底下的非測試原始碼（遞迴）。 */
+/** harness/apps/harness/src 底下的非測試原始碼（遞迴）。 */
 function harnessSources(): string[] {
-  const base = join(ROOT, 'apps/harness/src');
+  const base = join(ROOT, 'harness/apps/harness/src');
   const found: string[] = [];
   const walk = (current: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
@@ -397,11 +397,11 @@ function harnessSources(): string[] {
 }
 
 describe('驗收 E：「遷出的」判別只有一個出處', () => {
-  const DEFINITION = 'apps/harness/src/plugin-tree.ts';
+  const DEFINITION = 'harness/apps/harness/src/plugin-tree.ts';
   const CALLERS = [
-    'apps/harness/src/plugin-config.ts', // `resolveEntryModule`：Include 的 allow-list 從它算
-    'apps/harness/src/tool-catalog.ts',
-    'apps/harness/src/migrated-plugin-gate.ts', // 這一道 gate
+    'harness/apps/harness/src/plugin-config.ts', // `resolveEntryModule`：Include 的 allow-list 從它算
+    'harness/apps/harness/src/tool-catalog.ts',
+    'harness/apps/harness/src/migrated-plugin-gate.ts', // 這一道 gate
   ];
 
   /** 一個檔裡：有沒有從 `./plugin-tree.js` import `isFunctionPluginModule`、有沒有呼叫它。 */
@@ -453,7 +453,7 @@ describe('驗收 E：「遷出的」判別只有一個出處', () => {
     }
   });
 
-  it('apps/harness/src 沒有第二份手寫的「有沒有 manifest」判別', () => {
+  it('harness/apps/harness/src 沒有第二份手寫的「有沒有 manifest」判別', () => {
     const pattern =
       /\bmanifest\b\s*\)?\s*(?:!==|===|!=|==)\s*undefined|['"]manifest['"]\s+in\b|\.\s*hasOwn\w*\([^)]*['"]manifest['"]/;
     const hits = harnessSources()

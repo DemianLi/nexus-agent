@@ -2,7 +2,7 @@
  * native 直接呼叫 `streamEvents` 才走得到的兩條邊界，pump 那條路造不出來：
  *
  * - 呼叫端的 `config.signal` 在提問還掛著時舉起：這次 run 以中止拒絕，那顆呼叫的 `ask` 也要被收回，不留在記憶體裡等不到的答覆。
- *   pump 不帶 `config.signal`（`apps/harness/src/thread-pump.ts`）。
+ *   pump 不帶 `config.signal`（`harness/apps/harness/src/thread-pump.ts`）。
  * - 接回時一顆答覆都沒帶（`Command({ resume: {} })`）：pump 一次只送一顆 id 的答覆（`thread-pump.ts`），造不出來；這裡量 agent 自己
  *   在動任何狀態之前拋。
  */

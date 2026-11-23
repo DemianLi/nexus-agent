@@ -1,6 +1,6 @@
 /**
  * 點名子代理在折疊器裡的樣子（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：排著的件、領走時的人話、歷史重播的人話都帶 `mention`；
- * 壞掉的點名當沒有（畫不出標記，但話不能因此丟掉）。產出這些 frame 的一半在 `apps/harness/src/subagent-mention-*.test.ts`。
+ * 壞掉的點名當沒有（畫不出標記，但話不能因此丟掉）。產出這些 frame 的一半在 `harness/apps/harness/src/subagent-mention-*.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

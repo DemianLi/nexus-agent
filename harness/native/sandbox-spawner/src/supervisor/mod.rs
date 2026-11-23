@@ -1302,7 +1302,7 @@ impl Supervisor {
                     && conversation.cause == Some(DeathCause::Evicted))
             {
                 // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
-                // 別的死因不理：收完回的 `down` 就是回答。前台（`apps/harness/src/supervisor-client.ts` 的 `#apply`）收到 `down` 會重送 `ensure`，
+                // 別的死因不理：收完回的 `down` 就是回答。前台（`harness/apps/harness/src/supervisor-client.ts` 的 `#apply`）收到 `down` 會重送 `ensure`，
                 // 理由寫在那邊；這裡哪些死因排隊一改，那邊要跟著看。被組合行程連帶收掉的（`peer`）`down` 已經送過，不分死因都排隊，它收屍時不再送。
                 self.queue(thread, open);
                 self.make_room();

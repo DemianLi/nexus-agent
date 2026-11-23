@@ -61,7 +61,7 @@ export function startupSetting<T>(plugins: readonly PluginEntry[], plugin: Nexus
  * 當成有掛、一邊拿到預設值。
  *
  * **語意照 dsh：沒有那一列就是沒掛。** dsh 的會話落盤是清單上的一列
- * （`session-persistence-jsonl`，`packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`），
+ * （`session-persistence-jsonl`，`harness/packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`），
  * 不掛就沒有持久化服務，消費端各自 `ctx.get('sessionPersistence')` 拿到 `undefined`。
  * 產品路徑上那一列一定在（出貨的 `cordis.yml` 寫著它，patch 刪不掉列），所以「沒有那一列」
  * 只發生在手搭清單的呼叫端——那裡照 dsh 算沒掛，不另發明一個「沒講就開」。

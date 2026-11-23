@@ -12,9 +12,9 @@ import { DEFAULT_SKILLS_SOURCE } from './index.js';
 /**
  * 薄測試：設定的形狀、一致性套件、登記進去的東西與相依關係。
  *
- * skill **真的有沒有進到 prompt**、以及「看得到讀不到」那條，驗收在組裝點（`apps/harness` 的 `skills.test.ts`）——那裡看的是
+ * skill **真的有沒有進到 prompt**、以及「看得到讀不到」那條，驗收在組裝點（`harness/apps/harness` 的 `skills.test.ts`）——那裡看的是
  * 模型收到的 system prompt 與工具回傳，這裡看的是登記處的內容。兩件事。樹上那一列怎麼折進 thread 在
- * `apps/harness` 的 `skills-on-tree.test.ts`。
+ * `harness/apps/harness` 的 `skills-on-tree.test.ts`。
  */
 describe('設定', () => {
   it('省略 sources 時用慣例路徑；多來源照給的順序', () => {

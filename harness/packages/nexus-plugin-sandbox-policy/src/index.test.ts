@@ -31,7 +31,7 @@ import { ESCALATABLE_MODES, ESCALATION_TARGETS, SANDBOX_MODE_WIDTH } from './san
 import { SandboxModeController } from './sandbox-mode.js';
 
 /**
- * 模擬宿主橋接列的 threadSource 那一段：同 `apps/harness` 的 `plugin-config.ts`，在那一列的 `apply` 裡經 `runThreadSources` 跑
+ * 模擬宿主橋接列的 threadSource 那一段：同 `harness/apps/harness` 的 `plugin-config.ts`，在那一列的 `apply` 裡經 `runThreadSources` 跑
  * {@link mountSandboxPolicy}，登記落在這一列的位置；不走 Loader 與授權表。
  */
 function sandboxPolicyRow(): PluginEntry {
@@ -49,7 +49,7 @@ function sandboxPolicyRow(): PluginEntry {
   };
 }
 
-/** 載入一份清單。轉接器交給 registry，同產品路徑（`apps/harness` 的 `agent-factory.ts`）。 */
+/** 載入一份清單。轉接器交給 registry，同產品路徑（`harness/apps/harness` 的 `agent-factory.ts`）。 */
 function load(entries: readonly PluginEntry[]): ReturnType<typeof loadPlugins> {
   return loadPlugins(entries, createRegistry({ adaptTool: toLangChainTool }));
 }

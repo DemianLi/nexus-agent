@@ -9,7 +9,7 @@
  * ## 危險本身
  *
  * `PreToolListener` 的 `next()` **不呼叫就是把後面的人整個短路掉**——那是照 dsh 的
- * waterfall 語義刻意提供的能力（`packages/nexus-core/src/approval.ts` 的
+ * waterfall 語義刻意提供的能力（`harness/packages/nexus-core/src/approval.ts` 的
  * `PreToolListener`、`registry.ts` 的 `ApprovalRegistrationPoint.gate` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
@@ -19,7 +19,7 @@
  *
  * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
- * 被吃掉的那位是 submit-record 的 `submit_record` 閘門（`packages/nexus-plugin-submit-record/src/index.ts`
+ * 被吃掉的那位是 submit-record 的 `submit_record` 閘門（`harness/packages/nexus-plugin-submit-record/src/index.ts`
  * 的 `submitRecordGate`，#1466 起經樹上 `tools` 服務的 `gate()` 登記、折進 thread 的 `registry.approvals`，來源仍是這一列）。它被短路之後，工具**真的跑完**，那一列真的寫進工作區的檔案——**而沒有任何人
  * 看過它**。畫面上完全正常：沒有例外、沒有拒絕訊息、沒有中斷。這就是為什麼第二層量的是檔案最後在不在
  * （`written`），不是「閘門有沒有被呼叫」。
@@ -30,7 +30,7 @@
  *
  * ## 順序由 plugin 載入順序決定，被排到後面的那位管不著
  *
- * `approvals` 這個註冊點**只有 `append`**（`packages/nexus-core/src/registry.ts` 的 `ApprovalRegistrationPoint`：只有 `gate`），
+ * `approvals` 這個註冊點**只有 `append`**（`harness/packages/nexus-core/src/registry.ts` 的 `ApprovalRegistrationPoint`：只有 `gate`），
  * 沒有 `middleware.use({ prepend })` 或 `permissions` 那種槓桿。想排到前面的人只要在
  * 清單裡排前面就行，被排到後面的人沒有任何辦法。**這張卡不給 `approvals` 加 `prepend`**
  * （#199 的射程），只是把這件事釘住。
@@ -107,14 +107,14 @@ const shipped = await shippedPlugins();
  *
  * 以前這裡寫的是 `plan-mode#0`——`DEFAULT_PLUGINS` 的條目沒寫 id，由 `resolveEntries` 補
  * `<name>#<序號>`。**[#454](https://github.com/DemianLi/nexus-agent/issues/454) 之後清單從
- * `apps/harness/cordis.yml` 來，每一列都寫著看得懂的 id**，所以後來是 `plan-mode (plan-mode)`。
+ * `harness/apps/harness/cordis.yml` 來，每一列都寫著看得懂的 id**，所以後來是 `plan-mode (plan-mode)`。
  *
  * ## 現在只有 submit-record
  *
  * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 之後 plan-mode 不再掛閘門，出貨清單裡一位都沒有。
  * [#669](https://github.com/DemianLi/nexus-agent/issues/669) 把 `submit-record` 從組裝點（`assembly-root.ts`）的程式碼搬進出貨清單，
  * 它的閘門因此進了這一層的射程。**照下面 `NEW_GATE_GUIDANCE` 的出路 (c) 收下它**：先確認它對別的工具會呼叫 `next()`
- * （`packages/nexus-plugin-submit-record/src/index.ts` 的 `submitRecordGate` 只對 `submit_record` 回 `ask`，其餘一律 `next()`），
+ * （`harness/packages/nexus-plugin-submit-record/src/index.ts` 的 `submitRecordGate` 只對 `submit_record` 回 `ask`，其餘一律 `next()`），
  * 所以不會把排在它後面的人整條吃掉。沙箱升級（#700）已改在工具本體裡問人，不再有閘門。
  * 有人再往出貨清單加一位，這裡就響。
  *
@@ -145,12 +145,12 @@ describe('預設組裝裡的核准 gate', () => {
    *
    * 寫成 `origins(plugins = 出貨清單)` 再拿別的清單去「驗」它，證明的是斷言邏輯會動，
    * 而**不是這條絆索焊在產品那份清單上**——那就是 #195 那個空轉絆索換一件衣服。所以下面
-   * 直接讀出貨的那一份（`apps/harness/cordis.yml`），預檢的三個突變是真的去改那份檔案
+   * 直接讀出貨的那一份（`harness/apps/harness/cordis.yml`），預檢的三個突變是真的去改那份檔案
    * 再還原。
    *
    * 這一條**同時擋得住規矩的第二位**（有呼叫 `next()` 的那種）。那是刻意的：絆索的工作是
    * 「有人來了，回答上面那個問題」，不是「偵測強制允許」。只擋沒禮貌的那種，順序這個危險
-   * 就整個漏掉了——而測試夾具那位 gate（`apps/harness/src/approval.fixture.ts`）正是規矩的那種，
+   * 就整個漏掉了——而測試夾具那位 gate（`harness/apps/harness/src/approval.fixture.ts`）正是規矩的那種，
    * 這個形狀早就存在。
    */
   it('出貨清單裡剛好一位：submit-record 的 `submit_record` 閘門', async () => {

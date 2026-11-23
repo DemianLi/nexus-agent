@@ -2,7 +2,7 @@
  * MCP 工具結果的 artifact 不會把原始資料帶進會話日誌，也到不了瀏覽器（[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)）。
  *
  * 起一台真的 MCP server（stdio），要它回幾 MB 的內嵌資源、結構值與圖片，走完整條線——agent、會話日誌、
- * 即時串流與歷史端點——量每一層看到多大。對照 `packages/nexus-plugin-mcp/src/artifact-bound.ts` 裡的實測表：
+ * 即時串流與歷史端點——量每一層看到多大。對照 `harness/packages/nexus-plugin-mcp/src/artifact-bound.ts` 裡的實測表：
  * 沒有上限處理之前，內嵌資源 3 MB 就是 3 MB 的 `tool/result`。
  */
 

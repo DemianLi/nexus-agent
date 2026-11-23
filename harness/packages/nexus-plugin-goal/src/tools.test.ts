@@ -5,7 +5,7 @@
  * 而那個宣稱裡最容易靜靜壞掉的是接線那一段（`forCall` 挑錯日誌、服務查不到）。
  *
  * **權限那一半的單元在 `authority.test.ts`**，走真 agent 的行為驗收在
- * `apps/harness/src/goal-tools.test.ts`——那一份才證得了核准恢復之後那一輪真的過得了。
+ * `harness/apps/harness/src/goal-tools.test.ts`——那一份才證得了核准恢復之後那一輪真的過得了。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -696,7 +696,7 @@ describe('接線說得出原因', () => {
  * **每一種拒絕都落定成錯誤，碼照 dsh 逐類**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
  *
  * 文字不變由上面各組的 `toBe` 釘著，這一組只看狀態與碼；真的組裝裡日誌記下什麼在
- * `apps/harness/src/tool-refusals.test.ts`。**碼打字面、不 import 常數**：那幾個字串歸 dsh
+ * `harness/apps/harness/src/tool-refusals.test.ts`。**碼打字面、不 import 常數**：那幾個字串歸 dsh
  * （`tool-goal/src/authority.ts:24`、`index.ts:147-311`，`goal/goal/src/domain.ts:93-102`）。
  */
 describe('拒絕落定成錯誤，碼照 dsh', () => {

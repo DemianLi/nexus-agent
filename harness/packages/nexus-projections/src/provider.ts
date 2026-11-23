@@ -7,7 +7,7 @@
  * ## 行程級、一列；只收定義，不推動
  *
  * 一棵樹只掛一列提供者，登記處是行程級的：每顆消費者經 `ctx.projections.register(unit)` 登記，登記是 effect，消費者那一列
- * 卸載時登記處自己撤掉。**宿主**（`apps/harness`）經 {@link ProjectionsProviderHandle.entries} 讀每一個 key 連同登記它的
+ * 卸載時登記處自己撤掉。**宿主**（`harness/apps/harness`）經 {@link ProjectionsProviderHandle.entries} 讀每一個 key 連同登記它的
  * 那幾列的 id，把單元折進每條 thread 的登記處；那一面不在 {@link ProjectionRegistry} 的契約裡，消費者看不到。
  *
  * ## 偏離登記：provider 只收定義，不負責推動（PM 決策 2）

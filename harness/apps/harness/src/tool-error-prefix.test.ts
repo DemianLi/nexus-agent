@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** 掃哪些原始碼。 */
-const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
 
 /** 遞迴列出 `.ts`／`.tsx`，跳過測試、fixture 與建置產物。 */
 function sourceFiles(dir: string): string[] {
@@ -66,8 +66,8 @@ describe('Error: 前綴只有一個主人', () => {
    */
   it('手寫 error 狀態的只有錯誤結果的建構點與 native 照抄 langchain 的那一則', () => {
     expect(codeLinesMatching(/status:\s*['"]error['"]/u)).toEqual([
-      "packages/nexus-core/src/native-loop/invalid-tool.ts: status: 'error',",
-      "packages/nexus-core/src/tool-error-codes.ts: return { content, tool_call_id: options.callId, name: options.name, status: 'error' as const };",
+      "harness/packages/nexus-core/src/native-loop/invalid-tool.ts: status: 'error',",
+      "harness/packages/nexus-core/src/tool-error-codes.ts: return { content, tool_call_id: options.callId, name: options.name, status: 'error' as const };",
     ]);
   });
 
@@ -79,8 +79,8 @@ describe('Error: 前綴只有一個主人', () => {
    */
   it('字串裡寫 Error: 的只有前綴的定義與 native 照抄 langchain 的那一句', () => {
     expect(codeLinesMatching(/['"`]Error: /u)).toEqual([
-      "packages/nexus-core/src/native-loop/invalid-tool.ts: content: `Error: ${call.name} is not a valid tool, try one of [${available.join(', ')}].`,",
-      "packages/nexus-core/src/tool-events.ts: export const TOOL_ERROR_PREFIX = 'Error: ';",
+      "harness/packages/nexus-core/src/native-loop/invalid-tool.ts: content: `Error: ${call.name} is not a valid tool, try one of [${available.join(', ')}].`,",
+      "harness/packages/nexus-core/src/tool-events.ts: export const TOOL_ERROR_PREFIX = 'Error: ';",
     ]);
   });
 
@@ -92,10 +92,10 @@ describe('Error: 前綴只有一個主人', () => {
    */
   it('不帶前綴的那條路只有推模型歷史在走', () => {
     expect(codeLinesMatching(/\b(?:toolFeedback|errorResultFields)\(/u)).toEqual([
-      'packages/nexus-core/src/conversation-replay.ts: ...errorResultFields(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {',
-      'packages/nexus-core/src/tool-error-codes.ts: export function errorResultFields(',
-      'packages/nexus-core/src/tool-events.ts: const message = new ToolMessage(errorResultFields(content, options));',
-      'packages/nexus-core/src/tool-events.ts: export function toolFeedback(content: string, options: ErrorResultOptions): ToolMessage {',
+      'harness/packages/nexus-core/src/conversation-replay.ts: ...errorResultFields(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {',
+      'harness/packages/nexus-core/src/tool-error-codes.ts: export function errorResultFields(',
+      'harness/packages/nexus-core/src/tool-events.ts: const message = new ToolMessage(errorResultFields(content, options));',
+      'harness/packages/nexus-core/src/tool-events.ts: export function toolFeedback(content: string, options: ErrorResultOptions): ToolMessage {',
     ]);
   });
 });

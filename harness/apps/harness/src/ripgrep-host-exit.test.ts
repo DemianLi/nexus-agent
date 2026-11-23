@@ -4,7 +4,7 @@
  *
  * **另起一個子行程當「serve」**：它用 {@link ContainedFilesystemBackend.grep} 起一支假 rg（忽略 SIGTERM、一直掛著），
  * 等假 rg 起來就 `process.exit(0)`——強制結束的三條路最後都走這一步。父測試等它結束，看假 rg 還在不在。
- * 做法照 `packages/nexus-plugin-workspace-changes/src/git-host-exit.test.ts`。
+ * 做法照 `harness/packages/nexus-plugin-workspace-changes/src/git-host-exit.test.ts`。
  *
  * 對照組用裸 `spawn` 起同一支假 rg：Node 不替你收子行程，它要還活著，「grep 起的不在了」才有意義。
  * 拿掉 `tool-process.ts` 裡的 `trackHostExitChild` 那一行，第二條會紅。

@@ -9,7 +9,7 @@
  * ## 為什麼要有這一層
  *
  * dsh 的模型工具直接問 `exec.agent.session`——**它自己擁有派發點**，所以身分是被塞進來的
- * （`packages/core/agent-loop/src/tool-calls.ts:78`，`ToolExecutionInput.agent` 的註解寫著
+ * （`harness/packages/core/agent-loop/src/tool-calls.ts:78`，`ToolExecutionInput.agent` 的註解寫著
  * “set by the agent loop”）。我們的工具跑在 LangGraph 的 ToolNode 裡，那個派發點不是我們的，
  * 所以身分只能從執行期的 config 推出來。
  *
@@ -199,7 +199,7 @@ export function toolCallSessionAddress(config: unknown): SessionAddress | undefi
  * 這次呼叫在哪一條 LangGraph thread 裡（`configurable.thread_id`）。**身分隨呼叫明確傳進來**，不靠環境式的「目前 thread」
  * （[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) Q3）。
  *
- * `apps/harness/src/thread-id-reaches-handlers.test.ts` 實測過三種呼叫都拿得到：
+ * `harness/apps/harness/src/thread-id-reaches-handlers.test.ts` 實測過三種呼叫都拿得到：
  *
  * - 根 agent：那條 thread 的 id；
  * - 同步子代理（`task`，在父圖裡跑）：**沿用父 thread 的 id**，子代理是誰靠 {@link toolCallSessionAddress} 的 `checkpoint_ns`；

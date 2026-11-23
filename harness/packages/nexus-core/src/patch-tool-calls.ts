@@ -9,7 +9,7 @@
  * - 補上去的那句英文逐字照舊，`thread-pump.ts` 與 `conversation-restore.test.ts` 都引用它的措辭。
  * - `beforeAgent` 用 `REMOVE_ALL_MESSAGES` 整串換掉的語意照舊。
  *
- * 逐字對照的證據是 `apps/harness/src/patch-tool-calls.test.ts`：同一串訊息分別丟給基座那顆與這顆，
+ * 逐字對照的證據是 `harness/apps/harness/src/patch-tool-calls.test.ts`：同一串訊息分別丟給基座那顆與這顆，
  * 結果要完全相同。基座移除之前，那條測試同時是升版絆索。
  *
  * ## 它做兩件事

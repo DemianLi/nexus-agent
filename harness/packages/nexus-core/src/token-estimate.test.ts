@@ -1,6 +1,6 @@
 /**
  * 錨定估算的算法（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。接線與產品路徑在
- * `summarization.test.ts` 與 `apps/harness/src/context-pressure.test.ts`；這裡只管數字怎麼算出來。
+ * `summarization.test.ts` 與 `harness/apps/harness/src/context-pressure.test.ts`；這裡只管數字怎麼算出來。
  */
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';

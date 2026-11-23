@@ -33,7 +33,7 @@ function walk(dir: string, out: string[] = []): string[] {
 const ALL_FILES: readonly Source[] = walk(SRC)
   .filter((file) => /\.(tsx?|mts|cts|[cm]?js)$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file))
   .map((file) => ({
-    path: `apps/web/src/${relative(SRC, file).split(sep).join('/')}`,
+    path: `web/src/${relative(SRC, file).split(sep).join('/')}`,
     text: readFileSync(file, 'utf8'),
   }));
 

@@ -5,14 +5,14 @@
  * ## 第一個「插件提供、宿主消費」的服務
  *
  * 前面的接縫（工具、投影、技能來源）都是**宿主提供登記處、插件消費**。這一個反過來：服務的**提供者是插件**（`@nexus/plugin-feedback`
- * 在 `apply` 裡 `new` 一個繼承 `ContractService` 的類別，建構時 `provide`），**消費者是宿主**（`apps/harness` 的組 thread 那一步
+ * 在 `apply` 裡 `new` 一個繼承 `ContractService` 的類別，建構時 `provide`），**消費者是宿主**（`harness/apps/harness` 的組 thread 那一步
  * 從樹上取它）。所以三個角色的位置變了：
  *
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、`FeedbackService` 與請求／結果型別、契約版本 | `@nexus/sdk`，與 `@nexus/core` 的型別與讀日誌的函式（見下） |
  * | 提供者 | `@nexus/plugin-feedback`，樹上一列函式插件 | 這個套件、`@nexus/sdk`、`@nexus/session`、`@nexus/commands` |
- * | 消費者 | 宿主（`apps/harness`）：組 thread 時把服務折進 `registry.services`，wire handler 與 pump 讀它 | 這個套件；**不 import 提供者套件**（決議 §3-4 第 16 條） |
+ * | 消費者 | 宿主（`harness/apps/harness`）：組 thread 時把服務折進 `registry.services`，wire handler 與 pump 讀它 | 這個套件；**不 import 提供者套件**（決議 §3-4 第 16 條） |
  *
  * ## 偏離登記
  *
@@ -34,7 +34,7 @@
  * 服務的方法**一律不碰 `this.ctx`**：宿主拿到的是快照時取的那個值，列卸載之後開著的 thread 仍要能呼叫它（traceable proxy 讀屬性
  * 不檢查提供的 fiber 還在不在）。需要的設定在建構時進閉包，需要的日誌由呼叫端逐次傳進來。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

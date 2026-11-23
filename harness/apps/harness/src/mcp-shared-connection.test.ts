@@ -8,7 +8,7 @@
  * 會話日誌會解到預設的 home，而逐出非要落盤不可）。模型是預設的假模型，零憑證、零外部連線。
  *
  * 兩支夾具各量一次：[`mcp-fixture-server.ts`](./mcp-fixture-server.ts)（舊協定）與
- * `packages/nexus-plugin-mcp/src/modern-stdio-server.ts`（新協定，版本協商可能多起探測行程，所以讀數要等穩定）。
+ * `harness/packages/nexus-plugin-mcp/src/modern-stdio-server.ts`（新協定，版本協商可能多起探測行程，所以讀數要等穩定）。
  */
 
 import { execFileSync } from 'node:child_process';

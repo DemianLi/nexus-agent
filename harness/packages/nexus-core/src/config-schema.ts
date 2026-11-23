@@ -23,7 +23,7 @@
  * `.regex()` 在 zod 裡是一顆 `string_format` 檢查，`z.toJSONSchema` 把它的 `source` 原樣寫成 `pattern`。**但同一個 source 在兩邊的
  * 語意不一樣**：JSON Schema 的 `pattern` 以 Unicode 語意比對，serve 用原生 `RegExp`（沒有 `u` 旗標時以 UTF-16 code unit 比對），
  * `.`、`\uD83D`、`i`／`s` 旗標一類的寫法兩邊對同一個值可能判得不一樣。所以照 dsh 的 `createPatternCheck`
- * （`packages/boot/app-boot/src/config-schema/pattern.ts`，`687f282e`）：只有確定可攜的才寫進 schema，其餘標 `pattern` 並**拿掉**那條
+ * （`harness/packages/boot/app-boot/src/config-schema/pattern.ts`，`687f282e`）：只有確定可攜的才寫進 schema，其餘標 `pattern` 並**拿掉**那條
  * `pattern`（不產生會誤導人的約束）。
  *
  * ## 放在這裡的理由
@@ -67,7 +67,7 @@ export interface ConfigSchemaLoss {
  * - `complete`：輸出的 schema 表達了 `Config` 的全部限制。
  * - `partial`：輸出的 schema 可用，但比 `Config` 真正的驗證寬；`losses` 列出差在哪。
  * - `absent`：這顆 plugin 沒有 `Config`。**欄位未知，不是禁止設定**（dsh 的 `absent`，
- *   `packages/boot/app-boot/src/config-schema/collect.ts:192`）：它不算不完整，`schema` 也是 `undefined`。
+ *   `harness/packages/boot/app-boot/src/config-schema/collect.ts:192`）：它不算不完整，`schema` 也是 `undefined`。
  */
 export type ConfigSchemaStatus = 'complete' | 'partial' | 'absent';
 

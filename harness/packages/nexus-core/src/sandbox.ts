@@ -64,7 +64,7 @@ export function isSandboxMode(raw: string): raw is SandboxMode {
  * `--workspace`、有圍堵的時候才掛，所以它在不在就是工作區在不在。
  *
  * **要它是因為 backend 在不在答不了這一題**：沒有工作區時組裝點照樣墊一顆 `StateBackend`
- * （`apps/harness/src/agent-factory.ts`），`fs` 服務的 `backend()` 照樣有值。dsh 對應的判準是會話 header
+ * （`harness/apps/harness/src/agent-factory.ts`），`fs` 服務的 `backend()` 照樣有值。dsh 對應的判準是會話 header
  * 的 `cwd`（`tool-present` 的 `present requires a workspace`）；我們的 header `cwd` 記的是行程的工作目錄，
  * 不是工作區根，所以不能照抄。第一個讀方是 `@nexus/plugin-present`（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。
  */
@@ -76,7 +76,7 @@ export const WORKSPACE_CAPABILITY = 'workspace';
  *
  * 要它是因為「有沒有工作區、根在哪」原本只有組裝點知道，要用的 plugin 只能靠組裝點把根塞進自己的 `Config`
  * （`workspace-changes` 的 `root`）——那一列就進不了出貨清單。照 dsh：dsh 的 `eligible` 看會話 header 的 `cwd`
- * （`packages/deliverables/workspace-changes/src/index.ts:58-61`，`ddefc45`），沒有 `cwd` 就不合格、什麼都不做；
+ * （`harness/packages/deliverables/workspace-changes/src/index.ts:58-61`，`ddefc45`），沒有 `cwd` 就不合格、什麼都不做；
  * 我們的 header `cwd` 記的是行程目錄不是工作區根（見 {@link WORKSPACE_CAPABILITY}），所以退到最接近的實作：
  * 由組裝點經 host 服務交一格根，**不合格由服務缺席表達**。與 {@link WORKSPACE_CAPABILITY} 的分工：那一個答「有沒有」、
  * 在 plugin 的 `apply` 之後才知道；這一個答「在哪」、組裝點最前面就提供，`apply` 當下讀得到。
@@ -99,10 +99,10 @@ export const SHARED_WORKSPACE_SERVICE = 'sharedWorkspace';
  * 把模型給檔案工具的路徑換成工作區位址空間裡的絕對路徑：補前導 `/`、正規化、去尾斜線。
  *
  * **為什麼有這一份。** 這條規則的主人是基座 `FilesystemBackend` 在 `virtualMode` 下的 `resolvePath`
- * （`ContainedFilesystemBackend` 把 `virtualMode` 釘成 true，`apps/harness/src/contained-backend.ts`），
+ * （`ContainedFilesystemBackend` 把 `virtualMode` 釘成 true，`harness/apps/harness/src/contained-backend.ts`），
  * 而它是 private，外面問不到。dsh 的 present 是問規則的主人（經 fs 服務的 `resolve`）；我們問不到，
  * 只能照抄，所以**只抄一份，就是這裡**。事後要把模型給的原字串變回一個檔的人都走這裡：present 的
- * 存在檢查、交付讀檔路由（`apps/harness/src/deliverable-files.ts`）、workspace-changes 的擷取
+ * 存在檢查、交付讀檔路由（`harness/apps/harness/src/deliverable-files.ts`）、workspace-changes 的擷取
  * （經 {@link hostPathOf}）。事件裡存的是原字串，正規化的結果不落庫，各寫一次的下場是有一天只有一邊對。
  *
  * **`..` 夾回根，不拋**：`posix.normalize` 在補了前導 `/` 之後吃掉 `..`，所以結果不可能爬出根。這跟
@@ -111,7 +111,7 @@ export const SHARED_WORKSPACE_SERVICE = 'sharedWorkspace';
  * 另一個檔（`a/../b.md` 對到的是 `/b.md`，那個檔在就認），但出不了界。**基座「拒 `..`」的那幾處副本**（`contained-backend.ts` 裡照抄 `resolvePath` 的內聯）
  * **不併進來**：併進來就是把拒改成夾，是行為變更。
  *
- * 跟真 backend 對不對得上，由 `apps/harness/src/virtual-path.test.ts` 用真的
+ * 跟真 backend 對不對得上，由 `harness/apps/harness/src/virtual-path.test.ts` 用真的
  * `ContainedFilesystemBackend` 寫檔來釘（core 不能相依 harness，所以絆索放不到這一檔旁邊）。
  *
  * @param path - 模型給的路徑，相對路徑以工作區根為起點。
@@ -127,7 +127,7 @@ export function virtualPathOf(path: string): string {
  * 比的是整段：`/large_tool_results_x/a.md` **不**在 `/large_tool_results/` 底下。`path` 原樣比，不正規化：要先正規化的自己過 {@link virtualPathOf}。
  *
  * 技能來源在新 thread 接不接到共用區底下（`threadSkillSources`）、舊 thread 的守衛擋哪幾個技能目錄、技能清單在圖外讀不讀得到、
- * present 認不認某個檔在工作區外，都問這一條。前兩個必須算出同一組（`apps/harness/src/shared-reserved-writes.test.ts` 釘）：
+ * present 認不認某個檔在工作區外，都問這一條。前兩個必須算出同一組（`harness/apps/harness/src/shared-reserved-writes.test.ts` 釘）：
  * 分成兩份寫的話，一邊改了另一邊不會報錯，守衛就靜靜漏擋或多擋一個技能目錄。
  *
  * @param path - 虛擬路徑。
@@ -163,7 +163,7 @@ export function hostPathOf(root: string, path: string): string {
  * `SandboxModeController`。兩邊分屬不同套件，合約就不能住在其中一邊。
  *
  * 這是 dsh 的分法，不是我們的發明：它的基底套件 `@deepseek-ai/dsh-sandbox` 出的就是
- * 詞彙**加上升級協定**（`packages/sandbox/sandbox/src/index.ts:20` 把 `escalation.ts` 的
+ * 詞彙**加上升級協定**（`harness/packages/sandbox/sandbox/src/index.ts:20` 把 `escalation.ts` 的
  * `EscalationApproval` / `EscalationApprover` / `EscalationOutcome` / `EscalationRequest`
  * 一起轉出去，SHA `6b1808f`），而 `sandbox-policy` 與執行端的 `sandbox-local` 各自依賴它。
  *

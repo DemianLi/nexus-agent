@@ -2,7 +2,7 @@
  * 時間讀數（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）的單元驗收：文字格式、日誌摺出來的事實、節流。
  *
  * 時間一律固定：`vi.useFakeTimers({ toFake: ['Date'] })` 加 `vi.setSystemTime`，同 dsh 的測試（`tests/time-context.spec.ts:24-37`）；
- * 日誌的 `time` 就是 `Date.now()`，所以「推進 15 分鐘」只要改系統時間。進產品組裝之後的驗收（A–L）在 `apps/harness` 的 `time-context-on-tree.test.ts`。
+ * 日誌的 `time` 就是 `Date.now()`，所以「推進 15 分鐘」只要改系統時間。進產品組裝之後的驗收（A–L）在 `harness/apps/harness` 的 `time-context-on-tree.test.ts`。
  *
  * 每一條驗收都配反例：「第三行不是 `0s`」配「真的 0 才寫 `0s`」，「10 分鐘內不注入」配「剛好 10 分鐘就注入」。
  */

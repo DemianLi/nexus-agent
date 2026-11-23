@@ -5,7 +5,7 @@
  * 與 `applyShared`），宿主轉給這條 thread 的 `registry.approvals.gate()`，跟其他核准閘門同一條 waterfall。
  * 閘門**只回 `ask` 或 `next()`**；回 `ask` 之後的事（政策 never、沒有管道、背景子代理、人按不允許）全在 core 的
  * `nexusApprovalGate` 中介層，碼也沿用那裡的 `APPROVAL_*`。**絕不回 `allow`**：不呼叫 `next()` 的 `allow` 會把排在後面的
- * 閘門整條吃掉（`apps/harness/src/approval-gate-order.test.ts` 釘著）。
+ * 閘門整條吃掉（`harness/apps/harness/src/approval-gate-order.test.ts` 釘著）。
  *
  * 宣告寫在 MCP 那一列：內部系統的寫入全走 MCP，「哪台、哪幾支要人看過」是部署方的業務判斷，要能寫在設定裡。
  *

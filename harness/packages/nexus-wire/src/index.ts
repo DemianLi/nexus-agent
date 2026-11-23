@@ -1,8 +1,8 @@
 /**
- * `@nexus/wire`——`apps/web` 與 agent 之間那條線的協定層。
+ * `@nexus/wire`——`web` 與 agent 之間那條線的協定層。
  *
  * 存在的唯一理由是它有兩個消費者：Node 那端的 pump 與 handler 在 `@nexus/harness`，
- * 瀏覽器那端在 `apps/web`，而封包、SSE 編解碼、route 與 channel 白名單兩邊必須是同一份。
+ * 瀏覽器那端在 `web`，而封包、SSE 編解碼、route 與 channel 白名單兩邊必須是同一份。
  * 它沒有任何執行期相依（`@langchain/protocol` 只 `import type`），所以把它拉進
  * 瀏覽器不會順手把 Node 那半邊拖進去。
  *

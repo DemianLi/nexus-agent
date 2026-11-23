@@ -1,4 +1,4 @@
-// 我們自己的回歸測試，不是上游的：vendor/sync.mjs 不碰這個目錄。
+// 我們自己的回歸測試，不是上游的：harness/vendor/sync.mjs 不碰這個目錄。
 //
 // 一棵最小的樹：Loader ＋ 一個「登記處」服務 ＋ Include。登記處把每次 `add` 記進 `registry`，經 `ctx.effect` 登記，
 // 所以那一列卸載時登記處跟著收。測試讀 `registry` 看「樹上的列對外有什麼貢獻」。

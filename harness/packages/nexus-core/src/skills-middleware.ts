@@ -14,8 +14,8 @@
  * ## dsh 的做法
  *
  * dsh 沒有「沒有 skill 就不加字」這個分支要寫，是結構上就不產生：目錄訊息只有在清單非空、或之前發佈過
- * 才會出現（`packages/skill/tool-skill/src/index.ts:237` 的 `!history.published && skills.length === 0`），
- * 而掃描結果連空的也進快取（`packages/skill/skill/src/index.ts:540-541`，`cacheable` 就寫入 `collectCache`）。
+ * 才會出現（`harness/packages/skill/tool-skill/src/index.ts:237` 的 `!history.published && skills.length === 0`），
+ * 而掃描結果連空的也進快取（`harness/packages/skill/skill/src/index.ts:540-541`，`cacheable` 就寫入 `collectCache`）。
  *
  * ## 偏離登記
  *

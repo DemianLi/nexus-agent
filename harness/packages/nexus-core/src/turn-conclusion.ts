@@ -27,7 +27,7 @@
  * dsh 是批內**任何一個**工具 `concludeTurn()` 就收；這裡只有**那一批唯一的工具呼叫**標了才收。
  * 基座把每個工具呼叫各自送成一個 `Send`，tools 路由各判各的：一批裡有的走 exitNode（`afterAgent`）、有的回頭走 `beforeModel`，
  * 兩條在同一個 super-step 都寫 `jumpTo`，langgraph 擲 `InvalidUpdateError`，整輪垮掉（只要掛了任何 `beforeModel`，例如 step-inbox；
- * `apps/harness/src/returndirect-route.test.ts` 釘住基座形狀）。所以批裡不只一個呼叫時，標了也拿掉 `name`，照常繼續。
+ * `harness/apps/harness/src/returndirect-route.test.ts` 釘住基座形狀）。所以批裡不只一個呼叫時，標了也拿掉 `name`，照常繼續。
  *
  * @module
  */

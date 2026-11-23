@@ -4,7 +4,7 @@
  * 照 dsh `packages/util/crypto/src/index.ts` 的 `randomUUID` 與 `packages/client/connection/src/client/random-uuid.ts`
  * 的 `randomUuid`（`687f282e`）：用 `crypto.getRandomValues` 自己排，不用 `crypto.randomUUID`。後者只在安全環境（HTTPS、
  * localhost）有，內網用 IP 開的 `http://` 頁面上它是 `undefined`，首次載入就會拋錯、整頁起不來（做法從
- * [#1335](https://github.com/DemianLi/nexus-agent/issues/1335) 的請求編號搬過來）。`apps/web/eslint.config.js` 的
+ * [#1335](https://github.com/DemianLi/nexus-agent/issues/1335) 的請求編號搬過來）。`web/eslint.config.js` 的
  * `no-restricted-properties` 擋 `crypto.randomUUID`，把人導到這裡。
  *
  * **放在 `apps/web` 而不是照 dsh 開一個共用套件**：今天要它的只有網頁（harness 跑在 Node 上，`crypto.randomUUID` 一定有）。

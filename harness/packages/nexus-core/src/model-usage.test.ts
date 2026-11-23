@@ -3,7 +3,7 @@
  * 的驗收。這裡量的是**規則**：什麼樣的數字收、什麼樣的不收、寫不進去的時候會怎樣。
  *
  * 真的跑一場對話、真的落進 root 與 subagent 各自的日誌，由
- * `apps/harness/src/model-usage.test.ts` 量。
+ * `harness/apps/harness/src/model-usage.test.ts` 量。
  */
 
 import { AIMessage } from '@langchain/core/messages';
@@ -238,7 +238,7 @@ describe('這顆 middleware 記得進去的時候', () => {
  * （絕大多數組裝點沒有 `attachSession`），`ambiguous` 在 `serve.ts` 一次組裝配多條 thread 時是真的。
  *
  * 找到了日誌、`append` 卻拋：這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)，照 dsh
- * `packages/core/agent-loop/src/agent.ts:537-546` 的 usage 寫入沒有 catch）。
+ * `harness/packages/core/agent-loop/src/agent.ts:537-546` 的 usage 寫入沒有 catch）。
  */
 describe('寫不進去的時候', () => {
   it.each([

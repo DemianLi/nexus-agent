@@ -1,5 +1,5 @@
 /**
- * 宿主的 MCP 符合性測試（`native/sandbox-spawner/host/tests/mcp_conformance.rs`）用的對手：一台 HTTP MCP server，
+ * 宿主的 MCP 符合性測試（`harness/native/sandbox-spawner/host/tests/mcp_conformance.rs`）用的對手：一台 HTTP MCP server，
  * 起在 `127.0.0.1`，由 Rust 測試以 `node --import tsx <這個檔> <種類>` 啟動。不進 `index.ts` 的匯出。
  *
  * 種類（第一個參數）：

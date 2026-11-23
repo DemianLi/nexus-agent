@@ -1,10 +1,10 @@
 /**
- * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/dropdown-menu.tsx`，Base UI 的 Menu），
+ * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/dropdown-menu.tsx`，Base UI 的 Menu），
  * 外觀照 SG（#1468 Q8）。只轉出用得到的那幾件：側欄列選單的 Root、Trigger、Content、Item、Separator，加上 vendor 的
  * `ComposerPick`（#1591）用的 RadioGroup、RadioItem、Label——vendor 檔 import 的 `@/components/ui/dropdown-menu` 解析到這一層。
  * 另外轉出 Base UI 的 `createHandle`（`createDropdownMenuHandle`）與帶 payload 型別的 `DropdownMenuRoot`：一份選單接多顆不在它
  * 裡面的 Trigger，Trigger 帶的 `payload` 交給 Root 的 children 函式；側欄列選單（`features/threads/row-menu.tsx`）用它。
- * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 25 條）：
+ * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 25 條）：
  *
  * - `DropdownMenuItem` 與 `DropdownMenuRadioItem` 的觸控高度：vendor 都是 `py-1`（約 28px），規格 §9 要 1024 以下 44px、以上 32px
  *   （`min-h-11 lg:min-h-8`）。兩個是不同的元件，各包一次（RadioItem 在 #1591 加上）。

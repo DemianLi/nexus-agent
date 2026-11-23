@@ -9,11 +9,11 @@
 //   shadcn       npm 的 shadcn 套件 tarball（`npm pack shadcn@<version>`），sha512 要等於 `integrity`（SG 的 package-lock 記的那一個）
 //
 // 用法：
-//   node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz>           蓋過 vendor 的檔，重寫 sha256
-//   node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --check   只比對：vendor 的檔與 manifest 的 sha256
+//   node web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz>           蓋過 vendor 的檔，重寫 sha256
+//   node web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --check   只比對：vendor 的檔與 manifest 的 sha256
 //                                                                                              都要等於上游原樣加上登記的 patch，
 //                                                                                              有差異或 patch 套不上就印出並以 1 退出
-//   node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --record <檔> <事由>
+//   node web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --record <檔> <事由>
 //       把手改過的 vendor 檔記成下一個 patch（`patches/NNNN-<元件>-<事由>.patch`），登記進 manifest 的 `patches`
 //
 // 上游對不上 manifest（commit、工作區、integrity、版本）直接失敗（以 2 退出）。換版本：先改 manifest.json 的 `sources`，再不帶 --check 跑一次。
@@ -31,7 +31,7 @@ import { applyAll, createOne } from './patches.mjs';
 const VENDOR = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = join(VENDOR, 'manifest.json');
 const USAGE =
-  '用法：node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> [--check | --record <檔> <事由>]';
+  '用法：node web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> [--check | --record <檔> <事由>]';
 
 const args = process.argv.slice(2);
 const options = {};

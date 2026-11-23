@@ -3,7 +3,7 @@
  *
  * 走真的 Cordis 樹（`Loader` + `agentLoop` 與 `sessionLookup` 兩個真提供者）。和 `index.test.ts`（文字、日誌折疊、節流）分工：
  * 那邊問「讀數寫什麼」，這邊問「掛在樹上之後，登記的是誰、查的是哪條 thread」。進產品組裝的驗收（A–L）在
- * `apps/harness/src/time-context-on-tree.test.ts`。
+ * `harness/apps/harness/src/time-context-on-tree.test.ts`。
  *
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core`；`src/index.ts` 不行。
  */

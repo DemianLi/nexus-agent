@@ -260,7 +260,7 @@ function inventory(): PersistenceSchemaInventory {
           digest: schemaDigest(type),
           schema: type,
           names: index === 1 ? ['Recursive'] : [],
-          sources: ['packages/example/src/types.ts'],
+          sources: ['harness/packages/example/src/types.ts'],
         };
       })
       .sort((left, right) => left.digest.localeCompare(right.digest)),

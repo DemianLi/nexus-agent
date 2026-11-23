@@ -34,7 +34,7 @@
  * ```
  *
  * 同名的 fold middleware 原地換掉 core／tail 裡的預設（摘要就是這樣被換成我們的），沒撞名的新 middleware
- * 插在 core 與 tail 之間——**換模型與圖片省略例外，搬到 core 前面**（#1369，見 {@link mergeMiddlewareStack}）。**對照的證據**是 `apps/harness/src/assembly-parity.test.ts`：同一份 fold
+ * 插在 core 與 tail 之間——**換模型與圖片省略例外，搬到 core 前面**（#1369，見 {@link mergeMiddlewareStack}）。**對照的證據**是 `harness/apps/harness/src/assembly-parity.test.ts`：同一份 fold
  * 產物分別走 `createDeepAgent` 與這裡，middleware 名稱與順序、工具、系統提示、兩邊第一次送給模型的
  * 請求（root 與子代理）要逐位元組相同。基座移除之前，那條測試同時是升版絆索。
  *

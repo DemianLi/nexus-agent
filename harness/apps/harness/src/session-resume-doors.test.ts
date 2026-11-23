@@ -80,7 +80,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  * `MemorySaver` 在樹上命中二十幾個檔，**其中絕大多數是測試各自 `new` 一顆自己用的**——
  * 把它們收進來，這條絆索量的就變成「測試怎麼寫」而不是「產品組裝成什麼樣」。
  */
-const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
 
 /** 遞迴列出 `.ts`，跳過測試、fixture 與建置產物。 */
 function sourceFiles(dir: string): string[] {
@@ -132,7 +132,7 @@ function saverConstructions(): string[] {
  * **建的是同一顆、只有這一處、不耐久**，這三件事變了才是門動了，要照失敗訊息裡那兩個目的地走。
  */
 const THE_ONLY_SAVER = [
-  "apps/harness/src/assembly-root.ts: const checkpointer = invocation.agentLoop === 'native' ? undefined : new PrunedMemorySaver();",
+  "harness/apps/harness/src/assembly-root.ts: const checkpointer = invocation.agentLoop === 'native' ? undefined : new PrunedMemorySaver();",
 ];
 
 /**
@@ -170,8 +170,8 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
  * 另外用了 `TOOL_RESULT_STASH_PREFIX` 這個 import——那一格連名字都不必猜，編譯器會擋。
  */
 const DESTINATIONS = [
-  'apps/harness/src/conversation-restore.ts',
-  'apps/harness/src/agent-factory.ts',
+  'harness/apps/harness/src/conversation-restore.ts',
+  'harness/apps/harness/src/agent-factory.ts',
 ] as const;
 
 /** 每個目的地必須還講著那件事。**錨點選的是改寫時不會動的那一句。** */

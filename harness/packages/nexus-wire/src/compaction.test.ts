@@ -1,7 +1,7 @@
 /**
  * 壓縮的 `custom` frame 怎麼折（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）。
  *
- * 兩條路產出同一種 frame 的那一半在 `apps/harness/src/compaction-wire.test.ts`；這裡只管折疊器：每一顆長一格、
+ * 兩條路產出同一種 frame 的那一半在 `harness/apps/harness/src/compaction-wire.test.ts`；這裡只管折疊器：每一顆長一格、
  * 落在串流裡的位置、同一個 `seq` 只長一格、形狀不對整顆不收、往前翻頁原樣接上。
  */
 

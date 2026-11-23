@@ -282,7 +282,7 @@ const SERVERS = Symbol('mcp:servers');
  * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、經 `thread.logger`
  *   交出一則警告，那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
  *
- * **掛上那一刻就連不上的列，這一條 thread 補不了工具**：一條 thread 組好之後工具就定了（`packages/nexus-core/src/load.ts` 檔頭）。
+ * **掛上那一刻就連不上的列，這一條 thread 補不了工具**：一條 thread 組好之後工具就定了（`harness/packages/nexus-core/src/load.ts` 檔頭）。
  * serve 有連線池（[`pool.ts`](./pool.ts)，[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）在背景重試，連上之後組的 thread 有工具，
  * 之前組好的沒有；CLI 不在背景重試首連。
  *

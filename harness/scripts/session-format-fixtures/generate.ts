@@ -1,5 +1,5 @@
 /**
- * 產生 `apps/harness/src/fixtures/session-format/` 的夾具（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第一刀）：
+ * 產生 `harness/apps/harness/src/fixtures/session-format/` 的夾具（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第一刀）：
  * 每個出過貨的格式版本一份，**由那一版出貨的寫入器實際寫出**，不手寫、不改標籤。
  *
  * ## 怎麼寫
@@ -10,7 +10,7 @@
  * 1. 用那一版自己的 CLI 跑一輪（不帶 `--live` 是那一版出貨的假模型 `ScriptedChatModel`：回聲一次、寫一個檔、回一句話），
  *    `--session-log` 落盤。這是那一版產品路徑上真的寫入器：註冊表、協調器、JSONL 後端全是那一版的。
  * 2. 有些讀方分支 CLI 一輪碰不到（評分、停在一輪中間），由 `in-tree/trigger-*.ts` 用**那一版自己的**
- *    `SessionLog`、後端與服務補寫。觸發腳本複製進那一版的 `apps/harness/src/`，先對那一版的型別 `tsc --noEmit`，再跑。
+ *    `SessionLog`、後端與服務補寫。觸發腳本複製進那一版的 `harness/apps/harness/src/`，先對那一版的型別 `tsc --noEmit`，再跑。
  * 3. 格式 9 以後的 tag 用那一版自己的 `replayConversation` 推模型歷史（`in-tree/expect-own.ts`），寫進 `expected.json`。
  * 4. 收掉 worktree。
  *
@@ -41,7 +41,7 @@
  *
  * 不在 typecheck 與 lint 的範圍內（`in-tree/` 那幾支是對各 tag 的型別寫的，在今天的樹裡編不過）。
  *
- * 用法：`pnpm exec tsx scripts/session-format-fixtures/generate.ts [目標名…]`（省略即全部）。
+ * 用法：`pnpm exec tsx harness/scripts/session-format-fixtures/generate.ts [目標名…]`（省略即全部）。
  *
  * @module
  */
@@ -83,8 +83,8 @@ import { frozenFilesOf, readEvents, readRawHeader, sessionsIn } from './run-dire
 
 /** header 的 `cwd` 記的那個目錄。 */
 const FIXTURE_CWD = '/var/tmp/nexus-session-format-cwd';
-const FIXTURES = join(ROOT, 'apps/harness/src/fixtures/session-format');
-const HERE = join(ROOT, 'scripts/session-format-fixtures');
+const FIXTURES = join(ROOT, 'harness/apps/harness/src/fixtures/session-format');
+const HERE = join(ROOT, 'harness/scripts/session-format-fixtures');
 /** CLI 那一輪說的話。 */
 const PROMPT = '你好';
 
@@ -306,7 +306,7 @@ const git = (...args: string[]): string =>
 const TODAY = {
   head: git('rev-parse', 'HEAD'),
   dirty:
-    git('status', '--porcelain', '--', '.', ':(exclude)apps/harness/src/fixtures/session-format')
+    git('status', '--porcelain', '--', '.', ':(exclude)harness/apps/harness/src/fixtures/session-format')
       .length > 0,
 } as const;
 
@@ -388,7 +388,7 @@ function removeTree(tree: string): void {
 
 /** 跑一棵樹的 CLI 一輪，回傳它寫出的 run 目錄。 */
 function cli(tree: string, scratch: string, extra: readonly string[] = []): string {
-  const harness = join(tree, 'apps/harness');
+  const harness = join(tree, 'harness/apps/harness');
   const out = join(scratch, 'session-log');
   mkdirSync(out, { recursive: true });
   mkdirSync(FIXTURE_CWD, { recursive: true });
@@ -409,7 +409,7 @@ function cli(tree: string, scratch: string, extra: readonly string[] = []): stri
 
 /** 把 in-tree 腳本複製進那棵樹、對那一版的型別編過、跑。 */
 function inTree(tree: string, scratch: string, script: string, args: readonly string[]): string {
-  const harness = join(tree, 'apps/harness');
+  const harness = join(tree, 'harness/apps/harness');
   const target = join(harness, 'src', `__session-format-${script}`);
   copyFileSync(join(HERE, 'in-tree', script), target);
   try {
@@ -770,7 +770,7 @@ function generateMixed(mixed: Mixed): void {
     removeTree(tree);
     tree = undefined;
     tree = checkout(scratch, second.rev);
-    const harness = join(tree, 'apps/harness');
+    const harness = join(tree, 'harness/apps/harness');
     run(
       join(harness, 'node_modules/.bin/tsx'),
       [join(harness, 'src/cli.ts'), '--resume', directory, ...patch(second), PROMPT],

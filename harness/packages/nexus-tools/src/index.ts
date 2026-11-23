@@ -6,13 +6,13 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、介面、契約版本 | 只有 `@nexus/sdk`（與工具的型別） |
- * | 提供者 | 樹上一列，行程級的工具登記處（#1416 PR 2）：同一個套件的另一個入口 `@nexus/tools/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
+ * | 提供者 | 樹上一列，行程級的工具登記處（#1416 PR 2）：同一個套件的另一個入口 `@nexus/tools/provider`，由宿主（`harness/apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
  * | 消費者 | 想註冊工具的插件 | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * **不相依 `@nexus/core`**（第 17 條）：外部插件只該看見 SDK 與服務定義。工具的型別取自 `@langchain/core`，
  * 只用型別。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：
  * `@nexus/core` 註冊點的選項裡，`rootOnly` 與 `outputSchema` 在 `ask-user` 遷出時加進來（#1458，契約跳到 `1.1.0`）；
  * `scope` 今天沒有遷出的消費者，不加。
  *

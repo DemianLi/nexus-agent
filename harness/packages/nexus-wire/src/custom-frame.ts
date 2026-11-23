@@ -9,9 +9,9 @@
  * ## 照 dsh
  *
  * dsh 的投影值有一張可宣告合併的表 `SessionProjectionMap`，各領域套件合進自己的 key
- * （`packages/session/session-projection/src/types.ts:17`；收件匣在 `packages/core/agent/src/types.ts:64-67` 合進
+ * （`harness/packages/session/session-projection/src/types.ts:17`；收件匣在 `harness/packages/core/agent/src/types.ts:64-67` 合進
  * `inbox: InboxWireState`），生產端的 `wire.view` 必須回傳 `SessionProjectionMap[K]`
- * （`packages/session/session-projection/src/index.ts:73-84`），讀的一端也用同一張表定型
+ * （`harness/packages/session/session-projection/src/index.ts:73-84`），讀的一端也用同一張表定型
  * （`packages/api/session-controller/src/client/sessions/projection-store.ts:39`）。以上對 dsh `c1b47e4`，卡上引的
  * `477b4f4` 同內容。
  *

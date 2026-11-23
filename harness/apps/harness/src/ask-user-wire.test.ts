@@ -361,7 +361,7 @@ describe('掛著與收尾各自說對了什麼', () => {
  * **停在提問時按停止：線上帶的碼就是畫面要比的那個值**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
  *
  * 畫面判「這張提問卡是停在提問時被停止的」照 dsh 比碼不比字（dsh 的 UI 那側是手寫字面值，
- * `packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx:160`）。所以這一條**用字面值斷言**：pump
+ * `harness/packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx:160`）。所以這一條**用字面值斷言**：pump
  * 對提問改送別的碼（例如換成「已開始的中止」）時，這裡會紅，而不是讓畫面靜靜比不到。工具是真的
  * `ask_user_question`，不是等核准的工具。
  */

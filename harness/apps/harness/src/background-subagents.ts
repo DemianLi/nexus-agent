@@ -433,10 +433,10 @@ export class BackgroundSubagentError extends Error {
  * {@link BackgroundSubagentHost.start} 被 host 拒絕時，`subagent` 那一顆 `tool/result` 記的碼（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
  *
  * 照 dsh（`5badb15`）：`subagent` 工具本體 await `startContinuable`、不接錯（`packages/subagent/tool-subagent/src/index.ts:526-537`），
- * 名額滿了拋 `SubagentError` 的 `ACTIVATION_LIMIT_REACHED`（`packages/subagent/subagent/src/continuation-activation.ts:45-51`），
+ * 名額滿了拋 `SubagentError` 的 `ACTIVATION_LIMIT_REACHED`（`harness/packages/subagent/subagent/src/continuation-activation.ts:45-51`），
  * 收線中拋 `DRAINING`（同檔 `:446-455`，`continuation.ts:107` 起呼叫）；`SubagentError` 是 `HarnessError`（`error.ts:10-15`），
- * 註冊表接住後由 `errorInfo` 取 `{ name, code }`（`packages/core/tools/src/index.ts:661-668`、`:1586-1587`、`:1909-1917`），
- * 寫進 `tool/result` 的 `error`（`packages/core/agent-loop/src/tool-calls.ts:285`）。名字與碼抄 dsh 的字串，同
+ * 註冊表接住後由 `errorInfo` 取 `{ name, code }`（`harness/packages/core/tools/src/index.ts:661-668`、`:1586-1587`、`:1909-1917`），
+ * 寫進 `tool/result` 的 `error`（`harness/packages/core/agent-loop/src/tool-calls.ts:285`）。名字與碼抄 dsh 的字串，同
  * `INVALID_ARGS`、`UNKNOWN_TOOL` 的先例；`closed` 對 `DRAINING` 是最接近的對照（dsh 是收線開始就不收，我們是 host 已關）。
  *
  * **`closed` 在 `subagent` 工具這條路上今天沒有生產者**：收線先同步把 delegation 的 host 清掉、才關 host
@@ -978,7 +978,7 @@ export class BackgroundSubagentHost {
         appendSubagentCatalog(this.#sessions.root, { childId, callId, mode: 'continuable' });
       } catch (error) {
         // 目錄寫不進去就派出失敗（#1702）：撤回剛准入的那一輪再重拋，同 dsh 寫目錄失敗時 `dispose(activation)`
-        // （`packages/subagent/subagent/src/manager.ts:1401-1416`）。錯經工具本體回到父代理成錯誤結果。
+        // （`harness/packages/subagent/subagent/src/manager.ts:1401-1416`）。錯經工具本體回到父代理成錯誤結果。
         this.#retract(runId);
         throw error;
       }

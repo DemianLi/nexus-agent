@@ -1,6 +1,6 @@
 /**
  * 搜尋結果筆數上限那一對（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）的單位測試：middleware 開槽、
- * backend 包裝截前段。真組裝、真基座工具的驗收在 `apps/harness/src/search-overflow.test.ts`；這裡量的是那邊的
+ * backend 包裝截前段。真組裝、真基座工具的驗收在 `harness/apps/harness/src/search-overflow.test.ts`；這裡量的是那邊的
  * 檔案系統給不出來的形狀——backend 交出的順序跟路徑排序不同、同一次呼叫裡的第二次 backend 呼叫。
  */
 

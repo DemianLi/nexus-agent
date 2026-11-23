@@ -1,7 +1,7 @@
 /**
  * `AssembleAgentParams.withoutSubagents`（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：給了就不掛子代理中介層，
  * 兩個 loop 下模型拿到的工具都沒有 `task`。對照組用同樣的 plugin fold 出來，只差不給這個選項。
- * 經 harness 嵌入版設定檔走的端到端在 `apps/harness/src/embed-profile.test.ts`。
+ * 經 harness 嵌入版設定檔走的端到端在 `harness/apps/harness/src/embed-profile.test.ts`。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';

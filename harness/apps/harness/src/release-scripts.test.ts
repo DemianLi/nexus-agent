@@ -1,5 +1,5 @@
 /**
- * 發版腳本（`scripts/release/`，[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2＋3、
+ * 發版腳本（`harness/scripts/release/`，[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2＋3、
  * [#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 的授權檔與 SBOM）的單元紅燈。
  *
  * 規則在真的 repo 上全綠，不代表它擋得住壞掉的那一刻，所以每一條都用手造的最小產物樹跑「好的不報、壞的報」。
@@ -138,8 +138,8 @@ describe('版號', () => {
   it('發版成員共用同一個版本（根、apps、packages）；vendor 不在內', () => {
     const members = releaseMembers();
     expect(members.map((member) => member.manifestPath)).toContain('package.json');
-    expect(members.map((member) => member.manifestPath)).toContain('apps/harness/package.json');
-    expect(members.some((member) => member.manifestPath.startsWith('vendor/'))).toBe(false);
+    expect(members.map((member) => member.manifestPath)).toContain('harness/apps/harness/package.json');
+    expect(members.some((member) => member.manifestPath.startsWith('harness/vendor/'))).toBe(false);
     expect(() => sharedVersion(members)).not.toThrow();
   });
 
@@ -162,7 +162,7 @@ describe('版號', () => {
 describe('出貨清單的 name', () => {
   it('真的 cordis.yml／cordis.serve.yml：每個 - id: 都取得到一個 name', () => {
     for (const file of ['cordis.yml', 'cordis.serve.yml']) {
-      const text = readFileSync(join(ROOT, 'apps/harness', file), 'utf8');
+      const text = readFileSync(join(ROOT, 'harness/apps/harness', file), 'utf8');
       expect(shippedNames(text)).toHaveLength((text.match(/^- id:/gmu) ?? []).length);
     }
   });
@@ -323,7 +323,7 @@ describe('產物樹的內容檢查', () => {
     expect(collectPayloadViolations(root, options)).toEqual([]);
   });
 
-  it('產物 manifest 就是 apps/harness/package.json，它宣告 MIT', () => {
+  it('產物 manifest 就是 harness/apps/harness/package.json，它宣告 MIT', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { license?: unknown };
@@ -727,7 +727,7 @@ describe('相依圖', () => {
         JSON.stringify({ name: 'vue', version: '3.5.44' }),
       );
       // `Module.globalPaths` 在行程起來時由 `NODE_PATH` 算好，所以另起一個帶著它的行程。
-      const sbom = pathToFileURL(join(ROOT, 'scripts/release/sbom.ts')).href;
+      const sbom = pathToFileURL(join(ROOT, 'harness/scripts/release/sbom.ts')).href;
       const result = spawnSync(
         process.execPath,
         [

@@ -3,8 +3,8 @@
  * 加上閘門的兩格（認得它 / 不認得別人），以及（#1466 起）它在 Cordis 樹上的那一列。
  *
  * backend 在這裡是假的，因為這一層驗的是「拿到什麼就寫出什麼」，不是磁碟。真的走線、
- * 真的核准卡、真的讀檔那一份在 `apps/harness/src/submit-record-wire.test.ts`；樹上兩條 thread 同時活著的每一種呼叫形狀在
- * `apps/harness/src/submit-record-on-tree.test.ts`。
+ * 真的核准卡、真的讀檔那一份在 `harness/apps/harness/src/submit-record-wire.test.ts`；樹上兩條 thread 同時活著的每一種呼叫形狀在
+ * `harness/apps/harness/src/submit-record-on-tree.test.ts`。
  *
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 的 `runApprovalGate`；`src/index.ts` 不行。
  */
@@ -185,7 +185,7 @@ describe('拒絕的那幾條', () => {
 
   it('**`readRaw` 用拋的時候當作「還沒有這個檔案」**，不是讓它逃出去', async () => {
     // 基座的 `FilesystemBackend` 就是這樣：`read()` 回結構化錯誤，`readRaw()` 直接拋
-    // ENOENT（實測，絆索在 `apps/harness/src/submit-record-wire.test.ts`）。而這個工具
+    // ENOENT（實測，絆索在 `harness/apps/harness/src/submit-record-wire.test.ts`）。而這個工具
     // 每一次執行都在 resume 那一輪——拋出去等於整場 run 死。
     const written: string[] = [];
     const backend = {
@@ -272,7 +272,7 @@ describe('閘門只認 submit_record', () => {
     const { backend } = fakeBackend();
     const { tools } = await mount(alwaysOk(fsHandle(backend)));
     // 樹上的閘門住在 tools 提供者的 `gates()`（來源是登記它的那一列）；折進 thread 的 `registry.approvals` 是宿主的事
-    // （`apps/harness/src/submit-record-on-tree.test.ts` 與 `approval-gate-order.test.ts` 量）。
+    // （`harness/apps/harness/src/submit-record-on-tree.test.ts` 與 `approval-gate-order.test.ts` 量）。
     const gates = tools.gates();
     expect(gates.map((gate) => gate.source)).toEqual(['submit-record']);
     const listeners = gates.map((gate) => ({ value: gate.listener, origin: {} as never }));

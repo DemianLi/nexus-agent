@@ -11,7 +11,7 @@
  * ## 子行程的環境與逾時（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)）
  *
  * - **清洗過的環境**：照 dsh「每個 spawner 都走同一份清洗」（`packages/subprocess/subprocess/src/index.ts:41-47`，`687f282e`），
- *   用 `@nexus/core` 的 `scrubbedParentEnv()`，再疊上跟 git 快照同一組 git 變數（`packages/nexus-plugin-workspace-changes/src/git.ts`
+ *   用 `@nexus/core` 的 `scrubbedParentEnv()`，再疊上跟 git 快照同一組 git 變數（`harness/packages/nexus-plugin-workspace-changes/src/git.ts`
  *   的 `GitRunner.run`）。`launch-env` 從 `.env` 寫進行程環境的 key 不再交給 git；`GIT_OPTIONAL_LOCKS=0` 讓 `git status` 不去刷新
  *   程式碼 checkout 的 index。
  * - **逾時 {@link GIT_PROBE_TIMEOUT_MS}、到時 SIGKILL**：這是同步呼叫，git 卡住時整個 serve 的事件迴圈跟著卡住，所以不能用 git
@@ -83,7 +83,7 @@ export function readGitProvenance(probe: GitProbe = defaultGitProbe): BuildVersi
 }
 
 /**
- * 打包時寫進產物的建置戳記（#1502 刀 2）：`apps/harness/build-stamp.json`，內容 `{ "commit": "<sha>", "dirty": false }`。
+ * 打包時寫進產物的建置戳記（#1502 刀 2）：`harness/apps/harness/build-stamp.json`，內容 `{ "commit": "<sha>", "dirty": false }`。
  * 相對這個檔所在的位置找，`src/` 與編出來的 `lib/` 同一深度，兩邊相同。原始碼樹裡沒有這個檔。
  */
 const BUILD_STAMP_PATH = fileURLToPath(new URL('../build-stamp.json', import.meta.url));
@@ -91,7 +91,7 @@ const BUILD_STAMP_PATH = fileURLToPath(new URL('../build-stamp.json', import.met
 /**
  * 這個模組是不是跑在打包出來的安裝樹裡（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
  *
- * 判準是**產物根有 `build-stamp.json`**：戳記只由 `scripts/release/pack.ts` 寫進產物，原始碼樹裡沒有這個檔（上面那段），
+ * 判準是**產物根有 `build-stamp.json`**：戳記只由 `harness/scripts/release/pack.ts` 寫進產物，原始碼樹裡沒有這個檔（上面那段），
  * 所以它在就是安裝樹、不在就是原始碼樹。不用路徑形狀猜（`lib/` 對 `src/`、有沒有 `node_modules`、`current` 連結解成什麼），
  * 那些在 systemd 的安裝目錄、tarball 解在任意位置時都會變；戳記跟著產物走，位置不影響。
  * 戳記壞了（讀不了、形狀不對）仍算安裝樹：{@link readBuildStamp} 把壞的當沒有是給「版本」用的，

@@ -125,7 +125,7 @@ export class SessionTelemetryCoordinator {
    * 收掉：退訂、發一筆 `shutdown` 的 ops 記錄、轉發後端的 `shutdown()`。
    *
    * **on-demand 不發那筆 ops 記錄**，照 dsh（「on-demand capture creates no ops records」，
-   * `packages/session/session-telemetry/src/index.ts` 的 `shutdown`）。`feedback-only` 就是跑在
+   * `harness/packages/session/session-telemetry/src/index.ts` 的 `shutdown`）。`feedback-only` 就是跑在
    * on-demand 上的：發了的話，人一次回饋都沒送過，後端照樣每個會話收到一筆。
    *
    * 呼叫第二次是 no-op。後端 reject 只換來一行 warn——**盡力而為的旁路不該有讓應用程式

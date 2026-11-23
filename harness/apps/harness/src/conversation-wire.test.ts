@@ -24,7 +24,7 @@ import { createWireHandler } from './wire-handler.js';
  *
  * 這是 `stream-parity.test.ts` 立下的規矩往上再走一層：同一份腳本，一邊走 `invoke`，
  * 一邊走 pump → SSE → 解碼 → `reduceConversation`，比對兩邊。折疊器住在
- * `@nexus/wire` 就是為了這件事——放在 `apps/web` 只驗得到手寫的 fixture，而手寫
+ * `@nexus/wire` 就是為了這件事——放在 `web` 只驗得到手寫的 fixture，而手寫
  * fixture 會靜靜地與基座漂移。
  */
 

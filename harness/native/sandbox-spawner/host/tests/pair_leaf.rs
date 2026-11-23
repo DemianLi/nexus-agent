@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 //! 橋的兩種語言對接（#2583）：真的 [`nexus_host::pair::Pair`] listen，起 node 跑
-//! `packages/nexus-host-bridge/src/pair-leaf-probe.ts`（TS 的葉子連線，印的事件見該檔檔頭），斷言兩邊看到的一致。
+//! `harness/packages/nexus-host-bridge/src/pair-leaf-probe.ts`（TS 的葉子連線，印的事件見該檔檔頭），斷言兩邊看到的一致。
 //! `收下就拒絕_葉子不讀就寫_hello_每一條都讀得到_rejected` 起的是 `src/pair-reject-probe.ts`：不經葉子的連線函式庫，直接用 node 的 socket。
 //!
 //! 只在 Linux 編：`Pair` 讀 `SO_PEERCRED`（`libc::ucred`），nexus-host 在 Linux 以外編不過。全部標 `#[ignore]`：要 node 與 `pnpm install` 過的相依，CI 在 `./.github/actions/setup` 之後另跑一步帶 `--ignored`
@@ -38,7 +38,7 @@ impl Probe {
         Probe::launch(rig, "src/pair-leaf-probe.ts", &args)
     }
 
-    /// 在 `packages/nexus-host-bridge` 底下起 node 跑 `script`，參數是 `rig` 的 socket 再接 `args`。
+    /// 在 `harness/packages/nexus-host-bridge` 底下起 node 跑 `script`，參數是 `rig` 的 socket 再接 `args`。
     fn launch(rig: &Rig, script: &str, args: &[&str]) -> Probe {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/nexus-host-bridge");

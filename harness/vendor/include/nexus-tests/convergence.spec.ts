@@ -1,5 +1,5 @@
 // `entry.update({ config: { ...cfg, patches } })` 回來的時候，樹與登記處是不是已經是新值？
-// 臨界區（`apps/harness/src/tree-sync.ts`）等的就是這個：量完才知道要 await 什麼。
+// 臨界區（`harness/apps/harness/src/tree-sync.ts`）等的就是這個：量完才知道要 await 什麼。
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { bootTree } from './harness.ts'

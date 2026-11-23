@@ -120,7 +120,7 @@ describe('CLI 與 serve 共用的產品組裝：出貨值', () => {
   });
 
   it('不再自稱命令列助手', async () => {
-    // 字面拆開寫：驗收是 `git grep` 那個詞在 apps/harness/src 零命中，測試檔也算在內。
+    // 字面拆開寫：驗收是 `git grep` 那個詞在 harness/apps/harness/src 零命中，測試檔也算在內。
     expect(await cliPrompt(shipped)).not.toContain(`命令列${'助手'}`);
   });
 

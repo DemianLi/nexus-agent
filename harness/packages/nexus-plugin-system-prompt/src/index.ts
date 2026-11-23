@@ -18,11 +18,11 @@
  *   **三格設定是服務自己的設定**：這個服務建好之後自己登記三段（`harness:identity`、`deployment:persona-prefix`、
  *   `deployment:persona-suffix`），日後 `plan-mode`、`sandbox-policy`、`goal` 遷移時對同一個服務登記它們自己的段。
  * - **宿主消費它，而且取的是快照**：宿主在組 thread 時 `assemble()` 一次，拿各段的原文，之後每次模型呼叫只代入變數、渲染成請求
- *   （`apps/harness/src/system-prompt-middleware.ts`）。所以服務的 `assemble()` 不碰 `this.ctx`，列卸載之後宿主手上的資料仍完整。
+ *   （`harness/apps/harness/src/system-prompt-middleware.ts`）。所以服務的 `assemble()` 不碰 `this.ctx`，列卸載之後宿主手上的資料仍完整。
  *   前後綴**前置／附加**的渲染住在宿主那一側，不在這裡：渲染要訊息型別與 `wrapModelCall`，插件的 `src` 不 import `@nexus/core`，
  *   也不依賴 `langchain`。
  *
- * 舊的 `NexusPlugin` 外殼（`systemPromptPlugin`、`createSystemPromptPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的
+ * 舊的 `NexusPlugin` 外殼（`systemPromptPlugin`、`createSystemPromptPlugin`）不在這裡：它是測試夾具，住在 `harness/apps/harness` 的
  * `system-prompt.fixture.ts`。
  *
  * ## 嚴格插值，而且在掛載當下驗

@@ -1,6 +1,6 @@
 /**
  * `grep` 兩格參數說明的換法（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：模型看到的 `pattern`、`glob` 講正規式與單一篩選，
- * 其餘一格不動；執行時的工具仍是基座那個實例。掛進整個 agent、模型實際收到什麼，在 `apps/harness/src/assembly-parity.test.ts`。
+ * 其餘一格不動；執行時的工具仍是基座那個實例。掛進整個 agent、模型實際收到什麼，在 `harness/apps/harness/src/assembly-parity.test.ts`。
  */
 
 import { createFilesystemMiddleware } from 'deepagents';

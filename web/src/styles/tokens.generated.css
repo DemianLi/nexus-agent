@@ -40,7 +40,7 @@
   }
 }
 
-/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 vendor/solid-glass/README.md）。 */
+/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 harness/vendor/solid-glass/README.md）。 */
 [data-glass='opaque'] {
   --primary-solid: 100%;
   --panel: oklch(0.947 0.006 265);

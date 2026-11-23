@@ -158,7 +158,7 @@ mod tests {
         assert!(parsed("[]").unwrap().is_empty());
     }
 
-    /// 共用樣本 `host-plugins-vectors.json`：TS 的 `hostPluginRows` 產生的清單（`apps/harness/src/host-plugins-file.test.ts`
+    /// 共用樣本 `host-plugins-vectors.json`：TS 的 `hostPluginRows` 產生的清單（`harness/apps/harness/src/host-plugins-file.test.ts`
     /// 對同一份比對），宿主要整份收下，而且每一列都過得了 `mcp` 插件的 `build`。
     #[test]
     fn harness_generated_lists_are_accepted() {

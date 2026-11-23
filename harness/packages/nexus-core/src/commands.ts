@@ -11,9 +11,9 @@
  * 我們照做。
  *
  * **附件**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：照 dsh 的 `CommandInvocation.attachments`
- * （`packages/interaction/commands/src/index.ts`，`5badb150`）。命令用 `input.attachments: true` **宣告收附件**，宣告了才會在
+ * （`harness/packages/interaction/commands/src/index.ts`，`5badb150`）。命令用 `input.attachments: true` **宣告收附件**，宣告了才會在
  * {@link CommandInvocation.attachments} 收到收下之後的**參照**（圖與一般檔案，照選取順序；位元組在日誌之外，見
- * `apps/harness` 的 `attachment-store.ts`）；沒宣告的命令收到附件，執行器在 handler 之前就落定成 `error`，輸入框的草稿與附件留著。
+ * `harness/apps/harness` 的 `attachment-store.ts`）；沒宣告的命令收到附件，執行器在 handler 之前就落定成 `error`，輸入框的草稿與附件留著。
  * **registry 從不自己拿附件做事**：怎麼讓模型看到（`/goal` 是送一句帶附件的話，{@link CommandInvocation.steer} 的第二個參數）、
  * 這個文法收不收，全是 handler 的決定，收不下就回 `error`。
  *
@@ -97,7 +97,7 @@ export interface CommandInvocation {
    * 請宿主在這個命令**落定之後**，把 `text` 當成人打的一句話送進對話（`/plan <message>` 用它）。
    *
    * 對應 dsh 的 `agent.steer()`：dsh 的 handler 直接拿到 agent，閒著的時候 steer 會開一輪
-   * （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
+   * （`harness/packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
    * **我們的命令只跑在兩輪之間**（`serve` 的發派面在跑著、停在核准點時拒收；REPL 一行一輪），
    * 所以這裡的 steer 永遠是閒著的那一種——也就是「命令結束後開一輪」。命令沒有 agent 把手，
    * 這一格是宿主替它保管的那一半。**唯一的例外是命令用 {@link CommandDefinition.runWhileBusy} 宣告過的那幾種呼叫**
@@ -137,7 +137,7 @@ export interface CommandDefinition {
   /**
    * `command/run` 要不要記原文，**預設要**。命令自己的 domain 事件已經帶著那段輸入時設成
    * `false`，免得同一段話在日誌裡記兩次——照 dsh 的同名欄位
-   * （`packages/interaction/commands/src/index.ts:69-75`，`c291e79`）。
+   * （`harness/packages/interaction/commands/src/index.ts:69-75`，`c291e79`）。
    */
   readonly recordInput?: boolean;
   /**

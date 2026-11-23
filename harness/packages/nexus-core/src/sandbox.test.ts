@@ -1,7 +1,7 @@
 /**
  * 工具路徑對到工作區的那條規則（{@link virtualPathOf}、{@link hostPathOf}），與路由前綴的判斷（{@link isUnderAnyPrefix}）。
  *
- * 這裡只釘字串規則本身。它跟真 backend 對不對得上，由 `apps/harness/src/virtual-path.test.ts`
+ * 這裡只釘字串規則本身。它跟真 backend 對不對得上，由 `harness/apps/harness/src/virtual-path.test.ts`
  * 用真的 `ContainedFilesystemBackend` 寫檔來釘——core 不能相依 harness。
  */
 

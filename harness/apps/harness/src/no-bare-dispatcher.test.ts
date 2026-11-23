@@ -27,7 +27,7 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** 擁有派送器的模組；它自己的 agent 就是實作。 */
-const DISPATCHER_OWNER = 'packages/nexus-core/src/http-proxy/';
+const DISPATCHER_OWNER = 'harness/packages/nexus-core/src/http-proxy/';
 
 /** 註解帶這個記號並寫明理由，該位置豁免。 */
 const ALLOW_MARKER = 'proxy-exempt:';
@@ -141,7 +141,7 @@ describe('量具自檢：每一種寫法都抓得到，逃生口與擁有者不�
   });
 });
 
-const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
 
 describe('全樹掃描', () => {
   it('代理模組以外，沒有任何匯入 undici 或指定 dispatcher 的位置', () => {

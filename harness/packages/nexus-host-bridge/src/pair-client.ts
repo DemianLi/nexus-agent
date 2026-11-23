@@ -1,6 +1,6 @@
 /**
  * 一對之間那條橋在葉子這一端的連線（[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）；協定的規則在
- * `native/sandbox-spawner/host/src/pair_protocol.rs` 檔頭，編解碼在 `./pair-protocol.ts`。
+ * `harness/native/sandbox-spawner/host/src/pair_protocol.rs` 檔頭，編解碼在 `./pair-protocol.ts`。
  *
  * {@link PairClient.connect} 連到組合行程 listen 的 socket、送 `hello`，驗過才回一個 {@link PairClient}；沒進去就丟
  * {@link PairConnectError}，`failure.kind` 分四種：

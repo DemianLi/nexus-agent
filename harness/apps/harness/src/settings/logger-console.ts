@@ -8,13 +8,13 @@
  * ## 對 dsh 的做法
  *
  * 等級在 Cordis 的 logger 層，輸出由一顆 `logger-console` exporter 決定，設定格照 dsh
- * （`vendor/logger-console/src/shared.ts` 的 `ConsoleExporter.Config`）：`levels`（以 logger 名為鍵、`default` 是預設）、`showTime`、
+ * （`harness/vendor/logger-console/src/shared.ts` 的 `ConsoleExporter.Config`）：`levels`（以 logger 名為鍵、`default` 是預設）、`showTime`、
  * `colors`、`maxLength`。文字格式也照 dsh 的 `render`：`yyyy-MM-dd hh:mm:ss [W] serve 訊息`。
  *
  * ### 偏離一：`levels` 收等級**名稱**，不收數字（理由 1：基座表達不出來）
  *
  * dsh 的 Cordis 是自己的 fork，等級順序是 `ERROR 0、INFO 1、WARN 2、DEBUG 3`；nexus vendor 的是上游 rc.11，順序是
- * `ERROR 0、WARN 1、INFO 2、DEBUG 3`（`vendor/cordis/src/logger.ts`）。同一個數字在兩邊意思不同，所以設定寫名稱，
+ * `ERROR 0、WARN 1、INFO 2、DEBUG 3`（`harness/vendor/cordis/src/logger.ts`）。同一個數字在兩邊意思不同，所以設定寫名稱，
  * 換算在 `../server-log.ts` 的 `LOG_LEVEL_NUMBERS`（一張表、測試對著 vendor 實際行為釘住）。
  *
  * ### 偏離二：多一格 `format: 'json'`（理由 2：產品需求超出 dsh）

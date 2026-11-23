@@ -10,7 +10,7 @@
  * ## 根
  *
  * - `SessionHeader`：`StoredSessionHeader`（邏輯 header；`version` 是 `typeof SESSION_LOG_FORMAT_VERSION`，#1862）。
- * - `JsonlHeaderLine`：磁碟上的 header 行（世代檔第一行與舊路徑的墓碑），`apps/harness/src/jsonl-session-store.ts` 的
+ * - `JsonlHeaderLine`：磁碟上的 header 行（世代檔第一行與舊路徑的墓碑），`harness/apps/harness/src/jsonl-session-store.ts` 的
  *   `JsonlHeaderLine`，從實體格式的宣告直接抽。
  *   `type` 與 `migratedFrom` 只在這一行，不在邏輯 header 裡。
  * - `SessionEventEnvelope`：每一種事件拿掉 `data`、`type` 換成 `string` 之後的聯集。一般的新事件種類不改它。
@@ -28,15 +28,15 @@
  *
  * dsh 讀 `tsconfig.host.json`，檔案是 host 那一側所有套件的原始碼。nexus 沒有根 `tsconfig.json`，對應的是
  * `tsconfig.base.json`（它的 `paths` 把 `@nexus/core` 對到原始碼，各套件 `declare module '@nexus/core'` 的事件擴充才合得進去），
- * 檔案是 `packages/<套件>/src` 與 `apps/harness/src` 的產品原始碼（跟事件目錄同一套判斷）。`apps/web/src` 不進 program：
+ * 檔案是 `harness/packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（跟事件目錄同一套判斷）。`web/src` 不進 program：
  * 它不宣告事件，`tsconfig.base.json` 也沒有 DOM 與 JSX 的設定。編譯選項照 dsh 覆寫成 `strict`、
  * `exactOptionalPropertyTypes`、`skipLibCheck: false`；診斷只收選項、語法、根檔，以及從根可達的宣告範圍內的語意錯誤。
  *
  * ## 過渡：訊息上的來源不進型別圖
  *
  * **`@persistenceSource`／`@persistenceAttribution` 這一刀不搬，登記為過渡（不掛偏離理由）。** dsh 用這兩個標記把訊息來源
- * （`packages/llm/llm/src/message.ts:145` 的 `MessageBase.source`）綁進型別圖，讓「新增一種來源」走寬鬆的相容政策。
- * nexus 訊息上的來源 `MessageSource`（`packages/nexus-core/src/message-source.ts`）落盤在 `additional_kwargs.nexus_source`，
+ * （`harness/packages/llm/llm/src/message.ts:145` 的 `MessageBase.source`）綁進型別圖，讓「新增一種來源」走寬鬆的相容政策。
+ * nexus 訊息上的來源 `MessageSource`（`harness/packages/nexus-core/src/message-source.ts`）落盤在 `additional_kwargs.nexus_source`，
  * 今天的 `LoggedMessage` 照 LangChain 把 `additional_kwargs` 宣告成 `Record<string, any>`，所以圖裡是 `any`。**表達得出來**：
  * 跟 `role`、`name`、`tool_call_id` 一樣在 `LoggedMessage` 改寫型別就行；這一刀不收窄，是因為 `MessageSource` 本身是開放記錄
  * （`kind: string` 加索引簽名），接進來也看不出變更，dsh 的綁定還要求同一個物件上有 `role` 字面量。收窄屬
@@ -94,12 +94,12 @@ const CONFIG_PATH = 'tsconfig.base.json';
  * 合成的根檔：只存在於 compiler host 裡，不落盤。放在 {@link TRACKED_PREFIXES} 之外（同 dsh 的 `scripts/`），
  * 它的別名才不會被記成型別名與宣告位置。
  */
-export const ROOTS_FILE = 'scripts/__persistence_schema_roots__.ts';
+export const ROOTS_FILE = 'harness/scripts/__persistence_schema_roots__.ts';
 /** 磁碟上 header 行的宣告（`JsonlHeaderLine`）所在的檔。 */
-const PHYSICAL_HEADER_FILE = 'apps/harness/src/jsonl-session-store.ts';
+const PHYSICAL_HEADER_FILE = 'harness/apps/harness/src/jsonl-session-store.ts';
 
 /** 型別圖要追蹤宣告位置、收語意診斷、找 `@persistenceReserved` 的原始碼範圍（相對於 repo 根）。 */
-const TRACKED_PREFIXES = ['packages/', 'vendor/', 'apps/harness/src/'] as const;
+const TRACKED_PREFIXES = ['harness/packages/', 'harness/vendor/', 'harness/apps/harness/src/'] as const;
 
 interface DeclarationMetadata {
   readonly names: Set<string>;
@@ -281,11 +281,11 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
   return extraction.inventory(roots);
 }
 
-/** program 的檔案：`packages/<套件>/src` 與 `apps/harness/src` 的產品原始碼（對應 dsh 的 `hostSourceFiles`）。 */
+/** program 的檔案：`packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（對應 dsh 的 `hostSourceFiles`）。 */
 function programSourceFiles(root: string): string[] {
   return [
     ...productFilesUnder(root, 'packages').filter((file) => /^packages\/[^/]+\/src\//u.test(file)),
-    ...productFilesUnder(root, 'apps/harness/src'),
+    ...productFilesUnder(root, 'harness/apps/harness/src'),
   ].map((file) => resolve(root, file));
 }
 
@@ -366,7 +366,7 @@ function reservedPropertyAnnotations(
   for (const file of program.getSourceFiles()) {
     const path = slash(relative(root, file.fileName));
     if (
-      !(path.startsWith('packages/') || path.startsWith('apps/harness/src/')) ||
+      !(path.startsWith('harness/packages/') || path.startsWith('harness/apps/harness/src/')) ||
       path.includes('/node_modules/')
     ) {
       continue;

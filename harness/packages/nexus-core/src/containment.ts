@@ -15,7 +15,7 @@
  * ## 它為什麼住在 core 而不是某個 plugin
  *
  * dsh 那側**不把這件事做成可選的**：它是註冊表執行管線自己的 `catch`
- * （`packages/core/tools/src/index.ts:1494-1496` → `toolErrorResult`，SHA `4e84901`），
+ * （`harness/packages/core/tools/src/index.ts:1494-1496` → `toolErrorResult`，SHA `4e84901`），
  * 文件把它寫成性質而不是功能——「未知工具和抛出异常的工具都会变为结构化错误……
  * **调用失败但不终止当前轮次**」（`docs/subsystems/tools.zh.md:404`）。
  * 做成一個掛不掛隨人的 plugin 才是偏離。
@@ -30,7 +30,7 @@
  * 換成一則假的 error ToolMessage，核准點就這樣無聲地不見了。那正好是
  * [#71](https://github.com/DemianLi/nexus-agent/pull/71) 釘住的那些行為。搬家之後圍堵
  * 第一次包住 root 與**每個 subagent** 的核准路徑，所以那條命脈在新位置重量過一次
- * （`apps/harness/src/interrupt.test.ts`、`validation.test.ts`）。
+ * （`harness/apps/harness/src/interrupt.test.ts`、`validation.test.ts`）。
  *
  * ## 超時被單獨認出來（[#162](https://github.com/DemianLi/nexus-agent/issues/162)）
  *
@@ -69,7 +69,7 @@
  * 另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
  * ——那正是這一層要擋的東西。
  *
- * 時刻同 dsh：`tool/call` 在核准之前（`packages/core/agent-loop/src/tool-calls.ts:168` 在
+ * 時刻同 dsh：`tool/call` 在核准之前（`harness/packages/core/agent-loop/src/tool-calls.ts:168` 在
  * `prepare` 之前記），所以被閘門擋掉的呼叫一樣有一對。形狀與偏離見 `session-log.ts` 的
  * `SessionEventMap`。
  *
@@ -251,7 +251,7 @@ export function resolveToolName(request: {
  *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
  *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼；
  * - 工具拋出 {@link HarnessError} → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`
- *   （`packages/core/tools/src/index.ts:661-668`，`477b4f4`）。`NexusTool` 回 `ok: false` 時，碼由轉接器掛在訊息上
+ *   （`harness/packages/core/tools/src/index.ts:661-668`，`477b4f4`）。`NexusTool` 回 `ok: false` 時，碼由轉接器掛在訊息上
  *   （`@nexus/tool-adapter`），不經這裡。
  *
  * @param error - `catch` 到的東西。
@@ -349,7 +349,7 @@ function recordUnknownOutcome(
  *
  * ## 記不進去，這一步失敗（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）
  *
- * 這三種都進模型歷史，照 dsh 不吞（`packages/core/agent-loop/src/tool-calls.ts:156`、`:168`，`687f282e`）。會讓它們拋的是
+ * 這三種都進模型歷史，照 dsh 不吞（`harness/packages/core/agent-loop/src/tool-calls.ts:156`、`:168`，`687f282e`）。會讓它們拋的是
  * 日誌那一關拒收（#1526 的有損值、#1661 的深度上限）：
  *
  * - `tool/call` 寫不進去：原錯當場拋，工具本體不跑（dsh 的 `appendToolCall` 在 `prepare` 之前）。
@@ -438,7 +438,7 @@ function recordToolCall(
  *
  * **時刻：dsh 的 `tools/execute`**（環繞 waterfall：超時／重試／指標）。這一層是那個
  * 時刻在我們樹上的**第 0 格**佔用者。同一個時刻我們還有其他佔用者（逐個列在索引裡），而它們是同一種
- * 機制的不同陣列位置，不是三種權限——索引見 `apps/harness/src/interception-index.test.ts`。
+ * 機制的不同陣列位置，不是三種權限——索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * 它**必須排在整份 middleware 陣列的第 0 格**（root 與每個 subagent 都是）：`wrapToolCall`
  * 是層層相包的，越前面越外層，而圍堵的射程要涵蓋內層每一個 middleware——連核准閘門

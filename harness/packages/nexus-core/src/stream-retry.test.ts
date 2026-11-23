@@ -1,6 +1,6 @@
 /**
  * 串流中段重打的規則（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）：什麼時候重打、重打幾次、等多久、
- * 中止時怎麼收。真的打假端點、走完 pump 與折疊器的那一半在 `apps/harness/src/stream-retry.test.ts`。
+ * 中止時怎麼收。真的打假端點、走完 pump 與折疊器的那一半在 `harness/apps/harness/src/stream-retry.test.ts`。
  */
 
 import { AIMessage } from '@langchain/core/messages';

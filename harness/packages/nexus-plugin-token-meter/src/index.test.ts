@@ -12,7 +12,7 @@ import { tokenMeterUnit } from './index.js';
 /**
  * 這個套件的驗收分三塊：一致性套件（#1421 驗收 D）、相依關係（驗收 G）、形狀。
  *
- * 組裝點那一側（出貨清單上的 token-meter 經樹進來、停用它下一條 thread 沒有它的投影、開著的照舊）在 `apps/harness` 的
+ * 組裝點那一側（出貨清單上的 token-meter 經樹進來、停用它下一條 thread 沒有它的投影、開著的照舊）在 `harness/apps/harness` 的
  * `token-meter-on-tree.test.ts`；折疊本身在 `fold.test.ts`。這裡不重跑。
  */
 describe('一致性套件（驗收 D）：真的提供者、真的 Loader', () => {

@@ -281,7 +281,7 @@ async function until(line: Line, done: (state: ConversationState) => boolean): P
 }
 
 /**
- * 照網頁重新整理的順序接回來（`apps/web/src/hooks/use-conversation.ts`）：開下行 → 抓歷史 → **從空的重折** →
+ * 照網頁重新整理的順序接回來（`web/src/hooks/use-conversation.ts`）：開下行 → 抓歷史 → **從空的重折** →
  * 之後才抽下行。
  */
 async function refresh(client: WireClient, threadId: string): Promise<Line> {

@@ -7,7 +7,7 @@
  *
  * dsh 一輪一個 `AbortController`，每個非同步邊界 `throwIfAborted()`（`packages/core/agent-loop/src/agent.ts`，
  * SHA `c291e79`）；**工具從不丟下**——已經開始的等到靜止，結果才換成 `ABORTED`，還沒開始的補一顆
- * `ABORTED_BEFORE_DISPATCH`（`packages/core/tools/src/index.ts:1518-1520`，`agent-loop/src/tool-calls.ts:238-259`）。
+ * `ABORTED_BEFORE_DISPATCH`（`harness/packages/core/tools/src/index.ts:1518-1520`，`agent-loop/src/tool-calls.ts:238-259`）。
  * 模型串流在下一段就停。**中止只換掉成功的結果**：工具自己拋的、自己回的錯照舊
  * （`docs/subsystems/tools.zh.md:629`）。模型看到的兩句話逐字照抄。
  *
@@ -43,7 +43,7 @@
  * `chat_models/index.js:605`），而模型節點呼叫時明著傳 `{ ...config, signal }`——LangGraph 沒拿到訊號時那一格是
  * `undefined`，`_combineCallOptions` 一展開就把它蓋掉；`bindTools(tools, modelSettings)` 走的是同一條。
  * 核心 `RunnableBinding` 的 `mergeConfigs` 對 signal 是「已經有值就留、兩邊都有就合成」，`undefined`
- * 蓋不掉。`apps/harness/src/turn-cancel-openai.test.ts` 釘著這件事——換回 `withConfig` 的那一刻它會紅，
+ * 蓋不掉。`harness/apps/harness/src/turn-cancel-openai.test.ts` 釘著這件事——換回 `withConfig` 的那一刻它會紅，
  * 假模型重現不了這個 quirk。
  *
  * ## 兩處偏離
@@ -55,7 +55,7 @@
  * - **半段文字不在這裡組。** dsh 在迴圈裡把已經送出的文字記成一則被打斷的回覆；我們的產品路徑
  *   （`streamEvents` v3）上，逐字片段根本不經過模型層的回呼（實測一個 token 都收不到），唯一看得到
  *   「使用者看到了哪些字」的是轉發那些片段的 pump。所以這裡只拋 {@link TurnCancelledError}，半段由
- *   `apps/harness` 的 pump 事後寫回對話。
+ *   `harness/apps/harness` 的 pump 事後寫回對話。
  *
  * **工具本體讀得到這一輪的訊號**：從它拿到的 config 用 {@link turnCancelSignalOf} 讀。讀了、把它交給自己的 I/O 的工具，按停止
  * 就提早結束——今天是 `@nexus/plugin-mcp` 的工具呼叫與資源讀取，server 收到 `notifications/cancelled`（#1985）。**沒讀的工具
@@ -66,7 +66,7 @@
  * ## 在攔截索引上佔哪一格
  *
  * 外層那顆的 `wrapToolCall` 是 dsh `tools/execute` 那一格（環繞 waterfall）在我們樹上的又一個
- * 佔用者，索引見 `apps/harness/src/interception-index.test.ts` 的第 6 列。**dsh 的中止不佔這一格**
+ * 佔用者，索引見 `harness/apps/harness/src/interception-index.test.ts` 的第 6 列。**dsh 的中止不佔這一格**
  * ——它是迴圈自己的訊號，在每個非同步邊界檢查；我們沒有那個迴圈，最接近的縫就是這一格與模型那一側
  * 的 `wrapModelCall`。退的是載體，「等工具落定、只換成功的結果」的紀律照抄。
  *
@@ -121,7 +121,7 @@ export const TOOL_ABORTED_BEFORE_DISPATCH_TEXT =
  * 被中止時模型講到一半的那一則回覆，在 `additional_kwargs` 上的記號，值是 `true`
  * （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q11）。
  *
- * 寫它的是 `apps/harness` 的 pump（見檔頭「兩處偏離」第二條）。有了它，那一則在對話狀態裡分得出
+ * 寫它的是 `harness/apps/harness` 的 pump（見檔頭「兩處偏離」第二條）。有了它，那一則在對話狀態裡分得出
  * 「被打斷」與「講完了」——dsh 那側是 `assistant/message` 的 `interrupted: true`。
  */
 export const INTERRUPTED_REPLY_MARKER = 'nexus_interrupted_reply';

@@ -451,7 +451,7 @@ describe('sessions.expectSpawn', () => {
    * （serve 與 CLI 都把它接在最後）：它被通知的時候還沒有那句話。
    *
    * 這裡沒有掛會寫事件的參與者，所以那句話是子日誌唯一的一顆。它跟委派政策事件的先後（政策在前，同 dsh）要真的參與者才量得到，
-   * 釘在 `apps/harness/src/subagent-sandbox.test.ts`：這個套件不能依賴插件套件。
+   * 釘在 `harness/apps/harness/src/subagent-sandbox.test.ts`：這個套件不能依賴插件套件。
    */
   describe('子代理收到的那句話', () => {
     const input = toLoggedMessage(new HumanMessage('去查一下'));

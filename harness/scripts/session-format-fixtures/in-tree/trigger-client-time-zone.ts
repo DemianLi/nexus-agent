@@ -3,7 +3,7 @@
  * 記在 `turn/start`，輪中插話記在 `user/message` 的來源。`client_time_zone` 只有 `run.start` 帶得進來，CLI 一輪碰不到，
  * 所以由這支補寫。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那一版的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那一版的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-client-time-zone.ts <run 目錄>
  */
 

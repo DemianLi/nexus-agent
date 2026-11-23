@@ -82,10 +82,10 @@
 # 是 backend 命名空間下的 `/skills/`，要加別的目錄在 `sources` 列出（依序即優先序）。
 #
 # **沒有 skill 就一個字都不加**（照 dsh：目錄訊息清單為空且從沒發佈過就不出現，
-# `packages/skill/tool-skill/src/index.ts:239`）：沒給 `--workspace`、或工作區沒有 `skills/`，
+# `harness/packages/skill/tool-skill/src/index.ts:239`）：沒給 `--workspace`、或工作區沒有 `skills/`，
 # 送給模型的 system prompt 與沒掛這一列逐位元組相同，空結果也只掃一次。基座的 skills
 # middleware 做不到這一點（對空清單照樣接約 2000 字、又每一輪重掃），所以組裝點包了一層，
-# 偏離登記在 `packages/nexus-core/src/skills-middleware.ts` 檔頭。
+# 偏離登記在 `harness/packages/nexus-core/src/skills-middleware.ts` 檔頭。
 #
 # **這一列走 Cordis 樹**（#1446）：`sources` 經技能來源接縫（`@nexus/skills`）登記，路徑格式與重名在讀清單那一步就驗
 # （寫錯的路徑那一列掉在 `apply`，不等到組 thread）；折回每條 thread 的 `registry.skills.addSource` 之後，基座的中介層與
@@ -148,7 +148,7 @@
 # 評分與 `/feedback`：預設就裝，零設定的 serve 與 CLI 都評得到（#278）。
 #
 # `maxNoteBytes` 是一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
-# （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
+# （`harness/packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
 # 所以這一行是整棵樹上唯一講這個數字的地方。
 #
 # **這一列走 Cordis 樹**（#1456）：它在 `apply` 裡提供 `messageFeedback` 服務（第一個「插件提供、宿主消費」的服務），並經命令接縫
@@ -225,11 +225,11 @@
 # 系統提示詞的身分與 persona（#720、#1477）。照 dsh 的 `system-prompt`（`packages/core/system-prompt/src/index.ts:407-442`）
 # 三格設定；出貨的前綴對應 dsh 各入口 profile 覆寫的前綴（`packages/bundle/web-app/cordis.patch.yml:17-20`，另有 `headless` :11、
 # `acp-app` :5、`sdk-minimal` :118），英文，開頭句不自稱寫程式。**dsh 只覆寫前綴**：後綴的 `{{cwd}}` 句是我們的，而且 dsh 沒有
-# `cwd` 變數（`packages/core/system-prompt/README.md:78`，loop 只登記 `provider` 與 `model`）。
+# `cwd` 變數（`harness/packages/core/system-prompt/README.md:78`，loop 只登記 `provider` 與 `model`）。
 # 順序是身分句 → 前綴 → 其餘（含組裝點傳的那句指引）→ 後綴，**後綴永遠是最後一段**。
 #
 # 這一列是樹上的函式插件，**提供 `systemPrompt` 服務**（`@nexus/system-prompt` 1.2.0）：三格設定是服務自己的設定，建好之後自己登記三段。
-# 宿主在組 thread 時取一次快照，之後每次模型呼叫只代入變數（`apps/harness/src/system-prompt-middleware.ts`）。
+# 宿主在組 thread 時取一次快照，之後每次模型呼叫只代入變數（`harness/apps/harness/src/system-prompt-middleware.ts`）。
 #
 # - `includeHarnessIdentity`：最前面一句 "You are an AI agent powered by nexus-agent."。
 # - `personaPrefix`／`personaSuffix`：`{{model}}`（這一次組裝的模型 id）與 `{{cwd}}` 可以引用。**嚴格插值**：
@@ -269,7 +269,7 @@
 # 載入期當場拋。理由寫在它自己那一段上。
 
 # 連續重複同參數呼叫同一個工具時提醒模型（#147）。門檻與參數預覽字數照 dsh base 的
-# `repeat-tool-reminder`（`packages/bundle/base/cordis.patch.yml:441`，`ddefc45`）；
+# `repeat-tool-reminder`（`harness/packages/bundle/base/cordis.patch.yml:441`，`ddefc45`）；
 # `include`／`exclude` 是我們多的兩格，空陣列＝追蹤全部工具。
 #
 # **這一列寫出全部四格是刻意的**：patch 是整份替換 `config`，所以照著改的人手上要有完整
@@ -283,7 +283,7 @@
     argumentsPreviewChars: 500
 
 # 摘要之前先把過長的工具結果剪掉中段（#446）。三格預算照 dsh base 的 `tool-result-pruner`
-# （`packages/bundle/base/cordis.patch.yml:404`，`ddefc45`）。
+# （`harness/packages/bundle/base/cordis.patch.yml:404`，`ddefc45`）。
 #
 # **只在摘要開著時有作用**：dsh 的 pruner 唯一的消費者是 compaction，摘要不掛就沒人叫它。
 # 但設定照樣在載入期驗——寫錯不會因為今天剛好沒用到就放過。
@@ -319,7 +319,7 @@
     compactionRetries: 1
 
 # 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
-# （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
+# （`harness/packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
 #
 # **這一列刻意沒有 `config:`**：這一顆沒有設定，plugin 也就沒有 Config schema，寫了也沒有
 # 作用——照 dsh 原樣交下去、不驗，那一列照樣掛（先讀後改照樣在），啟動時印警告（#751）。它跟上面兩列
@@ -367,7 +367,7 @@
   name: '@nexus/core/approval-gate'
 
 # **會話日誌落盤本身**，以及它的批次窗口（毫秒，#457／#529）。**這一列代表落盤**（#612），照 dsh
-# base 的 `session-persistence-jsonl`（`packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`）：
+# base 的 `session-persistence-jsonl`（`harness/packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`）：
 # 掛著就寫（CLI 與 serve 都寫，預設在 `$NEXUS_AGENT_HOME/sessions`，#444），**`disabled: true` 就是
 # 一個位元組都不寫**——兩個入口只在記憶體裡、啟動時照實講，serve 的 thread 列表回「列不出來」，
 # 而 `--resume` 與 `--session-log` 跟它矛盾，給了就當場拋（照 dsh：headless 的 `--session-id`
@@ -394,7 +394,7 @@
 # ── harness 自己的設定 ────────────────────────────────────────────────────────
 #
 # 這幾列跟上面那段 core 的 middleware 設定同一個用途——**不裝功能，只講設定**——但擁有者住在
-# `apps/harness`（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+# `harness/apps/harness`（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
@@ -410,9 +410,9 @@
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
 # **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，所有 `#settings/…` 列共用：dsh 的每個可調值
-# 都由一個套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
+# 都由一個套件擁有，而 `harness/apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
 # 沒有連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
-# 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
+# 寫在 `harness/apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
 #
 # **哪幾列關不掉，以 `plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES` 為準**（`thread-title-llm`、`thread-search` 不在上面），這裡不寫顆數；理由分兩種。
 # 起動期那幾列是
@@ -423,7 +423,7 @@
 # 它們就真的沒有模型產生的標題、沒有內容搜尋，理由寫在各自那一段上。
 
 # 會話標題的兩個上限（#302、#647）：列表、畫面標頭與日誌裡的退回標題都照它截。值照 dsh base 的 `session-title`
-# （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
+# （`harness/packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
 # `fallbackMaxBytes: 40`），**數字一模一樣**。
 #
 # 兩格全部寫出來，理由同上面那三列：patch 是整份替換 `config`，照著改的人手上要有完整的一份
@@ -455,8 +455,8 @@
     timeoutMs: 60000
 
 # 按內容搜尋以前的會話（#631），側欄的搜尋框用它。**出廠不開**（`openAt: never`），同 dsh `base` 與 `web-app` 兩個
-# bundle 的 `session-query-sqlite` 那一列（`packages/bundle/base/cordis.patch.yml:141-153`、
-# `packages/bundle/web-app/cordis.patch.yml:22-30`，`477b4f4`）：要不要多背一份索引是部署自己的選擇。不開的時候側欄
+# bundle 的 `session-query-sqlite` 那一列（`harness/packages/bundle/base/cordis.patch.yml:141-153`、
+# `harness/packages/bundle/web-app/cordis.patch.yml:22-30`，`477b4f4`）：要不要多背一份索引是部署自己的選擇。不開的時候側欄
 # 只比標題，同今天。要用的人在自己的 `~/.nexus-agent/cordis.patch.yml` 把這一列改成 `openAt: first-search`（第一次搜才
 # 載入）或 `startup`（serve 起動就載入），寫法見 docs/operations.md。
 #
@@ -471,7 +471,7 @@
 # 用 `@` 引用別的會話時的四個上限（#1573 N0862）：一則訊息最多引用幾條（`maxReferences`，不能超過 3）、候選最多回幾筆
 # （`candidateLimit`）、每條來源序列化後最多幾個位元組（`maxReferenceBytes`，**省略即照模型窗口算**，給了就原樣蓋過）、
 # 自動預算占模型窗口的幾成（`referenceContextFraction`）。**欄位名與 schema 的預設（3、50、0.2）都是 dsh 的**
-# （`packages/context/session-reference/src/index.ts:90-95`，`1517a4db`／`687f282e`／`22ddee37`）。自動預算是
+# （`harness/packages/context/session-reference/src/index.ts:90-95`，`1517a4db`／`687f282e`／`22ddee37`）。自動預算是
 # `max(65536, floor(窗口 × 4 × 比例))` 位元組，窗口跟著**這條 thread 下一步會走的模型**，換了模型下一次引用就用新那顆的窗口。
 #
 # **出廠的比例是 0.1，不是 dsh 的 0.2。偏離登記：理由 2（產品需求超出 dsh 的射程），demian 2026-10-17 拍板 Q4 (b)。**
@@ -592,7 +592,7 @@
 #
 # **改這一格會讓一條跨套件的比例失效，而且沒有任何東西會紅。** `@nexus/wire` 的
 # `HISTORY_PAGE_MAX_BYTES = 8_000_000` 是照每張卡「文字加 `meta`」的最壞值算的，`meta` 的那一半跟著這一格走，
-# 那個關係由 `apps/harness` 的一條測試釘著；這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡
+# 那個關係由 `harness/apps/harness` 的一條測試釘著；這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡
 # 明著選的第三條（2026-09-23 拍板）。
 - id: tool-text
   name: '#settings/tool-text'
@@ -624,7 +624,7 @@
     maxQueuedBytes: 2097152
 
 # 過大的工具結果暫存到主機上的哪裡、留多久（#734）。**兩格名字都是 dsh `spill-local` 的**（`root`、`cleanupPeriodDays`，
-# `packages/spill/spill-local/src/index.ts:66-69`，`477b4f4`）。`root` 不寫就是 harness home 底下的 `tool-results`
+# `harness/packages/spill/spill-local/src/index.ts:66-69`，`477b4f4`）。`root` 不寫就是 harness home 底下的 `tool-results`
 # （偏離 dsh 的「每行程一個暫存目錄」：基座的路徑是虛擬的，續接時要讀回同一個檔，所以根要固定，理由與登記見
 # `src/tool-result-stash.ts`）；`cleanupPeriodDays: 0` 表示不清，啟動時清一次，別人改得動的根不清。
 - id: tool-result-stash
@@ -634,7 +634,7 @@
 
 # 一則工具結果最多佔多少估算 token（#719）。超過就把全文存進上面那個暫存目錄，模型只收到頭尾預覽加路徑，
 # 用 `read_file` 去讀全文。**欄位名與 12500 都是 dsh 的**（`packages/spill/spill-policy/src/index.ts:34`、
-# `packages/bundle/base/cordis.patch.yml:409`，`477b4f4`）。**省略 `maxInlineTokens`（或把這一列標成 `disabled: true`）
+# `harness/packages/bundle/base/cordis.patch.yml:409`，`477b4f4`）。**省略 `maxInlineTokens`（或把這一列標成 `disabled: true`）
 # 就停用**，照 dsh；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。`read_file` 不外溢。
 # 找不到暫存目錄可寫（沒有會話日誌的組裝、目錄不可寫）時保留原結果，不外溢。
 - id: spill-policy
@@ -644,7 +644,7 @@
 
 # 搜尋結果的筆數上限（#735）：`grep` 命中超過 `grepMaxMatches`、`glob`／`ls` 超過 `globMaxResults` 時，模型只收到前段
 # 加一句定位，完整結果存進上面那個暫存目錄，用 `read_file` 照定位讀。**id、三格的名字與 250／100／2000 都是 dsh 的**
-# （`packages/fs/tool-fs-search/src/index.ts:73-100`、`grep.ts:29`、`:35`、`glob.ts:25`）；`ls` 沿用 `globMaxResults`
+# （`harness/packages/fs/tool-fs-search/src/index.ts:73-100`、`grep.ts:29`、`:35`、`glob.ts:25`）；`ls` 沿用 `globMaxResults`
 # （dsh 沒有這顆工具）。`grep` 只管 `content` 模式。暫存目錄寫不進、或沒有會話日誌時，照樣只留前段，結尾註明沒存到。
 # `grepMaxLineBytes`（#1605）：`grep` 每一行命中文字最多留幾個位元組，切在 UTF-8 字元邊界、切了加 ` (line truncated)`；
 # 一行壓縮過的 JS 或 JSON 命中時不會整行塞進結果，整行還在檔案裡可以 `read_file`。
@@ -657,7 +657,7 @@
     grepMaxLineBytes: 2000
 
 # 檔案工具的組態（#1605）：個別關掉寫檔、改檔，以及讀檔的上限。**id 與欄位名都是 dsh 的**（`tool-fs`，
-# `packages/fs/tool-fs/src/index.ts:20-98`），預設值就是出廠的常數（讀一頁 2000 行、一行 2000 字元、一頁 50 KiB、
+# `harness/packages/fs/tool-fs/src/index.ts:20-98`），預設值就是出廠的常數（讀一頁 2000 行、一行 2000 字元、一頁 50 KiB、
 # 檔案達 10 MiB 改串流讀）。數值都要是正整數，否則載入時就拋。
 # `write: false`：模型看不到 `write_file` 與 `delete`（基座多一顆會改檔的 `delete`，dsh 沒有，歸到寫入面）；
 # `edit: false`：模型看不到 `edit_file`。關掉的工具根本不在送給模型的清單裡，「先讀後改」那句提示也跟著不出現。
@@ -677,7 +677,7 @@
     readStreamMinSize: 10485760
 
 # 委派工具是一次性的還是背景續行的（#841），以及每個主對話同時存活的背景子代理上限。**兩格名字與值域都是 dsh 的**
-# （`backgroundMode` 是 `tool-subagent` 的 Config、`maxActiveSubagents` 預設 8，`packages/subagent/tool-subagent/src/index.ts:111`，
+# （`backgroundMode` 是 `tool-subagent` 的 Config、`maxActiveSubagents` 預設 8，`harness/packages/subagent/tool-subagent/src/index.ts:111`，
 # `477b4f4`），**出貨值 `continuable` 也是 dsh base bundle 打開的**（`packages/bundle/base/cordis.patch.yml:369-374`）。
 # `continuable`：模型看到 `subagent`，派出去預設在背景跑、當場回編號；做完會叫醒主對話多跑一輪。`one-shot`：模型看到基座的 `task`，
 # 一次性、等結果。**改成 `one-shot`（或把這一列標成 `disabled: true`）就回到一次性。**
@@ -693,7 +693,7 @@
     maxActiveSubagents: 8
 
 # 子代理逐次選模型（#875，卡 #709）：模型委派時可以從授權清單挑子代理跑哪一顆。**出廠關著**，同 dsh
-# （`enabled` 預設 `false`、`allowedModels` 預設空，`packages/subagent/tool-subagent/src/model-selection-settings.ts:38-39`，`477b4f4`）。
+# （`enabled` 預設 `false`、`allowedModels` 預設空，`harness/packages/subagent/tool-subagent/src/model-selection-settings.ts:38-39`，`477b4f4`）。
 # `allowedModels` 是 `live-model` 型錄裡的 id（我們只有一個端點，dsh 的 `{provider, model}` 路由在這裡就是型錄 id）。
 # **新會話建立時取樣一次寫進日誌**，之後只讀日誌那份：打開設定只影響以後新開的會話。只有 `serve` 讀這一列。
 - id: subagent-model-selection
@@ -704,13 +704,13 @@
 
 # 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。**連線那幾格都是 dsh 的設定欄位**：
 # `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`streamIdleTimeoutMs`、`retryPolicy`
-# （`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，寫死才是。
+# （`harness/packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，寫死才是。
 # 值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
 #
 # 照抄不了的兩處登記在 `src/settings/live-model.ts` 的檔頭：dsh 逐次請求解析端點，`ChatOpenAI` 表達
 # 不出來，退到起動期解一次；重試掛在 `wrapModelCall`，不是 dsh 的 `agent/request-error`（LangChain 沒有步級掛點）。
 #
-# **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`packages/llm/llm-pi-ai/README.md:40-103`）：
+# **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`harness/packages/llm/llm-pi-ai/README.md:40-103`）：
 # 每筆帶窗口、輸出上限（`maxTokens`，設了就是這顆每次請求送出去的 `max_tokens`）、`input`（收哪些種類，這是對端點
 # 的宣告，不是檢查）、`reasoningEfforts`（`off:` 是不推理）與 `compat`（關推理的 chat template 參數）。
 # **`modelId` 必須在裡面**，不在就是載入期失敗；**patch 寫 `models` 是整份取代**，不是逐筆合併。預設那顆模型
@@ -946,7 +946,7 @@
 # ── 權限組合（#437）──────────────────────────────────────────────────────────
 #
 # **把「檔案政策」與「核准政策」兩顆旋鈕捆成具名組合，並且是切換它們的唯一入口 `/permission`。** 對應 dsh 的
-# `permission-presets`（`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）：出廠兩組 `read-only`／`workspace-write`，
+# `permission-presets`（`harness/packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）：出廠兩組 `read-only`／`workspace-write`，
 # 名字與值照 dsh 的前兩組。**dsh 出廠還有第三組 `danger-full-access`，我們出廠不給**（#1621，理由 2：多人共用一台主機，
 # 同一把 token 底下的每個人都切得到；CLI 也跟著少這一組，屬理由 1：出貨層只有一份表）。部署方要全開，用 patch 把整張表
 # 重寫一份、加回這一組，值照 dsh（沙箱 `danger-full-access`、核准 `never`）。範例見 `docs/operations.md`「設定」那條。
@@ -989,7 +989,7 @@
 # **代價是每一次執行多八個條目、八次 `apply`**，換到的是這份清單與
 # `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
-# 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
+# 這份清單要跟 `harness/packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
 # 可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。對帳由
 # `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。新增一個沒有
 # 檢查的配套入口會被 `package-invariants` 擋下來——沒有可檢的關係就不要發布。

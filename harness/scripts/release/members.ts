@@ -2,7 +2,7 @@
  * 發版的成員與版號（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2）。
  *
  * 照 dsh `scripts/release/families.ts:365-371`：**所有成員共用一個版本**，一個 tag 才叫得出它。成員是根與 `apps/*`、`packages/*`；
- * `vendor/*` 不在內——它們各自跟著上游的版號（`cordis` 是 `4.0.0-rc.12`），不屬於我們的發版線。
+ * `harness/vendor/*` 不在內——它們各自跟著上游的版號（`cordis` 是 `4.0.0-rc.12`），不屬於我們的發版線。
  *
  * @module
  */
@@ -23,7 +23,7 @@ export interface ReleaseMember {
 }
 
 /**
- * 盤點發版成員：根、`apps/*`、`packages/*` 的 `package.json`。
+ * 盤點發版成員：根、`apps/*`、`harness/packages/*` 的 `package.json`。
  *
  * @param root - repo 根，省略即這個 repo。
  * @returns 依路徑排序的成員。

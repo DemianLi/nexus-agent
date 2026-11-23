@@ -16,9 +16,9 @@
  *
  * ## dsh 怎麼做（`c291e79`）
  *
- * 解不開就不解：原字串留在 `arguments`（`packages/core/agent-loop/src/tool-calls.ts:105-111`），照常
- * 進註冊表；schema 驗證對字串回 `"arguments" must be an object`（`packages/core/tools/src/json-schema.ts:556`），
- * 渲染成 `Error: invalid arguments: …`、碼 `INVALID_ARGS`（`packages/core/tools/src/index.ts:1860-1868`、
+ * 解不開就不解：原字串留在 `arguments`（`harness/packages/core/agent-loop/src/tool-calls.ts:105-111`），照常
+ * 進註冊表；schema 驗證對字串回 `"arguments" must be an object`（`harness/packages/core/tools/src/json-schema.ts:556`），
+ * 渲染成 `Error: invalid arguments: …`、碼 `INVALID_ARGS`（`harness/packages/core/tools/src/index.ts:1860-1868`、
  * `schema.ts:466`）。核准在驗參數之前（`index.ts:1453-1470` 先於 `:1539`）。
  *
  * ## 我們怎麼做：一顆 middleware、兩個鉤子
@@ -41,7 +41,7 @@
  * 不存在。**這個理由在 [#297](https://github.com/DemianLi/nexus-agent/issues/297) 之後不成立了**：卡改從
  * 會話日誌的 `tool/call` 開，本體沒被呼叫到的呼叫一樣有卡。樁照舊叫 `handler`，行為沒有跟著改。
  *
- * 基座那張卡的 `input` 是歷史裡的 `{}`；**換成原字串的是 pump**（`apps/harness/src/thread-pump.ts`），
+ * 基座那張卡的 `input` 是歷史裡的 `{}`；**換成原字串的是 pump**（`harness/apps/harness/src/thread-pump.ts`），
  * 原字串從同一條串流上模型那一段學來。不在這裡換，理由寫在 `wrapToolCall` 那一行。從日誌開的那一顆
  * 本來就是原字串（圍堵記的就是它）。
  *
@@ -53,17 +53,17 @@
  * （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：撞到輸出上限的那則先被清掉所有呼叫，
  * 被切斷的那一顆到不了這裡，不會被當成參數不合格。外面那些看到的參數是 `{}`——
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
- * 時刻是 `tools/execute`，佔用者的索引見 `apps/harness/src/interception-index.test.ts`。
+ * 時刻是 `tools/execute`，佔用者的索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * ## 未知工具在這一層認（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）
  *
  * 交到這一層時 `request.tool` 還是 `undefined` 的呼叫，基座按名字也查不到（`ToolNode.js:209-221`），
  * 它回的錯誤結果在這裡標上 `UNKNOWN_TOOL`，碼經 `tool-events.ts` 的載體走到圍堵記進日誌。dsh 那側
- * `ToolNotFoundError` 是在派發那一步、查註冊表落空時拋的（`packages/core/tools/src/index.ts:1578-1579`，
+ * `ToolNotFoundError` 是在派發那一步、查註冊表落空時拋的（`harness/packages/core/tools/src/index.ts:1578-1579`，
  * `5badb15`），註解明寫未知工具走派發階段（`:1400-1406`）。所以外層 policy 自己回的拒絕不可能是 `UNKNOWN_TOOL`。
  *
  * **之前是圍堵在第 0 格看 `request.tool === undefined` 猜的，猜錯過**：`subagent` 是
- * `apps/harness/src/background-delegation.ts` 在 `wrapModelCall` 加給模型的，ToolNode 的工具表裡沒有它，
+ * `harness/apps/harness/src/background-delegation.ts` 在 `wrapModelCall` 加給模型的，ToolNode 的工具表裡沒有它，
  * 第 0 格看到的 `request.tool` 永遠是 `undefined`；它在外層回的每一則沒碼的拒絕（例如前景不能指定
  * `reasoning_effort`）都被記成 `UNKNOWN_TOOL`，離線掃描因此說模型叫了不存在的工具。這一層在每一顆
  * 會自己回拒絕的 middleware 內側，到得了這裡、`request.tool` 又還是空的，才是真的要交給基座查名字的那次。
@@ -75,11 +75,11 @@
  * ## 登記的偏離
  *
  * 1. **回送用 `{}`**，照 dsh 多供應商的 pi-ai 轉接器（`packages/llm/llm-pi-ai/src/replay.ts:43-54`），
- *    不照 DeepSeek 轉接器原樣回送（`packages/llm/llm-deepseek/src/serialize.ts:214`）：我們的供應商
+ *    不照 DeepSeek 轉接器原樣回送（`harness/packages/llm/llm-deepseek/src/serialize.ts:214`）：我們的供應商
  *    收到原字串回 400（#269 實測）。原字串記在同一則 AI 訊息的 `additional_kwargs` 上（見下一節），
  *    日誌的 `tool/call.arguments` 也有一份。
  * 2. **核准卡的原字串放在中斷酬載的 `args` 裡**；dsh 的核准請求只帶 `callId`，連到已顯示的工具卡
- *    （`packages/interaction/user-approval/src/index.ts:101-102`）。我們的酬載照抄基座 HITL 的形狀，
+ *    （`harness/packages/interaction/user-approval/src/index.ts:101-102`）。我們的酬載照抄基座 HITL 的形狀，
  *    本來就帶 `args`，而核准卡顯示時工具卡還不存在。
  *
  * ## 原字串跟著那則訊息走，不住在行程裡
@@ -140,7 +140,7 @@ const INVALID_ARGUMENTS_REASON = 'invalid arguments: "arguments" must be an obje
 
 /**
  * 那一顆拿到的結果，**逐字照 dsh**：`toolErrorResult` 的 `Error: ` 加上 {@link INVALID_ARGUMENTS_REASON}
- * （`packages/core/tools/src/index.ts:1860-1868`）。前綴由 `toolRefusal` 加，這裡只拼給測試與 web 比對。
+ * （`harness/packages/core/tools/src/index.ts:1860-1868`）。前綴由 `toolRefusal` 加，這裡只拼給測試與 web 比對。
  */
 export const INVALID_ARGUMENTS_REFUSAL = TOOL_ERROR_PREFIX + INVALID_ARGUMENTS_REASON;
 
@@ -302,7 +302,7 @@ export function invalidToolArgsToolStep(sessions?: {
 }): ToolCallStep {
   return async (call, next) => {
     // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
-    // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
+    // 先認工具、再驗參數（`harness/packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
     if (call.tool === undefined) return markUnknownTool(await next());
     const raw = rawArgumentsOf(ownerRequestOf(call), sessions);
     if (raw === undefined) return next();

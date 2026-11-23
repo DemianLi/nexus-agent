@@ -1,7 +1,7 @@
 /**
  * 輸出 schema 校驗監聽者自己的邏輯——掛進 `tools/execute` 生產者的內層，直接餵一個假的 `handler`，看生產者把什麼交回來。
  * 「fold 有沒有把它打底進去、排在哪」在 `fold.test.ts`；「掛進真的 agent 之後行為對不對」在
- * `apps/harness/src/validation.test.ts`。
+ * `harness/apps/harness/src/validation.test.ts`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

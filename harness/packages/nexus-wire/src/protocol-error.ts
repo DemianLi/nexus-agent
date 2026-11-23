@@ -6,10 +6,10 @@
  * ## 偏離（依 AGENTS.md 登記）
  *
  * dsh 對同一類事沒有專屬的錯誤類別：`assertSessionWireEvent` 拋一般的 `Error`（`packages/api/session-controller/src/client/session-wire-event.ts:14-46`，
- * `687f282e`），**反過來把「載體斷了」標成專屬類別** `RemoteStreamCarrierError`（`packages/api/gateway/src/client/stream-client.ts:15`），
+ * `687f282e`），**反過來把「載體斷了」標成專屬類別** `RemoteStreamCarrierError`（`harness/packages/api/gateway/src/client/stream-client.ts:15`），
  * 只有它會自動續接，其餘一律終止串流（`session-controller/README.md:54`）。理由 1（基座表達不出來）：我們的 web 沒有可以分辨「載體斷線」的錯誤類別——
  * 下行讀端拋的錯，除了帶永久碼（#1708、#1753）的 `WireRejectedError` 走 `refuse`、不重連之外，一律進 `lose` 路徑退避重連
- * （`apps/web/src/hooks/use-conversation.ts` 的 `catch`）；與其先替所有載體錯誤補一個類別，不如把終止類標出來，其餘維持原樣。
+ * （`web/src/hooks/use-conversation.ts` 的 `catch`）；與其先替所有載體錯誤補一個類別，不如把終止類標出來，其餘維持原樣。
  * 分類的語意相同（協定錯誤終止、只有載體斷線續接），標的那一邊相反。
  *
  * @module

@@ -8,7 +8,7 @@
  * | --- | --- | --- |
  * | 定義 | 這個套件：`goals` 的 token 與結構介面、折疊（`applyGoalEvent`…）、續行輪次的提示文字、目標視圖的型別 | `@nexus/sdk`，與 `@nexus/core` 的詞彙（見下） |
  * | 提供者 | `@nexus/plugin-goal`，樹上一列函式插件：`new` 一個繼承 `ContractService` 的類別，`provide` 成 `goals` | 這個套件、`@nexus/sdk`、`@nexus/session`、`@nexus/tools`、`@nexus/commands` |
- * | 消費者 | 宿主（`apps/harness`）：組 thread 時把服務折進 `registry.services`，續行排程器、逐出判斷與 pump 讀它 | 這個套件；**不 import 提供者套件**（決議 §3-4 第 16 條） |
+ * | 消費者 | 宿主（`harness/apps/harness`）：組 thread 時把服務折進 `registry.services`，續行排程器、逐出判斷與 pump 讀它 | 這個套件；**不 import 提供者套件**（決議 §3-4 第 16 條） |
  *
  * ## 偏離登記
  *
@@ -21,7 +21,7 @@
  *   #1421 Q2 (b)。
  * - **折疊與續行提示文字搬進來**（#1486 Q4 (a)）：宿主的 pump 與排程器值 import 它們，插件自己的配套入口也要比對同一段文字，
  *   放在定義套件才不會讓配套入口反向依賴 app（#1486 Q4 (c) 的反例）。`hasDirectHumanTurn` 留在插件：宿主只有測試在用，
- *   不放進定義套件（`packages/AGENTS.md`「Require a current owner and need」）。
+ *   不放進定義套件（`harness/packages/AGENTS.md`「Require a current owner and need」）。
  *
  * ## `serviceFor` 只收 root 日誌，沒有 `attached()`
  *
@@ -75,7 +75,7 @@ export const GOALS_SERVICE = 'goals';
  * `maxGoalRounds` 沒指定時的預設。
  *
  * **它進耐久快照，所以是建立當下的那個值**，不是讀取當下的預設：改了這個常數不會追溯到既有的目標身上。消費它的是續行排程器
- * （`apps/harness` 的 `goal-driver.ts`）——用完就記一顆 `round-limit` 的 blocker。它是模型填得動的那條；操作者那條在 harness 的
+ * （`harness/apps/harness` 的 `goal-driver.ts`）——用完就記一顆 `round-limit` 的 blocker。它是模型填得動的那條；操作者那條在 harness 的
  * `goal-round-cap` 那一列（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，記 `round-cap`），兩條先到的那一條管。
  */
 export const DEFAULT_MAX_GOAL_ROUNDS = 256;

@@ -90,7 +90,7 @@ export type SessionTelemetryRedactRule = (record: SessionTelemetryRecord) => Ses
  *
  * **這裡沒有 `sharing`，是刻意的**——協調器從頭到尾不讀它。共享策略是**掛載**這件事的
  * 要求，不是捕獲的要求，所以它落在 {@link SessionTelemetryService} 上：`feedback-only` 要怎麼捕獲，
- * 是組裝點讀了它之後替協調器挑 `capture`（`apps/harness` 的 `attachTelemetry`，
+ * 是組裝點讀了它之後替協調器挑 `capture`（`harness/apps/harness` 的 `attachTelemetry`，
  * [#279](https://github.com/DemianLi/nexus-agent/issues/279)），協調器只知道 live 或 on-demand。dsh 同一個切法：
  * `sharing` 在可載入的 `SessionTelemetryBackend` 上，`SessionTelemetrySink` 上沒有。
  * 把它塞進這裡只會讓每個測試替身實作一個沒人看的欄位。

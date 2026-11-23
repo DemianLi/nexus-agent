@@ -3,7 +3,7 @@
  *
  * dsh 的 `vendor/cordis` 沒有任何匯流排測試，所以這些是從 `events.ts` 原始碼逐條寫的一致性測試：每一條對到原始碼的哪一行寫在
  * 該條的註解裡。事件表是空的，測試用的名字全部在這個檔案裡用 declaration merging 加（`test/` 前綴），這同時是
- * 「靠擴充 `Events` 加事件」這個機制本身的證明（跨套件那一側見 `apps/harness/src/events-augmentation.test.ts`）。
+ * 「靠擴充 `Events` 加事件」這個機制本身的證明（跨套件那一側見 `harness/apps/harness/src/events-augmentation.test.ts`）。
  */
 
 import { describe, expect, it } from 'vitest';

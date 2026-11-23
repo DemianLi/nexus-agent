@@ -1,6 +1,6 @@
 /*
  * 一條 thread 的命令清單（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）：送出時認命令用的那一份。照 dsh 的
- * `CommandDirectory`（`packages/client/ui-commands/src/client/directory.ts`，本機 clone `687f282e`，MIT，Copyright (c) DeepSeek），
+ * `CommandDirectory`（`harness/packages/client/ui-commands/src/client/directory.ts`，本機 clone `687f282e`，MIT，Copyright (c) DeepSeek），
  * 只留一條 thread 的那一格——web 一個 hook 只管一條 thread，換 thread 整個重掛，不需要 dsh 那層依 session 分的表。
  *
  * - 四種狀態同 dsh：`cold` 沒抓過、`pending` 在抓而且手上沒有能用的、`ready` 有一份、`failed` 最近一次抓失敗、清單丟掉。

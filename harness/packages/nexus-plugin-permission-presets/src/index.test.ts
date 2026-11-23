@@ -1,7 +1,7 @@
 /**
  * plugin 本身：預設組怎麼決定、目錄長什麼樣、掛在真的 Loader 上之後註冊了什麼、會話參與者與 `/permission` 對日誌做了什麼。
- * 組裝在產品上的行為（`--sandbox`、續接、必掛名單、wire）在 `apps/harness/src/permission-presets.test.ts`；掛上樹之後的接縫
- * （參與者折進 thread 的位置、冷復活、逐條 thread）在 `apps/harness/src/permission-presets-on-tree.test.ts`。
+ * 組裝在產品上的行為（`--sandbox`、續接、必掛名單、wire）在 `harness/apps/harness/src/permission-presets.test.ts`；掛上樹之後的接縫
+ * （參與者折進 thread 的位置、冷復活、逐條 thread）在 `harness/apps/harness/src/permission-presets-on-tree.test.ts`。
  *
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 造日誌與跑參與者；`src/index.ts` 不行。
  */

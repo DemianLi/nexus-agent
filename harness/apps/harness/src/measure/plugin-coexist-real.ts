@@ -1,8 +1,8 @@
 /**
  * 拿**真的** plugin 套件走一遍並存——[#1136](https://github.com/DemianLi/nexus-agent/issues/1136) 的探針。
  *
- * `plugin-coexist.ts` 用生出來的夾具量機制；這裡換成出貨的套件：把 `packages/nexus-plugin-<name>/src`（去掉測試）複製成
- * `v1`、`v2` 兩份，放在 `apps/harness/` 底下（裸 specifier 錨在 importer，放在 repo 外會找不到 `@nexus/core`），
+ * `plugin-coexist.ts` 用生出來的夾具量機制；這裡換成出貨的套件：把 `harness/packages/nexus-plugin-<name>/src`（去掉測試）複製成
+ * `v1`、`v2` 兩份，放在 `harness/apps/harness/` 底下（裸 specifier 錨在 importer，放在 repo 外會找不到 `@nexus/core`），
  * 各用 `import()` 載進來，再各開一個 thread（`loadPlugins`）並行跑。檢查：
  *
  * 1. 兩份模組是不同的實例，但註冊出來的工具名與命令名相同；

@@ -10,7 +10,7 @@
  * 3. **不另造總帳**：root 這份的逐輪加總跟 web 已有的 `tokenUsage`／`sessionStats` frame 逐項對得上。
  * 4. **失敗那一列是真的進帳**：失敗呼叫由真的 `createLiveModel` 對假 SSE 端點產生，不是手寫進日誌——拿掉 #1022 的失敗進帳，這一條會紅。
  *
- * 規則與手算的數字在 `packages/nexus-plugin-token-meter/src/fold.test.ts`。
+ * 規則與手算的數字在 `harness/packages/nexus-plugin-token-meter/src/fold.test.ts`。
  */
 
 import { createServer } from 'node:http';

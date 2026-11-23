@@ -325,7 +325,7 @@ describe('嚴格解析器的事件 metadata', () => {
             schema: root.schema,
             digest: root.digest,
             names: [],
-            sources: [`packages/example/src/types.ts${suffix}`],
+            sources: [`harness/packages/example/src/types.ts${suffix}`],
           },
         ],
       };
@@ -381,7 +381,7 @@ describe('從基線起算的同版紀錄', () => {
         {
           ...current.roots[2]!,
           names: ['RenamedAlias'],
-          sources: ['packages/example/src/types.ts:99'],
+          sources: ['harness/packages/example/src/types.ts:99'],
         },
       ].map(({ schema, digest, names, sources }) => ({ schema, digest, names, sources })),
     };
@@ -1401,9 +1401,9 @@ describe('明確的同版決定', () => {
 
 // ── 真抽取器：⓪b-1 那種夾具樹（tsconfig.base.json、@nexus/core 的 SessionEventMap 與 StoredSessionHeader） ──
 
-const PAYLOAD = 'packages/fixture-payload/src/types.ts';
-const SESSION_LOG = 'packages/nexus-core/src/session-log.ts';
-const SESSION_STORE = 'packages/nexus-core/src/session-store.ts';
+const PAYLOAD = 'harness/packages/fixture-payload/src/types.ts';
+const SESSION_LOG = 'harness/packages/nexus-core/src/session-log.ts';
+const SESSION_STORE = 'harness/packages/nexus-core/src/session-store.ts';
 const HEADER_50 =
   'export interface StoredSessionHeader { readonly version: 50; readonly id: string; readonly createdAt: number }\n';
 
@@ -1439,13 +1439,13 @@ function sourceTree(payload: string): string {
   mkdirSync(join(root, 'apps', 'harness', 'src'), { recursive: true });
   put(
     root,
-    'apps/harness/src/jsonl-session-store.ts',
+    'harness/apps/harness/src/jsonl-session-store.ts',
     "import type { StoredSessionHeader } from '@nexus/core';\nexport interface JsonlHeaderLine extends StoredSessionHeader { readonly type: 'session' }\n",
   );
   put(root, PAYLOAD, payload);
   put(
     root,
-    'packages/nexus-core/src/index.ts',
+    'harness/packages/nexus-core/src/index.ts',
     [
       "export type { SessionEvent, SessionEventMap } from './session-log.js';",
       "export type { StoredSessionHeader } from './session-store.js';",

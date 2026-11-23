@@ -13,7 +13,7 @@
  *    站在外面看的 middleware 看不到記憶內容，快照看得到；最內側改寫提示詞與工具的 middleware，快照也跟著。
  * 4. **寫在 `model/start` 之前、看位置歸屬**（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：兩顆不帶
  *    `modelCall`、不帶 `ignorable`，緊接著就是它那次呼叫的 `model/start`。不進遙測見
- *    `packages/nexus-core/src/session-telemetry-coordinator.test.ts`。
+ *    `harness/packages/nexus-core/src/session-telemetry-coordinator.test.ts`。
  * 5. **記不進去，這次請求不送**（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）：端點收到 0 個請求，呼叫原樣拋出寫入的錯。
  * 6. **排空完才送**：快照與 `model/start` 落盤之後端點才收到請求；排空被拒，端點收不到。
  *

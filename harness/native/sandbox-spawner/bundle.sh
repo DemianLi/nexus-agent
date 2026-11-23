@@ -1,6 +1,6 @@
 #!/bin/sh
 # 把 release 執行檔與連進去的程式碼的授權全文打成 bundle，交給 `pnpm run release:pack --spawner`。
-# bundle 的形狀與產物裡的檢查在 scripts/release/spawner.ts。
+# bundle 的形狀與產物裡的檢查在 harness/scripts/release/spawner.ts。
 #
 # 用法：在這個目錄、`cargo build --release --locked --target "$(uname -m)-unknown-linux-musl"` 之後跑 `./bundle.sh <輸出目錄>`。
 # 連進執行檔的 crate 用 `cargo tree -p nexus-sandbox-spawner -e normal,no-proc-macro` 收（只收 spawner 這個 package，宿主的相依不算），授權檔從 cargo 的 registry 原始碼複製；

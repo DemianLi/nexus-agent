@@ -2,7 +2,7 @@
  * agent-instructions 的**舊外殼**：「給一個 backend 就得到 middleware」的建構式，給 `pre-step-middleware.test.ts` 的「摘要之後」那一組用
  * （[#1474](https://github.com/DemianLi/nexus-agent/issues/1474)）。
  *
- * agent-instructions 本身已經是樹上的函式插件（`packages/nexus-plugin-agent-instructions`，`src/index.ts` 沒有一行 `@nexus/core`）：
+ * agent-instructions 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-agent-instructions`，`src/index.ts` 沒有一行 `@nexus/core`）：
  * 它只登記一位 `preStep` listener，宿主（`pre-step-middleware.ts`）建 middleware。單元測試要一顆「掛上同一個 middleware」、
  * 不經圖也不經樹的建構式，就走這個外殼——**listener 取自同一份**（`createAgentInstructionsListener`）、**middleware 由同一支建**
  * （`createPreStepMiddleware`），所以行為只有一個出處。同 `submit-record.fixture.ts`、`todo.fixture.ts` 的前例。

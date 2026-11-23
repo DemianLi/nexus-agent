@@ -8,7 +8,7 @@
  * 比的是每則訊息轉成 `BaseMessage`、再 {@link toLoggedMessage} 之後的 JSON，也就是日誌記訊息的那個形狀（含 `additional_kwargs`）。
  *
  * 前五節各對著 {@link MODEL_HISTORY_REBUILD_EVENTS} 的一種：那一種事件之後還有新的訊息進來，漏了重建就推錯。
- * 出貨寫入器寫的夾具另在 `apps/harness` 的 `model-history-fixtures.test.ts` 比。
+ * 出貨寫入器寫的夾具另在 `harness/apps/harness` 的 `model-history-fixtures.test.ts` 比。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';

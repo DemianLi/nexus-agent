@@ -113,7 +113,7 @@ describe('docs/tool-catalog.md', () => {
     TIMEOUT,
   );
 
-  it('套件清單與磁碟一一對應：packages/nexus-plugin-* 每個都有一列，沒有多的', () => {
+  it('套件清單與磁碟一一對應：harness/packages/nexus-plugin-* 每個都有一列，沒有多的', () => {
     expect([...pluginPackageDirs(join(root, 'packages'))]).toEqual(
       Object.keys(PACKAGE_MANIFEST).sort(),
     );

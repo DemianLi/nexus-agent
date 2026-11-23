@@ -20,7 +20,7 @@ export type RequestErrorAction = { readonly kind: 'retry' } | undefined;
 
 /**
  * `llm/stream` 交給監聽者的一顆 chunk：OpenAI Chat Completions 串流 chunk 的形狀。打端點的模型交 SDK 收到的原始 chunk、不翻譯；不打端點的模型（腳本、重放）交從回覆推出來的一顆。
- * 只寫監聽者會讀的格；`apps/harness` 的型別測試釘住 `openai` SDK 的 `ChatCompletionChunk` 能指派過來。
+ * 只寫監聽者會讀的格；`harness/apps/harness` 的型別測試釘住 `openai` SDK 的 `ChatCompletionChunk` 能指派過來。
  * `reasoning_content` 不在 SDK 的型別裡，所以是選填；`id`、`model` 選填，短路的監聽者可以不給。
  */
 export interface ModelStreamChunk {

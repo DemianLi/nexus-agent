@@ -29,7 +29,7 @@
 //! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
 //! 宿主自己不因為任何一條連線結束。
 //!
-//! 每種狀態的連線收到每種輸入時怎麼處理，整理成表在 `native/sandbox-spawner/README.md`〈連線身分的狀態表〉，每一格附釘住它的測試或不測的原因。
+//! 每種狀態的連線收到每種輸入時怎麼處理，整理成表在 `harness/native/sandbox-spawner/README.md`〈連線身分的狀態表〉，每一格附釘住它的測試或不測的原因。
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]（收監督行程的 `revoke` 時收 backlog 不受這個上限，見 `Host::sync`）；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 

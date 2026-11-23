@@ -193,7 +193,7 @@ export interface QuestionReply {
 /**
  * 「這次組裝有沒有人可以回答」這個服務的名字，型別見 `NexusServices.channel`。
  *
- * 由**組裝點**提供（`apps/harness` 的 `createHostServicesPlugin`）：產品路徑一律呼叫
+ * 由**組裝點**提供（`harness/apps/harness` 的 `createHostServicesPlugin`）：產品路徑一律呼叫
  * {@link deriveApprovalChannel} 明著算一次再提供出來，理由是消費者（核准閘門、`ask_user_question`、
  * `exit_plan_mode`）必須讀到同一個值。以前住在 `@nexus/plugin-ask-user`，第二個提問的生產者
  * 出現之後搬來這裡——它與 {@link ApprovalChannel} 是同一個擁有者。
@@ -215,7 +215,7 @@ export const CHANNEL_SERVICE = 'channel';
  * **宿主的義務：同一份組裝服務多條 thread 時，`channel` 是每一條 thread 都會拿到的預設。** 所以 `channel` 只能放
  * 每條 thread 都適用的值；逐條不同的答題者一律交給這支函式，並且不提供 `channel`（或只放每條都適用的那個）。
  * 這是照 dsh：它的答題者用 `scopeTarget(agent, agent)` 分發，對**沒有標籤的監聽者一律放行**、只有帶標籤的才看是不是
- * 這個 agent 或它的上層（`packages/core/scope/src/index.ts:170-185`）——行程級、不分 scope 的答題者服務每一個 agent。
+ * 這個 agent 或它的上層（`harness/packages/core/scope/src/index.ts:170-185`）——行程級、不分 scope 的答題者服務每一個 agent。
  * 我們的 `channel` 對應那個沒有標籤的監聽者，往下退回它就是那個語意。
  *
  * @param threadId - 這次呼叫的 `thread_id`；認不出來（不在圖裡）是 `undefined`。
@@ -294,7 +294,7 @@ export async function runApprovalGate(
 
 /**
  * 一則說得出原因的拒絕，政策擋的與人按拒絕的都走這裡。dsh 兩種都是 `Error: <原因>`
- * （`packages/core/tools/src/index.ts:1479-1487`）。**`status` 不是模型分辨它的依據**：Chat
+ * （`harness/packages/core/tools/src/index.ts:1479-1487`）。**`status` 不是模型分辨它的依據**：Chat
  * Completions 的轉換器不送它（見 `tool-events.ts` 的 `toolRefusal`），模型靠的是前綴與原因。
  */
 function denial(exec: ToolExecution, reason: string, error: ToolErrorInfo): ToolMessage {
@@ -310,13 +310,13 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
  * `sessions` 的測試組裝）就整對不記。
  *
  * **寫不進去就往外拋**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），照 dsh：`user-approval` 的兩顆
- * 都直接 `append`、不接（`packages/interaction/user-approval/src/index.ts:225`、`:232`），拋出去由工具執行那層轉成這次呼叫的
- * 錯誤結果（`packages/core/tools/src/index.ts:1544-1545` → `toolErrorResult`）。我們的對應物是排在第 0 格、包住這顆閘門的
+ * 都直接 `append`、不接（`harness/packages/interaction/user-approval/src/index.ts:225`、`:232`），拋出去由工具執行那層轉成這次呼叫的
+ * 錯誤結果（`harness/packages/core/tools/src/index.ts:1544-1545` → `toolErrorResult`）。我們的對應物是排在第 0 格、包住這顆閘門的
  * 圍堵（`containment.ts` 的 `createContainmentMiddleware`）：它接住這裡拋的錯、翻成錯誤 ToolMessage 並記 `tool/result`。
  * 工具本體一樣沒跑，模型看到的從「被拒」變成「審計寫不進去」的工具錯誤。
  *
  * **人那條路不在這裡寫**：`langgraph` 下閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
- * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。例外：等人期間政策切到 `never` 時，
+ * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`harness/apps/harness/src/thread-pump.ts`）。例外：等人期間政策切到 `never` 時，
  * 這裡照樣寫一對 `rejected`，pump 那一對照答覆記。native（讀得到等人服務）只在人核准之後這樣寫；`langgraph` 接回時整段重跑，不論人
  * 答什麼都會寫。
  */
@@ -349,7 +349,7 @@ function auditDecision(
  *
  * **中斷的酬載刻意長得跟基座一模一樣**：`interrupt({ actionRequests, reviewConfigs })`
  * 送出、`{ decisions: [{ type }] }` 收回（`hitl.js:325-346`、`:469`）。換掉的是「誰產生
- * 它」，不是線上的形狀——`packages/nexus-wire` 與 web 那一側因此一行都不用動。
+ * 它」，不是線上的形狀——`harness/packages/nexus-wire` 與 web 那一側因此一行都不用動。
  *
  * **順帶關掉基座的批次語義。** 基座是在 `afterModel` 整批停下來問，一批裡有人被拒，
  * 被核准的那些會靜靜地不執行、而且從 `tool_calls` 裡被抹掉（`hitl.js:483-496`）。
@@ -362,7 +362,7 @@ function auditDecision(
  * request 一對 `approval/asked`＋`approval/decided`（`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:44-58`，
  * `5badb15`，log-only 審計）：
  *
- * - **人那條路由 pump 寫**（`apps/harness/src/thread-pump.ts`）：asked 在它記 `interrupt/raised` 的同一刻（`id` 就是
+ * - **人那條路由 pump 寫**（`harness/apps/harness/src/thread-pump.ts`）：asked 在它記 `interrupt/raised` 的同一刻（`id` 就是
  *   中斷的 id），decided 在收到回覆（核准／拒絕；看不懂的回覆記 `unavailable`）或收回（`cancelled`）那一刻。**不在這裡寫**：`langgraph` 下閘門在圖內，
  *   `interrupt()` 回來之後整顆 middleware 從頭重跑，在 `interrupt()` 前寫會是兩筆。中斷酬載多帶 `callId`，
  *   asked 才配得上 `tool/call`。
@@ -377,7 +377,7 @@ function auditDecision(
  * （它的核准拒絕不帶 `info`）。依據是 #1018 Q2 的「拒絕帶原因碼」決定，載體是 dsh `deny.info` 那一格，
  * 登記見 `tool-events.ts` 的碼定義。
  *
- * 閱讀面在 `apps/harness/src/interception-index.test.ts` 第 4 列。
+ * 閱讀面在 `harness/apps/harness/src/interception-index.test.ts` 第 4 列。
  *
  * **參數解不開的那顆照樣先問人**（dsh 核准在驗參數之前），拒絕在內側那顆
  * （`invalid-tool-args.ts`）。listener 拿到的是歷史裡的 `{}`；**只有中斷酬載的 `args` 換成
@@ -552,7 +552,7 @@ export function approvalGateToolStep(
  * **它跟另外五顆 core 條目的鍵不同型**：那幾顆的名字是拿去問
  * {@link ./registry.ts | DisabledEntryView} 的（「這一顆被關掉了嗎」），這一顆**沒有人
  * 會去問**——它關不掉，載入器在條目驗證那一刻就擋下來了
- * （`apps/harness/src/plugin-config.ts` 的保護名單）。這個常數的用途只有一個：讓
+ * （`harness/apps/harness/src/plugin-config.ts` 的保護名單）。這個常數的用途只有一個：讓
  * `cordis.yml` 那一列的 `name` 與這個模組對得上。
  */
 export const APPROVAL_GATE_PLUGIN_NAME = 'approval-gate';

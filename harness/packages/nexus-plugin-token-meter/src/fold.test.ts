@@ -2,7 +2,7 @@
  * 用量投影的折疊（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）。
  *
  * **每個數字都是手算的**：事件是手造的，`time` 與 `seq` 明寫，算式寫在旁邊。手造事件證不到「失敗那一筆真的有人寫進日誌」，
- * 那一半（拿掉 #1022 的失敗進帳會紅）在 `apps/harness/src/token-meter-wire.test.ts`，那裡的日誌是真的組裝產生的。
+ * 那一半（拿掉 #1022 的失敗進帳會紅）在 `harness/apps/harness/src/token-meter-wire.test.ts`，那裡的日誌是真的組裝產生的。
  * 對帳測試把折出來的數字跟 core 的 `sessionStats`、`tokenUsage` 逐項對一遍——「不另造總帳」靠這個證明。
  */
 

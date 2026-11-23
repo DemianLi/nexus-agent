@@ -3,12 +3,12 @@
  * `grepMaxMatches`、`glob`／`ls` 超過 `globMaxResults` 時，模型只收到前段加一句定位，完整結果存進外溢的存檔服務
  * （#719 的 {@link SpillStore}），要看全部就 `read_file` 照定位讀。
  *
- * ## 照 dsh 的部分（`packages/fs/tool-fs-search/src/{grep,glob,search-core,index}.ts`，`477b4f4`）
+ * ## 照 dsh 的部分（`harness/packages/fs/tool-fs-search/src/{grep,glob,search-core,index}.ts`，`477b4f4`）
  *
  * - **觸發看筆數、不看字數**：`grep` 數攤平的命中、`glob` 數路徑；剛好等於上限時原樣（`grep.ts:351`、`glob.ts:361`）。
  * - 預設上限 250 與 100（`grep.ts:29`、`glob.ts:25`），是部署可設的欄位（`index.ts:99-100`），欄位名照抄。
  * - 存的是**完整**結果，行內留前段（`grep.ts:342-365`、`glob.ts:355-367`）；`glob` 留按順序的前段，不抽樣——那是
- *   base 出廠的 `sampleOverCapGlobResults: false`（`packages/bundle/base/cordis.patch.yml:286`）。
+ *   base 出廠的 `sampleOverCapGlobResults: false`（`harness/packages/bundle/base/cordis.patch.yml:286`）。
  * - **存不下照樣成功**：沒有存檔服務、或存檔拋錯，保留行內的前段、註明沒存到，`isError` 不變
  *   （`search-core.ts:370-374`、`:388-410`）。措辭照抄。
  *
@@ -16,7 +16,7 @@
  *
  * dsh 的搜尋工具是自己的，結果在工具裡還是結構化的值，`tools/post-execute` 拿著那個值決定存不存。
  * **`deepagents@1.13.1` 的 `ls`／`glob`／`grep` 是基座的**：名字無條件保留（自訂同名工具在建構時就被拒，
- * `apps/harness/src/base-tools.ts`），工具本體在自己裡面就把 backend 的結構化結果壓成文字，超過 80,000 字元再自己截掉
+ * `harness/apps/harness/src/base-tools.ts`），工具本體在自己裡面就把 backend 的結構化結果壓成文字，超過 80,000 字元再自己截掉
  * （`truncateIfTooLong`，`dist/langsmith-zm0ILQsV.js:302`）。換不掉工具，也拿不到它手上的值，所以退到 #617 搜尋卡
  * 已經走過的那條路（`tool-result-meta.ts`）：**一對**——
  *

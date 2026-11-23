@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-time-context`——讓模型知道現在的日期時間（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）。
  * 對上 dsh 的 `@deepseek-ai/dsh-time-context`（`packages/context/time-context`，`687f282e`），web-app 的 standard、cordis、ptc 三個 preset
- * 都掛它（`packages/bundle/web-app/presets/*.patch.yml`），所以是出廠就開的。
+ * 都掛它（`harness/packages/bundle/web-app/presets/*.patch.yml`），所以是出廠就開的。
  *
  * 在一次 agent 呼叫開頭追加**一則持久的讀數**（同一條 thread 至多每 `refreshIntervalMs` 一次），四行：
  *
@@ -34,7 +34,7 @@
  * （`src/index.ts:185-225`）；我們這側經 `@nexus/agent-loop` 的 `preStep` 登記 listener（宿主以 `beforeAgent` 承載），**只佔注入那半**，
  * 只能追加、落點由基座決定。位置由列的位置決定：`cordis.yml` 上這一列排在 `agent-instructions` 與 `skill-invocation` 之後，所以同一次 invoke 裡
  * 讀數排在 AGENTS.md 基線與 `/名字` 叫用的技能說明之後，是最後一則——同 dsh 以 `{ prepend: true }` 登記、當 waterfall 的最外層
- * （`src/index.ts:225`，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) 核過）。逐欄的差與頻率量在 `apps/harness/src/interception-index.test.ts` 第 2 列。
+ * （`src/index.ts:225`，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) 核過）。逐欄的差與頻率量在 `harness/apps/harness/src/interception-index.test.ts` 第 2 列。
  *
  * ## 偏離登記（AGENTS.md 的偏離規則；dsh 以 `687f282e` 為準）
  *
@@ -52,7 +52,7 @@
  *    插件認自己的讀數，靠 `source.plugin` 等於 {@link TIME_CONTEXT_MIDDLEWARE_NAME}，另外在 `additional_kwargs` 放 {@link TIME_CONTEXT_MARKER}。
  *    這是接縫的形狀，不是新做法。撤除條件同第 1 條。
  * 4. **節流狀態不走投影，改重播日誌。** dsh 用 `ctx.sessionProjections.register` 加 `stateOf`（`:157-192`）；`@nexus/projections` 沒有讓插件
- *    讀回狀態的 `stateOf`（goal 同一件事，`packages/nexus-goal/src/index.ts` 的〈偏離登記〉）。插件經會話查找拿這條 thread 的 `log.events`，自己照 dsh 的
+ *    讀回狀態的 `stateOf`（goal 同一件事，`harness/packages/nexus-goal/src/index.ts` 的〈偏離登記〉）。插件經會話查找拿這條 thread 的 `log.events`，自己照 dsh 的
  *    `apply` 規則摺出三格。**撤除條件**：`@nexus/projections` 長出 `stateOf(log, key)` 時改走投影，另開卡。
  *    **基線的規則改寫了，不是逐字搬 dsh 的 `apply`**：兩邊日誌的形狀不同。dsh 第 1 步時，這一輪的人話和 agent-instructions 的基線都還在「提議的
  *    批次」裡，沒進 session；我們一輪開頭那句人話記在 `turn/start`（不是 `user/message`），而且同一次 `beforeAgent` 裡 agent-instructions 的基線在
@@ -63,7 +63,7 @@
  *    **查找不是 `ok`**（例如落盤關掉）：照樣注入，經過時長寫 `unavailable`，`turn`／`step` 寫 1；節流退回看 `visible`——讀數的記號裡放這次
  *    取樣的時間，從模型看得到的那一串找最近一則。這樣不會每次 invoke 都多一則，也不靜靜不注入。
  * 5. **CLI 也掛。** dsh 只有 web-app 的三個 preset 掛，headless、base 不掛，照 dsh 該只掛 serve。serve 專屬層（`cordis.serve.yml`）的函式插件
- *    上不了樹（`apps/harness/src/plugin-tree.ts:51-52`），這顆是樹上的插件，只能寫在 `cordis.yml`，CLI 和 serve 一起掛。CLI 沒有瀏覽器，第二行
+ *    上不了樹（`harness/apps/harness/src/plugin-tree.ts:51-52`），這顆是樹上的插件，只能寫在 `cordis.yml`，CLI 和 serve 一起掛。CLI 沒有瀏覽器，第二行
  *    一律 `unavailable`，跟 dsh 的 CLI 一樣不知道使用者的時區。**撤除條件**：serve 層改成經 Include 上樹時，把這一列搬到 `cordis.serve.yml`。
  * **和 schedule 不同行，不算偏離。** dsh 把它和提醒工具放在同一個 preset，我們不做 schedule（L-18、#1614 拍板第 2 條）；dsh 拿掉 `minimal` 的理由
  * 是那個組合裡沒有人用得到讀數，它的掛載條件是一般性的（`README.zh.md:28`：要解讀沒寫明時區的日期就掛）。我們的 serve 出廠組合比較接近 standard，

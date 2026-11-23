@@ -42,7 +42,7 @@
  * ## 第 0 版的切輪靠「人那一格」，而這會錯
  *
  * 沿用畫面按輪歸位的老規矩（`startsTurn`：人的話、背景子代理的結算通知與來信）。目標自己排的輪次沒有人話
- * （`apps/harness/src/conversation-history.ts`），那一輪的列會黏在前一輪後面；折疊器也沒有輪 id。
+ * （`harness/apps/harness/src/conversation-history.ts`），那一輪的列會黏在前一輪後面；折疊器也沒有輪 id。
  *
  * ## 哪些條目長列、哪些不長
  *

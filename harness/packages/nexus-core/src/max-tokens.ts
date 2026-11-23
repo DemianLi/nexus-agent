@@ -21,21 +21,21 @@
  * - **這一輪的原因**由收尾的人從 root 日誌讀（{@link turnReachedMaxTokens}）：CLI 與 web 的 pump
  *   各自寫 `turn/end`，兩條共用這一個判準。子代理的截斷不算 root 這一輪的，同 dsh 每個 agent 各記
  *   各的；它對父代理的效果是那一則錯誤。
- * - 沒有內容的助手訊息不送，補在 `apps/harness/src/live-model.ts` 的 `withEmptyAssistantContent`。
+ * - 沒有內容的助手訊息不送，補在 `harness/apps/harness/src/live-model.ts` 的 `withEmptyAssistantContent`。
  *
  * ### 位置：`invalidToolArgs` 的內側
  *
  * 清在修補之前：被切斷的那一顆本來會被 {@link ./invalid-tool-args.ts} 改寫成 `{}` 參數的正常呼叫，
  * 清掉之後它看到的是一則沒有壞呼叫的回覆，什麼都不做。外面每一顆（起訖紀錄器記進日誌的那一則、
  * 用量記錄器）看到的都是清過的。工具那一半是 `tools/execute` 內層最內一位，在圍堵、每個 plugin 與輸出校驗的內側，圍堵記進
- * `tool/result` 的是換過的那則；時刻索引見 `apps/harness/src/interception-index.test.ts`。
+ * `tool/result` 的是換過的那則；時刻索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * ## 登記的偏離
  *
  * 1. **認得的字串是 `length` 與 `max_tokens`**，照 dsh 在轉接器那一層分類。web 那條路的原始值在
  *    我們拿到之前就被 `@langchain/core` 對映過（`dist/language_models/openai_completions_stream.js:260-270`
  *    的 `mapFinishReason`）：**已知字串只是改名**；不認得的供應商字串原本一律變成 `stop`，現在在 `fetch` 層就被
- *    `apps/harness/src/live-model.ts` 的 `withStreamCompletionCheck` 當成失敗（`UnknownFinishReasonError`，#1538），走不到這裡。
+ *    `harness/apps/harness/src/live-model.ts` 的 `withStreamCompletionCheck` 當成失敗（`UnknownFinishReasonError`，#1538），走不到這裡。
  *    CLI 那條（非串流 `_generate`）拿到的是供應商原字串。
  * 2. **子代理那一側退到一份載體**：dsh 的子代理有自己的 `turn/end`，`task` 讀它的原因；我們子代理的
  *    日誌沒有 `turn/end`，基座的 `task` 只交回文字。所以由子代理的模型呼叫記、父圖的 `task` 取，

@@ -8,7 +8,7 @@
  *    —— 推導與實送對不上（#1339 的驗收條件）。
  * 2. 下一輪又要摘要：從沒摘要過的狀態重摘，日誌讀回的段落把同一段原文疊兩份（#1389）。
  *
- * 切點表見 `packages/nexus-core/src/summary-cutoffs.ts`。這裡走產品路徑（`ThreadPump` 管日誌、
+ * 切點表見 `harness/packages/nexus-core/src/summary-cutoffs.ts`。這裡走產品路徑（`ThreadPump` 管日誌、
  * 使用者訊息也進日誌，日誌推導才有東西可比）。這條路徑不寫歷史檔，被摘掉的原文從日誌讀回（`recallHistory`），
  * 量的是讀回的段落。零憑證、零外部連線。
  *

@@ -3,7 +3,7 @@
  * （[#1557](https://github.com/DemianLi/nexus-agent/issues/1557)）。
  *
  * 照 dsh 的 `LlmError` 建構期驗證（`packages/llm/llm/src/index.ts:80-131`，`687f282e`）與 `thrownMessage`
- * （`packages/llm/llm/src/adapter-failure.ts:30-38`）。這一層跑在 `catch` 裡——記失敗的那一步自己不能拋，否則
+ * （`harness/packages/llm/llm/src/adapter-failure.ts:30-38`）。這一層跑在 `catch` 裡——記失敗的那一步自己不能拋，否則
  * `turn/failed` 沒寫成、原本的錯誤也被換掉。
  *
  * ## 與 dsh 的偏離（理由 1：基座表達不出來）

@@ -7,7 +7,7 @@
  * **#1458 之後答題者是行程級的**：宿主在建樹時交給樹一份預設答題管道（`approval-channel` 那一列），ask-user 在 `apply`
  * 當下抓住它，**不再逐條 thread 查**（`channelForThread` 退成定義套件裡的 token 與型別，今天沒有提供者）。所以這一檔的
  * 「兩條 thread」共用同一個答題者；「一條有人在、一條沒人在」是兩個進程級組裝（serve 與 headless CLI）的事，
- * 各自一棵樹，那一格的測試在 `apps/harness/src/ask-user-on-tree.test.ts`。
+ * 各自一棵樹，那一格的測試在 `harness/apps/harness/src/ask-user-on-tree.test.ts`。
  *
  * **轉接用真的圖**：`interrupt()` 只在圖裡有意義，所以每次呼叫都是一張只有一個節點的 `StateGraph`，帶存檔點、以 thread 為鍵，
  * 同 serve 那條路的形狀。結果只留兩種：「問了」（圖停在中斷上，帶題目 id）與「沒問」（回給模型的那一句）。

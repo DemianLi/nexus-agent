@@ -1,7 +1,7 @@
 /**
  * 一顆 MCP 工具的一次 `tools/call`：參數驗證、server 執行到一半的反問（elicitation）、結果轉成 `NexusToolResult`。
  * 行為照 `@langchain/mcp-adapters@2.0.0`（`dist/tools.js` 的 `_callTool`、`dist/content.js`、`dist/elicitation.js`）抄；送上線的請求、
- * 模型看到的句子與落盤的 `artifact` 由 `apps/harness/src/mcp-migration.test.ts` 對 `mcp-migration.baseline.json` 逐字釘住（#2353）。
+ * 模型看到的句子與落盤的 `artifact` 由 `harness/apps/harness/src/mcp-migration.test.ts` 對 `mcp-migration.baseline.json` 逐字釘住（#2353）。
  *
  * - **參數再照 server 的 JSON Schema 驗一次**，用 SDK 自己的驗證器：宿主那一層（轉接器的 `rawParameters`）驗的是 LangChain 那一套，
  *   兩套對 `format` 這類關鍵字看法不同。驗完的值才送上線。

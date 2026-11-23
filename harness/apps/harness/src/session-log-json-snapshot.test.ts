@@ -1,7 +1,7 @@
 /**
  * 會話日誌的 JSON 快照，走真的 JSONL 後端（[#1526](https://github.com/DemianLi/nexus-agent/issues/1526) 驗收 A、A2、C）。
  *
- * 規則本身的單元測試在 `packages/nexus-core/src/session-log.test.ts`。這一份量的是**接線**：記憶體裡那顆事件、
+ * 規則本身的單元測試在 `harness/packages/nexus-core/src/session-log.test.ts`。這一份量的是**接線**：記憶體裡那顆事件、
  * 落盤之後續接讀回來的那顆、以及續接接上 seed（`#adoptSeed`）之後的那顆，三份是同一個東西。
  *
  * - **A**：`JSON.parse` 出來的自有 `"__proto__"` 鍵。改寫前副本用 `copy[key] =` 賦值，走的是原型 setter：

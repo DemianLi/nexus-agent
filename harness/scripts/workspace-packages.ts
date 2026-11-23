@@ -9,7 +9,7 @@
  *   `src/settings/live-model.ts`），所以 `import.meta.url` 相對來源位置算的路徑（`../cordis.yml`）在 `src/` 與 `lib/` 同一深度時兩邊都對。
  * - **開發時每個說法對到哪個來源檔**：一個套件名與它的每個 subpath。`<套件>/src/*` 這種深路徑由 manifest 的 `./src/*` export 直接指到 `src/`（仍在原本的 manifest 裡），不產生別名。
  *
- * `apps/web` 不在這裡：它由 vite 建成 `dist`，不是 Node 載入的套件。
+ * `web` 不在這裡：它由 vite 建成 `dist`，不是 Node 載入的套件。
  */
 
 import { existsSync, globSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -41,10 +41,10 @@ export interface Alias {
 
 export interface WorkspacePackage {
   readonly name: string;
-  /** 相對 repo 根的目錄，例：`packages/nexus-core`。 */
+  /** 相對 repo 根的目錄，例：`harness/packages/nexus-core`。 */
   readonly dir: string;
   /**
-   * 是不是 `vendor/*`（上游原始碼）。vendor 的原始碼用自己較寬鬆的 tsconfig 檢查（NodeNext、`noImplicitAny: false`），
+   * 是不是 `harness/vendor/*`（上游原始碼）。vendor 的原始碼用自己較寬鬆的 tsconfig 檢查（NodeNext、`noImplicitAny: false`），
    * 放進 repo 的嚴格設定會噴出一整批與本專案無關的錯，所以型別檢查那份 `paths` 不含它（型別來自各自 `prepare` 產的
    * `lib/types/*.d.ts`，維持今天的做法）；執行期（tsx、vitest）那份才含，載進來的是 `src/`。
    */
@@ -56,7 +56,7 @@ export interface WorkspacePackage {
 }
 
 /** 掃描的位置。順序決定輸出順序。 */
-const GROUPS = ['apps/harness', 'packages/*', 'vendor/*'] as const;
+const GROUPS = ['harness/apps/harness', 'harness/packages/*', 'harness/vendor/*'] as const;
 
 function readManifest(dir: string): Manifest | undefined {
   const file = join(ROOT, dir, 'package.json');
@@ -134,7 +134,7 @@ function describePackage(dir: string, manifest: Manifest): WorkspacePackage {
   return {
     name: manifest.name,
     dir,
-    vendor: dir.startsWith('vendor/'),
+    vendor: dir.startsWith('harness/vendor/'),
     manifest,
     entries,
     aliases,

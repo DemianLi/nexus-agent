@@ -2,10 +2,10 @@
  * `fs` 服務：**工具拿到工具實際讀寫的那一個 backend** 的地方（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。
  *
  * dsh 只有一個 `fs` 服務（`packages/fs/fs/src/index.ts:89` 的 `super(ctx, 'fs')`，SHA `477b4f4`），
- * 檔案工具、`present` 與 `agent-instructions` 注入的都是同一個（`packages/fs/tool-fs/src/index.ts:22`、
- * `packages/deliverables/tool-present/src/index.ts:26`）。我們照它：要讀寫工作區檔案的工具從這裡拿，
+ * 檔案工具、`present` 與 `agent-instructions` 注入的都是同一個（`harness/packages/fs/tool-fs/src/index.ts:22`、
+ * `harness/packages/deliverables/tool-present/src/index.ts:26`）。我們照它：要讀寫工作區檔案的工具從這裡拿，
  * 拿到的是 {@link foldRegistry} 折出來、也交給基座檔案工具的那一個——包含組裝點在 fold 之前包的路由
- * （`apps/harness/src/agent-factory.ts` 的會話歷史與工具結果暫存）與 plugin `backend.mount()` 掛的路由。
+ * （`harness/apps/harness/src/agent-factory.ts` 的會話歷史與工具結果暫存）與 plugin `backend.mount()` 掛的路由。
  *
  * ## 偏離登記：服務的值是一格把手，不是檔案系統本身
  *
@@ -72,7 +72,7 @@ export interface FsService {
   /**
    * **這條 thread** 的唯讀共用參考區在模型位址空間裡的前綴（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)，`@nexus/fs` 2.1.0 起）。
    *
-   * 新 thread 有私有可寫根，`--workspace` 退成唯讀共用區、掛在這個前綴底下（`apps/harness/src/agent-factory.ts`）；舊 thread 的可寫根本來就是
+   * 新 thread 有私有可寫根，`--workspace` 退成唯讀共用區、掛在這個前綴底下（`harness/apps/harness/src/agent-factory.ts`）；舊 thread 的可寫根本來就是
    * 共用區，沒有這一格。fold 當下讀組裝點提供的 host 服務 `sharedWorkspace`，跟 {@link workspaceRoot} 同一次算、同一條 thread。
    * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）；技能來源在把手填值時據它換到共用區底下（{@link skillSources}，#1928）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
    * @returns 前綴（不含結尾斜線）；還沒 fold、或這條 thread 沒有共用區是 `undefined`。

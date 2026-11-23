@@ -12,7 +12,7 @@
  * `deepagents@1.13.1` 的實際形狀，寫成可執行的證據比寫在註解裡強，基座哪天改了它們會紅。
  *
  * **「空清單」那一組不是缺陷了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：基座對空清單照樣
- * 接約 2000 字、又每輪重掃，組裝點包了一層（`packages/nexus-core/src/skills-middleware.ts`）讓它整個隱形，
+ * 接約 2000 字、又每輪重掃，組裝點包了一層（`harness/packages/nexus-core/src/skills-middleware.ts`）讓它整個隱形，
  * 最後一組 `沒有 skill 就一個字都不加` 走產品組裝（`createCliAgent` ＋ 出貨清單）量這件事。
  */
 
@@ -174,7 +174,7 @@ describe('skills 進到 system prompt', () => {
  * **基座的空結果不算**：載入結果為空時 `loadedSkills.length > 0` 是 false，於是每一次
  * `beforeAgent` 都重掃整個來源。**這條絆索翻面了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
  * 原本斷言「沒 skill」是兩次掃描，現在是一次——照 dsh，掃描結果連空的也進快取
- * （`packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
+ * （`harness/packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
  */
 describe('skills 的快取邊界', () => {
   it('載到 skill 就凍住，載到空的也凍住', async () => {

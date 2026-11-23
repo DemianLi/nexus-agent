@@ -159,7 +159,7 @@ describe('出廠比例夠中文用嗎（驗收 H）', () => {
     '第二，伺服器擴容改為分兩批採購，先買 8 台，視負載再決定後續；第三，對外的報價單統一用新版模板。' +
     '如果發現數字對不上，先檢查匯率與發票日期，再回頭看是不是有重複入帳。下次例會訂在十一月三日上午十點。';
 
-  /** 中文的真實 token 數 ÷ o200k 估算，`packages/nexus-core/src/token-estimate.ts:41` 錄下產品 body 送真端點量到的值（沒有匯出成常數）。 */
+  /** 中文的真實 token 數 ÷ o200k 估算，`harness/packages/nexus-core/src/token-estimate.ts:41` 錄下產品 body 送真端點量到的值（沒有匯出成常數）。 */
   const CHINESE_REAL_OVER_O200K = 1.1;
 
   function repeatTo(text: string, bytes: number): string {

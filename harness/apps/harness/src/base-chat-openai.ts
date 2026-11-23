@@ -22,7 +22,7 @@
  * `live-model.ts` 的 fetch 層，不寫進這裡，差分測試才比得了。例外：native 的 `llm/stream` 環繞寫在這裡，因為它要包住 SDK 回的串流；
  * 沒有環繞函式時這條路照搬，差分測試比的就是它。撤除條件：差分測試不再拿 `@langchain/openai` 當基準。
  *
- * 繼承 `BaseChatModel`：`langchain` 的 `AgentNode` 與 native loop 的模型節點（`packages/nexus-core/src/native-loop/model-node.ts`）要
+ * 繼承 `BaseChatModel`：`langchain` 的 `AgentNode` 與 native loop 的模型節點（`harness/packages/nexus-core/src/native-loop/model-node.ts`）要
  * `bindTools`／`invoke`；線上的 token、請求快照、`model/start` 都靠它發的 callback。
  *
  * @module

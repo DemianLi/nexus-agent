@@ -5,7 +5,7 @@
  * `inbox/spliced` 會出現在以前沒有東西的位置：送出時在一輪前面（閒著時也一樣）、領走時在 `turn/start` 之後、停在
  * 核准點時收下的那句在 `interrupt/raised` 之後與 `resume` 的 `turn/start` 之前。每個讀者各一條，而且驗到第二輪。
  *
- * 另外兩個讀者不在這裡：日誌不變量的輪次配對見 `packages/nexus-core/src/invariant.test.ts` 的「送出佇列」那組；
+ * 另外兩個讀者不在這裡：日誌不變量的輪次配對見 `harness/packages/nexus-core/src/invariant.test.ts` 的「送出佇列」那組；
  * `turn/start.kind` 的授權判準（`@nexus/plugin-goal` 的 `authority.ts`）往回找時只認 `turn/start`、其餘跳過，
  * 佇列事件落在哪裡都一樣。
  */

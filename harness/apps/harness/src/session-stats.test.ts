@@ -2,8 +2,8 @@
  * **會話統計讀得出來**——[#266](https://github.com/DemianLi/nexus-agent/issues/266) 的驗收，量的是
  * 真的跑一場對話之後，把日誌餵過 `deriveSessionStats` 得到什麼。
  *
- * 折疊的規則在 `packages/nexus-core/src/session-stats.test.ts`，起訖紀錄器的規則在
- * `packages/nexus-core/src/model-calls.test.ts`。這一份量的是它們掛進真的組裝、走真的進入點
+ * 折疊的規則在 `harness/packages/nexus-core/src/session-stats.test.ts`，起訖紀錄器的規則在
+ * `harness/packages/nexus-core/src/model-calls.test.ts`。這一份量的是它們掛進真的組裝、走真的進入點
  * （`ThreadPump`，web 那條；它寫 `turn/start`／`turn/end`，也是唯一會寫 `resume` 的）之後
  * 還成不成立。
  *

@@ -20,7 +20,7 @@
  * ## 清單怎麼進樹
  *
  * 變更紀錄折出來的 patch 與 `--patch` 的 patch，原樣推給 Include（`entry.update({ config: { ...config, patches } })`），
- * 樹上的列由 Include 自己疊（上游 `applyPatches`）。**Include 不寫回任何檔**（`vendor/README.md` 第 7 條）：寫入口只有變更紀錄一個。Loader 上游會在安裝樹建 `.cordis/` 輔助檔，這裡給了解析函式（{@link resolveBareSpecifier}，第 9 條）就不建：產品路徑不依賴安裝樹可寫。
+ * 樹上的列由 Include 自己疊（上游 `applyPatches`）。**Include 不寫回任何檔**（`harness/vendor/README.md` 第 7 條）：寫入口只有變更紀錄一個。Loader 上游會在安裝樹建 `.cordis/` 輔助檔，這裡給了解析函式（{@link resolveBareSpecifier}，第 9 條）就不建：產品路徑不依賴安裝樹可寫。
  * 疊的規則跟相容層那邊（`applyEntryPatches`）是兩支，所以每次推完都對一次：樹上那一列的 `disabled` 與 `config` 跟相容層
  * 疊出來的不一致，那一列就算掉了，不靜靜地各走各的（`diverged`）。
  *
@@ -33,7 +33,7 @@
  * 之後推回那一份會被當成沒變而跳過。同一份清單再推一次，Cordis 的 `update` 不動任何一列（量過：不重掛、不卸載、fiber 同一個、
  * 自我停用不重講，每次多 0.1～0.2 毫秒），所以不需要這個快取。
  *
- * ## 收斂的語意（實測，`vendor/include/nexus-tests/convergence.spec.ts`）
+ * ## 收斂的語意（實測，`harness/vendor/include/nexus-tests/convergence.spec.ts`）
  *
  * `await entry.update({ config })` 回來時 Include 底下的樹已經收斂：停用的那一列已卸載、登記處已撤；啟用的已重掛；
  * 改設定的舊值已撤、新值已進；同值的什麼都沒動。所以快照在這之後取，不必再輪詢。
@@ -46,7 +46,7 @@
  *   並由宿主替那一列推一條 `{ id, disabled: true }` 給 Include——Include 每次重疊（樹上別列的設定改了、整列重建）都把每一列的
  *   options 整份換掉，不推的話那一列會被蓋回啟用、重掛一次再停一次（閃動）。serve 重啟、或那一列的宣告改了（模組名或設定），
  *   下一次同步才再試；清單自己把它停用（`disable`）也算了結，之後啟用回同一份宣告會重掛、再停用，去重鍵同所以不再記一筆。
- *   Loader 在自我停用那一格的呼叫點發的 `loader/self-disable`（`vendor/loader` 本地修改第 10 條，只有那一格發；`ctx.fiber.update()`
+ *   Loader 在自我停用那一格的呼叫點發的 `loader/self-disable`（`harness/vendor/loader` 本地修改第 10 條，只有那一格發；`ctx.fiber.update()`
  *   走的 `internal/commit` 不發）經 {@link PluginTree.onSelfDisable} 交給宿主，serve 把它記成 `self-disabled`
  *   （`plugin-failure-recorder.ts`）。
  *   **偏離 dsh（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：dsh 任何一次協調（plugin-manager 操作、HMR 偵測到
@@ -363,9 +363,9 @@ export class PluginTreeError extends Error {
 }
 
 /**
- * 樹上裸 specifier（`@nexus/plugin-echo`）的解析：錨在這個檔所在的專案（`apps/harness`），跟 Loader 預設的輔助檔
+ * 樹上裸 specifier（`@nexus/plugin-echo`）的解析：錨在這個檔所在的專案（`harness/apps/harness`），跟 Loader 預設的輔助檔
  * 錨在 `cordis.yml` 所在目錄是同一個專案。**給了它 Loader 就不在安裝樹裡寫 `.cordis/{.gitignore,resolve.mjs}`**
- * （`vendor/loader` 本地修改第 9 條）：唯讀的安裝樹、別的帳號建過的目錄，都不該讓插件掛不上，也不該在
+ * （`harness/vendor/loader` 本地修改第 9 條）：唯讀的安裝樹、別的帳號建過的目錄，都不該讓插件掛不上，也不該在
  * 安裝樹裡多出檔案。
  */
 const resolveBareSpecifier = (specifier: string): string => import.meta.resolve(specifier);
@@ -373,12 +373,12 @@ const resolveBareSpecifier = (specifier: string): string => import.meta.resolve(
 const treeId = (id: string): string => `${NAMESPACE}${id}`;
 
 /**
- * 樹上帶 `__jsExpr` 的物件會被 Loader 的 `interpolate` 當 JavaScript `eval` 掉（`vendor/loader/src/config/utils.ts`），
+ * 樹上帶 `__jsExpr` 的物件會被 Loader 的 `interpolate` 當 JavaScript `eval` 掉（`harness/vendor/loader/src/config/utils.ts`），
  * 而設定來自變更紀錄與 `--patch`：寫入口的使用者、部署端都不該有「經設定檔執行任意程式」的路。
  *
  * 三個地方各擋一次：相容層讀清單時掃走橋接那幾列的最終 `config`（寫入前驗證走同一條，所以寫入口當場擋下、
  * 不會把會讓之後每次啟動都失敗的東西寫進紀錄）；推上樹之前再把整份 patch 掃一遍，是「演算法對不上」時的後盾；
- * 第三道在 vendor 的 Include：它讀完出貨檔、疊完 patch、交給 Loader 之前，掃那份真正會被 eval 的樹（`vendor/README.md`
+ * 第三道在 vendor 的 Include：它讀完出貨檔、疊完 patch、交給 Loader 之前，掃那份真正會被 eval 的樹（`harness/vendor/README.md`
  * 本地修改第 11 條，#1461）。rc.11 起 Loader 連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
  *
  * @param value - 要掃的東西（設定或 patch）。
@@ -575,7 +575,7 @@ export class PluginTree {
     });
     await root.plugin(Loader);
     root.loader.resolver = resolveBareSpecifier;
-    // Loader 自我停用那一格的呼叫點發的（`vendor/loader` 本地修改第 10 條）：只有插件自己 `ctx.fiber.dispose()` 才有。
+    // Loader 自我停用那一格的呼叫點發的（`harness/vendor/loader` 本地修改第 10 條）：只有插件自己 `ctx.fiber.dispose()` 才有。
     root.on('loader/self-disable', (entry, legacy) => this.#noteSelfDisable(root, entry, legacy));
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: this.#provider.Provider,

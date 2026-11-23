@@ -76,8 +76,8 @@ export function apply(ctx) { ${options.apply} }
 }
 
 /**
- * echo 模組的絕對位置。出貨檔在暫存目錄時，Include 裡的裸 specifier 錨在**出貨檔所在目錄**（`vendor/include` 的
- * `ctx.baseUrl`），解不出 `@nexus/plugin-echo`；真正的出貨檔住在 `apps/harness`，沒有這個問題。
+ * echo 模組的絕對位置。出貨檔在暫存目錄時，Include 裡的裸 specifier 錨在**出貨檔所在目錄**（`harness/vendor/include` 的
+ * `ctx.baseUrl`），解不出 `@nexus/plugin-echo`；真正的出貨檔住在 `harness/apps/harness`，沒有這個問題。
  */
 const ECHO_MODULE = import.meta.resolve('@nexus/plugin-echo');
 
@@ -178,7 +178,7 @@ describe('H：快照與列分類對上樹的 echo', () => {
 });
 
 /**
- * 上游 Include 疊 patch 的那支。**用變數當 specifier 動態載入**：它在 `vendor/include/src` 裡，沒有 `.d.ts` 輸出，
+ * 上游 Include 疊 patch 的那支。**用變數當 specifier 動態載入**：它在 `harness/vendor/include/src` 裡，沒有 `.d.ts` 輸出，
  * 靜態 import 會讓 harness 的 tsc 把整個 vendor 原始碼拉進自己的嚴格設定裡檢查（vendor 有自己的 tsconfig 在管）。
  */
 type UpstreamApplyPatches = (

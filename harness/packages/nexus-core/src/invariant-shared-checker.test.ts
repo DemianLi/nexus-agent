@@ -1,7 +1,7 @@
 /**
  * 執行期的配套入口用的是讀盤那一支（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597) 驗收 E 的 core 那一側）：
  * `sessionInvariant` 要經 `createSessionRelationshipChecker` 判，自己另寫一份狀態機就紅。讀盤那一側在
- * `apps/harness/src/session-log-validation-shared-checker.test.ts`。
+ * `harness/apps/harness/src/session-log-validation-shared-checker.test.ts`。
  */
 
 import { describe, expect, it, vi } from 'vitest';

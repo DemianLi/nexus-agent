@@ -7,7 +7,7 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件的主入口：token、介面、契約版本 | `@nexus/sdk`，與 `@nexus/core`（單向轉出，見下） |
- * | 提供者 | 樹上一列，行程級的技能來源登記處：同一個套件的另一個入口 `@nexus/skills/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk`、`@nexus/core` 的 `assertLoadableSkillsPath`（見下） |
+ * | 提供者 | 樹上一列，行程級的技能來源登記處：同一個套件的另一個入口 `@nexus/skills/provider`，由宿主（`harness/apps/harness`）掛一列 | 這個套件、`@nexus/sdk`、`@nexus/core` 的 `assertLoadableSkillsPath`（見下） |
  * | 消費者 | 想登記技能來源的插件，今天是 `skills` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * ## 接縫的形狀：路徑（#1446 Q1 (a)）
@@ -30,7 +30,7 @@
  * `peerDependencies`，`devDependencies` 留 `workspace:*`），core 不 import 它。**撤除條件**同 #1421 Q2 (b)：SDK 與定義套件要發布到
  * 私有 registry 之前，把實作搬進這個套件。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：下面三個值與型別是 `skills` 的 `/名字` 叫用的。
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：下面三個值與型別是 `skills` 的 `/名字` 叫用的。
  *
  * @module
  */

@@ -16,7 +16,7 @@ import { HARNESS_VERSION } from './harness-version.js';
  * main 不執行，**什麼都不印、以 0 結束**——像成功。所以這裡從符號連結啟動，斷言輸出真的出現；把任一個入口改回比 `argv[1]`，
  * 對應那一條就紅（輸出空白）。`--version` 是不碰任何東西就印完的旗標，所以量的只有「main 有沒有跑」。
  *
- * 這裡跑的是原始碼（`node --import tsx`）。編出來的 `lib/` 經 `node_modules/.bin` 啟動的版本由 `scripts/smoke-built-bin.ts`
+ * 這裡跑的是原始碼（`node --import tsx`）。編出來的 `lib/` 經 `node_modules/.bin` 啟動的版本由 `harness/scripts/smoke-built-bin.ts`
  * 在 build 之後量（`lib/` 在測試用的乾淨樹裡不存在，測試不替它建）。
  */
 

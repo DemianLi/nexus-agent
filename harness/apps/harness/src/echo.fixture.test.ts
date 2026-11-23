@@ -9,7 +9,7 @@ import {
 } from './echo.fixture.js';
 
 /**
- * 舊外殼的測試（原本在 `packages/nexus-plugin-echo`，echo 搬上樹之後那個套件不再有 `NexusPlugin` 形狀）。
+ * 舊外殼的測試（原本在 `harness/packages/nexus-plugin-echo`，echo 搬上樹之後那個套件不再有 `NexusPlugin` 形狀）。
  *
  * 這一組是**不經過工廠**的那條路也要走通的證明：`NexusPlugin` 的設定走條目（[#453](https://github.com/DemianLi/nexus-agent/issues/453)）、
  * 同一顆模組層級常數掛兩次組裝不串台。外殼包的是 `createEchoTool`，所以工具行為與樹上那一列是同一份。

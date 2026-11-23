@@ -1,7 +1,7 @@
 /**
  * 中止這一輪的兩顆 middleware，直接呼叫鉤子量規則。
  *
- * 掛進真的組裝之後的行為（日誌上的碼、子代理、真的 `ChatOpenAI` 請求被切斷）在 `apps/harness`。
+ * 掛進真的組裝之後的行為（日誌上的碼、子代理、真的 `ChatOpenAI` 請求被切斷）在 `harness/apps/harness`。
  */
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';

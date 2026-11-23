@@ -7,7 +7,7 @@
  *
  * - [#104](https://github.com/DemianLi/nexus-agent/issues/104) 的頭條決定 (b)——`id` 與
  *   `disabled` 掛在 plugin 上。現在它們掛在**條目**上，照 dsh
- *   （`vendor/loader/src/config/entry.ts:9-22` 的 `EntryOptions`）。
+ *   （`harness/vendor/loader/src/config/entry.ts:9-22` 的 `EntryOptions`）。
  * - [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 9——設定由
  *   `createXPlugin(opts)` 關進工廠閉包。現在 plugin 可以帶一份 {@link NexusPlugin.Config}
  *   schema，設定是**條目上的一格資料**，載入時驗過才交給 `apply`。
@@ -20,14 +20,14 @@
  * dsh 的 plugin 模組匯出 `Config`（schemastery schema）與 `apply(ctx, config)`；載入器
  * import 條目的 `name` 拿到 plugin，cordis 在啟動 fiber 之前用
  * `Config['~standard'].validate(config)` 驗過，驗不過就拋 `ValidationError`
- * （`vendor/cordis/src/fiber.ts:50-62` 的 `resolveConfig`）。走的是 Standard Schema
+ * （`harness/vendor/cordis/src/fiber.ts:50-62` 的 `resolveConfig`）。走的是 Standard Schema
  * 介面，而 **zod 4 自己就實作了這個介面**，所以我們直接用 core 本來就在用的 zod，
  * 不引進 schemastery。
  *
  * ## 登記的偏離：未知欄位讓載入失敗
  *
  * dsh **放行**未知欄位：schemastery 的 `~standard.validate` 跑非嚴格模式
- * （`vendor/schemastery/src/index.ts:282`、`:470` 的 `strict = false`），而 object 在
+ * （`harness/vendor/schemastery/src/index.ts:282`、`:470` 的 `strict = false`），而 object 在
  * 非嚴格模式下把未知欄位原樣併進去（`:761`）——拼錯的欄位名因此悄悄沒有作用。
  *
  * 我們讓它**載入失敗**：每一層 object 都用 `z.strictObject`。理由是 YAML 拼錯字會悄悄
@@ -116,7 +116,7 @@ export interface PluginEntry {
    * 編號在停用之前就發完了。
    *
    * 只收字面布林。dsh 那邊可以寫 `!!js` 運算式對 loader context 求值
-   * （`vendor/loader/src/config/entry.ts:105`），我們刻意不接——理由見
+   * （`harness/vendor/loader/src/config/entry.ts:105`），我們刻意不接——理由見
    * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 的偏離標註。
    */
   readonly disabled?: boolean;
@@ -170,7 +170,7 @@ export type EntryManifest = z.infer<typeof entryManifestSchema>;
  *
  * **但它不承諾跨清單穩定，也不要存下來。** 清單裡多一個同名的 plugin，後面那些的
  * 序號就會移動。這是刻意的射程：dsh 的自動 id 之所以能當長期識別，是因為 loader
- * 產完就寫回設定檔（`vendor/loader/src/config/group.ts:21` → `tree.ts:102`），
+ * 產完就寫回設定檔（`harness/vendor/loader/src/config/group.ts:21` → `tree.ts:102`），
  * 而我們沒有那個檔——[#104](https://github.com/DemianLi/nexus-agent/issues/104)
  * 明著把設定檔排除在範圍外。**要跨版本穩定的指名，就自己寫 `id`。**
  */
@@ -264,9 +264,9 @@ export function parseEntry(
  * 兩條規則：
  *
  * - plugin **沒有** `Config`：**不驗，給了什麼就原樣交下去**，照 dsh 的 `resolveConfig`
- *   （`vendor/cordis/src/fiber.ts:50-51`，`477b4f4`：`if (!runtime.Config) return config`）。設了一份不會有
+ *   （`harness/vendor/cordis/src/fiber.ts:50-51`，`477b4f4`：`if (!runtime.Config) return config`）。設了一份不會有
  *   任何作用的設定不是失敗，這裡不擋（[#751](https://github.com/DemianLi/nexus-agent/issues/751) 拍板）；
- *   產品路徑在讀完清單時另外印一句警告（`apps/harness` 的 `loadDefaultPlugins`）。
+ *   產品路徑在讀完清單時另外印一句警告（`harness/apps/harness` 的 `loadDefaultPlugins`）。
  * - plugin **有** `Config`：用 `config ?? {}` 去驗，預設值因此寫得進 schema。未知欄位
  *   讓它失敗（登記的偏離，見檔頭）。
  *

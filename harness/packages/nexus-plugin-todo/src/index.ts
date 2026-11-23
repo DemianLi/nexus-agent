@@ -57,7 +57,7 @@
  * 3. **驗證失敗是回錯誤訊息，不是拋。** dsh 的 `execute` 直接 `throw`，它的 harness 把錯渲染
  *    成一則 `isError` 的工具結果交回模型。我們回 `ok: false`——同樣是錯誤，而模型手上的字與 dsh 一致（`Error: ` 前綴由 `@nexus/core` 的 `toolRefusal` 加）。
  *    不拋是因為拋給圍堵的話，模型看到的字會變成「工具 todo_write 執行失敗：…」。驗收在
- *    `apps/harness/src/todo-tool.test.ts`；決議見 [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
+ *    `harness/apps/harness/src/todo-tool.test.ts`；決議見 [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
  * ## 遷上 Cordis 樹（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)，Part of #1385）
  *
@@ -73,7 +73,7 @@
  * 呼叫都靠 `threadId` 認出主人。挑法與 `registry.sessions.forCall` 是同一支實作（`@nexus/core` 的
  * `pickSessionForCall`）。這個插件**只認服務回來的四種結果**，不在這裡再挑一次。
  *
- * **舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/todo.fixture.ts`，同 echo、skills、feedback、ask-user 的前例）：還在
+ * **舊的 `NexusPlugin` 外殼搬走了**（`harness/apps/harness/src/todo.fixture.ts`，同 echo、skills、feedback、ask-user 的前例）：還在
  * 相容層組裝的測試經它掛這顆工具，它與樹上這一列共用 {@link createTodoTool}，所以兩邊的工具本體是同一份程式碼。
  *
  * **`src/invariant.ts` 不在這條路上**：配套入口還是相容層的列（`todo-invariant`），它 import `@nexus/core` 並寫 `NexusPlugin`。
@@ -262,7 +262,7 @@ const todoToolSchema = z.object({
 /**
  * 組出 `todo_write` 這顆工具。
  *
- * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`apps/harness/src/todo.fixture.ts`）都從這裡取。
+ * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`harness/apps/harness/src/todo.fixture.ts`）都從這裡取。
  * 它們之間唯一不同的是「這次呼叫的會話怎麼來」，所以那一格是參數。
  *
  * @param allowParallel - 允不允許同時多條 `in_progress`；決定描述與拒絕條件，兩者是同一個答案。

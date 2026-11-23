@@ -1,6 +1,6 @@
 /**
  * `read_file` 描述的換法（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：看讀到哪與搜尋說明掛不掛，換基座原文裡指定的片段。
- * 掛進整個 agent、模型實際收到什麼，在 `apps/harness/src/observation.test.ts`、`read-limits-openai.test.ts` 與 `assembly-parity.test.ts`。
+ * 掛進整個 agent、模型實際收到什麼，在 `harness/apps/harness/src/observation.test.ts`、`read-limits-openai.test.ts` 與 `assembly-parity.test.ts`。
  */
 
 import { createFilesystemMiddleware } from 'deepagents';

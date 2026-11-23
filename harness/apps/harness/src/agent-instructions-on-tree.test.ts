@@ -4,7 +4,7 @@
  * 量的是產品路徑——真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的相容層 `assembly.create`（serve 每條 thread
  * 一次）、真的 `attachSessions`、真的檔案系統 backend；不手搭 `ctx.plugin`。
  *
- * 驗收 A（SDK lint、一致性套件、套一次服務兩條 thread）在 `packages/nexus-plugin-agent-instructions` 與
+ * 驗收 A（SDK lint、一致性套件、套一次服務兩條 thread）在 `harness/packages/nexus-plugin-agent-instructions` 與
  * `migrated-plugin-gate.test.ts`；既有的產品路徑測試（一個 agent 一份、子代理各有一份、摘要之後補回、畫面上看不到）是
  * `agent-instructions.test.ts`，斷言一個字沒動；`pre-step-middleware.test.ts` 量宿主建的 middleware 本身；驗收 C（golden）是一次性
  * 錄製，做法與數字寫在 PR 內文。
@@ -605,7 +605,7 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
  * 不是拿當前分支自己比自己：遷到樹上、改由橋接列 `registry.middleware.use` 折進之後，`AgentInstructionsMiddleware` 必須還在
  * 名單上的同一格（`nexusSessionCheckpoint` 之後、`nexusSandboxPolicy` 之前），其餘一個都不能多、不能少、不能換位。
  *
- * 錄法（PR 內文也寫了）：`git worktree add --detach <dir> b0a74042`、`pnpm install --frozen-lockfile`，在 `apps/harness/src/` 放一個
+ * 錄法（PR 內文也寫了）：`git worktree add --detach <dir> b0a74042`、`pnpm install --frozen-lockfile`，在 `harness/apps/harness/src/` 放一個
  * 臨時測試，三種組裝各建一次（出貨清單＝`createNexusAgent({ plugins: await shippedPlugins(), summarization: false, backend })`；
  * CLI／serve＝`createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS | undefined), contained: true })` ＋ `loadDefaultPlugins(…, { tree })` ＋
  * `root.boot('cli' | 'serve')` ＋ `assembly.create(…)`），都帶一個放了 AGENTS.md 的工作區；名單取自建好的 agent 身上那份

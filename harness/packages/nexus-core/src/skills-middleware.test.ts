@@ -1,6 +1,6 @@
 /**
  * skills 那一段由這一層記下的清單渲染：state 裡已經有清單時（同一條 thread 換了一個組裝），基座沿用它、不重掃，這一層也跟著沿用。
- * 掃描、空清單、只給人叫的技能這幾條走真的檔案系統，在 `apps/harness/src/skills.test.ts`。
+ * 掃描、空清單、只給人叫的技能這幾條走真的檔案系統，在 `harness/apps/harness/src/skills.test.ts`。
  */
 
 import { SystemMessage } from '@langchain/core/messages';

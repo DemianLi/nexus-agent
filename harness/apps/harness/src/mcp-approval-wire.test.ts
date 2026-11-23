@@ -6,7 +6,7 @@
  * 「status: failed」「沒有結果」都假得出來，server 那邊的檔假不出來。斷言 0 行之前，同一個檔裡有 B、E 證明 1 行寫得到。
  *
  * 子代理那兩格（背景回絕、前景問 root 的人）在 [`mcp-approval-subagent.test.ts`](./mcp-approval-subagent.test.ts)。設定的形狀、
- * 閘門對哪幾支回 `ask`、跟工具同進同退量在插件那一層（`packages/nexus-plugin-mcp/src/approval.test.ts`）。
+ * 閘門對哪幾支回 `ask`、跟工具同進同退量在插件那一層（`harness/packages/nexus-plugin-mcp/src/approval.test.ts`）。
  */
 
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';

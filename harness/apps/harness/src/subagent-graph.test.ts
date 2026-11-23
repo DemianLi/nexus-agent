@@ -3,7 +3,7 @@
  * 跟基座 `task` 那條路編出來的，**對模型來說是同一個子代理**。
  *
  * 這是漂移絆索：自編路徑複製了基座 `createSubagentDefaultMiddleware` 與 `mergeMiddlewareStack` 的形狀
- * （`packages/nexus-core/src/subagent-graph.ts` 檔頭），基座升版改掉預設疊時，兩條路模型看到的工具或系統提示會分岔，
+ * （`harness/packages/nexus-core/src/subagent-graph.ts` 檔頭），基座升版改掉預設疊時，兩條路模型看到的工具或系統提示會分岔，
  * 這裡就紅。量的是模型請求那一層（綁了哪些工具、收到的 system 文字），不是 middleware 的名單。
  */
 

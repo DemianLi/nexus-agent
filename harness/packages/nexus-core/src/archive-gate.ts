@@ -3,7 +3,7 @@
  *
  * ## dsh 怎麼做
  *
- * `ArchivedSessionGate`（`packages/api/session-controller/src/archived-session-gate.ts`，`5badb15009a`）掛在 `agent/pre-step`：
+ * `ArchivedSessionGate`（`harness/packages/api/session-controller/src/archived-session-gate.ts`，`5badb15009a`）掛在 `agent/pre-step`：
  * 這一步的 Agent 所屬的會話、或它往上（**只沿子代理血統**，fork 是獨立的對話）有任何一條封存了，就回 `reject`。迴圈把那一輪以
  * `turn/end { reason: { kind: 'blocked' } }` 收掉、不發請求（`agent-loop/src/agent.ts:316-319`）。**每一步都問**，不只輪頭。
  *

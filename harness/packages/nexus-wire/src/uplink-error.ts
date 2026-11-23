@@ -10,7 +10,7 @@
  *
  * dsh 沒有 HTTP 上行：它的 SDK client 是 JSON-RPC over stdio，沒有 HTTP 狀態碼可抄（`packages/sdk/client/src/client.ts`
  * 只有 `TransportClosedError`、`RequestTimeoutError`、`SdkProtocolError`，都不帶狀態碼）。形狀照最近的
- * `JsonRpcResponseError`（`packages/sdk/protocol/src/transport.ts:18`）：建構子參數屬性保留載體層的欄位（那邊是
+ * `JsonRpcResponseError`（`harness/packages/sdk/protocol/src/transport.ts:18`）：建構子參數屬性保留載體層的欄位（那邊是
  * `code`／`data`，這裡是 `status`／`body`）、設 `name`、`message` 是一句人話。基座（`fetch`）表達不出的是「帶狀態碼的
  * 失敗」——`fetch` 對非 2xx 不拋，只給 `Response`，所以這個型別得自己定。
  *

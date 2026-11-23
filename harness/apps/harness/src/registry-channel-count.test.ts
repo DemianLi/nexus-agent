@@ -7,7 +7,7 @@
  *
  * ## 那兩處不是過期，是從沒對過
  *
- * `apps/harness/src/goal-driver.ts` 與 `packages/nexus-plugin-goal/src/index.ts` 都寫著
+ * `harness/apps/harness/src/goal-driver.ts` 與 `harness/packages/nexus-plugin-goal/src/index.ts` 都寫著
  * 「`PluginRegistry` N 條通道沒有一條排得出一輪」，兩處由**同一顆 commit** 生出
  * （`c4fe696`，[#181](https://github.com/DemianLi/nexus-agent/pull/181)，2026-09-05）。當年寫的
  * 是十五，而在它的父節點上數 `PluginRegistry` 就已經是 14 個欄位——第十四條 `sessions`
@@ -141,7 +141,7 @@ function offByOne(value: number, suffix: string): readonly string[] {
 const PROSE_SITES: readonly ProseSite[] = [
   {
     // 定義處。九與五的拆法本身也寫在這裡，所以兩個數字都釘。
-    path: 'packages/nexus-core/src/registry.ts',
+    path: 'harness/packages/nexus-core/src/registry.ts',
     phrases: [`${cn(FOLDED_CHANNELS)}個註冊點`, `外加${cn(ORTHOGONAL_CHANNELS)}條`],
     forbidden: [
       ...offByOne(FOLDED_CHANNELS, '個註冊點'),
@@ -151,19 +151,19 @@ const PROSE_SITES: readonly ProseSite[] = [
   },
   {
     // #181 的載體偏離：「沒有一條排得出一輪」。當年的「十五」是在這裡被寫下去的。
-    path: 'apps/harness/src/goal-driver.ts',
+    path: 'harness/apps/harness/src/goal-driver.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}條通道`],
     forbidden: offByOne(TOTAL_CHANNELS, '條通道'),
   },
   {
     // 同一筆偏離的另一半，同一顆 commit。
-    path: 'packages/nexus-plugin-goal/src/index.ts',
+    path: 'harness/packages/nexus-plugin-goal/src/index.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}條通道`],
     forbidden: offByOne(TOTAL_CHANNELS, '條通道'),
   },
   {
     // #193 的索引：「最直覺的家是 `PluginRegistry` 的十五個欄位，那是錯的軸」。
-    path: 'apps/harness/src/interception-index.test.ts',
+    path: 'harness/apps/harness/src/interception-index.test.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}個欄位`],
     forbidden: offByOne(TOTAL_CHANNELS, '個欄位'),
   },
@@ -172,7 +172,7 @@ const PROSE_SITES: readonly ProseSite[] = [
 /** 斷言擋不到、但通道數變了就要人去看一眼的地方。**這份清單是這條絆索的價值所在。** */
 const ALSO_SWEEP = [
   "**掃的時候按形狀不按值**：`grep '個欄位（9\\|條通道\\|個註冊點'`。照上一版字面去掃會掃空——那幾處自己就漂過（#456 動工時量到 §2 與 development-plan 都還列著 #477 已經收掉的 `feedback`）",
-  'packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
+  'harness/packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
   'registry.ts 的「十個註冊點」在六行上（檔頭兩處、lifecycle／logger／telemetry／commands 四處），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',
 ].join('\n  - ');
 

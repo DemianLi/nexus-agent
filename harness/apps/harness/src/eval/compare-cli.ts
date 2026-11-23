@@ -56,7 +56,7 @@ const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--mo
                        ${MEASURED_MODELS.map((model) => model.label).join(' / ')}
   --floor-only         只印平凡地板（三個不需要模型的 agent 在這份題目上的成功題數），
                        不連外、不需要憑證、不寫結果檔。
-  --out <dir>          結果檔放哪個目錄，預設 apps/harness/eval-results/（不進版控）。
+  --out <dir>          結果檔放哪個目錄，預設 harness/apps/harness/eval-results/（不進版控）。
                        每次執行逐筆寫進一份 .jsonl，開頭記 commit、題庫與評分程式版本、
                        取樣設定；沒有最後一行 footer 的檔是沒跑完的。
 

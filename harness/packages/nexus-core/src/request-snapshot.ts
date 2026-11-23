@@ -11,7 +11,7 @@
  * - `request/header`：`{ header: { config, tools? }, reason }`，照 dsh 同名事件（`packages/core/session/src/types.ts:390-397`，
  *   `5badb15`）——**變更才記一份完整快照**，不是每次呼叫都記。
  * - `request/system`：`{ system, reason }`，渲染後的系統提示詞全文，同樣變更才記。dsh 把它叫 `system/message`，是模型可見
- *   的 surface 節點（`packages/core/session/src/types.ts:330`）、對話史就從它導出；我們的對話史由訊息串重建、系統提示詞是
+ *   的 surface 節點（`harness/packages/core/session/src/types.ts:330`）、對話史就從它導出；我們的對話史由訊息串重建、系統提示詞是
  *   每次呼叫現組的，這顆**只是快照、不進模型**——名字沿用會讓照 dsh 的投影去讀它的人靜靜讀錯（同 `model/start` 不叫
  *   `step/start` 的理由，見 `model-calls.ts`），所以換一個講實話的名字。
  *
@@ -78,7 +78,7 @@
  *   每次呼叫一份。出廠的提示詞組裝沒有這種內容（實測連續呼叫只記一份），但新 plugin 這樣做時日誌會線性膨脹——要在那個
  *   plugin 的設計裡避開，不是在這裡截。
  * - **腳本模型不報呼叫參數與工具。** `ScriptedChatModel` 沒有 `invocationParams`，所以它組出來的快照 `config` 是空的；
- *   帶工具與設定的比對一律用真的 `ChatOpenAI` 打本機假端點（`apps/harness/src/request-snapshot.test.ts`）。
+ *   帶工具與設定的比對一律用真的 `ChatOpenAI` 打本機假端點（`harness/apps/harness/src/request-snapshot.test.ts`）。
  * - **動態模型（函式）不記。** `request.model` 不是 Runnable 時包不了，照舊交出去。
  *
  * ## 不進模型，遙測不放行
@@ -103,7 +103,7 @@
  * 形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
  * （`:430-439`），再寫 `request/header`（`:637-650`），header 寫不進去時那一步的 system 與 user 一樣留在日誌上。dsh 的不變量是
  * 「送出的必定在送出之前就在日誌上」，不是「日誌上的必定被送出」；讀 `request/system` 的地方取的是最近（生效）的那一份
- * （`packages/nexus-plugin-trajectory/src/trajectory.ts` 的 `noteSnapshot`、`apps/harness/src/log-derived-history.fixture.ts`）。
+ * （`harness/packages/nexus-plugin-trajectory/src/trajectory.ts` 的 `noteSnapshot`、`harness/apps/harness/src/log-derived-history.fixture.ts`）。
  *
  * **已知差異（#1731）：抽取階段拋的，連 `request/system` 都不寫。** {@link extractRequest} 是 {@link recordRequestSnapshot} 的引數，
  * 工具參數拷不動、巢狀太深都在抽取時就拋，輪不到寫 system；dsh 的 `step()` 在這一步已經寫了 system 與 user。#1731 之前，
@@ -126,7 +126,7 @@
  * 工具 `parameters` 與 `config.extra` 先拷成純 JSON 再進 header（{@link jsonCopy}）。改寫前拷不動（循環、頂層是函式、原生
  * stringify 爆堆疊）回 `undefined`、呼叫端把那一格拿掉，日誌上記下一份**少了參數**的 header，沒有任何提示；現在照 dsh 的
  * `append` 拒收：dsh 的 `snapshotJsonValue` 拷不動回 `undefined`，由 `Session.append` 拋（不帶路徑的通用 `Error`，
- * `packages/core/session/src/index.ts:808-811`），欄位不會被丟掉。我們當場拋，等於這次請求不送，同上一節。
+ * `harness/packages/core/session/src/index.ts:808-811`），欄位不會被丟掉。我們當場拋，等於這次請求不送，同上一節。
  * **訊息帶「是哪一格」（`tools["name"].parameters`）是偏離，理由 2（產品需求超出 dsh）**，與 `session-log.ts` 的
  * `snapshotJsonValue` 已登記的「帶路徑的 `TypeError`」同類：多人共用的主機上，管理者要靠錯誤定位是哪一顆工具。
  * 深度超過上限的也一樣：寫入那一關的路徑只印前 8 段，看得到索引、看不到名字。
@@ -228,7 +228,7 @@ const HEADER_VALUE_PREFIX_DEPTH = 4;
  * 拷成純 JSON，**拷不動就當場拋、帶上是哪一格**（[#1731](https://github.com/DemianLi/nexus-agent/issues/1731)）。
  *
  * 照 dsh 的 `append` 拒收：`request/header` 的內容原樣交給 `append`，`snapshotJsonValue` 拷不動回 `undefined`、`append` 拋，
- * 不會丟掉欄位（`packages/core/session/src/index.ts:808-811`，`687f282e`）。訊息帶「是哪一格」是理由 2 的偏離。改寫前這裡拷不動回 `undefined`、呼叫端把那一格拿掉，
+ * 不會丟掉欄位（`harness/packages/core/session/src/index.ts:808-811`，`687f282e`）。訊息帶「是哪一格」是理由 2 的偏離。改寫前這裡拷不動回 `undefined`、呼叫端把那一格拿掉，
  * 日誌上記下一份**少了參數**的 header，「日誌 = 模型收到的」不成立，也沒有任何提示。
  *
  * 值在 `JSON.stringify` 之後才進日誌，所以 JSON 本來就丟的（巢狀裡的 `undefined`、函式、`toJSON` 的轉換）照舊——那是

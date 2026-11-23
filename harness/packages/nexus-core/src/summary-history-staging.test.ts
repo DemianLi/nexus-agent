@@ -1,6 +1,6 @@
 /**
  * 摘要歷史檔的暫存（[#1389](https://github.com/DemianLi/nexus-agent/issues/1389)）：範圍內只記不寫，結束時依
- * 「這一步有沒有生出摘要」提交。真摘要器配真 graph 的整合測試在 `apps/harness/src/summary-history-staging.test.ts`。
+ * 「這一步有沒有生出摘要」提交。真摘要器配真 graph 的整合測試在 `harness/apps/harness/src/summary-history-staging.test.ts`。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';

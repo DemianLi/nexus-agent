@@ -103,14 +103,14 @@ route 前綴下。做成 backend 會讓 `permissions` 擴充點與這個能力�
 
 custom tool 完全不經過那條路——基座明文「custom tools from the agent or other
 middleware are left untouched」。絆索測試在
-[`apps/harness/src/sandbox-backend-conflict.test.ts`](../../apps/harness/src/sandbox-backend-conflict.test.ts)。
+[`harness/apps/harness/src/sandbox-backend-conflict.test.ts`](../../apps/harness/src/sandbox-backend-conflict.test.ts)。
 
 工具名因此**刻意不叫 `execute`**：那是基座 `FILESYSTEM_TOOL_NAMES` 裡的名字。
 
 ## 與 dsh 的偏離
 
 這是**結構性偏離**，不是細節不同。dsh 的 sandbox（`packages/sandbox/*`、
-`packages/shell/*-sandbox`）是把子行程的 argv 包進**核心級**的檔案效果策略（Linux
+`harness/packages/shell/*-sandbox`）是把子行程的 argv 包進**核心級**的檔案效果策略（Linux
 bwrap/Landlock、macOS Seatbelt、Windows ACL 受限 token）。它整個 repo grep `quickjs`
 零命中。dsh 有程式碼執行的接口 `ctx.ptcRuntime`（`packages/ptc-runtime/ptc-runtime/src/index.ts:98`），語言與
 執行方式由提供方決定，是它「模型寫程式、程式裡呼叫工具」那個模式（PTC，工具叫 `run_code`）的執行環境；出廠的
@@ -130,7 +130,7 @@ sandbox 等於宣稱一個這裡沒有填的 seam。
 
 - **沒有檔案系統。** VM 讀不到也寫不到任何檔案。要讓模型把算出來的東西留下來，走基座
   內建的 `write_file`——兩個工具在同一輪裡並用是通的
-  （[`apps/harness/src/quickjs.test.ts`](../../apps/harness/src/quickjs.test.ts)）。
+  （[`harness/apps/harness/src/quickjs.test.ts`](../../apps/harness/src/quickjs.test.ts)）。
 - **沒有網路。**
 - **每次呼叫一個新 VM。** 兩次呼叫之間不共用狀態，前一次留在 global 上的東西下一次
   看不到。資源預算因此也是每次乾淨一份，而不是跨呼叫累計。

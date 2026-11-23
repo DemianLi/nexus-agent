@@ -16,7 +16,7 @@ import Loader from '@nexus/cordis-plugin-loader';
 import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 
 /**
- * 上游 `FiberState` 的值（vendor/cordis/src/fiber.ts）。
+ * 上游 `FiberState` 的值（harness/vendor/cordis/src/fiber.ts）。
  *
  * 2026-10-11 #1401 更正：探針當時把 3 寫成 UNLOADING，其實上游的順序是 FAILED 3、DISPOSED 4、UNLOADING 5。
  * 探針報告與 ③ 負對照說的「停在 UNLOADING（3）」因此是「停在 FAILED（3）」；#127 重現的結論不變。

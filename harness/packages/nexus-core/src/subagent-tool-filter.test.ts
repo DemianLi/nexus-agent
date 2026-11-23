@@ -2,7 +2,7 @@
  * 子代理的工具允許／拒絕清單（[#707](https://github.com/DemianLi/nexus-agent/issues/707)）在 fold 這一層的規則。
  *
  * 判準：只靠 fold 的輸入輸出斷言（子代理拿到哪些 `tools`、stack 裡有沒有那顆遮基座工具的 middleware）；
- * 遮罩真的擋住一次呼叫、真的不出現在模型的請求裡，由 `apps/harness` 的產品路徑測試量（真組裝、真子代理）。
+ * 遮罩真的擋住一次呼叫、真的不出現在模型的請求裡，由 `harness/apps/harness` 的產品路徑測試量（真組裝、真子代理）。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

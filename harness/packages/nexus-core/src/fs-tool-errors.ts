@@ -13,7 +13,7 @@
  *
  * **這一層只修得到日誌與模型那一半。** web 的工具卡來自基座在工具本體裡就發的 `tool-finished`，
  * 早於這裡換狀態；那一半由 pump 改以日誌的 `tool/result` 為準才修掉
- * （[#296](https://github.com/DemianLi/nexus-agent/issues/296)，`apps/harness/src/thread-pump.ts`）。
+ * （[#296](https://github.com/DemianLi/nexus-agent/issues/296)，`harness/apps/harness/src/thread-pump.ts`）。
  *
  * ## 對 dsh
  *
@@ -31,7 +31,7 @@
  * 也該帶。記錄每一顆工具呼叫都開；換狀態、補前綴仍只對基座那七個，其餘只補碼（`withSandboxCode`）。
  *
  * **偏離：在工具外面改狀態，不是在工具裡拋。** 基座的檔案工具我們改不了，所以退到最接近的——
- * `tools/execute` 內層的一位 core 監聽者，結果離開之前換狀態（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
+ * `tools/execute` 內層的一位 core 監聽者，結果離開之前換狀態（攔截索引的第 6 格，`harness/apps/harness/src/interception-index.test.ts`）。
  * 更內側只有輸出校驗與撞限替換：前者只驗宣告了 schema 的工具，後者只看 `task`，都不碰基座的檔案工具。
  * 判準是結構訊號而不是字面：
  *
@@ -73,7 +73,7 @@ export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
 
 /**
  * 檔案工具失敗的原因碼（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。除 `FS_NO_SPACE` 外字面照 dsh `FsErrorCode`
- * （`packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
+ * （`harness/packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
  * （{@link noteFsError}），監聽者標錯時帶出去，最後落進會話日誌那顆 `tool/result` 的 `error`，web 的 trace 列照實顯示。
  *
  * - `FS_NOT_FOUND`：路徑不存在（`read`／`edit`）。
@@ -107,7 +107,7 @@ export type FsErrorCode =
 
 /**
  * 搜尋失敗的碼（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。dsh `SearchErrorCode` 的四個成員
- * （`packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
+ * （`harness/packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
  * 一樣：backend 在這一次呼叫的記錄上寫碼（{@link noteSearchError}），監聽者標錯時帶出去，最後落進會話日誌
  * 那顆 `tool/result` 的 `error`。nexus 沒有 dsh 的 `HarnessError` 註冊表，這是 #293 已經用過的載體，不另立新的。
  */
@@ -164,7 +164,7 @@ interface CallRecord {
 }
 
 /**
- * 正在跑的那一次工具呼叫。**模組層一份**：fence 住在 `apps/harness`，它回報拒絕時要找得到
+ * 正在跑的那一次工具呼叫。**模組層一份**：fence 住在 `harness/apps/harness`，它回報拒絕時要找得到
  * 同一個；每次呼叫各 `run` 一份記錄，兩次呼叫（含平行的）不會共用。
  */
 const currentCall = new AsyncLocalStorage<CallRecord>();
@@ -276,7 +276,7 @@ export function recordBackendOutcomes<T extends object>(backend: T): T {
  * `FS_SANDBOX_DENIED`（[#316](https://github.com/DemianLi/nexus-agent/issues/316)）。
  *
  * **只補碼**，文字與狀態是工具自己的。照 dsh：註冊表從拋出來的 `HarnessError` 通用地取碼
- * （`packages/core/tools/src/index.ts:635-641`，SHA `c291e79`），不看是哪顆工具。成功的、已經有碼的、
+ * （`harness/packages/core/tools/src/index.ts:635-641`，SHA `c291e79`），不看是哪顆工具。成功的、已經有碼的、
  * 包在 `Command` 裡的都原樣交出。
  */
 function withSandboxCode(result: PipelineResult, record: CallRecord): PipelineExecuteResult {

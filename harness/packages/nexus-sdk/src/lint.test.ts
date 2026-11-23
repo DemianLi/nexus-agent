@@ -352,6 +352,6 @@ describe('範圍：只管插件的 src，不含測試檔', () => {
   });
 
   it('src 之外的檔不報（例如套件根的腳本）', async () => {
-    expect(await messagesOf(VIOLATING, 'scripts/tool.ts')).toEqual([]);
+    expect(await messagesOf(VIOLATING, 'harness/scripts/tool.ts')).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * 行程結束時強殺子行程的登記表（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）。接到 git 的那一半、真的結束行程
- * 那一半在 `packages/nexus-plugin-workspace-changes/src/git-host-exit.test.ts`。
+ * 那一半在 `harness/packages/nexus-plugin-workspace-changes/src/git-host-exit.test.ts`。
  */
 
 import { afterEach, describe, expect, it } from 'vitest';

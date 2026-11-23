@@ -1,6 +1,6 @@
 /**
  * 會話統計那道折疊的規則。每一條對著一份手寫的事件串驗；真的跑一場對話之後讀不讀得出來，
- * 在 `apps/harness/src/session-stats.test.ts`。
+ * 在 `harness/apps/harness/src/session-stats.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

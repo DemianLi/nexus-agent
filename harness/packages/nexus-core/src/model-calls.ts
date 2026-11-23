@@ -6,7 +6,7 @@
  * ## dsh 的 `step/*`，以及為什麼不叫那個名字
  *
  * dsh 的一步是「一次模型請求＋它派發的工具」：`step/start` 在請求前，`step/end` 在
- * `finally` 裡、**工具跑完之後**（`packages/core/agent-loop/src/agent.ts:302-312`，SHA
+ * `finally` 裡、**工具跑完之後**（`harness/packages/core/agent-loop/src/agent.ts:302-312`，SHA
  * `c291e79`；`executeToolCalls` 在 `step()` 裡面）。所以 dsh 的工具事件**包在**一步裡。
  *
  * 我們拿得到的邊界是 `wrapModelCall`，而它只包模型那一段：工具事件落在這一對**之後**。
@@ -41,14 +41,14 @@
  *
  * 原本要排在摘要器外層（#266 拍板），**這個基座上表達不出來**：我們的摘要器是同名取代，
  * `createAgent` 以名字為鍵合併 middleware，它落回基座 `SummarizationMiddleware` 的原位——
- * 基座那幾顆在 fold 交出去的整串之前（`apps/harness/src/summarization.test.ts` 釘著那份
+ * 基座那幾顆在 fold 交出去的整串之前（`harness/apps/harness/src/summarization.test.ts` 釘著那份
  * 順序）。所以不管排在哪，這顆都在摘要器**裡面**。
  *
  * 後果：deepagents 的摘要器碰到 `ContextOverflowError` 會先摘要、再叫一次內層
  * （`deepagents@1.13.1` `dist/index.js:3146-3225`），日誌上是兩對起訖，**算兩步**。退到這裡
  * 說得通：溢出的那一次是一個真的送出去、失敗了的請求，而失敗的呼叫本來就算一步。產摘要的
  * 那次呼叫是摘要器直接叫模型，不經過內層，**不算、也不計時**；兩對起訖一前一後、中間隔著
- * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`apps/harness/src/context-overflow.test.ts` 釘著
+ * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`harness/apps/harness/src/context-overflow.test.ts` 釘著
  * 「四次模型節點、五步」。
  *
  * ## 重試在這一格外面（[#712](https://github.com/DemianLi/nexus-agent/issues/712)、#1427）
@@ -83,7 +83,7 @@
  *   這次請求沒送出，這裡補寫 `model/start`、記 `model/end{outcome:'error'}` 再往外拋（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）。
  *
  * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
- * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
+ * `live.settle()` 裡寫（`harness/packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
  * （`assistant-stream.ts:83-88`），不交給重試，這一輪失敗。會讓它拋的是日誌那一關拒收（#1526 的有損值、#1661 的深度上限）。
  * 吞掉的話，這則回覆照樣進 graph state、日誌上卻沒有：記憶體與日誌分岔，續接後模型看到的歷史跟之前不同。往外拋則模型
  * 節點失敗，state 不收它，兩邊一致。重試只看回報的碼（{@link ./stream-retry.ts}），這個錯沒有回報碼，所以不會重打，同 dsh。

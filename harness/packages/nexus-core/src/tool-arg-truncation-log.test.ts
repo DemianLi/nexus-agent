@@ -2,7 +2,7 @@
  * 舊工具呼叫參數的縮短在日誌裡（[#1303](https://github.com/DemianLi/nexus-agent/issues/1303)）：
  * 純函式（讀、換、比），以及 `createSummarizer` 包的那一層接上**真的基座**之後的行為。
  *
- * 整條線接真的 CLI／serve、拿推導的歷史對線上請求逐位元組比的那一頭在 `apps/harness/src/log-derived-history.test.ts`（S9、SH4、SV6、SR5）。
+ * 整條線接真的 CLI／serve、拿推導的歷史對線上請求逐位元組比的那一頭在 `harness/apps/harness/src/log-derived-history.test.ts`（S9、SH4、SV6、SR5）。
  * 這裡問的是：基座縮短了就記一筆、記過的下一次沿用不重記、日誌上有而基座這次不縮的照樣換上去、記不進去不殺摘要器。
  */
 

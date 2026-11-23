@@ -62,14 +62,14 @@
  * `writer` 同樣落到 `stream.push`（`index.js:1086-1094`），`stream.js:74-77` 同步 `enqueue`。消費側是單一 for-await
  * （`index.js:1169`）接 `stream/mux.js:302-321` 的 `pump`，依序蓋 `seq`、推進 mux，`run` 的迭代器就是依到達順序讀它
  * （`stream/run-stream.js:106`）。失敗那次的最後一個字片段在模型呼叫拋錯之前就入列了，middleware 的 catch 在那之後才推
- * `writer`，所以 pump 讀到通知時，失敗那次的片段一個都不會再來。這條不是從版本號推的：`apps/harness/src/stream-retry.test.ts`
+ * `writer`，所以 pump 讀到通知時，失敗那次的片段一個都不會再來。這條不是從版本號推的：`harness/apps/harness/src/stream-retry.test.ts`
  * 有常駐的順序測試（密集片段加慢消費者），升級 langgraph 改了順序它會紅；探針 200 次（密集 300 片段、慢消費者、中段 503 與
  * 斷線）零亂序。
  *
  * 這取代了第一版的做法（等下一次嘗試的第一則 `message-start` 到來才擦，畫面在退避期間凍著半截字，也沒有地方放倒數）。
  *
  * - **政策照 dsh**（`retry-policy.ts:14-24`）：倍增、單次封頂（`maxDelayMs`）、抖動，**抖動之後再夾到 `maxDelayMs`**
- *   （`llm-retry/src/index.ts` 的 `localDelay`）。數值與欄位見 `apps/harness/src/settings/live-model.ts` 的 `retryPolicy`：
+ *   （`llm-retry/src/index.ts` 的 `localDelay`）。數值與欄位見 `harness/apps/harness/src/settings/live-model.ts` 的 `retryPolicy`：
  *   出廠 6 次、500 毫秒起、封頂 10 秒、抖動 0.1（#1427，demian 2026-10-14 拍板；dsh 預設 5 次，6 是它開放的設定值）。
  * - **`retry-after`**（照 dsh 的 `recover`）：供應商給的延遲不超過 `maxDelayMs` 就照它等（不加抖動）；超過就放棄、原錯誤往外拋。
  * - **退避聽中止訊號**：等待中按停止就立刻收，不再打一次。

@@ -1,7 +1,7 @@
 /**
  * 附件的參照與它們在訊息裡的樣子（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  *
- * 位元組存在會話日誌與存檔點之外（`apps/harness` 的 `attachment-store.ts`，內容定址），訊息與日誌**只留參照**。這一支只放
+ * 位元組存在會話日誌與存檔點之外（`harness/apps/harness` 的 `attachment-store.ts`，內容定址），訊息與日誌**只留參照**。這一支只放
  * 「參照長什麼樣、訊息裡的區塊長什麼樣、檔案給模型的那一行字」：不碰檔案系統，所以 token 估算與日誌折疊都能用。
  *
  * ## 照 dsh 的部分（`packages/attachment/attachment/src/types.ts`、`packages/llm/llm/src/content.ts`，`5badb150`）
@@ -21,7 +21,7 @@
  * @module
  */
 
-/** 模型讀附件的虛擬前綴（沒有結尾斜線）。路由由組裝點掛上，見 `apps/harness/src/agent-factory.ts`。 */
+/** 模型讀附件的虛擬前綴（沒有結尾斜線）。路由由組裝點掛上，見 `harness/apps/harness/src/agent-factory.ts`。 */
 export const ATTACHMENTS_MODEL_PREFIX = '/attachments';
 
 /**
@@ -94,7 +94,7 @@ export interface ImageBlock {
 /**
  * 一個參照放進訊息內容時的區塊。**只挑型別裡的欄位**（[#2323](https://github.com/DemianLi/nexus-agent/issues/2323)）：
  * 參照帶了型別以外的鍵也不進訊息（`isAttachmentRef` 不擋多出來的鍵，例如命令 handler 經 `steer` 傳進來的），
- * 所以訊息的層數不隨參照多帶的鍵變深（`apps/harness/src/checkpoint-serde.ts` 靠這一點）。選填欄位沒有就不出現；
+ * 所以訊息的層數不隨參照多帶的鍵變深（`harness/apps/harness/src/checkpoint-serde.ts` 靠這一點）。選填欄位沒有就不出現；
  * 鍵的順序同附件儲存建參照的順序。
  */
 export function attachmentBlock(ref: AttachmentRef): FileBlock | ImageBlock {
@@ -113,7 +113,7 @@ function definedFields<T>(fields: AllFields<T>): T {
   return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as T;
 }
 
-/** 檔案參照只留型別裡的欄位，順序同附件儲存建參照的順序（`apps/harness/src/attachment-store.ts`）。 */
+/** 檔案參照只留型別裡的欄位，順序同附件儲存建參照的順序（`harness/apps/harness/src/attachment-store.ts`）。 */
 function fileRefFields(ref: FileAttachmentRef): FileAttachmentRef {
   return definedFields<FileAttachmentRef>({
     attachmentId: ref.attachmentId,
@@ -122,7 +122,7 @@ function fileRefFields(ref: FileAttachmentRef): FileAttachmentRef {
   });
 }
 
-/** 圖片參照只留型別裡的欄位（`originalDimensions` 底下也是），順序同附件儲存建圖片參照的順序（`apps/harness/src/attachment-store.ts`）。 */
+/** 圖片參照只留型別裡的欄位（`originalDimensions` 底下也是），順序同附件儲存建圖片參照的順序（`harness/apps/harness/src/attachment-store.ts`）。 */
 function imageRefFields(ref: ImageAttachmentRef): ImageAttachmentRef {
   const original = ref.originalDimensions;
   return definedFields<ImageAttachmentRef>({

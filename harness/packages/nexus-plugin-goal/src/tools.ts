@@ -45,7 +45,7 @@
  * > responsible for judging that the same condition persisted** across those rounds and
  * > must explain it in `blocked_reason`.
  *
- * 整個 `packages/goal` 掃過，`same condition`／`persists` 這組字**只出現在那兩處模型面
+ * 整個 `harness/packages/goal` 掃過，`same condition`／`persists` 這組字**只出現在那兩處模型面
  * 的字串裡**（`guidance()` 與工具說明）。`goal-round-driver/src/invariant.ts` 管的是續行
  * 提示詞重建得出來，跟這條政策無關。**dsh 在任何地方都沒有機械地檢查持續性。**
  *
@@ -468,7 +468,7 @@ const CREATE_DESCRIPTION =
 
 /**
  * `create_goal` 的 `max_goal_rounds` 那格說明——**與 dsh 逐字相同**
- * （`packages/goal/tool-goal/src/index.ts` 的 `create_goal` 參數表）。
+ * （`harness/packages/goal/tool-goal/src/index.ts` 的 `create_goal` 參數表）。
  *
  * ## 為什麼是一句白描，而不是一句勸
  *

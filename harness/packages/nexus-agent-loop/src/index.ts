@@ -9,7 +9,7 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件主入口：token、介面、契約版本 | 只有 `@nexus/sdk`（與訊息的型別，取自 `@langchain/core`），**不 import `@nexus/core`** |
- * | 提供者 | 樹上一列內建列 `pre-step`，行程級的登記處：同一個套件的另一個入口 `@nexus/agent-loop/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
+ * | 提供者 | 樹上一列內建列 `pre-step`，行程級的登記處：同一個套件的另一個入口 `@nexus/agent-loop/provider`，由宿主（`harness/apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
  * | 消費者 | 想在一次呼叫開頭注入訊息的插件，今天是 `agent-instructions` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * ## 誰建 middleware、誰建訊息、誰記日誌（Q2 (a)）
@@ -38,7 +38,7 @@
  *
  * 這張表只收接縫本身的偏離。另有一條屬於消費者而不是接縫的——agent-instructions 把 `fs` 放進 `inject`（必填，#1474 Q3 (a)）——登記在 `@nexus/plugin-agent-instructions` 檔頭「偏離登記」第 2 條；`docs/plugin-contract.md` 的偏離表把兩處合在一張表裡。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`agent/turn-stopping` 等其餘 agent loop
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：`agent/turn-stopping` 等其餘 agent loop
  * 事件今天沒有遷出的消費者，不加。
  *
  * @module

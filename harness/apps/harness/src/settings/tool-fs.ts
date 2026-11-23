@@ -1,7 +1,7 @@
 /**
  * 檔案工具組態的**設定條目**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0355）：管理者可以個別關掉寫檔、改檔
  * 這兩顆工具（例如部署「只讀的知識助理」），也可以調讀檔的上限。id 與欄位名照 dsh `tool-fs` 的 Config
- * （`packages/fs/tool-fs/src/index.ts:20-98`，`687f282e`）：數值都要是正整數，否則載入時就拋（`assertPositiveInteger`，`:106-110`）。
+ * （`harness/packages/fs/tool-fs/src/index.ts:20-98`，`687f282e`）：數值都要是正整數，否則載入時就拋（`assertPositiveInteger`，`:106-110`）。
  * 功能本體在 `@nexus/core`：開關換成基座的 `tools` 白名單（`fs-tools-options.ts`），行數上限在讀檔續讀（`read-continuation.ts`），
  * 其餘三個上限由 backend 建頁時讀（`contained-backend.ts`）。
  *

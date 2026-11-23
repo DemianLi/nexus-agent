@@ -925,7 +925,7 @@ export interface AwaitingInput {
  *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
  * @param inherited - 分叉繼承來的前綴有幾顆（`inheritedEventCount`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），
  *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉 frame，同 dsh 的
- *   `subagentCatalog` 投影（`packages/subagent/subagent/src/catalog.ts:124-126`，`687f282e`）——這顆 frame 就是拿來取代
+ *   `subagentCatalog` 投影（`harness/packages/subagent/subagent/src/catalog.ts:124-126`，`687f282e`）——這顆 frame 就是拿來取代
  *   那個投影的（`@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
  */
 export function historyFrames(

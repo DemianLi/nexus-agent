@@ -10,7 +10,7 @@
  * - **沒有投影註冊表。** dsh 把單元註冊到 `session-projection`，由它交給 web 的統計列。我們
  *   沒有那個註冊表，讀者各自把事件餵過單元：
  *   - **web 的統計**（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：pump 逐顆套、歷史每頁從
- *     日誌開頭折一次，都經 `apps/harness/src/conversation-history.ts` 的 `SessionTotals`，以 `sessionStats`
+ *     日誌開頭折一次，都經 `harness/apps/harness/src/conversation-history.ts` 的 `SessionTotals`，以 `sessionStats`
  *     這個 `custom` frame 上線（`@nexus/wire` 的 `session-totals.ts`）。
  *   - **離線掃描**（[#268](https://github.com/DemianLi/nexus-agent/issues/268) 的步數欄），經
  *     {@link deriveSessionStats}。
@@ -35,7 +35,7 @@
  * 一輪要等到它的第一顆 `model/end` 才算數：沒叫到模型的輪不算，同 dsh。
  *
  * **前景 subagent 那份沒有 `turn/start`**（入口點只包 root 的輪），一份就是一次委派，整份算一輪。**背景的每一輪**（派出去與每次
- * `subagent.send`）各有 `turn/start`／`turn/end`（`apps/harness/src/background-subagents.ts`），照一般的輪數。
+ * `subagent.send`）各有 `turn/start`／`turn/end`（`harness/apps/harness/src/background-subagents.ts`），照一般的輪數。
  *
  * ## 數字是逐份日誌的
  *

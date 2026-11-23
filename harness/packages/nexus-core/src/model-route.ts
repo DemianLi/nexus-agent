@@ -2,7 +2,7 @@
  * 一次模型呼叫走的**路由**：哪一顆模型、帶什麼推理強度（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）。
  *
  * 照 dsh `ModelSelection`（`packages/core/agent/src/model-selection.ts:21-28`，`5badb15`）的 `{ provider, model, reasoningEffort? }`，
- * **去掉 `provider`**：我們整個部署只有一個端點，路由就是型錄 id（理由同 `apps/harness/src/subagent-model-selection.ts` 的偏離一）。
+ * **去掉 `provider`**：我們整個部署只有一個端點，路由就是型錄 id（理由同 `harness/apps/harness/src/subagent-model-selection.ts` 的偏離一）。
  * 哪天有第二個端點，加一格選填的 `provider` 是向後相容的。
  *
  * ## 實例上的標記

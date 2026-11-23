@@ -136,7 +136,7 @@ function isHumanInput(value: unknown): value is HumanInput {
 /**
  * 還沒答就被收回（含判成卡死）、或那顆呼叫已經收完：{@link HumanInput.ask}、{@link HumanInput.idle} 以它拒絕。是 `GraphInterrupt`，所以閘門、圍堵、屏障都當成控制流往外拋，不記
  * `tool/result`。native 的 `#toolStep` 在收回那一刻套 root 那一步已收完的寫入；沒收完的，以及前景子代理那一層的，丟掉。日誌與對話
- * 由收回那一側寫：停止時是 `apps/harness` 的 pump 的 `#withdraw`，判成卡死時是 pump 的 `#closeUnansweredCalls`；收線（`close()`）
+ * 由收回那一側寫：停止時是 `harness/apps/harness` 的 pump 的 `#withdraw`，判成卡死時是 pump 的 `#closeUnansweredCalls`；收線（`close()`）
  * 兩樣都不寫。
  */
 export class HumanInputWithdrawn extends GraphInterrupt {

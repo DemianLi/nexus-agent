@@ -7,10 +7,10 @@
  *
  * ## 照 dsh 的部分（`5badb15009a`）
  *
- * - 額度的形狀：`LlmImageRequestBudget`（`packages/llm/llm/src/types.ts:356-367`）的 `maxImages`、`maxBytes`（base64 長度）。**單位是張數與位元組，
+ * - 額度的形狀：`LlmImageRequestBudget`（`harness/packages/llm/llm/src/types.ts:356-367`）的 `maxImages`、`maxBytes`（base64 長度）。**單位是張數與位元組，
  *   不是 token**——dsh 的預設是 20 MiB 的 base64，不看模型窗口。看圖模型要靠張數把圖留在窗口裡（型錄的 `imageBudget`）。
- * - 算「最舊的要省略幾張」：`requiredImageOffload`／`offloadedImagePrefixCount`（`packages/llm/llm/src/content.ts:284-332`）。
- * - 決定寫成 `image/offload { targets: [{ seq, imageIndexes }] }`、永久省略（`packages/compaction/compaction-image-offload/src/image-offload.ts:17-45`）；
+ * - 算「最舊的要省略幾張」：`requiredImageOffload`／`offloadedImagePrefixCount`（`harness/packages/llm/llm/src/content.ts:284-332`）。
+ * - 決定寫成 `image/offload { targets: [{ seq, imageIndexes }] }`、永久省略（`harness/packages/compaction/compaction-image-offload/src/image-offload.ts:17-45`）；
  *   解譯是純函式（`project-message.ts`），被省略的圖打上 `offloaded` 旗標（`projection.ts`）；佔位字見 `attachment-projection.ts` 的 `offloadedImageText`。
  *
  * ## 檢查在 adapter、決定在上層（dsh 的形狀）

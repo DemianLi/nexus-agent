@@ -1,7 +1,7 @@
 /**
  * {@link RunSuspension} 的判定：停在等待點、都在 `idle` 卻沒人問、補記拋錯、收回放掉在 `idle` 等的。
  *
- * 經 harness 的線一路跑的見 `apps/harness/src/human-input-wire.test.ts`；這裡量的是那條路上不好造出來的情形。
+ * 經 harness 的線一路跑的見 `harness/apps/harness/src/human-input-wire.test.ts`；這裡量的是那條路上不好造出來的情形。
  */
 
 import { describe, expect, it, vi } from 'vitest';

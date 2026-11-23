@@ -36,7 +36,7 @@ export interface InjectionSourceReport {
 
 /**
  * 訊息 `additional_kwargs` 上的鍵：這一則注入有多少原文位元組放不下、沒放進去（正整數）。放在訊息串裡的源（插件的
- * `agent/pre-step` listener）用它回報；插件不能 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
+ * `agent/pre-step` listener）用它回報；插件不能 import core，鍵名照抄，`harness/apps/harness` 的測試把兩邊釘成相等。
  */
 export const INJECTION_DEFERRED_BYTES_KEY = 'nexus_injection_deferred_bytes';
 

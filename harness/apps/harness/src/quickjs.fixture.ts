@@ -1,7 +1,7 @@
 /**
  * quickjs 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下、手搭 `PluginEntry` 清單的測試用（#2353）。
  *
- * quickjs 本身已經是樹上的函式插件（`packages/nexus-plugin-quickjs`，沒有一行 `@nexus/core`）。這個外殼**包的是同一個
+ * quickjs 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-quickjs`，沒有一行 `@nexus/core`）。這個外殼**包的是同一個
  * `createRunJavascriptTool`**（經宿主的轉接器轉成 LangChain 工具），所以工具的定義只有一個出處。
  *
  * **不能出現在任何產品路徑上**，同 `echo.fixture.ts`。想驗「quickjs 經樹進來」的測試用 patch `insert` 一列

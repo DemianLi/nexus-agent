@@ -5,7 +5,7 @@
  * **兩份，差在 vendor——偏離 dsh，理由 1（基座表達不出來）。** dsh 只有一份 `tsconfig.base.json`（`:100-108` 把 vendor 也映到 `src`），
  * 嚴格度靠 project references 隔開，而且 base 本身就是 `verbatimModuleSyntax: false`（`:18`）。nexus 的 base 是嚴格的單檔，
  * 沒有 project references，所以分兩份、由這支產生器一起寫、`--check` 一起查。實測兩個理由：
- * `tsconfig.base.json`（tsc 的型別檢查）不含 `vendor/*`：上游原始碼用較寬鬆的 tsconfig 檢查，放進嚴格設定會噴出一批與本專案無關的錯（實測 186 個），
+ * `tsconfig.base.json`（tsc 的型別檢查）不含 `harness/vendor/*`：上游原始碼用較寬鬆的 tsconfig 檢查，放進嚴格設定會噴出一批與本專案無關的錯（實測 186 個），
  * 型別維持今天的來源（各 vendor 套件 `prepare` 產的 `lib/types/*.d.ts`）。`tsconfig.runtime.json`（tsx、vitest 用）含全部、
  * 並關掉 `verbatimModuleSyntax`（vendor 原始碼有未標 `type` 的型別 import，esbuild 在該旗標下會留著而載入失敗，例如 cosmokit 的 `Dict`），
  * 載進來的是 `src/`——不然 vendor 要先建置才跑得了開發環境，改了原始碼卻跑到舊的 `lib/`。
@@ -14,7 +14,7 @@
  * 套件的 `main`／`exports` 直接指 `lib/`（裝進 `node_modules` 之後 Node 要載的是編好的 JS），所以在原始碼樹裡 tsc、tsx 與 vitest
  * 都要靠這份 `paths` 才解得到 `src/`。`--check` 只報漂移不寫檔，接在 gate：新增套件或 subpath 忘了重新產生，CI 當場紅。
  *
- * `apps/web/tsconfig.json` 也寫一份（標記區塊在它的 `paths` 裡，相對 `apps/web` 的路徑），但只收 {@link WEB_SPECIFIERS}：TS 的 `paths` 不跟 `extends` 的 base 合併，
+ * `web/tsconfig.json` 也寫一份（標記區塊在它的 `paths` 裡，相對 `web` 的路徑），但只收 {@link WEB_SPECIFIERS}：TS 的 `paths` 不跟 `extends` 的 base 合併，
  * web 自己設了 `paths`（`@/*`、`cn`）就會整個蓋掉 base 那份，tsc／編輯器要靠這一份。web 的 vite 與 vitest 外掛則讀根 `tsconfig.base.json`
  * （#1633：外掛只對 tsconfig `include` 內的檔套 `paths`，讀 web 自己的會讓各套件 `src` 的傳遞 import 解到不存在的 `lib/`）。
  *
@@ -49,7 +49,7 @@ export const WEB_SPECIFIERS: ReadonlySet<string> = new Set([
 /** 要寫區塊的 tsconfig（路徑相對這個檔所在目錄寫），與它收哪些說法（沒給就全收）。不含 vendor：理由見檔頭。 */
 const TARGETS: readonly { readonly file: string; readonly only?: ReadonlySet<string> }[] = [
   { file: 'tsconfig.base.json' },
-  { file: 'apps/web/tsconfig.json', only: WEB_SPECIFIERS },
+  { file: 'web/tsconfig.json', only: WEB_SPECIFIERS },
 ];
 
 /** 整份產生的執行期 tsconfig，含 vendor。 */
@@ -68,7 +68,7 @@ function renderAlias(alias: Alias, from: string): string {
  *
  * @param from - 要寫入的 tsconfig 所在目錄。
  * @param indent - 每行縮排。
- * @param withVendor - 要不要含 `vendor/*`。
+ * @param withVendor - 要不要含 `harness/vendor/*`。
  * @param only - 只收這幾個說法；沒給就全收。
  */
 export function renderRegion(
@@ -124,7 +124,7 @@ export function renderRuntime(): string {
   const indent = '      ';
   return [
     '{',
-    '  // 產生的檔，不要手改：pnpm run gen-tsconfig-paths（scripts/gen-tsconfig-paths.ts）。',
+    '  // 產生的檔，不要手改：pnpm run gen-tsconfig-paths（harness/scripts/gen-tsconfig-paths.ts）。',
     '  // tsx 與 vitest 用它把 @nexus/* 對回 src/；型別檢查用 tsconfig.base.json（不含 vendor，理由見產生器檔頭）。',
     '  "extends": "./tsconfig.base.json",',
     '  "compilerOptions": {',

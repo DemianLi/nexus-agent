@@ -4,7 +4,7 @@
  * ## 照 dsh
  *
  * dsh 的 `tool-subagent` 有一格 `toolFilter: { allow?, deny? }`，作用在那個委派工具派出的**每個**子代理；
- * 實作是 base `tools` 的 `restrict(filter)`（`packages/core/tools/src/index.ts:1097`，`477b4f4`）：
+ * 實作是 base `tools` 的 `restrict(filter)`（`harness/packages/core/tools/src/index.ts:1097`，`477b4f4`）：
  *
  * - `allow` 只留列到的、`deny` 拿掉列到的，可並用；
  * - 空 filter 拋錯、未知名字拋錯並列出已知名單；
@@ -17,7 +17,7 @@
  * ## 基座工具為什麼要另外攔
  *
  * 檔案系統工具不在 registry 裡，是子代理 middleware stack 裡 `createFilesystemMiddleware` 帶的
- * （`apps/harness/src/base-tools.ts`）。要「從請求消失、叫了也不執行」，只能在它的外側攔：
+ * （`harness/apps/harness/src/base-tools.ts`）。要「從請求消失、叫了也不執行」，只能在它的外側攔：
  * `wrapModelCall` 把名字從 `request.tools` 拿掉；手寫的呼叫由 `tools/pre-execute` 的 core 監聽者拒絕，工具本體不跑。
  * 請求那一半的形狀同 deepagents 內部（沒有公開匯出）的 `createToolExclusionMiddleware`。
  *

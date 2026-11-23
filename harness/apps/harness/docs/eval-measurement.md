@@ -1,6 +1,6 @@
 # 評估工具層的量測規矩
 
-`apps/harness/src/eval/` 這一層（基準任務、評分器、`eval:compare`、`eval:survey`、`eval:sessions`）怎麼量、
+`harness/apps/harness/src/eval/` 這一層（基準任務、評分器、`eval:compare`、`eval:survey`、`eval:sessions`）怎麼量、
 量出來的數字能拿去做什麼、哪些量法**現在不建**以及哪天要建。詞彙見 [`GLOSSARY.md`](../GLOSSARY.md)；
 怎麼跑、報表怎麼讀見 [`docs/operations.md`](../../../docs/operations.md) 的 eval 一節。
 

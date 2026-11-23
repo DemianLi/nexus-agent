@@ -1,7 +1,7 @@
 /**
  * 讀檔結果最後補上讀到哪的那一層自己的邏輯——直接餵 middleware 一個假 `handler`，`handler` 照基座
  * `read_file` 的樣子叫包過的 backend、編號、包成 ToolMessage。「fold 有沒有把它打底進去、排在哪」在
- * `fold.test.ts`；「掛進真的 agent、真的基座工具之後」在 `apps/harness/src/read-continuation.test.ts`。
+ * `fold.test.ts`；「掛進真的 agent、真的基座工具之後」在 `harness/apps/harness/src/read-continuation.test.ts`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

@@ -1008,7 +1008,7 @@ describe('git 快照（#461）', () => {
       writeFile(join(root, 'out', 'tool.txt'), 'x\ny\n'),
     );
     await writeFile(join(root, 'out', 'other.txt'), 'o\n');
-    await m.tool('edit_file', { file_path: 'vendor/v.md', old_string: 'v', new_string: 'w' }, () =>
+    await m.tool('edit_file', { file_path: 'harness/vendor/v.md', old_string: 'v', new_string: 'w' }, () =>
       writeFile(join(nested, 'v.md'), 'w\n'),
     );
     result(m.log);

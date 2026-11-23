@@ -2,10 +2,10 @@
 // 從上游 cordiverse/cordis 的 clone 重建 vendor 的原始碼：複製 → 套 patches/ 裡的上游修補 → 機械改寫。
 //
 // 用法：
-//   node vendor/sync.mjs <上游 clone>           蓋過 vendor/cordis/{src,tests}、vendor/loader/src 與 vendor/include/src
-//   node vendor/sync.mjs <上游 clone> --check   重建到暫存目錄，與 vendor 逐檔比對；有差異就印出並以 1 退出
+//   node harness/vendor/sync.mjs <上游 clone>           蓋過 harness/vendor/cordis/{src,tests}、harness/vendor/loader/src 與 harness/vendor/include/src
+//   node harness/vendor/sync.mjs <上游 clone> --check   重建到暫存目錄，與 vendor 逐檔比對；有差異就印出並以 1 退出
 //
-// 上游 clone 要停在 README 清單記的 commit。步驟與每一條本地修改的對應見 vendor/README.md。
+// 上游 clone 要停在 README 清單記的 commit。步驟與每一條本地修改的對應見 harness/vendor/README.md。
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,17 +22,17 @@ const SCOPE = {
 
 /** 目標目錄 ← 上游路徑。 */
 const COPIES = [
-  ['cordis/src', 'packages/core/src'],
-  ['cordis/tests', 'packages/core/tests'],
-  ['loader/src', 'packages/loader/src'],
-  ['include/src', 'packages/include/src'],
-  ['logger-console/src', 'packages/logger-console/src'],
-  ['logger-console/tests', 'packages/logger-console/tests'],
+  ['cordis/src', 'harness/packages/core/src'],
+  ['cordis/tests', 'harness/packages/core/tests'],
+  ['loader/src', 'harness/packages/loader/src'],
+  ['include/src', 'harness/packages/include/src'],
+  ['logger-console/src', 'harness/packages/logger-console/src'],
+  ['logger-console/tests', 'harness/packages/logger-console/tests'],
 ];
 
 const [upstream, flag] = process.argv.slice(2);
 if (upstream === undefined || (flag !== undefined && flag !== '--check')) {
-  console.error('用法：node vendor/sync.mjs <上游 clone> [--check]');
+  console.error('用法：node harness/vendor/sync.mjs <上游 clone> [--check]');
   process.exit(2);
 }
 
@@ -61,7 +61,7 @@ function rescope(source) {
 
 /**
  * 本地修改第 7 條（include）：關掉寫回，拿掉 HMR 監看。每一處都要在上游原樣裡剛好命中一次，否則同步時直接失敗，
- * 不靜默漏改。理由與涵蓋的測試見 vendor/README.md。
+ * 不靜默漏改。理由與涵蓋的測試見 harness/vendor/README.md。
  */
 function closeWriteBack(source) {
   const once = (text, from, to) => {
@@ -150,10 +150,10 @@ function closeWriteBack(source) {
  * Loader 會把樹上 `__jsExpr` 是字串的值 `eval` 掉（`interpolate`、`Entry._resolveDisabled`），`disabled` 也在其中（上游 #179）。
  * 宿主的承諾是「樹上的設定不接受表達式」，所以檢查要做在 Loader **真正會 eval 的那份資料**上：
  * `_scheduleApply` 算出來、緊接著交給 `root.update` 的那個物件。這裡掃的就是它，不另外再讀一次檔，讀檔與檢查之間沒有空隙。
- * 只看鍵名，跟 `apps/harness/src/plugin-tree.ts` 的 `findJsExpr` 同一把尺：Loader 自己的 `isJsExpr` 只認字串值，非字串的 `__jsExpr` 不會被 eval，但一樣不是合法設定。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
+ * 只看鍵名，跟 `harness/apps/harness/src/plugin-tree.ts` 的 `findJsExpr` 同一把尺：Loader 自己的 `isJsExpr` 只認字串值，非字串的 `__jsExpr` 不會被 eval，但一樣不是合法設定。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
  * 的呼叫鏈都接得住；放在 `_applyTask` 裡拋會變成沒人接的 rejection。
  *
- * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 harness/vendor/README.md。
  */
 function rejectJsExpr(source) {
   const once = (text, from, to) => {
@@ -204,9 +204,9 @@ export class Include extends EntryTree {
 
 /**
  * 本地修改第 9 條（loader）：宿主可以給一支解析函式，Loader 就不在安裝樹裡寫 `.cordis/resolve.mjs` 輔助檔。
- * 上游的 `createResolve` 會在 `baseUrl` 所屬專案根（這裡是 `apps/harness`）建 `.cordis/{.gitignore,resolve.mjs}`，
+ * 上游的 `createResolve` 會在 `baseUrl` 所屬專案根（這裡是 `harness/apps/harness`）建 `.cordis/{.gitignore,resolve.mjs}`，
  * 唯讀的安裝樹或別的帳號建過時，寫不進去只能退回原生 `import()`；產品路徑不該依賴安裝樹可寫。
- * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 harness/vendor/README.md。
  */
 function hostResolver(source, file) {
   const once = (text, from, to) => {
@@ -244,11 +244,11 @@ function hostResolver(source, file) {
 /**
  * 本地修改第 10 條（loader）：自我停用交給宿主，與樹拆卸時不誤認。
  *
- * - 「這棵樹正在拆卸」那一格加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader 同一格、dsh vendor/README 第 15 條）。
+ * - 「這棵樹正在拆卸」那一格加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader 同一格、dsh harness/vendor/README 第 15 條）。
  * - 自我停用那一格在 `tree.commit` 之後發一個 `loader/self-disable` 事件。`commit` 的參數與 `internal/commit`（插件 `ctx.fiber.update`）
  *   送出的一模一樣，宿主在 `commit` 那一頭分不出來，只能在呼叫點這裡區分。
  *
- * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 harness/vendor/README.md。
  */
 function selfDisableHook(source) {
   const once = (text, from, to) => {
@@ -315,7 +315,7 @@ function selfDisableHook(source) {
  *   `inspect` 的格式化函式不變。
  * - `browser.ts` 刪掉：套件只在 Node 的伺服器上用。
  *
- * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 harness/vendor/README.md。
  */
 function trimLoggerConsole(source, file) {
   const once = (text, from, to) => {
@@ -343,7 +343,7 @@ try {
   // 1. 上游原樣。
   const base = join(work, 'upstream');
   for (const [, from] of COPIES) cpSync(join(upstream, from), join(base, from), { recursive: true });
-  // 2. 上游修補，依檔名順序；每一份都是上游 PR 的原樣 diff（只留 packages/core 與 packages/loader）。
+  // 2. 上游修補，依檔名順序；每一份都是上游 PR 的原樣 diff（只留 harness/packages/core 與 harness/packages/loader）。
   const patches = existsSync(PATCHES) ? readdirSync(PATCHES).filter((name) => name.endsWith('.patch')).sort() : [];
   for (const name of patches) {
     execFileSync('patch', ['-p1', '--forward', '--batch', '-s', '-d', base, '-i', join(PATCHES, name)], { stdio: 'inherit' });
@@ -391,7 +391,7 @@ try {
       const b = existsSync(join(VENDOR, path)) ? readFileSync(join(VENDOR, path), 'utf8') : undefined;
       return a !== b;
     });
-    for (const path of diffs) console.log(`不同：vendor/${path}`);
+    for (const path of diffs) console.log(`不同：harness/vendor/${path}`);
     console.log(diffs.length === 0 ? `一致（${expected.size} 個檔，${patches.length} 份修補）` : `${diffs.length} 個檔不同`);
     process.exitCode = diffs.length === 0 ? 0 : 1;
   } else {

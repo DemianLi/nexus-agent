@@ -1,6 +1,6 @@
 /**
  * 插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：兩個掛點各自的判斷。真組裝上「下一次模型呼叫看得到、
- * 同一輪再叫一次模型」的驗收在 `apps/harness/src/steer.test.ts`。
+ * 同一輪再叫一次模型」的驗收在 `harness/apps/harness/src/steer.test.ts`。
  */
 
 import { HumanMessage } from '@langchain/core/messages';

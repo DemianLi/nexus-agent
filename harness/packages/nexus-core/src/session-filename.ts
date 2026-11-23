@@ -12,10 +12,10 @@
  * - **舊兩檔佈局**（`legacyTwoFileSessionFilenames`／`parseLegacyTwoFileHeaderFilename`，#1872）：v0.5.19 以前的版本寫的佈局，
  *   一份會話三個檔並排：`<base>.header.json`、`<base>.jsonl`、`<base>.lock`。檔名不帶格式版本，格式版本看 header 的
  *   `version`。已出貨的資料要永久讀得懂，所以這一組不隨寫方換佈局而變。綁這一組的是讀方（後端的讀取接縫、離線掃描）、
- *   `create` 的撞名檢查、遷移時拿的 `<base>.lock`、寫在舊路徑的墓碑，與夾具產生器（`scripts/session-format-fixtures/run-directory.ts`）。
+ *   `create` 的撞名檢查、遷移時拿的 `<base>.lock`、寫在舊路徑的墓碑，與夾具產生器（`harness/scripts/session-format-fixtures/run-directory.ts`）。
  *   舊路徑的 header 版本到了 {@link FIRST_GENERATION_FORMAT_VERSION} 就是墓碑，不是一份舊兩檔會話。
  *
- * 舊兩檔的 `base` 由後端從 session id 算出來（`apps/harness` 的 `safeBaseName`），不歸這裡。
+ * 舊兩檔的 `base` 由後端從 session id 算出來（`harness/apps/harness` 的 `safeBaseName`），不歸這裡。
  *
  * @module
  */

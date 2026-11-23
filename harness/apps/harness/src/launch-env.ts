@@ -25,7 +25,7 @@
  * ## 舊位置
  *
  * 以前讀的是**程式碼資料夾根目錄**的 `.env`。`pnpm --filter` 起 `cli:live` 與 `serve:live` 時目前資料夾是
- * `apps/harness`，那個檔不會再被讀到。**不偷偷再讀舊位置當退路**（[docs/standards.md](../../../docs/standards.md)
+ * `harness/apps/harness`，那個檔不會再被讀到。**不偷偷再讀舊位置當退路**（[docs/standards.md](../../../docs/standards.md)
  * 的「不得 fallback」）；也不能默默失效——舊檔還在、而需要的名字又沒有值時，直接失敗並指名搬去哪裡
  * （{@link LaunchEnvOptions.needs}）。
  *
@@ -145,7 +145,7 @@ function isBootstrapOnly(name: string): boolean {
 /**
  * 程式碼資料夾根目錄的舊 `.env`；**安裝樹沒有這個位置，回 `undefined`**（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
  *
- * 原始碼樹裡 `moduleDir` 是 `apps/harness/src`，往上三層是 repo 根，那裡的 `.env` 才是以前讀的那一份。
+ * 原始碼樹裡 `moduleDir` 是 `harness/apps/harness/src`，往上三層是 repo 根，那裡的 `.env` 才是以前讀的那一份。
  * 安裝樹（`lib/`）往上三層是 `/opt` 這種系統目錄——`current` 連結被 Node 解成實際路徑之後，那裡根本不是什麼
  * 「程式碼資料夾根目錄」，把一份不相干的 `/opt/.env` 當成舊檔叫人搬，是誤導。判準是產物根有沒有建置戳記
  * （{@link isPackedTree}，為什麼選它寫在那裡）。

@@ -166,7 +166,7 @@ function productFiles(root: string): string[] {
 }
 
 /**
- * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/harness/src`（web 不宣告事件表）。寫不出 `Events` 這個識別字的檔不建 AST（前提見檔頭「名字假設」）。
+ * 掃整棵樹的產品碼：`harness/packages/*\/src` 與 `harness/apps/harness/src`（web 不宣告事件表）。寫不出 `Events` 這個識別字的檔不建 AST（前提見檔頭「名字假設」）。
  *
  * @param root - repo 根。
  * @returns 所有宣告在事件表上的成員。

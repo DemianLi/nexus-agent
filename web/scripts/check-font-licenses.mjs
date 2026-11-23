@@ -42,7 +42,7 @@ export function checkFontLicenses(dist) {
   return problems;
 }
 
-// 直接執行才量（`node scripts/check-font-licenses.mjs`）；測試 import 時不跑。比 realpath：路徑經過符號連結時字面對不上。
+// 直接執行才量（`node harness/scripts/check-font-licenses.mjs`）；測試 import 時不跑。比 realpath：路徑經過符號連結時字面對不上。
 if (
   process.argv[1] &&
   realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))

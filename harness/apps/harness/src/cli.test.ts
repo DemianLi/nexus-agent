@@ -191,7 +191,7 @@ describe('一次性模式', () => {
   it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十四列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
-    // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
+    // 讓計劃模式進來，理由寫在 `harness/apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
     // 不存在）。**改成 `toHaveLength` 會把這條線整個放掉**，所以名字仍然逐個寫死：
     // 下一個想塞東西進來的人還是得先改這一行，並且說得出理由。
     //
@@ -229,7 +229,7 @@ describe('一次性模式', () => {
       'time-context',
       // **`skills` 進來的理由是它本來就在，只是沒有人掛**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
       // 工作區的 `skills/<name>/SKILL.md` 不進清單就永遠看不到。沒有 skill 的時候一個字都不加（組裝點包了一層，
-      // 見 `packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。
+      // 見 `harness/packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。
       'skills',
       'plan-mode',
       'goal',
@@ -278,7 +278,7 @@ describe('一次性模式', () => {
       // `startupSetting`。它跟 `approval-gate` 一樣關不掉，理由卻是相反的那一種：關掉它
       // 不會有任何行為改變，只會讓讀設定的人以為自己改了落盤的節奏。
       'session-persistence',
-      // **這八顆跟上面那七顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
+      // **這八顆跟上面那七顆同類——不裝功能、只講設定——但擁有者住在 `harness/apps/harness`**
       // （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。它們內部又分兩層，
       // 分界是消費點跑的時刻。
       //
@@ -956,7 +956,7 @@ describe('REPL', () => {
 /**
  * 端到端，**只此一條**。
  *
- * 驗的是錯誤傳播路徑不被吞掉：衝突規則本身是 `packages/nexus-core` 的單測在管，而從
+ * 驗的是錯誤傳播路徑不被吞掉：衝突規則本身是 `harness/packages/nexus-core` 的單測在管，而從
  * registry 到行程退出碼的路只有一條，所以這裡只需要一個案例。
  *
  * **偏離 dsh 一處**：它的 `built-bin.e2e.ts` 跑的是建構後的 `lib/bin.js` 加原生 `node`，

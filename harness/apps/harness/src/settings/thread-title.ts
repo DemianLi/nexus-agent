@@ -17,8 +17,8 @@
  * 1. **擁有者是 package-internal specifier（`#settings/thread-title`），不是套件名。** dsh 的每個
  *    可調值都由一個**套件**擁有——這兩個數字在 dsh 是 `- id: session-title` /
  *    `@deepseek-ai/dsh-session-title` 那一列的 `fallbackMaxWords`、`fallbackMaxBytes`
- *    （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`，**數字一模一樣**）。
- *    我們表達不出來的是：**`apps/harness` 解不到自己**——條目走 `plugin-config.ts` 的
+ *    （`harness/packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`，**數字一模一樣**）。
+ *    我們表達不出來的是：**`harness/apps/harness` 解不到自己**——條目走 `plugin-config.ts` 的
  *    `import(entry.name)`，而 `@nexus/harness` 沒有連進自己的 `node_modules`（實測
  *    `Cannot find package '@nexus/harness'`）。退到 Node 的 `imports` 欄位，映射寫在
  *    `package.json` 裡看得見；為幾個設定值開套件是另一個方向，代價更大。

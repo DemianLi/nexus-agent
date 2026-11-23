@@ -1,5 +1,5 @@
 /**
- * 第三方元件清單（`scripts/gen-third-party-notices.ts`，[#1545](https://github.com/DemianLi/nexus-agent/issues/1545)）的
+ * 第三方元件清單（`harness/scripts/gen-third-party-notices.ts`，[#1545](https://github.com/DemianLi/nexus-agent/issues/1545)）的
  * 新鮮度與規則紅燈。照 dsh（687f282e）`scripts/gen-third-party-notices.spec.ts`：新鮮度放在測試裡，不另開 job。
  *
  * 新鮮度那格真的跑一次網頁的 vite build（`write: false`）。
@@ -52,7 +52,7 @@ function workspace(entries: Record<string, Manifest>): {
 describe('執行期授權', () => {
   it('執行期塞一顆 GPL-3.0 的相依：產生失敗並點名', () => {
     const { manifests, names } = workspace({
-      'packages/nexus-plugin-x/package.json': {
+      'harness/packages/nexus-plugin-x/package.json': {
         name: '@nexus/plugin-x',
         dependencies: { 'copyleft-lib': '^1' },
       },
@@ -92,7 +92,7 @@ describe('執行期授權', () => {
   it('開發那層的授權不擋', () => {
     const { manifests, names } = workspace({
       'package.json': { devDependencies: { 'lint-tool': '^1' } },
-      'apps/web/package.json': { name: '@nexus/web', devDependencies: { 'test-tool': '^1' } },
+      'web/package.json': { name: '@nexus/web', devDependencies: { 'test-tool': '^1' } },
     });
     expect([...tierExternalDeps(manifests, names)]).toEqual([
       ['lint-tool', false],
@@ -149,13 +149,13 @@ describe('tierExternalDeps', () => {
   it('依宣告的區域分層：根 manifest 一律是開發用，插件的 dependencies 是執行期', () => {
     const { manifests, names } = workspace({
       'package.json': { dependencies: { 'root-runtime-looking': '^1' } },
-      'packages/nexus-plugin-mcp/package.json': {
+      'harness/packages/nexus-plugin-mcp/package.json': {
         name: '@nexus/plugin-mcp',
         dependencies: { 'protocol-sdk': '^1', '@nexus/core': 'workspace:*' },
         devDependencies: { 'fixture-server': '^1' },
         optionalDependencies: { 'native-bin': '^1' },
       },
-      'packages/nexus-core/package.json': { name: '@nexus/core' },
+      'harness/packages/nexus-core/package.json': { name: '@nexus/core' },
     });
     expect(tierExternalDeps(manifests, names)).toEqual(
       new Map([
@@ -169,7 +169,7 @@ describe('tierExternalDeps', () => {
 
   it('網頁打包的開發相依算執行期；打包了卻沒人宣告就錯', () => {
     const { manifests, names } = workspace({
-      'apps/web/package.json': {
+      'web/package.json': {
         name: '@nexus/web',
         devDependencies: { react: '^19', 'type-only': '^1' },
       },
@@ -213,7 +213,7 @@ describe('cssBareImportsIn', () => {
 
 describe('parseVendoredRows', () => {
   it('讀得到進版控的 vendor 清單表', () => {
-    const rows = parseVendoredRows(readFileSync(join(ROOT, 'vendor/README.md'), 'utf8'));
+    const rows = parseVendoredRows(readFileSync(join(ROOT, 'harness/vendor/README.md'), 'utf8'));
     expect(rows.map((row) => row.npmName)).toEqual([
       '@nexus/cordis',
       '@nexus/cordis-plugin-loader',

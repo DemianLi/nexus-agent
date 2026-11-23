@@ -1,9 +1,9 @@
 /*
- * solid-glass 的本地修改（#1512，#1468 Q9）：`vendor/solid-glass/solid-glass.css` 一個字都不改。修改分在兩處——
+ * solid-glass 的本地修改（#1512，#1468 Q9）：`harness/vendor/solid-glass/solid-glass.css` 一個字都不改。修改分在兩處——
  * 這個檔（機制類與字型）與 `tokens.generated.css`（顏色，產生器產出）。
  * 這個檔在 `index.css` 裡排在 solid-glass.css 與 tokens.generated.css 後面，規則**除了焦點 offset 那段刻意留在 base layer，都在 layer 外**：
  * 同選擇器、同 specificity 時後載入的贏，上游同步只是換檔再比對，不必把修改重新套上去。`@theme`／`@custom-variant` 則是後定義的贏。
- * 每一條都登記在 `vendor/solid-glass/README.md` 的「本地修改」：蓋掉了上游的哪一行、為什麼、哪條測試釘住。
+ * 每一條都登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」：蓋掉了上游的哪一行、為什麼、哪條測試釘住。
  *
  * 這裡只放「機制」（#1468 Q8）：焦點、body、dark variant、程式標出來的高亮這類行為規則，以及 Q6 的字型。外觀照 SG。
  */
@@ -115,7 +115,7 @@
 
 /*
  * 輸入框群組的焦點外框畫在群組上（#1279；#1523 換成 vendor 版起寫在這裡，README 本地修改第 15 條）：裡面的 input／textarea
- * 自帶 `outline-none`、沒有邊框，焦點只能畫在外面那個群組。vendor 的群組（`vendor/solid-glass/components/ui/input-group.tsx:17`）
+ * 自帶 `outline-none`、沒有邊框，焦點只能畫在外面那個群組。vendor 的群組（`harness/vendor/solid-glass/components/ui/input-group.tsx:17`）
  * 只有 `outline-none` 加 `has-[…:focus-visible]:ring-3`，沒有外框；ring 已由 SG 自己清掉（`solid-glass.css:946-950`，
  * 不是無效的欄位時），這裡只補 Q5 的那一圈：2px 字色、offset 2px（offset 在上面的 base layer），跟全站其他焦點同一個樣子。
  * 外框寫在 layer 外，群組自帶的 `outline-none`（utilities layer）擋不掉。`local-edits.test.ts` 釘住這條與 vendor 原文；
@@ -130,7 +130,7 @@
 
 /*
  * 群組只在欄位本身停用時才變淡（#1523，PM 定；README 本地修改第 18 條）：vendor 的 `has-disabled:opacity-50`
- * （`vendor/solid-glass/components/ui/input-group.tsx:17`）編成 `:has(:disabled)`，群組裡任何一個後代停用就命中——
+ * （`harness/vendor/solid-glass/components/ui/input-group.tsx:17`）編成 `:has(:disabled)`，群組裡任何一個後代停用就命中——
  * 輸入框（`composer.tsx`）沒字時送出鈕是停用的，整個框就變成 50%。這裡保留 develop 的語意：按鈕停用不算，
  * 欄位（`input-group-control`）停用時照 vendor 變淡。底色那一半（`has-disabled:bg-input/50`、暗色 /80）本來就被
  * `solid-glass.css:919-932` 寫在 layer 外的 `background-color: var(--field)` 蓋掉，不用處理。
@@ -143,7 +143,7 @@
 
 /*
  * destructive 按鈕 hover 的淡紅底調淡（#1523，PM 定格 2；README 本地修改第 17 條）：vendor 是亮 `hover:bg-destructive/20`、
- * 暗 `dark:hover:bg-destructive/30`（`vendor/solid-glass/components/ui/button.tsx:18`），字疊上去只有 3.7，比 develop 那顆實心紅底白字
+ * 暗 `dark:hover:bg-destructive/30`（`harness/vendor/solid-glass/components/ui/button.tsx:18`），字疊上去只有 3.7，比 develop 那顆實心紅底白字
  * （hover 5.8 以上）差。Q5 碰到 Q8 以 Q5 為準（同第 12 條）：hover 底換成亮 17%、暗 26%，`--destructive` 由 tokengen 照這兩格解到 4.5。
  * 百分比的來源是 `tokengen/destructive-tint.mjs`，CSS 寫不了 import，`solid-glass-overrides.test.ts` 比對兩邊一致。
  * 包在 `(hover: hover)` 裡跟 Tailwind 的 `hover:` 一樣（觸控點一下不會把底色卡住）；寫在 layer 外，蓋得過 utilities 層的那兩條。
@@ -220,7 +220,7 @@ body {
 }
 
 /*
- * 手機左側欄的抽屜只留陰影、不畫邊（#1583，PM 定；README 本地修改第 21 條）：vendor 的 sheet（`vendor/solid-glass/components/ui/sheet.tsx:54`）
+ * 手機左側欄的抽屜只留陰影、不畫邊（#1583，PM 定；README 本地修改第 21 條）：vendor 的 sheet（`harness/vendor/solid-glass/components/ui/sheet.tsx:54`）
  * 同時帶 `data-[side=*]:border-*` 與 `shadow-lg`。SG 只在 `.bg-popover`（`solid-glass.css:396-404`）把邊歸零，`.bg-sidebar` 只給 blur
  * （`:365-371`），所以手機左側欄（vendor `components/ui/sidebar.tsx` 傳 `bg-sidebar`）會邊與陰影一起畫，違反規格 §5。寫在 layer 外，蓋得過 utilities 層的邊；
  * 手機側欄的 `SheetContent` 帶著 `data-slot="sidebar"`（vendor `components/ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面，蓋掉它），
@@ -267,10 +267,10 @@ body {
 
 /*
  * sheet 在 reduced-motion 下不滑、時長 ≤ 150ms（#1583，PM 定；README 本地修改第 23 條）：vendor 的 sheet 用 transition 滑入
- * （`vendor/solid-glass/components/ui/sheet.tsx:54`，200ms、位移 2.5rem；遮罩 `:29` 150ms 淡入），不走 `--animate-in`，
+ * （`harness/vendor/solid-glass/components/ui/sheet.tsx:54`，200ms、位移 2.5rem；遮罩 `:29` 150ms 淡入），不走 `--animate-in`，
  * 所以 `motion.css` 的 reduced-motion 段管不到它。這裡拿掉位移、留下 ≤ 150ms 的透明度（同 Q5 的規則）。寫在 layer 外，
  * 蓋得過 utilities 層的 `translate-*` 與 `duration-*`。手機側欄的抽屜 `data-slot` 是 `sidebar`（見上面「只留陰影」那條），一起列。
- * `scripts/check-built-css.mjs` 在產物裡量這幾條，`guard/` 在模擬 reduced-motion 下量計算值。不讓 Prettier 排版，理由同上。
+ * `harness/scripts/check-built-css.mjs` 在產物裡量這幾條，`guard/` 在模擬 reduced-motion 下量計算值。不讓 Prettier 排版，理由同上。
  */
 /* prettier-ignore */
 @media (prefers-reduced-motion: reduce) {
@@ -284,7 +284,7 @@ body {
 
 /*
  * command 的選項不畫 vendor 附的那顆勾（#1583，PM 決定第 3 點；README 本地修改第 27 條）：vendor 的 `CommandItem`
- * （`vendor/solid-glass/components/ui/command.tsx:165`）在 children 後面自己附一顆 `CheckIcon`，平常 `opacity-0` 但照樣占位，
+ * （`harness/vendor/solid-glass/components/ui/command.tsx:165`）在 children 後面自己附一顆 `CheckIcon`，平常 `opacity-0` 但照樣占位，
  * `data-checked="true"` 時才看得見。nexus 的勾由呼叫端自己畫、帶報讀名稱「目前選的」（`composer.tsx` 的 `@` 選單）；
  * vendor 那顆是 `aria-hidden`，改用它會失去報讀，留著又會畫出兩個勾、在 `flex-col` 的項目（composer 的命令選單）多出一列。
  * 所以設成 `display: none`（不是 opacity）。選擇器錨在 vendor 的結構上：它永遠是選項的最後一個子節點；
@@ -297,7 +297,7 @@ body {
 
 /*
  * 輸入框（SG 的 `Composer`）的焦點外框畫在外殼上（#1591；README 本地修改第 30 條）：vendor 的 textarea
- * （`vendor/solid-glass/components/ui/composer.tsx`）自帶 `outline-none`、沒有邊框，外殼只有 `focus-within:border-ring/60`
+ * （`harness/vendor/solid-glass/components/ui/composer.tsx`）自帶 `outline-none`、沒有邊框，外殼只有 `focus-within:border-ring/60`
  * 而沒有邊框寬度，等於聚焦時什麼都看不到。跟第 15 條（輸入框群組）同一個做法：2px 字色、offset 2px，外框寫在 layer 外，
  * offset 在 base layer。`guard/` 在 composer 頁量外殼聚焦後的外框與 `box-shadow`。不讓 Prettier 排版，理由同上。
  */
@@ -360,7 +360,7 @@ body {
 
 /*
  * 用量環的色階壓回 status token（#1591 PM 決定第 6 點；README 本地修改第 37 條）：vendor 的 `ContextRing`
- * （`vendor/solid-glass/components/ui/context-ring.tsx`）寫死 `text-blue-500`（70% 以下）與 `text-amber-500`（70% 起），是
+ * （`harness/vendor/solid-glass/components/ui/context-ring.tsx`）寫死 `text-blue-500`（70% 以下）與 `text-amber-500`（70% 起），是
  * Tailwind 的色板，不跟 nexus 的亮暗 token 走。90% 起的 `text-destructive` 已經是 token，不用動。環是非文字，要過 3:1；
  * `guard/` 量亮暗兩色加三個色階。選擇器錨在 vendor 的 class 上：`local-edits.test.ts` 釘住 vendor 仍寫這兩個 class。
  */
@@ -411,7 +411,7 @@ body {
 
 /*
  * 對話的每一則不用 content-visibility（#1638 PM 決定 Q6；README 本地修改第 42 條）：vendor 的 `MessageScrollerItem`
- * （`vendor/solid-glass/components/ui/message-scroller.tsx:74`）帶 `[content-visibility:auto]` 與 `[contain-intrinsic-size:auto_10rem]`，
+ * （`harness/vendor/solid-glass/components/ui/message-scroller.tsx:74`）帶 `[content-visibility:auto]` 與 `[contain-intrinsic-size:auto_10rem]`，
  * paint containment 會把卡片陰影與光暈切成直角（§9，#1468 Q19 保留的壓制；500 則的捲動量測在 #404 的 PR）。寫在 layer 外，
  * 蓋得過 utilities 層的那兩條。`local-edits.test.ts` 釘住 vendor 原文仍是 auto，`guard/` 量計算值是 `visible`。
  */
@@ -447,7 +447,7 @@ body {
 
 /*
  * 不支援 scroll-driven 動畫的瀏覽器，對話區不淡出（#1638 PR B PM 判；README 本地修改第 43 條）：vendor 的 viewport 用
- * `scroll-fade-b`（`vendor/solid-glass/shadcn/tailwind.css` 的 `@utility scroll-fade-b`），退路是
+ * `scroll-fade-b`（`harness/vendor/solid-glass/shadcn/tailwind.css` 的 `@utility scroll-fade-b`），退路是
  * `@supports not (animation-timeline: scroll())` 底下把 `--scroll-fade-b` 設成整段，淡出常駐：捲到底時最新那則的最後約 40px
  * 也被壓淡，字的對比過不了 §5 的門檻。這裡把淡出歸 0（`-t` 一起歸 0，換成雙向淡出時同樣不遮字）。寫在 layer 外，蓋得過
  * utilities 層。支援的瀏覽器走不到這段，`guard/`（Chrome）量不到；`local-edits.test.ts` 釘這段與 vendor 的退路原文。
@@ -463,7 +463,7 @@ body {
 
 /*
  * 問答選項的焦點外框畫在選項上（#1638 PR C，卡上驗收 D；README 本地修改第 46 條）：vendor 的 `QuestionnaireChoice`
- * （`vendor/solid-glass/components/ui/questionnaire.tsx:109`）把真的 input 鋪滿選項、`opacity-0`，聚焦的樣子只有
+ * （`harness/vendor/solid-glass/components/ui/questionnaire.tsx:109`）把真的 input 鋪滿選項、`opacity-0`，聚焦的樣子只有
  * `has-[>input:focus-visible]:border-ring` 與 `ring-3`；而 SG 自己的玻璃規則（`solid-glass.css:769-781`）在 layer 外寫了選項的
  * `border-color` 與 `box-shadow`，兩樣都被蓋掉，input 上的外框又看不見——鍵盤聚焦時什麼都沒畫（違反 #1497 Q5）。跟第 15、30 條
  * 同一個做法：2px 字色、offset 2px，外框寫在 layer 外，offset 在 base layer。`local-edits.test.ts` 釘住這條與 vendor 原文，
@@ -482,7 +482,7 @@ body {
 
 /*
  * 不支援 scroll-driven 動畫的瀏覽器，一排附件左右不淡出（#1638 PR C PM 判，同第 43 條的判法；README 本地修改第 47 條）：vendor 的
- * `AttachmentGroup`（`vendor/solid-glass/components/ui/attachment.tsx:189`）用 `scroll-fade-x`（`vendor/solid-glass/shadcn/tailwind.css`
+ * `AttachmentGroup`（`harness/vendor/solid-glass/components/ui/attachment.tsx:189`）用 `scroll-fade-x`（`harness/vendor/solid-glass/shadcn/tailwind.css`
  * 的 `@utility scroll-fade-x`），退路是 `@supports not (animation-timeline: scroll())` 底下把 `--scroll-fade-s`／`-e` 設成整段，
  * 不管有沒有溢出都常駐：只有一張附件時左右兩邊也被切淡。支援的瀏覽器不溢出時 timeline 不作用、兩邊都是 0，溢出才跟著捲動收放
  * （`guard/` 量）。這裡把退路歸 0，寫在 layer 外。`guard/`（Chrome）量不到這段；`local-edits.test.ts` 釘這段與 vendor 的退路原文。
@@ -498,7 +498,7 @@ body {
 
 /*
  * 亮色時附件上傳中的標題 shimmer 亮面改成次要字色（#1638 PR C PM 判；README 本地修改第 48 條）：vendor 的 `AttachmentTitle`
- * （`vendor/solid-glass/components/ui/attachment.tsx:104`）用 shadcn 的 `shimmer`（`vendor/solid-glass/shadcn/tailwind.css` 的
+ * （`harness/vendor/solid-glass/components/ui/attachment.tsx:104`）用 shadcn 的 `shimmer`（`harness/vendor/solid-glass/shadcn/tailwind.css` 的
  * `@utility shimmer`），字是 `-webkit-text-fill-color: transparent`、顏色來自漸層；亮色的亮面是字色的 20% 透明度，12px 字掃過時
  * 正中只有 1.55（§5 門檻 4.5）。Q5 優先於 Q8，偏離只做到過門檻為止（同第 12、17 條）：亮面換成 `--muted-foreground`（約 5.9，
  * 跟說明那一行同色）。暗色的亮面是更亮的字色（最低 16.09），維持 SG。`guard/` 量兩色每個色標的最低對比。
@@ -509,7 +509,7 @@ body {
 }
 
 /*
- * 工具列執行中不閃（#1682 PM 決定 Q1；README 本地修改第 61 條）：vendor 的 `StepRow`（`vendor/solid-glass/components/ui/tool-steps.tsx`）
+ * 工具列執行中不閃（#1682 PM 決定 Q1；README 本地修改第 61 條）：vendor 的 `StepRow`（`harness/vendor/solid-glass/components/ui/tool-steps.tsx`）
  * 在 `status === "running"` 時給整顆按鈕 `animate-pulse`，波谷 opacity .5 時次要字的對比亮色約 2.0、暗色約 2.75，過不了 §5 的 4.5。
  * Q5 優先於 Q8（先例第 48 條）：動畫停掉，執行中由 trailing 裡的狀態字「執行中」表示（§7：狀態不能只靠動效）。選擇器錨在 vendor 的
  * class 上，寫在 layer 外；`local-edits.test.ts` 釘 vendor 仍是 `animate-pulse`，`guard/` 量執行中那一列的 `animation-name`。

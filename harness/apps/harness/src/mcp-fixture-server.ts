@@ -1,10 +1,10 @@
 /**
  * 組裝點這一側的假 MCP server：一個真的走 stdio 的子行程。
  *
- * 與 `packages/nexus-plugin-mcp` 那一支分工不同，不是複製品。那一支驗的是 plugin 自己
+ * 與 `harness/packages/nexus-plugin-mcp` 那一支分工不同，不是複製品。那一支驗的是 plugin 自己
  * （命名、註冊、關機）；這一支只提供**外部資料**，讓 [`mcp.test.ts`](./mcp.test.ts) 驗
  * Phase 2 的主路徑驗收——agent 經 MCP 讀到東西、再經基座內建的 `write_file` 寫進虛擬
- * 檔案系統。它刻意住在 `apps/harness`：plugin 套件不得 import harness，反向借用測試素材
+ * 檔案系統。它刻意住在 `harness/apps/harness`：plugin 套件不得 import harness，反向借用測試素材
  * 也會把那條界線弄糊。
  *
  * 由 `mcp.test.ts` 以 `node --import tsx <這個檔>` 啟動。
@@ -74,7 +74,7 @@ server.registerTool(
 
 /**
  * 回**空的** `content` 陣列的那一支（#1562）：MCP 允許工具什麼都不回（只做事、沒有可講的結果）。`projectNonText`
- * （`packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列不換，ToolMessage 的 content 留著 `[]`，模型端點收到的
+ * （`harness/packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列不換，ToolMessage 的 content 留著 `[]`，模型端點收到的
  * 工具訊息就是空的——驗收看的是下一個請求裡那則工具訊息被補成 `(no output)`。
  */
 export const EMPTY_RESULT = 'empty_result';

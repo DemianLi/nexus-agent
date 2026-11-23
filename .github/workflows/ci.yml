@@ -176,7 +176,7 @@ jobs:
         if: steps.plan.outputs.mode == 'light' && steps.scope.outputs.typecheck == 'true'
         with:
           path: |
-            packages/*/node_modules/.cache/nexus-typecheck
+            harness/packages/*/node_modules/.cache/nexus-typecheck
             apps/*/node_modules/.cache/nexus-typecheck
           key: typecheck-${{ steps.base.outputs.sha }}
           restore-keys: typecheck-
@@ -420,7 +420,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
-            packages/*/node_modules/.cache/nexus-typecheck
+            harness/packages/*/node_modules/.cache/nexus-typecheck
             apps/*/node_modules/.cache/nexus-typecheck
           key: typecheck-${{ github.sha }}
 
@@ -450,7 +450,7 @@ jobs:
         run: pnpm --filter @nexus/web --fail-if-no-match run test
 
   # harness 是關鍵路徑，切四片平行跑（#2498）；web 一片就比 harness 的一片短，不分。
-  # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到幾份就取幾份，跑完由合併後那一輪各片存回自己這一份。
+  # 分片看上一輪的耗時（#2093，`harness/apps/harness/src/test-shard-sequencer.ts`）：plan 查到幾份就取幾份，跑完由合併後那一輪各片存回自己這一份。
   # 四份都沒查到時四片退回 vitest 的雜湊切法；plan 查到了、這一片卻取不到就紅，不會一片看耗時、一片看雜湊而漏跑檔。
   test-harness:
     name: test-harness (${{ matrix.shard }}/4)
@@ -498,7 +498,7 @@ jobs:
         if: inputs.full && !cancelled()
         run: |
           mkdir -p .harness-durations
-          cp apps/harness/node_modules/.vite/vitest/*/results.json ".harness-durations/results-${{ matrix.shard }}.json"
+          cp harness/apps/harness/node_modules/.vite/vitest/*/results.json ".harness-durations/results-${{ matrix.shard }}.json"
       - name: 存這一片的耗時
         if: inputs.full && !cancelled()
         uses: actions/cache/save@v6
@@ -506,7 +506,7 @@ jobs:
           path: .harness-durations/results-${{ matrix.shard }}.json
           key: harness-durations-${{ matrix.shard }}-${{ github.sha }}
 
-  # 沙箱 spawner（#1946，`native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試，再用編好的執行檔跑 TS 那一側。plan 的 `rust` 決定跑不跑，跟模式無關：
+  # 沙箱 spawner（#1946，`harness/native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試，再用編好的執行檔跑 TS 那一側。plan 的 `rust` 決定跑不跑，跟模式無關：
   # 動到它、TS 那一側的接縫與 client 或 CI 自己的功能 PR（輕的模式也跑，#1827 D55：接受超過 60 秒）、packed-install 要跑的一輪（並打 bundle 給它）與合併後完整一輪。
   # 核心沒有 Landlock 時測試紅，不准自我跳過。同一個 crate 也編出監督行程（`src/bin/nexus-supervisor.rs`），per-thread 的整合測試（#2341）在這裡跑。
   sandbox-spawner:
@@ -526,7 +526,7 @@ jobs:
       # 不帶 --ignored 就一支都不跑，所以要核對實際跑到的數目不是 0（test_ci_workflow.py 釘住這一步）。
       - name: 宿主的 MCP 符合性測試
         shell: bash
-        working-directory: native/sandbox-spawner
+        working-directory: harness/native/sandbox-spawner
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored --nocapture | tee "$RUNNER_TEMP/mcp-conformance.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/mcp-conformance.txt"
@@ -534,7 +534,7 @@ jobs:
       # 不帶 --ignored 就一支都不跑，所以要核對實際跑到的數目不是 0（test_ci_workflow.py 釘住這一步）。
       - name: 橋對 TS 葉子的對接測試
         shell: bash
-        working-directory: native/sandbox-spawner
+        working-directory: harness/native/sandbox-spawner
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
@@ -579,7 +579,7 @@ jobs:
       # 不帶 --ignored 就一支都不跑，所以要核對實際跑到的數目不是 0（test_ci_workflow.py 釘住這一步）。
       - name: 宿主的 MCP 符合性測試
         shell: bash
-        working-directory: native/sandbox-spawner
+        working-directory: harness/native/sandbox-spawner
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored --nocapture | tee "$RUNNER_TEMP/mcp-conformance.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/mcp-conformance.txt"
@@ -587,7 +587,7 @@ jobs:
       # 不帶 --ignored 就一支都不跑，所以要核對實際跑到的數目不是 0（test_ci_workflow.py 釘住這一步）。
       - name: 橋對 TS 葉子的對接測試
         shell: bash
-        working-directory: native/sandbox-spawner
+        working-directory: harness/native/sandbox-spawner
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"

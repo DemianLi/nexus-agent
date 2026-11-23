@@ -37,7 +37,7 @@ declare module '@nexus/core' {
   }
 }
 
-/** 憑證名的形狀：環境變數形狀，跟 harness 受管憑證檔的鍵同一條（`apps/harness/src/credentials.ts` 的 `CREDENTIAL_NAME_PATTERN`）。 */
+/** 憑證名的形狀：環境變數形狀，跟 harness 受管憑證檔的鍵同一條（`harness/apps/harness/src/credentials.ts` 的 `CREDENTIAL_NAME_PATTERN`）。 */
 export const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 const credentialName = z

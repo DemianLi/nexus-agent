@@ -1,6 +1,6 @@
 /**
  * 影子比對與 `log`（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）的單元測試：投影、這次呼叫要推的那一段、分類、計數與兩顆 middleware。
- * 產品路徑上「沒有一次落在 other」的驗收在 `apps/harness` 的 `log-derived-history.test.ts` 與 `.agents.test.ts`；
+ * 產品路徑上「沒有一次落在 other」的驗收在 `harness/apps/harness` 的 `log-derived-history.test.ts` 與 `.agents.test.ts`；
  * 兩個分開數的類別在 `history-shadow-scenarios.test.ts`。
  */
 

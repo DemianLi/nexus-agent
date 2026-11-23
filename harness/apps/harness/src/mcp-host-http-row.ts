@@ -1,5 +1,5 @@
 /**
- * 一台 HTTP MCP server 交給宿主（`native/sandbox-spawner/host`，#2570 D2b）的那一段 `connection`。
+ * 一台 HTTP MCP server 交給宿主（`harness/native/sandbox-spawner/host`，#2570 D2b）的那一段 `connection`。
  *
  * 宿主只收成品：`headers` 是代入之後的字串，`credentialHeaders`（header 名 → prefix）標出哪幾個是憑證。**只有這些進宿主的遮蔽器**，
  * 沒標的是字面值，不遮。哪幾個是憑證由 `@nexus/plugin-mcp` 的 `hostHeaders` 判斷（`redactorFor` 用同一個函式，兩條路只有一份判斷）：

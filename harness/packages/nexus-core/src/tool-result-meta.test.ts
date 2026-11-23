@@ -2,7 +2,7 @@
  * `tool-result-meta.ts` 自己的邏輯（[#617](https://github.com/DemianLi/nexus-agent/issues/617)）：hunk 的算法、槽的
  * 規則、圍堵怎麼把槽裡的東西寫進 `tool/result`。
  *
- * 掛進真的組裝、真的基座工具跑完之後日誌上長什麼樣，由 `apps/harness/src/tool-result-meta.test.ts` 量。
+ * 掛進真的組裝、真的基座工具跑完之後日誌上長什麼樣，由 `harness/apps/harness/src/tool-result-meta.test.ts` 量。
  * 這裡量的是**產品路徑上今天碰不到、但規則要守住的那幾條**：別顆工具在自己的呼叫裡打 backend、
  * 失敗的呼叫手上有 meta、圍堵外面的 backend 呼叫。
  */

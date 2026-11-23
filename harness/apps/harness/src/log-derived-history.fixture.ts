@@ -374,7 +374,7 @@ export const LOW_SUMMARIZATION = [
 // 比對
 // ---------------------------------------------------------------------------
 
-/** 工具結果被剪刀剪過，留在線上的標記：`packages/nexus-core/src/tool-result-pruner.ts` 的 `TOOL_RESULT_PRUNE_MARKER`（那顆帶換行，線上 JSON 裡是跳脫過的，所以這裡只認中間那句）。 */
+/** 工具結果被剪刀剪過，留在線上的標記：`harness/packages/nexus-core/src/tool-result-pruner.ts` 的 `TOOL_RESULT_PRUNE_MARKER`（那顆帶換行，線上 JSON 裡是跳脫過的，所以這裡只認中間那句）。 */
 export const PRUNE_MARKER = '工具結果中段已剪除';
 /** 舊工具呼叫的參數被截斷，留在線上的標記：deepagents 摘要 middleware `truncateArgs` 的預設 `truncationText`（`...(argument truncated)`，deepagents@1.13.1 `dist/langsmith-*.js`），我們沒有自己的產生者。 */
 export const TRUNCATE_MARKER = 'argument truncated';
@@ -680,7 +680,7 @@ async function sessionsUnder(root: string): Promise<SessionOnDisk[]> {
 }
 
 /**
- * 出貨的 `live-model` 那一列（`apps/harness/cordis.yml`，已驗過形狀）的 `config`。
+ * 出貨的 `live-model` 那一列（`harness/apps/harness/cordis.yml`，已驗過形狀）的 `config`。
  *
  * patch 對既有列是**整份替換 `config`**（`applyEntryPatches` 的淺層覆寫），所以夾具只想換 `baseUrl` 與重試的時候，
  * 不能只寫那幾格——#1372 之前夾具就是這樣寫的，SH、SV 系列跑的 `live-model` 少了出貨型錄、相容設定與逾時，

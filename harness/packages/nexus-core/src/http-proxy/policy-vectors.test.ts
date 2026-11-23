@@ -1,6 +1,6 @@
 /**
- * 代理政策的共用樣本（#2570）：TS 的 {@link proxyForUrl}、{@link isLoopbackHost} 跑 `native/sandbox-spawner/proxy-vectors.json`，
- * 宿主的 `nexus_host::proxy`（`native/sandbox-spawner/host/tests/proxy.rs`）跑同一份。
+ * 代理政策的共用樣本（#2570）：TS 的 {@link proxyForUrl}、{@link isLoopbackHost} 跑 `harness/native/sandbox-spawner/proxy-vectors.json`，
+ * 宿主的 `nexus_host::proxy`（`harness/native/sandbox-spawner/host/tests/proxy.rs`）跑同一份。
  */
 
 import { readFileSync } from 'node:fs';

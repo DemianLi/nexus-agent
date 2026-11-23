@@ -1,7 +1,7 @@
 /**
  * 人的命令，**在真的 REPL 裡**。
  *
- * `packages/nexus-plugin-commands` 那兩個檔案驗的是解析、執行與配對關係；這裡驗的是
+ * `harness/packages/nexus-plugin-commands` 那兩個檔案驗的是解析、執行與配對關係；這裡驗的是
  * 接線 —— 一行 `/name` 到底走了哪條路。三條路都要有人守：跑 handler、掉回模型、
  * 收工。少了「掉回模型」那一條，一個把所有斜線行都吞掉的實作照樣會綠。
  *

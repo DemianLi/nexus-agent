@@ -636,7 +636,7 @@ async function reportListingFailure(
   );
 }
 
-/** serve 的 `host-tools` 那一列（`apps/harness/cordis.serve.yml`）：免核准的名單與宿主頁幾毫秒沒回就當逾時。 */
+/** serve 的 `host-tools` 那一列（`harness/apps/harness/cordis.serve.yml`）：免核准的名單與宿主頁幾毫秒沒回就當逾時。 */
 function hostToolsRow(config: { readonly exempt: readonly string[]; readonly timeoutMs?: number }) {
   return `- id: host-tools\n  config: ${JSON.stringify({
     approval: { exempt: config.exempt },

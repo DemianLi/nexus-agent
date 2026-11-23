@@ -6,7 +6,7 @@
  * （`toBe`），而且掛在物件上的錯誤碼還在——碼住在以訊息物件為鍵的 `WeakMap` 上，複製就斷（`tool-events.ts` 檔頭）。
  *
  * 掛進產品組裝之後的位置（pre 在閘門外側、post 在輸出校驗外側、execute 在最內層）由 `fold.test.ts` 釘；
- * 組裝之後模型收到的訊息逐位元組不變由 `apps/harness/src/tool-pipeline-product.test.ts` 量。
+ * 組裝之後模型收到的訊息逐位元組不變由 `harness/apps/harness/src/tool-pipeline-product.test.ts` 量。
  */
 
 import { HumanMessage, ToolMessage } from '@langchain/core/messages';

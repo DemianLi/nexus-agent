@@ -1,7 +1,7 @@
 /**
  * 瀏覽器那一端的線。
  *
- * 只用 `fetch`，所以它是同構的：`apps/web` 用它連 harness，測試用它連一個
+ * 只用 `fetch`，所以它是同構的：`web` 用它連 harness，測試用它連一個
  * 記憶體裡的 handler，兩邊跑的是同一條路徑（對應 dsh 的 `InProcessApiClient`
  * ——「跑完整的協定序列化與校驗路徑而不經過網路」）。
  *
@@ -1051,7 +1051,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | ThreadManagementCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
-    // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
+    // （`harness/packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
     const response = await postJson(commandPath(threadId, method), command);
     if (!response.ok) {
       throw new UplinkTransportError(response.status, await response.text());

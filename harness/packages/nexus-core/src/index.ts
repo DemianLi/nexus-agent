@@ -2,7 +2,7 @@
  * `@nexus/core`——NexusPlugin 契約與 fold。
  *
  * 這裡是純轉換層：只產出參數，不呼叫 `createDeepAgent`。那一次呼叫住在
- * `apps/harness`，而且只有那一個地方。
+ * `harness/apps/harness`，而且只有那一個地方。
  */
 
 export { NEXUS_CORE_VERSION } from './version.js';

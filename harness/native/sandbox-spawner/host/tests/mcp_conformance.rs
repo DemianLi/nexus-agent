@@ -1,4 +1,4 @@
-//! 宿主的 MCP 對官方 server 的符合性：真的起 `packages/nexus-plugin-mcp/src/conformance-server.ts`（node 子行程，
+//! 宿主的 MCP 對官方 server 的符合性：真的起 `harness/packages/nexus-plugin-mcp/src/conformance-server.ts`（node 子行程，
 //! 四種對手見該檔檔頭），經宿主的橋連上去，斷言 **server 那一側收到的東西**：握手走哪一條、封套鍵、標頭、分頁、取消。
 //! 手寫的假 server（`tests/common/fake_mcp.rs`）不檢查這些，綠的測試證明不了宿主照規格送。
 //!

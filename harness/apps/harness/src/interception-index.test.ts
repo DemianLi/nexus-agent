@@ -8,7 +8,7 @@
  * ## 為什麼是這裡，而不是 `registry.ts` 的檔頭
  *
  * 最直覺的家是 `PluginRegistry` 的二十個欄位。**那是錯的軸**：第 2、6、7 格全擠在
- * `middleware` 一個欄位，第 3 格落在 `apps/harness` 根本沒有欄位，而第 6／7 格的**位置**
+ * `middleware` 一個欄位，第 3 格落在 `harness/apps/harness` 根本沒有欄位，而第 6／7 格的**位置**
  * 是 `fold.ts` 決定的、不由註冊順序決定——欄位這一軸連「排在第幾個」都表達不出來。
  * #190 記著同型的坑：grep `lifecycle` 找生命週期鉤子會落到關機 disposer 上。
  *
@@ -20,7 +20,7 @@
  * 下面那條斷言是絆索。
  *
  * **（2026-10-09 補，#1248）** 匯流排上有了 `tools/pre-execute`／`tools/execute`／`tools/post-execute`／`tools/result` 之後，
- * 這三個名字也會 grep 到 `packages/nexus-core/src/tool-pipeline.ts`：那是**事件的生產者與宣告**，不是這一格的 middleware 佔用者，
+ * 這三個名字也會 grep 到 `harness/packages/nexus-core/src/tool-pipeline.ts`：那是**事件的生產者與宣告**，不是這一格的 middleware 佔用者，
  * 所以不列進 `occupants`；「現在由哪個事件佔住」另有一欄（`eventOccupant`）。
  *
  * ## 每一列三件事，不是一個判決
@@ -117,7 +117,7 @@ import { describe, expect, it } from 'vitest';
 
 import { scanEventTableTree } from './event-table-scan.js';
 
-/** 這個 repo 的根。從 `apps/harness/src/` 往上三層。 */
+/** 這個 repo 的根。從 `harness/apps/harness/src/` 往上三層。 */
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /**
@@ -188,16 +188,16 @@ const INDEX: readonly InterceptionRow[] = [
     permission: '讀／改這一步要送出的訊息批次，可 `jumpTo: "end"` 收掉這一輪',
     occupants: [
       // 注入那半的**消費者**（#1474 起它遷上樹，只經 `@nexus/agent-loop` 的 `preStep` 登記 listener，自己沒有 `beforeAgent`）。
-      'packages/nexus-plugin-agent-instructions/src/index.ts',
+      'harness/packages/nexus-plugin-agent-instructions/src/index.ts',
       // 第二位消費者（#1625）：時間讀數，同一個接縫、同一顆宿主 middleware 當載體。
-      'packages/nexus-plugin-time-context/src/index.ts',
+      'harness/packages/nexus-plugin-time-context/src/index.ts',
       // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
-      'apps/harness/src/pre-step-middleware.ts',
+      'harness/apps/harness/src/pre-step-middleware.ts',
       // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。plan-mode 經 `thread.on('agent/pre-step')`
       // 自己聽那一步（#2358），不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
-      'packages/nexus-plugin-plan-mode/src/index.ts',
+      'harness/packages/nexus-plugin-plan-mode/src/index.ts',
       // 那一步在 `langgraph` 下的載體：core 在 `wrapModelCall` 頭上派 `agent/pre-step` 的轉接格（native 由迴圈自己派）。
-      'packages/nexus-core/src/pre-step-adapter.ts',
+      'harness/packages/nexus-core/src/pre-step-adapter.ts',
     ],
     permissionDelta:
       '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一步' +
@@ -223,7 +223,7 @@ const INDEX: readonly InterceptionRow[] = [
     eventOccupant: NO_EVENT,
     moment: 'agent/turn-stopping',
     permission: 'awaited 通知，聽者可以要求再跑一步（`agent.steer()`）',
-    occupants: ['apps/harness/src/goal-driver.ts'],
+    occupants: ['harness/apps/harness/src/goal-driver.ts'],
     permissionDelta:
       '**只佔了一半**：聽者要求再跑一步的口（`agent.steer()` 給聽者用的那一面）沒有等價物，輪迴圈歸入口點所有。' +
       '載體偏離已登記在該檔檔頭；今天只有 goal 一個消費者，一個消費者不撐起一條通道。' +
@@ -236,7 +236,7 @@ const INDEX: readonly InterceptionRow[] = [
     eventOccupant: NO_EVENT,
     moment: 'tools/pre-execute',
     permission: 'waterfall，allow／deny／ask',
-    occupants: ['packages/nexus-core/src/approval.ts'],
+    occupants: ['harness/packages/nexus-core/src/approval.ts'],
     permissionDelta:
       '**事件 `tools/pre-execute` 已宣告也有生產者（#1248，在這一格的閘門外側），但核准沒有搬上去，所以這一列的事件佔用仍是「尚無」**：' +
       '匯流排上的 `PreToolDecision` 沒有 `ask`，監聽者只能 allow／deny；問人仍走 `approvals` 註冊點。' +
@@ -250,7 +250,7 @@ const INDEX: readonly InterceptionRow[] = [
       ' 四值（`types.ts:32`），我們的**應答**只有 approve／reject（`cancelled` 不是人答的，是停止收回時由 pump 記，#1029）。' +
       '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
       '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
-      '（例如 `packages/nexus-plugin-submit-record/src/index.ts` 的 `approvals.gate`，`submit_record` 回 `ask`；' +
+      '（例如 `harness/packages/nexus-plugin-submit-record/src/index.ts` 的 `approvals.gate`，`submit_record` 回 `ask`；' +
       'plan-mode 以前也掛一位，#652 照 dsh 改走提問通道，不在這裡了）。' +
       '**plan-mode 的 `exit_plan_mode` 模式外拒絕曾經在這個事件上（#1272）、現在不在了（#1276）**：dsh 只在工具本體裡檢查' +
       '（`execute` 拋 `is only available in plan mode`），那一層排在核准閘門之前的拒絕是 nexus 自己加的，demian 2026-10-09 決定拿掉。' +
@@ -259,7 +259,7 @@ const INDEX: readonly InterceptionRow[] = [
       '**核准的問與答各有一顆事件（#1029，翻了 #220 的「認帳不做」）。** 照 dsh 每次 request 追加 ' +
       '`approval/asked` ＋ `approval/decided`（`user-approval/src/types.ts:44-58`，log-only audit，帶 id／' +
       '工具名／call id／理由／結果），詞彙同 dsh 的 `ApprovalOutcome` 四值。**兩個生產者都在圖外的事實沒變**' +
-      '（`apps/harness/src/thread-pump.ts`，`cli.ts` 傳 `HEADLESS_APPROVALS` 所以永遠不問人），' +
+      '（`harness/apps/harness/src/thread-pump.ts`，`cli.ts` 傳 `HEADLESS_APPROVALS` 所以永遠不問人），' +
       '但事件的寫法因此分兩條：人那條由 pump 在記 `interrupt/raised` 的同一刻寫 asked、收到回覆或收回時寫 decided' +
       '（閘門在圖內、`interrupt()` 回來後從頭重跑，在它前面寫會是兩筆），回覆不是 approve 也不是 reject 時記 `unavailable`（#2027）；' +
       '不必問人就確定的（政策關掉 → `rejected`、' +
@@ -279,19 +279,19 @@ const INDEX: readonly InterceptionRow[] = [
     moment: 'tools/execute',
     permission: '環繞 waterfall（超時／重試／指標）',
     occupants: [
-      'packages/nexus-core/src/containment.ts',
-      'packages/nexus-core/src/fold.ts',
-      'packages/nexus-core/src/invalid-tool-args.ts',
-      'packages/nexus-core/src/turn-cancel.ts',
-      'packages/nexus-core/src/output-schema.ts',
+      'harness/packages/nexus-core/src/containment.ts',
+      'harness/packages/nexus-core/src/fold.ts',
+      'harness/packages/nexus-core/src/invalid-tool-args.ts',
+      'harness/packages/nexus-core/src/turn-cancel.ts',
+      'harness/packages/nexus-core/src/output-schema.ts',
       // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們在 `tools/execute` 內層換狀態。
-      'packages/nexus-core/src/fs-tool-errors.ts',
+      'harness/packages/nexus-core/src/fs-tool-errors.ts',
       // 耐久檢查點（#599）：dsh 的 `session-checkpoint-policy` 本來就掛在這一格，呼叫動手之前排空（root 與子代理）。
-      'packages/nexus-core/src/session-checkpoint-policy.ts',
+      'harness/packages/nexus-core/src/session-checkpoint-policy.ts',
       // 讀檔結果最後補上讀到哪（#594）：dsh 在 `read` 本體裡寫，我們在 `tools/execute` 外側補。
-      'packages/nexus-core/src/read-continuation.ts',
+      'harness/packages/nexus-core/src/read-continuation.ts',
       // 子代理撞到輸出上限（#433）：dsh 在前景 `task` 本體裡拋，我們貼著本體換掉結果。
-      'packages/nexus-core/src/max-tokens.ts',
+      'harness/packages/nexus-core/src/max-tokens.ts',
     ],
     permissionDelta:
       '**這一格與第 4、7 格在我們這側是同一種機制的三個陣列位置**，dsh 那三格是三種權限' +
@@ -304,7 +304,7 @@ const INDEX: readonly InterceptionRow[] = [
     eventOccupant: 'tools/post-execute',
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
-    occupants: ['packages/nexus-core/src/shared-read-mark.ts'],
+    occupants: ['harness/packages/nexus-core/src/shared-read-mark.ts'],
     permissionDelta:
       '佔用者是共用區讀出內容的前綴（#1676），`tools/post-execute` 內層的 core 監聽者，在每一位插件監聽者內側；' +
       '位置由 fold 決定。輸出校驗（dsh 在這一格**之前**的 `createSuccessResult`）在第 6 格的內層。' +
@@ -336,7 +336,7 @@ const EXPECTED_SITES = 17;
  *
  * **例外明著列**：第 2 列裡不是靠 `beforeAgent` 佔住的那幾個，見 {@link PRE_STEP_OTHER_CARRIERS}。
  */
-const PRE_STEP_ROOTS = ['apps/harness/src', 'packages'] as const;
+const PRE_STEP_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
 
 /**
  * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。
@@ -346,15 +346,15 @@ const PRE_STEP_ROOTS = ['apps/harness/src', 'packages'] as const;
  * 讓掃描放寬，是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
  *
  * agent-instructions（#1474）是**消費者**：它經 `@nexus/agent-loop` 登記 listener、自己不碰 `beforeAgent`，載體是宿主的
- * `apps/harness/src/pre-step-middleware.ts`（那個在掃描裡找得到，所以不在這張例外名單上）。
+ * `harness/apps/harness/src/pre-step-middleware.ts`（那個在掃描裡找得到，所以不在這張例外名單上）。
  */
 const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
-  'packages/nexus-plugin-plan-mode/src/index.ts',
-  'packages/nexus-core/src/pre-step-adapter.ts',
+  'harness/packages/nexus-plugin-plan-mode/src/index.ts',
+  'harness/packages/nexus-core/src/pre-step-adapter.ts',
   // agent-instructions 是 `preStep` 的消費者：它登記 listener，載體是宿主的 `pre-step-middleware.ts`（#1474）。
-  'packages/nexus-plugin-agent-instructions/src/index.ts',
+  'harness/packages/nexus-plugin-agent-instructions/src/index.ts',
   // time-context（#1625）同上：第二位 `preStep` 消費者。
-  'packages/nexus-plugin-time-context/src/index.ts',
+  'harness/packages/nexus-plugin-time-context/src/index.ts',
 ];
 
 /**
@@ -376,9 +376,9 @@ const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
  * 那顆的「讀一次記憶檔」轉過去、記下讀到的。注入發生在 `wrapModelCall`，所以同樣不佔 pre-step。
  */
 const PRE_STEP_NOT_OCCUPANTS: readonly string[] = [
-  'packages/nexus-core/src/patch-tool-calls.ts',
-  'packages/nexus-core/src/skills-middleware.ts',
-  'packages/nexus-core/src/memory-middleware.ts',
+  'harness/packages/nexus-core/src/patch-tool-calls.ts',
+  'harness/packages/nexus-core/src/skills-middleware.ts',
+  'harness/packages/nexus-core/src/memory-middleware.ts',
 ];
 
 /** 遞迴列出產品原始碼的 `.ts`。 */
@@ -414,7 +414,7 @@ function productSources(dir: string): string[] {
  */
 const RECORD_ANCHOR = {
   cell: 4,
-  path: 'packages/nexus-core/src/session-log.ts',
+  path: 'harness/packages/nexus-core/src/session-log.ts',
   /** 事件種類的鍵（映射／宣告合併的寫法）。 */
   present: [
     /^\s*'approval\/asked'\s*:/mu,

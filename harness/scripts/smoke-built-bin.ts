@@ -4,7 +4,7 @@
  * 照 dsh `docs/testing.md`「Test the real entry path」：「真正的入口」是發佈的產物——`bin` 跑 `lib/*.js`、純 `node`、
  * 沒有 tsx，才看得到 tsx 蓋住的失敗（模組解析、靜靜吞掉的載入失敗）。這支在 `pnpm run build:lib` 之後跑，量：
  *
- * 1. `node apps/harness/lib/<入口>.js --version` 印出 manifest 的版本，**stderr 是空的**（照 dsh `apps/cli/tests/built-bin.e2e.ts:650`）；
+ * 1. `node harness/apps/harness/lib/<入口>.js --version` 印出 manifest 的版本，**stderr 是空的**（照 dsh `apps/cli/tests/built-bin.e2e.ts:650`）；
  * 2. 經 `node_modules/.bin` 那種符號連結啟動，同樣印得出來（比路徑的入口檢查在這裡會靜靜以 0 結束、什麼都不印）；
  * 3. 每支入口（`bin` 與 `exports` 指的檔，加上啟動器 per-thread 時起的那兩支）在 `lib/` 裡都要編出來；原始碼帶 `if (import.meta.main)` 的，
  *    產物裡也要留著自己的那一個（[#2657](https://github.com/DemianLi/nexus-agent/issues/2657)）：入口被另一個入口 import 時，打包把它的本體搬進
@@ -34,7 +34,7 @@ import { join } from 'node:path';
 
 import { ROOT } from './workspace-packages.js';
 
-const HARNESS = join(ROOT, 'apps/harness');
+const HARNESS = join(ROOT, 'harness/apps/harness');
 const manifest = JSON.parse(readFileSync(join(HARNESS, 'package.json'), 'utf8')) as {
   version: string;
   bin: Record<string, string>;
@@ -192,7 +192,7 @@ const stamp = join(HARNESS, 'build-stamp.json');
 if (existsSync(stamp))
   failures.push(`build:lib 之後原始碼樹裡出現了 ${stamp}：戳記只能由打包寫進產物`);
 const stray = readdirSync(join(HARNESS, 'lib')).filter((name) => name.includes('build-stamp'));
-if (stray.length > 0) failures.push(`apps/harness/lib 裡有戳記檔：${stray.join('、')}`);
+if (stray.length > 0) failures.push(`harness/apps/harness/lib 裡有戳記檔：${stray.join('、')}`);
 const { resolveBuildVersion } = (await import('../apps/harness/src/build-version.ts')) as {
   resolveBuildVersion: () => { commit: string | null };
 };

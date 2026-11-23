@@ -1,7 +1,7 @@
 /**
  * 封存的準入閘門（#633），直接呼叫 `createTurnCancelGuard` 的鉤子量規則。
  *
- * 掛進真的組裝之後的行為（日誌上的 `blocked`、背景子代理、存檔點）在 `apps/harness`。
+ * 掛進真的組裝之後的行為（日誌上的 `blocked`、背景子代理、存檔點）在 `harness/apps/harness`。
  */
 
 import { AIMessage } from '@langchain/core/messages';

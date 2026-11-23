@@ -5,13 +5,13 @@
  * 這個模組是那個時刻在我們樹上唯一的佔用者，但**只佔了一半**：dsh 那一格配一個
  * `agent.steer()` 讓聽者把下一步塞進去，我們沒有給聽者用的等價物——輪迴圈歸入口點所有，見下面
  * 那條載體偏離。人插話那一面有了（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
- * `@nexus/core` 的 `step-inbox.ts`），但它由 pump 送進圖，聽者碰不到。索引見 `apps/harness/src/interception-index.test.ts`。
+ * `@nexus/core` 的 `step-inbox.ts`），但它由 pump 送進圖，聽者碰不到。索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * 形狀照 dsh 的 `packages/goal/goal-round-driver/`（對讀版本
  * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04），
  * [#180](https://github.com/DemianLi/nexus-agent/issues/180)。
  *
- * ## 為什麼它落在 `apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
+ * ## 為什麼它落在 `harness/apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
  *
  * dsh 的 driver 是一個 Cordis plugin，靠 `agent/pre-step` 與 `ctx.agents` 的 idle 判斷把
  * 一輪排進 agent 的 inbox。我們的 `PluginRegistry` 二十條通道（`registry.ts:863-883`）
@@ -130,14 +130,14 @@ export type GoalDriverIdleReason =
   /**
    * 上一輪**拋錯**結束。續行不重試，見 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 的 Out of scope。
    * 不只這一次不排：{@link driveGoalRound} 還會收回續行授權，同 dsh 收到 `agent/error` 就 `disarm`
-   * （`packages/goal/goal-round-driver/src/index.ts:246-249`，`477b4f4`）。
+   * （`harness/packages/goal/goal-round-driver/src/index.ts:246-249`，`477b4f4`）。
    */
   | 'turn-failed'
   /**
    * 上一輪**被人中止**（`turn/end` 帶 `reason.kind: 'aborted'`）。人按了停止，續行不接著排，也不會在人
    * 隨便再說一句話之後接回來——[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8。
    * {@link driveGoalRound} 收回續行授權，要續行得走一次有人授權的 `resume`；同 dsh 在「被中止的不是自己排的
-   * 那一輪」時直接 `disarm`（`packages/goal/goal-round-driver/src/index.ts:328-337`，`477b4f4`）。
+   * 那一輪」時直接 `disarm`（`harness/packages/goal/goal-round-driver/src/index.ts:328-337`，`477b4f4`）。
    * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
    *
    * **收尾之後又有人下了 `create` 或 `resume`，就不算**——那次收尾針對的是上一份授權，見 {@link reauthorizedSince}
@@ -160,7 +160,7 @@ export type GoalDriverIdleReason =
    * 上一輪**撞到了模型的輸出上限**（`turn/end` 帶 `reason.kind: 'max-tokens'`，
    * [#433](https://github.com/DemianLi/nexus-agent/issues/433)）。不只這一次不排：{@link driveGoalRound} 還會
    * 收回續行授權，要續行得走一次有人授權的 `resume`——同 dsh 的 `goal-round-driver` 看到 max-tokens 就
-   * `disarm`（`packages/goal/goal-round-driver/src/index.ts:329-331`，`477b4f4`）。
+   * `disarm`（`harness/packages/goal/goal-round-driver/src/index.ts:329-331`，`477b4f4`）。
    */
   | 'turn-max-tokens'
   /** 停在核准點，中斷還掛著。 */
@@ -189,7 +189,7 @@ export type GoalDriverDecision =
  *
  * 以前這一格回 `no-turn`、不排。它把「就緒與否」綁在這個行程「跑過一輪」上，結果新開的行程、或續接回來還沒說過話的會話，
  * 打 `/goal <目標>` 或 `/goal resume` 之後什麼都不會發生，要等人再講一句話。dsh 的 `readyToDrive`
- * （`packages/goal/goal-round-driver/src/index.ts:103-109`，`477b4f4`）沒有「得先跑過一輪」這個條件，看的是 agent 此刻閒不閒。
+ * （`harness/packages/goal/goal-round-driver/src/index.ts:103-109`，`477b4f4`）沒有「得先跑過一輪」這個條件，看的是 agent 此刻閒不閒。
  *
  * 放行不會讓續接回來的會話自己跑起來：授權從 `disarmed` 開始，只有一次有人下的 `create` 或 `resume` 才 armed
  * （`service.ts`）；而 `currentTurnStart` 往回找時遇到最後一顆 `session/end-seed` 就停，上一個行程的輪不會被當成現在這一輪

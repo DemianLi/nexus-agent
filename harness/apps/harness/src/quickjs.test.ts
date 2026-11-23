@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-quickjs` 在**真的 agent 迴圈**裡的驗收。
  *
- * 與 `packages/nexus-plugin-quickjs/src/index.test.ts` 分工：那邊驗的是直譯器本身的兩種
+ * 與 `harness/packages/nexus-plugin-quickjs/src/index.test.ts` 分工：那邊驗的是直譯器本身的兩種
  * 邊界（能力與資源），這裡驗的是**接線**——經我們的 registry 註冊進去的工具真的被基座
  * 排進工具集合、真的在迴圈裡執行、結果真的回到對話裡，而且與基座內建的檔案工具並存無礙。
  *

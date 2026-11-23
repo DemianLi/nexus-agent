@@ -47,7 +47,7 @@ export const SNAPSHOT_THREAD_ID = 'snapshot';
 /** 場景都放在這裡，一個場景一個目錄。 */
 export const SCENARIOS_DIR = fileURLToPath(new URL('./scenarios/', import.meta.url));
 
-/** `apps/harness/src`：patch 裡 `insert` 的夾具外掛用絕對路徑指，落盤的外掛名就帶著它。 */
+/** `harness/apps/harness/src`：patch 裡 `insert` 的夾具外掛用絕對路徑指，落盤的外掛名就帶著它。 */
 export const HARNESS_SRC_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 /** 一步。今天只有說一句話；核准在 {@link ScenarioInput.approvals}。 */

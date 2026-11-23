@@ -19,7 +19,7 @@
  * ## 偏離 dsh（AGENTS.md「技術實現標準」，#1531 卡上登記）
  *
  * 1. **理由 1（基座表達不出來）：`write_file` 不走 `createIfAbsent` 的 hard link 發佈。** 那個意圖要從「先讀後改」的政策傳到寫入這一層，
- *    基座的 `write(filePath, content)` 沒有參數可以帶它（`packages/nexus-core/src/observation.ts` 的偏離一已登記同一個
+ *    基座的 `write(filePath, content)` 沒有參數可以帶它（`harness/packages/nexus-core/src/observation.ts` 的偏離一已登記同一個
  *    限制）。退到：`write_file` 一律用 `rename` 原子取代，`createIfAbsent` 仍由 observation 在呼叫前擋。`copy_file` 不經基座，
  *    直接帶 {@link AtomicWriteOptions.createIfAbsent}。
  * 2. **理由 2（產品只部署 POSIX）：不做 Windows 那一支（DACL、`ReplaceFile`）。**

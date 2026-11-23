@@ -1,5 +1,5 @@
 //! 受管憑證檔（`<home>/.credentials.yaml`）：宿主自己讀（#2570）。契約在 `docs/credentials-file.md`，兩邊跑同一份樣本
-//! `credentials-vectors.json`；TS 的解析器是 `apps/harness/src/credentials.ts`，這裡照它實際跑出的結果做。
+//! `credentials-vectors.json`；TS 的解析器是 `harness/apps/harness/src/credentials.ts`，這裡照它實際跑出的結果做。
 //!
 //! - [`parse`]：一份文字 → `refs` 與不認得的頂層鍵。YAML 用 `saphyr-parser` 的事件，純量讀成什麼照 `scalar` 子模組。
 //! - [`Store`]：讀檔、查權限位元、`stat` 簽章沒變就用快取；讀好過之後壞了續用上一份並警告。

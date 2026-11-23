@@ -193,7 +193,7 @@ describe('舊位置（程式碼資料夾根目錄的 .env）', () => {
     return loadLaunchEnv({ cwd, home, target, warn: () => undefined, legacyFile: file });
   }
 
-  /** 從 `apps/harness` 啟動、key 只在舊位置：舊檔沒被讀；缺 key 時給搬家訊息，指名舊路徑、新位置與變數名。 */
+  /** 從 `harness/apps/harness` 啟動、key 只在舊位置：舊檔沒被讀；缺 key 時給搬家訊息，指名舊路徑、新位置與變數名。 */
   it('key 只在舊位置：舊檔沒被讀，搬家訊息指名舊路徑、新位置與變數名', () => {
     const file = legacy();
     const target: NodeJS.ProcessEnv = {};

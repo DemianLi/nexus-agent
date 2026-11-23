@@ -1,6 +1,6 @@
 /**
  * 檔案工具開關換算成基座 `tools` 白名單（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0355）。
- * 掛進整個 agent、模型實際看得到哪幾顆，在 `apps/harness/src/tool-fs.test.ts`。
+ * 掛進整個 agent、模型實際看得到哪幾顆，在 `harness/apps/harness/src/tool-fs.test.ts`。
  */
 
 import { createFilesystemMiddleware } from 'deepagents';

@@ -1,5 +1,5 @@
 {
-  "description": "宿主 `mcp/client` 的 `open` 收的 `server` 整份的共用樣本（#3044）：TS 的 mcpHostRow（apps/harness/src/mcp-host-row-service.ts）在工作目錄是 cwd、環境是 parentEnv 時，對 config 與 credentials 的產出要等於 server；宿主的 Server::parse 讀同一份 server 都要收，欄位的值要對得上。有 relativeCommand 的案例，server 的 command 要等於 server 的 cwd 接上 relativeCommand。憑證值都是假的。",
+  "description": "宿主 `mcp/client` 的 `open` 收的 `server` 整份的共用樣本（#3044）：TS 的 mcpHostRow（harness/apps/harness/src/mcp-host-row-service.ts）在工作目錄是 cwd、環境是 parentEnv 時，對 config 與 credentials 的產出要等於 server；宿主的 Server::parse 讀同一份 server 都要收，欄位的值要對得上。有 relativeCommand 的案例，server 的 command 要等於 server 的 cwd 接上 relativeCommand。憑證值都是假的。",
   "cwd": "/srv/nexus",
   "parentEnv": {
     "PATH": "/usr/bin:/bin",

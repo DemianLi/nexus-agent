@@ -5,7 +5,7 @@
  * ## 這一層在做什麼
  *
  * `@nexus/plugin-mcp` 在連線開了 `elicitation` 之後，server 反問時把工具呼叫停在一顆 `interrupt()` 上（它的 `tool-call.ts`），酬載長這樣
- * （夾具見 `packages/nexus-plugin-mcp` 的 `modern-tools.ts`）：
+ * （夾具見 `harness/packages/nexus-plugin-mcp` 的 `modern-tools.ts`）：
  *
  * ```
  * { type: 'mcp_elicitation', server, tool, arguments,

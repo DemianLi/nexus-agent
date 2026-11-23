@@ -7,8 +7,8 @@
  * `features/tool/result-card.ts`（[#625](https://github.com/DemianLi/nexus-agent/issues/625)），選哪一種檢視在 adapter 的 `result`。
  *
  * **`execute` 還沒有終端卡**：dsh 有（`terminal-card-model.ts`，解析結果結尾的 exit code），但今天產品路徑上的
- * backend 都沒有 shell，基座不註冊 `execute`（`apps/harness/src/base-tools.ts`）。sandbox backend 註冊它的那天要補
- * 終端卡；絆索在 harness：`apps/harness/src/execute-not-bound.test.ts` 經產品組裝量模型實際綁到的工具，`execute` 一出現就紅
+ * backend 都沒有 shell，基座不註冊 `execute`（`harness/apps/harness/src/base-tools.ts`）。sandbox backend 註冊它的那天要補
+ * 終端卡；絆索在 harness：`harness/apps/harness/src/execute-not-bound.test.ts` 經產品組裝量模型實際綁到的工具，`execute` 一出現就紅
  * （#666，原本這裡有一組讀 harness 原始碼的，已搬走）。
  *
  * 新增工具與畫法的做法見 `features/tool/tools.ts` 檔頭。

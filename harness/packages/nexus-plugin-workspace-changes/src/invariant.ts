@@ -2,7 +2,7 @@
  * `@nexus/plugin-workspace-changes` 的配套入口：**每一顆 `workspace/changes` 都落在一輪裡，而且那一輪跑過工具**。
  *
  * dsh 這個包不發佈配套入口（README：「不发布伴生入口」——記錄器同時擁有摘要與副本，沒有獨立的觀察會與它
- * 分歧）。我們只有擁有可檢關係的 package 才發布一個（空 installer 會被 `apps/harness/src/package-invariants.ts`
+ * 分歧）。我們只有擁有可檢關係的 package 才發布一個（空 installer 會被 `harness/apps/harness/src/package-invariants.ts`
  * 擋下來，#974），而這顆事件在日誌上有三條機械判得出來的關係，所以寫實的：
  *
  * 1. **落在一輪裡**：同一份日誌前面有一顆 `turn/start`。**這一條不擋「寫進子代理那一份」**：前景子代理的日誌沒有

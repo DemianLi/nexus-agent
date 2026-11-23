@@ -1,5 +1,5 @@
 //! 宿主對外 HTTP 走哪個代理（#2570）。政策由呼叫端用 [`ProxyPolicy::parse`] 解好，交給 [`crate::tls::http_client`]；宿主不讀環境變數。
-//! 比對規則跟 `packages/nexus-core/src/http-proxy/policy.ts` 的 `proxyForUrl` 一致，兩邊用 `proxy-vectors.json` 驗：
+//! 比對規則跟 `harness/packages/nexus-core/src/http-proxy/policy.ts` 的 `proxyForUrl` 一致，兩邊用 `proxy-vectors.json` 驗：
 //! 迴圈位址一律直連；放行清單只比主機名與埠，不比 CIDR。代理網址只收 `http:`／`https:`。
 //!
 //! 代理網址可能帶帳密，所以這裡的錯誤訊息只講欄位名，不帶值；[`ProxyPolicy`] 的 `Debug` 也不印網址。

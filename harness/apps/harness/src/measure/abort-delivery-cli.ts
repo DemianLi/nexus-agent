@@ -4,7 +4,7 @@
  * ```bash
  * pnpm --filter @nexus/harness exec tsx src/measure/abort-delivery-cli.ts --total 400 --concurrency 16
  * # 對照修前的 wire-server（抽出來放在 src 底下任一處，import 要改成對得上的相對路徑）：
- * git show d63afae^:apps/harness/src/wire-server.ts > src/measure/_old-wire-server.ts
+ * git show d63afae^:harness/apps/harness/src/wire-server.ts > src/measure/_old-wire-server.ts
  * pnpm --filter @nexus/harness exec tsx src/measure/abort-delivery-cli.ts --wire-server ./_old-wire-server.ts
  * ```
  */

@@ -208,7 +208,7 @@ export interface DeriveOptions {
    * 每從一顆事件推出一則訊息就叫一次，交出那則訊息與那顆事件。補上的結果（{@link TOOL_OUTCOME_UNKNOWN_TEXT}
    * 那兩句）不是從事件推出來的，不叫。
    *
-   * 給要知道「推出來的串裡哪一則出自日誌哪一顆」的讀者：會話內容搜尋（`apps/harness` 的 `thread-search.ts`，
+   * 給要知道「推出來的串裡哪一則出自日誌哪一顆」的讀者：會話內容搜尋（`harness/apps/harness` 的 `thread-search.ts`，
    * [#631](https://github.com/DemianLi/nexus-agent/issues/631)）拿它判哪幾顆還在模型看得到的那一串上，
    * 拿到的是推出來的那一則本身（工具結果是換過預覽之後的），
    * 所以跟回傳的 `messages` 可以用物件身分對。
@@ -216,13 +216,13 @@ export interface DeriveOptions {
   readonly origin?: (message: NexusMessage, event: SessionEvent) => void;
   /**
    * 只看推不推得回來（`kind`、`reason`），推出來的訊息讀完就丟：日誌記的每一則原樣交出日誌上那個物件，不深拷；含圖片區塊的那則換成淺拷、加上來源記號（巢狀的值仍與日誌共用）。
-   * 給判斷是不是舊日誌的讀者（`apps/harness` 的 `isLegacyLog`）。回傳串或 {@link origin} 交出的訊息要留下來、交給 graph state 或模型的，不能開。
+   * 給判斷是不是舊日誌的讀者（`harness/apps/harness` 的 `isLegacyLog`）。回傳串或 {@link origin} 交出的訊息要留下來、交給 graph state 或模型的，不能開。
    */
   readonly readOnly?: boolean;
   /**
    * 讀盤共用過的事件（{@link storedEventDepth} 有值，整張深凍過）原樣交出日誌上那個物件，不深拷（含圖片區塊的同 {@link DeriveOptions.readOnly}）；
    * 其餘的事件深拷一份（`snapshotJsonValue`）。推出來的可以交給 graph state：下游就地改巢狀的值會當場拋，不會改到日誌。給續接灌回 graph state 的讀者
-   * （`apps/harness` 的 `restoreConversation`）。
+   * （`harness/apps/harness` 的 `restoreConversation`）。
    */
   readonly shareStored?: boolean;
 }

@@ -38,7 +38,7 @@
  *    `mountDetached` 掛一次就卸載，呼叫當下才經 `ctx` 取服務會拋；而不經 `inject` 的選用服務在 `apply` 當下沒有次序保證——`fs` 那一列
  *    還沒提供就會永遠拿到 `undefined`，基線也就靜靜消失。
  *    **退到什麼**：`fs` 列是宿主內建列、永遠先起來，必填不會讓清單上的這一列多掉一種原因。
- *    **要守的風險**：呼叫當下 `fs.forCall(invocation)` 的查找若不是 `ok`，基線會**靜靜消失**。`apps/harness/src/agent-instructions-on-tree.test.ts`
+ *    **要守的風險**：呼叫當下 `fs.forCall(invocation)` 的查找若不是 `ok`，基線會**靜靜消失**。`harness/apps/harness/src/agent-instructions-on-tree.test.ts`
  *    在 CLI、serve、無樹三個入口，root 與同步／背景子代理，量到的查找都是 `ok`。
  * 3. **哪一條**：摘要把基線切掉之後，dsh 在**下一步**補回——`agent/pre-step` 每一步都跑
  *    `visibleBaselineSource`，看的是壓縮後還看得到的那一面，看不到就重讀、重渲染一則新的（`src/index.ts:46-62`、
@@ -50,7 +50,7 @@
  *    （#1474，`@nexus/agent-loop` 的 `preStep`；接縫本身的偏離登記在那個套件的檔頭），內容與重開條件不變。
  *    **留下的缺口**：同一次 invoke 裡，摘要之後的那幾輪看不到工作區指令，要等使用者下一句話。
  *    **重開條件**：#389 重開，或 core 開了讓多個貢獻者共用一格的 pre-step 節點。
- * 4. **偏離 2 的延伸**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775) 第 10 項；#1775 的偏離 2「`--workspace` 退成唯讀共用區」，理由 2「產品需求超出 dsh 的射程」，登記在 `apps/harness/src/thread-roots.ts` 檔頭）：dsh 讀的是
+ * 4. **偏離 2 的延伸**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775) 第 10 項；#1775 的偏離 2「`--workspace` 退成唯讀共用區」，理由 2「產品需求超出 dsh 的射程」，登記在 `harness/apps/harness/src/thread-roots.ts` 檔頭）：dsh 讀的是
  *    工作目錄這一棵樹上的指示檔，工作目錄就是可寫根。我們在 serve 上讓每條新 thread 有自己的私有可寫根，`--workspace` 退成唯讀共用區
  *    （`FsService.sharedWorkspacePrefix()`），所以**新 thread 讀共用區、不讀自己的私有根**：部署方放的規則檔生效，模型寫進私有根的
  *    `AGENTS.md` 不會升格成系統指示（那是一條使用者訊息的載體，不該由模型自己填）。
@@ -80,7 +80,7 @@
  *   基線，所以這條修法在子代理身上沒有東西要修；子代理自己那一趟裡被摘掉，是上面同一次 invoke 的缺口。
  * - **續接**（`--resume`、serve 碰到舊 thread）：`conversation-restore.ts` 刻意只灌 `messages`、不帶切點，
  *   而灌回去的是「摘要＋之後的」，被切掉的舊基線本來就不在裡面，判準退回「有沒有」也照樣補一則。
- *   2026-09-18 實測，見 `apps/harness/src/agent-instructions.test.ts`。
+ *   2026-09-18 實測，見 `harness/apps/harness/src/agent-instructions.test.ts`。
  *
  * ## 攔截時刻：dsh 第 2 格 `agent/pre-step`
  *
@@ -88,7 +88,7 @@
  * （`86a40220` 上的 `src/index.ts:334-360`，splice 在 `:355-359`）。我們這側對應的是 `@nexus/agent-loop` 的 `preStep`（宿主以 `beforeAgent` 承載），**只佔了注入那半**：
  * 拿不到整個訊息批次自己 splice，只能追加；落點由基座決定（2026-09-18 實測落在使用者那一句之後，與 dsh 同位）。
  * 攔截那半（`jumpTo: 'end'`）用不到，基線只注入。逐欄的差與頻率量在
- * `apps/harness/src/interception-index.test.ts` 第 2 列。
+ * `harness/apps/harness/src/interception-index.test.ts` 第 2 列。
  *
  * ## 代價：每次 invoke 一格，每一輪零格
  *
@@ -158,7 +158,7 @@ export const AGENT_INSTRUCTIONS_MARKER = 'nexus.agentInstructions';
 /**
  * 這一則注入有多少原文位元組放不下、沒放進去（被截掉的那一段與整份沒放的檔都算），記在 `additional_kwargs` 的這一格（正整數；全部放完就不放），`context/measure` 的
  * `sources[].deferredBytes` 從它讀（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core` 的
- * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
+ * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`harness/apps/harness` 的測試把兩邊釘成相等。
  */
 export const INJECTION_DEFERRED_BYTES_KEY = 'nexus_injection_deferred_bytes';
 
@@ -176,7 +176,7 @@ export const INSTRUCTION_FILE_CANDIDATES = [
 /**
  * 一則基線的位元組上限。照 dsh 在 `dsh-base` 給這顆 plugin 的值：`packages/bundle/base/cordis.patch.yml:278`
  * 的 `id: agent-instructions` 底下 `maxBytes: 65536`（`ddefc45`，自己核過）。**這個套件出廠就掛**是另一件
- * 事，證據在 `packages/bundle/base/package.json:122` 的相依宣告——「有這個套件」與「出廠就開」是兩件事，
+ * 事，證據在 `harness/packages/bundle/base/package.json:122` 的相依宣告——「有這個套件」與「出廠就開」是兩件事，
  * 這個 repo 在那上面失手過三次（見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md §五第 5 條）。
  */
 export const DEFAULT_MAX_BYTES = 65536;
@@ -235,7 +235,7 @@ export type AgentInstructionsLimits = Pick<AgentInstructionsConfig, 'maxBytes' |
 
 /**
  * 這一次的渲染預算：`min(maxBytes, floor(窗口 × 4 × contextFraction))`。同 `@nexus/core` 的 `injectionLimitFor`；插件不 import core，
- * 算法照抄，`apps/harness` 的測試把兩邊釘成相等。
+ * 算法照抄，`harness/apps/harness` 的測試把兩邊釘成相等。
  */
 function renderBudget(limits: AgentInstructionsLimits, contextWindow: number | undefined): number {
   const fraction = limits.contextFraction;

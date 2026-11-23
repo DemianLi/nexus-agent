@@ -2,7 +2,7 @@
  * 已出貨格式的夾具，用今天的讀取路徑讀（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第一刀，驗收 B、C、D）。
  *
  * 夾具在 `fixtures/session-format/<名>/`，每份**由那一版出貨的寫入器實際寫出**（產生器在
- * `scripts/session-format-fixtures/generate.ts`，PR 內文貼了每個 tag 的產生指令與 rev 核對），旁邊的 `expected.json`
+ * `harness/scripts/session-format-fixtures/generate.ts`，PR 內文貼了每個 tag 的產生指令與 rev 核對），旁邊的 `expected.json`
  * 記事件數、`type` 序列、推回模型的角色序列（逐格標明是哪一版的讀方算的），以及觸發讀方相容分支的那幾條的輸出。
  *
  * 每份複製到暫存目錄再讀：續接會把舊兩檔遷成這一版的世代檔、舊 header 換成墓碑，夾具本身不能被動到。
@@ -769,7 +769,7 @@ describe('錨點登記整行，不比行號，而且要在程式碼裡', () => {
   });
 
   it('32→33 的錨點靠縮排區分同文字的另外兩行', () => {
-    const text = readFileSync(join(REPO, 'apps/harness/src/conversation-history.ts'), 'utf8');
+    const text = readFileSync(join(REPO, 'harness/apps/harness/src/conversation-history.ts'), 'utf8');
     const turnClose = "if (turnOpen || suspended) close(event.time, { event: 'completed' });";
     expect(anchorProblem(text, turnClose)).toBe('錨點出現在 3 行');
     expect(anchorProblem(text, `          ${turnClose}`)).toBeUndefined();
@@ -789,7 +789,7 @@ describe('各邊的檔與錨點互不相同', () => {
 
 describe('33→34 的讀方分支只有一份（#1797）', () => {
   // 入口改回自己寫一份 `recordedApprovalPolicy(...) ?? 'ask'` 時行為不變，入口層的續接測試抓不到，只能看原始碼。
-  it.each(['apps/harness/src/cli.ts', 'apps/harness/src/serve-run.ts'])(
+  it.each(['harness/apps/harness/src/cli.ts', 'harness/apps/harness/src/serve-run.ts'])(
     '%s 續接的核准政策呼叫 approvalPolicyOnResume，不自己讀日誌',
     (path) => {
       const source = readFileSync(join(REPO, path), 'utf8');

@@ -7,7 +7,7 @@
  * 三輪：第一句帶一張圖、第二句帶第二張（超額，省略第一張）、第三句沒圖。跑完把 pump 那一份日誌**照原樣的順序與內容**
  * 用那一版的 `SessionLog`、JSONL 後端與協調器寫出來（時間戳是寫出的當下）。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那一版的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那一版的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-image-offload.ts <run 目錄>
  */
 

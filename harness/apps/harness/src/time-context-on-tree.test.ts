@@ -3,7 +3,7 @@
  * 量的是真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的相容層 `assembly.create`（serve 每條 thread 一次）、
  * 真的 `attachSessions`，以及 `runServe --live` 對著假端點、`runCli --resume`；不手搭 `ctx.plugin`。
  *
- * 文字格式、日誌折疊、節流的細節在 `packages/nexus-plugin-time-context/src/index.test.ts`（用固定時鐘、不進組裝）；
+ * 文字格式、日誌折疊、節流的細節在 `harness/packages/nexus-plugin-time-context/src/index.test.ts`（用固定時鐘、不進組裝）；
  * 套件的一致性與兩條 thread 在 `src/tree.test.ts`。這一檔問的是：**出貨清單上這一列掛上之後，模型真的讀到什麼、日誌記了什麼、
  * 拿掉那一列會不會紅。**
  *

@@ -1,6 +1,6 @@
 /**
  * 樹上那一條路（#2533）：{@link mountServer} 在同一條 thread 上的撞名與 hub 的共用，和 {@link apply} 要宿主的 `threadSource`。
- * 用一條假的 {@link ToolThread}，不經宿主；宿主那一側的語意在 `apps/harness/src/thread-source.test.ts`。
+ * 用一條假的 {@link ToolThread}，不經宿主；宿主那一側的語意在 `harness/apps/harness/src/thread-source.test.ts`。
  */
 import { Context } from '@nexus/cordis';
 import { checkConformance } from '@nexus/sdk';

@@ -2,9 +2,9 @@
  * 這條對話累計燒了多少上線的形狀（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：token 總帳與會話統計。
  *
  * 照 dsh 的兩個投影：`tokenUsage`（`packages/llm/token-meter/src/usage-projection.ts`）與 `sessionStats`
- * （`packages/session/session-stats/src/projection.ts`），SHA `477b4f4`。兩個都是**讀整份 root 日誌折出來的**、
+ * （`harness/packages/session/session-stats/src/projection.ts`），SHA `477b4f4`。兩個都是**讀整份 root 日誌折出來的**、
  * 值是整個投影、後到的取代先到的。dsh 的 `StatsPills` 讀的是它們，不是畫面：畫面分頁載入、會被摘要改寫，從畫面上
- * 加會算錯（它自己的註解，`packages/client/ui-chat/src/client/chat/StatsPills.tsx:41-52`）。
+ * 加會算錯（它自己的註解，`harness/packages/client/ui-chat/src/client/chat/StatsPills.tsx:41-52`）。
  *
  * | `data.name` | `payload` | 折自 root 日誌的 |
  * | --- | --- | --- |
@@ -30,7 +30,7 @@
  * 1. **載體是 `custom` frame，不是投影註冊表與連線快照。** 我們沒有 `session-projection` 那一層；用量表、待辦清單
  *    已經用這個載體，這裡照抄：即時由 pump 合成、歷史每頁帶一顆，web 那側的「連線快照」就是最後一頁歷史。
  * 2. **初值在 server 端就不送，dsh 送、由畫面擋。** dsh 的快照帶每一個已登記的投影，還沒計費時就是一組 0
- *    （`packages/session/session-projection/src/index.ts:338`）；`StatsPills` 自己擋：token 要大於 0 才算有
+ *    （`harness/packages/session/session-projection/src/index.ts:338`）；`StatsPills` 自己擋：token 要大於 0 才算有
  *    （`:330`），沒有步也沒有 token 就整顆不畫（`:347`）。我們沒有連線快照，即時只在變的時候送，歷史若照送 0，
  *    重新整理就會比即時多一顆——所以兩邊都不送。**web 把 `null` 當成 dsh 的「全是 0」處理**，畫面結果相同。
  *
@@ -54,7 +54,7 @@ export interface WireTokenUsage {
   readonly outputTokens: number;
   /**
    * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
-   * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊——未快取的輸入、快取讀、快取寫、輸出。
+   * （`harness/packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊——未快取的輸入、快取讀、快取寫、輸出。
    *
    * `uncachedInputTokens` **永遠等於 {@link inputTokens}，server 每次都送**：它是 web 分辨「新 server（四桶）」與「舊 server
    * （`inputTokens` 含快取）」的標記，只看有沒有這一格、不看大小（0 也算新）。型別上選填是為了讀舊 server 的資料。

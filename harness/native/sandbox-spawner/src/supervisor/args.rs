@@ -303,7 +303,7 @@ pub fn stall_warning(stall: Option<Duration>) -> Option<String> {
     let stall = stall.filter(|stall| *stall <= STALL_WARN_AT_OR_BELOW)?;
     Some(format!(
         "--stall-ms {} 不超過 4000：真的對話行程與組合行程的心跳是 1 秒一次，值小於約 1 秒時行程一綁定就會被判 stalled；\
-         見 native/sandbox-spawner/README.md 的 --stall-ms",
+         見 harness/native/sandbox-spawner/README.md 的 --stall-ms",
         stall.as_millis()
     ))
 }

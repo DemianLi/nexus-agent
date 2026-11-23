@@ -26,7 +26,7 @@
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
  *
  * 步驟 3 到 7 的判斷都是輸入子行程結果、輸出 problems 的純函式（`versionProblems` 等），單元測試在
- * `apps/harness/src/verify-packed-install.test.ts` 與 `release-scripts.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
+ * `harness/apps/harness/src/verify-packed-install.test.ts` 與 `release-scripts.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
  *
  * 用法：`pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty] [--supervisor <nexus-supervisor>]`。
  *
@@ -99,7 +99,7 @@ export function cleanEnv(home: string): NodeJS.ProcessEnv {
     'TSX_TSCONFIG_PATH',
     'NVIDIA_API_KEY',
     // 遙測關掉：宿主上若設了，驗證用的假模型日誌會送出去。dsh 在同一個位置設 `DSH_TELEMETRY_DISABLED = '1'`
-    // （`scripts/release/verify-packed-install.ts:44`）；我們的遙測只有這一個開關，沒有就是關，所以清掉它。
+    // （`harness/scripts/release/verify-packed-install.ts:44`）；我們的遙測只有這一個開關，沒有就是關，所以清掉它。
     'NEXUS_OTLP_LOGS_URL',
   ]) {
     delete env[key];
@@ -292,7 +292,7 @@ export function installedGrepProblems(
 }
 
 /**
- * 步驟 6d：serve 啟動日誌裡 grep 的那一行（`搜尋（grep）：…`，`apps/harness/src/rg-path.ts` 的 `formatRipgrepDisclosure`）。
+ * 步驟 6d：serve 啟動日誌裡 grep 的那一行（`搜尋（grep）：…`，`harness/apps/harness/src/rg-path.ts` 的 `formatRipgrepDisclosure`）。
  *
  * - 沒有這一行：啟動路徑少了披露（#1502 驗收 6 要的就是它）。
  * - 說「不可用」：內附的 rg 在安裝樹裡缺了或沒有執行權限。

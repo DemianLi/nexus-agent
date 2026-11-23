@@ -1,7 +1,7 @@
 /**
  * **解不開的工具參數：同一輪拿到 `INVALID_ARGS`、thread 不再壞死**——
  * [#281](https://github.com/DemianLi/nexus-agent/issues/281) 的驗收。規則本身在
- * `packages/nexus-core/src/invalid-tool-args.test.ts`。
+ * `harness/packages/nexus-core/src/invalid-tool-args.test.ts`。
  *
  * ## 為什麼一定要真的 `ChatOpenAI`
  *

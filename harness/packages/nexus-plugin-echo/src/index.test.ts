@@ -26,7 +26,7 @@ const exec: ToolExec = {
  * 這個套件的驗收分三塊：工具本身、一致性套件（G）、相依關係。
  *
  * 組裝點那一側（一份清單 fold 出的 agent 真的呼叫得到這個工具、設定一改下一條 thread 看到新值）在
- * `apps/harness` 的 `echo-on-tree.test.ts`；這裡不重跑。
+ * `harness/apps/harness` 的 `echo-on-tree.test.ts`；這裡不重跑。
  */
 describe('echo 工具', () => {
   it('回聲帶上前綴', async () => {

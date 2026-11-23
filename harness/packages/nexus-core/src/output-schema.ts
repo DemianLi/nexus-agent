@@ -5,7 +5,7 @@
  *
  * dsh 那側這一步是**註冊表執行管線自己做的**：`createSuccessResult` 對
  * `tool.output.schema` 驗成功值，不合拋 `INVALID_TOOL_OUTPUT`
- * （`packages/core/tools/src/index.ts:1783-1786`、`:511`，SHA `c291e79`），`tools/post-execute`
+ * （`harness/packages/core/tools/src/index.ts:1783-1786`、`:511`，SHA `c291e79`），`tools/post-execute`
  * 的 listener 在它**之後**才跑（`:1721-1771`）。所以它是性質不是功能——論證與圍堵搬家那次
  * 逐字相同（[#159](https://github.com/DemianLi/nexus-agent/issues/159)，見 {@link ./containment.ts}）。
  * 這一版之前它住在 `@nexus/plugin-validation`，而那個 plugin 不在任何一份正式清單裡，樹上也
@@ -20,7 +20,7 @@
  * **時刻：在 `tools/post-execute` 之前。** 它是 `tools/execute` 內層的一位 core 監聽者
  * （{@link createOutputSchemaListener}），在每一位插件監聽者內側、只有撞到輸出上限的 `task` 替換（`max-tokens.ts` 的 `createMaxTokensListener`）在它更內側；真正做事的是 `await next()`
  * **之後**那一段，所以每一位 `tools/execute` 插件監聽者與 `tools/post-execute` 看到的都是驗過的結果。時刻索引見
- * `apps/harness/src/interception-index.test.ts`。
+ * `harness/apps/harness/src/interception-index.test.ts`。
  *
  * ## 兩條對 dsh 的偏離
  *

@@ -1,7 +1,7 @@
 /**
  * 子代理目錄的 `custom` frame 怎麼折（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）。
  *
- * 產出 frame 的那一半（即時與歷史）在 `apps/harness/src/subagent-session-link.test.ts`；這裡只管折疊器：掛到 `callId` 那張卡上、
+ * 產出 frame 的那一半（即時與歷史）在 `harness/apps/harness/src/subagent-session-link.test.ts`；這裡只管折疊器：掛到 `callId` 那張卡上、
  * 卡之後的更新不弄丟它、卡不在或形狀不對不收。
  */
 

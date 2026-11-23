@@ -1,6 +1,6 @@
 /**
  * 撞到輸出上限那一層自己的規則（#433）。真的轉接器、真的組裝與兩條產品路徑在
- * `apps/harness/src/max-tokens.test.ts`。
+ * `harness/apps/harness/src/max-tokens.test.ts`。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';

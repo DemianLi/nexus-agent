@@ -1,7 +1,7 @@
 /**
  * **中止這一輪，在正式路徑上**——[#276](https://github.com/DemianLi/nexus-agent/issues/276) 的驗收。
  *
- * `packages/nexus-core/src/turn-cancel.test.ts` 直接呼叫鉤子量規則；這一份量的是它們掛進真的組裝、
+ * `harness/packages/nexus-core/src/turn-cancel.test.ts` 直接呼叫鉤子量規則；這一份量的是它們掛進真的組裝、
  * 走真的進入點（`ThreadPump`，web 那條）、接上真的會話註冊表之後，**日誌上的碼、對話狀態、下行**
  * 三邊對不對得上。兩者會為不同的理由壞掉：規則對但位置錯（被擋下的呼叫多算一步）、或位置對但
  * 進入點沒把訊號放進去。

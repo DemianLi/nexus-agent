@@ -9,7 +9,7 @@
  * （`plan/mode`，見 `index.ts` 檔頭），所以這份配套入口**看得到它了**——以前它活在 graph
  * state 裡，這一節原本的標題是「檢不到的那一條」。
  *
- * **但看得到的只有形狀，照 dsh 的 plan-mode 配套入口**（`packages/plan/plan-mode/src/invariant.ts`）：
+ * **但看得到的只有形狀，照 dsh 的 plan-mode 配套入口**（`harness/packages/plan/plan-mode/src/invariant.ts`）：
  * `plan/mode` 是整份值的單顆事件。`/plan` 的選擇在兩輪之間當場提交；`exit_plan_mode` 的同意照 dsh 排到
  * 下一步之前才提交（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），那一格待關只活在記憶體裡，
  * 日誌上看不到排著的那一刻。所以**沒有 turn 包圍關係可以檢**，剩下的就是 `active` 必須是布林。
@@ -21,7 +21,7 @@
  * 「同意」那一條回成功，但那是程式碼保證的、不是日誌看得到的，所以那兩條照舊證在別處，三樣都是 dsh
  * 明說的「型別、載入或單元測試關注點」：
  *
- * - **模式狀態的讀寫**由 `index.test.ts` 與 `apps/harness/src/plan-mode.test.ts` 驗，
+ * - **模式狀態的讀寫**由 `index.test.ts` 與 `harness/apps/harness/src/plan-mode.test.ts` 驗，
  *   後者跑的是真的 agent 迴圈——同意之後日誌上多一顆 `plan/mode`（落在工具結果之後）、下一步的
  *   prompt 沒有指引。
  * - **工具撞名**歸 `PluginRegistry` 的註冊期擋（同一個 `exit_plan_mode` 註冊兩次當場拋）。
@@ -48,7 +48,7 @@
  * 這條規則假設日誌裡那個叫 `plan` 的命令是**我們註冊的那個**。同一份組裝裡這是保證的
  * （`registry.commands.register()` 撞名當場拋），但配套入口與 plugin 本體是分開掛的，
  * 所以「掛了配套入口、沒掛 plugin、別人註冊了自己的 `/plan`」在理論上會誤報。
- * 出貨清單兩個都掛（`apps/harness/cordis.yml`），這條路只有自訂清單走得到。
+ * 出貨清單兩個都掛（`harness/apps/harness/cordis.yml`），這條路只有自訂清單走得到。
  *
  * @module
  */

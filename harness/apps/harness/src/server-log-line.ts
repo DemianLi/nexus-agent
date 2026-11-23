@@ -1,6 +1,6 @@
 /**
  * serve 伺服器日誌的「一行」怎麼拆（[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)）：**純函式、不依賴任何套件**，
- * 測試的 `fixtures.ts` 與樹外的驗證腳本（`scripts/release/verify-packed-install.ts`）共用這一份，不各寫一份解析器。
+ * 測試的 `fixtures.ts` 與樹外的驗證腳本（`harness/scripts/release/verify-packed-install.ts`）共用這一份，不各寫一份解析器。
  *
  * @module
  */

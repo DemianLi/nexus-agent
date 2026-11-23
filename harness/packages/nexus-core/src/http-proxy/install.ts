@@ -3,7 +3,7 @@
  * 以及「哪份政策正在生效」的行程層紀錄。
  *
  * 照 dsh 的 `packages/util/http-proxy/src/install.ts`（`477b4f4`）。**不是外掛**：一個行程只有一個答案，
- * 沒有第二種實作可以換，所以入口在第一顆外掛載入之前裝一次（見 `apps/harness` 的各入口）。
+ * 沒有第二種實作可以換，所以入口在第一顆外掛載入之前裝一次（見 `harness/apps/harness` 的各入口）。
  * `undici` 用動態 import，純政策那一半（`policy.ts`）就不會被連帶拉進來。
  *
  * ## 與 dsh 的差異

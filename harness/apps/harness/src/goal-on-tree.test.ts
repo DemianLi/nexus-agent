@@ -1,7 +1,7 @@
 /**
  * goal 遷上樹之後，**宿主這一側**要證的事（[#1486](https://github.com/DemianLi/nexus-agent/issues/1486)，驗收 D、E 與 PM 補的三點）。
  *
- * 插件本身的 lazy 語意、一致性與「套一次服務兩條 thread」在 `packages/nexus-plugin-goal/src/tree.test.ts`；這一檔問的是宿主拿著
+ * 插件本身的 lazy 語意、一致性與「套一次服務兩條 thread」在 `harness/packages/nexus-plugin-goal/src/tree.test.ts`；這一檔問的是宿主拿著
  * `goals` 服務做的事：
  *
  * - **逐出判斷走非建立式讀（`existingFor`）**：真的 wire handler＋真的 `goals` 服務＋真的 `create`。武裝中的目標不撤；沒碰過 goal

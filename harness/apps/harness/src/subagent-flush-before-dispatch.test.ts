@@ -9,7 +9,7 @@
  * - root 與子代理各叫兩次模型時，呼叫數、被問排空的總次數、`model/start` 之後的排空次數都相同。
  *
  * 排空與「送出」的先後這裡沒有量（探針沒記模型被叫的時刻，檢查點政策自己也會排空）；送出前的那一次排空由 `request-snapshot.ts` 做，
- * 單元測試在 `packages/nexus-core/src/request-snapshot.test.ts`。沒接真的持久化（排空者是這裡掛的記錄用的），所以量的是呼叫次數，
+ * 單元測試在 `harness/packages/nexus-core/src/request-snapshot.test.ts`。沒接真的持久化（排空者是這裡掛的記錄用的），所以量的是呼叫次數，
  * 不是磁碟上的內容。明給 `historySource` 與 `agentLoop`。**零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 

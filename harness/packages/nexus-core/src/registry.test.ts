@@ -710,7 +710,7 @@ describe('telemetry 註冊點', () => {
  *
  * **訊息換人了，這是唯一真的變的東西。** 原本是領域句（「兩個後端就是兩份出境資料」），
  * 現在是 `services` 的通用句。照標準接受：cordis 自己就是通用的
- * （`vendor/cordis/src/reflect.ts:290` 的 `service "<name>" has been registered at <fiber>`）。
+ * （`harness/vendor/cordis/src/reflect.ts:290` 的 `service "<name>" has been registered at <fiber>`）。
  * 領域說明搬進各自 plugin 的文件。
  */
 describe('遙測與回饋走 services', () => {

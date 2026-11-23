@@ -7,7 +7,7 @@
  * 帶 `modelCall` 指回失敗那次的 `assistant/attempt`（`ignorable`，同那一版的 `thread-pump.ts`），再來第二次呼叫的起訖與回覆。
  * `llm/retry-started` 與 `context/measure` 不寫：今天的讀方不看它們決定歸屬。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 rev 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那個 rev 的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-retry-attempt.ts <run 目錄>
  */
 

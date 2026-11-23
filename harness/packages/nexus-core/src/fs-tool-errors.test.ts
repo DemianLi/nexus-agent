@@ -1,7 +1,7 @@
 /**
  * 檔案工具失敗標成錯誤的那一層自己的邏輯——把監聽者掛進 `tools/execute`，直接餵一個假 `handler`，`handler` 照基座
  * 檔案工具的樣子叫包過的 backend、把結果包成狀態成功的 ToolMessage。「fold 有沒有把它打底進去、
- * 排在哪」在 `fold.test.ts`；「掛進真的 agent、真的 fence 之後」在 `apps/harness/src/fs-tool-errors.test.ts`。
+ * 排在哪」在 `fold.test.ts`；「掛進真的 agent、真的 fence 之後」在 `harness/apps/harness/src/fs-tool-errors.test.ts`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

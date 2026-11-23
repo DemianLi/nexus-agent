@@ -1,6 +1,6 @@
 /**
  * sandbox-policy 在樹上的那一半：一致性套件、行程級的 `apply`、宿主缺接縫時當場拋。登記落在相容層 registry 的哪裡（四樣順序、
- * 日誌位元組）在 `apps/harness/src/sandbox-policy-on-tree.test.ts`。
+ * 日誌位元組）在 `harness/apps/harness/src/sandbox-policy-on-tree.test.ts`。
  *
  * @module
  */

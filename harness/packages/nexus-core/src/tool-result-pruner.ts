@@ -38,7 +38,7 @@
 
  * 那條 8 萬字元的線因此是我們的**上界**，而它是基座的一個預設值——它變了、或 eviction 被
  * 拿掉了，這把剪刀能碰到的區間就跟著變，**兩邊都不會拋**。所以
- * `apps/harness/src/summarization.test.ts` 有一條測試把它釘住。
+ * `harness/apps/harness/src/summarization.test.ts` 有一條測試把它釘住。
  *
  * ⚠️ 這同時是 {@link ./summarization.ts} 那條絆索（「模型哪天解得出 `maxInputTokens`
  * 就要紅」）現在守的**第二**件事：那天到了，`compactToolResults` 會醒過來，跟這個檔
@@ -46,7 +46,7 @@
  *
  * ## dsh 怎麼做
  *
- * `packages/compaction/compaction-tool-result-pruner`（SHA `4e84901`，動工當天對過
+ * `harness/packages/compaction/compaction-tool-result-pruner`（SHA `4e84901`，動工當天對過
  * upstream，這條路徑只有 `package.json` 版號與一行測試 fixture 的差別）：
  *
  * - 預算是 **Unicode code point**，不是 UTF-16 code unit——切點不會劈開代理對。

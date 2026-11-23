@@ -7,7 +7,7 @@
  * ## 行程級、一列；只收定義，不執行
  *
  * 一棵樹只掛一列提供者。每顆消費者經 `ctx.commands.register(definition)` 登記，登記是 effect，消費者那一列卸載時登記處
- * 自己撤掉。**宿主**（`apps/harness`）經 {@link CommandsProviderHandle.entries} 讀每一個命令連同登記它的那一列的 id，把
+ * 自己撤掉。**宿主**（`harness/apps/harness`）經 {@link CommandsProviderHandle.entries} 讀每一個命令連同登記它的那一列的 id，把
  * active 的那一列登記的命令折進每條 thread 的 `registry.commands`；那一面不在 {@link CommandRegistry} 的契約裡，消費者
  * 看不到。**執行**（解析、寫 `command/run`、呼叫 handler）留在 `@nexus/plugin-commands`，這裡不碰。
  *

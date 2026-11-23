@@ -47,7 +47,7 @@
  * 逐條 thread 的查詢一定落空。拿掉它不改行為；等出現真的逐條不同的答題者時，提供者與查詢一起加回來
  * （`docs/plugin-contract.md` 的偏離表）。它也沒有放進 `inject`：選配的依賴放進 `inject` 會讓一致性套件的 `export-form` 紅。
  *
- * **舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/ask-user.fixture.ts`，同 echo、skills、feedback 的前例）：還在相容層
+ * **舊的 `NexusPlugin` 外殼搬走了**（`harness/apps/harness/src/ask-user.fixture.ts`，同 echo、skills、feedback 的前例）：還在相容層
  * 組裝的測試經它掛這顆工具，它與樹上這一列共用 {@link createAskUserTool}，所以兩邊的工具本體是同一份程式碼。
  *
  * @module
@@ -180,7 +180,7 @@ export function noAnswererMessage(channel: ApprovalChannel): string {
 /**
  * 組出 `ask_user_question` 這顆工具。
  *
- * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`apps/harness/src/ask-user.fixture.ts`）都從這裡
+ * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`harness/apps/harness/src/ask-user.fixture.ts`）都從這裡
  * 取。它們之間唯一不同的是「這次呼叫的答題者怎麼來」，所以那一格是參數。
  *
  * **fail-closed 排在最前面**（#669）：沒有人在的時候連中斷都不該發出去，因為 `no-channel` 底下 `interrupt()` 是當場拋，

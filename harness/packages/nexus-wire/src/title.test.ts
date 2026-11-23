@@ -1,7 +1,7 @@
 /**
  * 會話標題的 `custom` frame 怎麼折（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。
  *
- * 產出 frame 的那一半在 `apps/harness/src/session-title-wire.test.ts`；這裡只管折疊器：初值、換掉、形狀不對不收、
+ * 產出 frame 的那一半在 `harness/apps/harness/src/session-title-wire.test.ts`；這裡只管折疊器：初值、換掉、形狀不對不收、
  * 往前翻頁不動它。
  */
 

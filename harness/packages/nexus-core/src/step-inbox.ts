@@ -6,11 +6,11 @@
  *
  * dsh 的迴圈在 driver 裡，一步一步走：每一步的 `preStep` 領走整條 `next-step`（一輪開頭再多領一件 `next-turn`），
  * 寫成 `user/message` 送進模型；模型說完了但 `next-step` 不空時，這一輪不收，接著跑下一步
- * （`packages/core/agent-loop/src/agent.ts:271`、`:342-347`、`:403-405`，`477b4f4`）。
+ * （`harness/packages/core/agent-loop/src/agent.ts:271`、`:342-347`、`:403-405`，`477b4f4`）。
  *
  * ## 我們的縫
  *
- * 我們的迴圈是基座的圖，pump（`apps/harness/src/thread-pump.ts`）在圖外。收件匣由 pump 持有，經由 `configurable` 的
+ * 我們的迴圈是基座的圖，pump（`harness/apps/harness/src/thread-pump.ts`）在圖外。收件匣由 pump 持有，經由 `configurable` 的
  * {@link STEP_INBOX_CONFIG_KEY} 把一個 {@link StepInbox} 交進圖裡，同 `turn-cancel.ts` 交中止訊號的做法。圖裡兩個掛點，
  * 對到 dsh 的兩件事，**都是基座表達得出來的，不是偏離**（2026-09-28 用真組裝的探針量過）：
  *
@@ -26,7 +26,7 @@
  *
  * 兩個都跳得回模型。差在價錢：每一顆 `beforeModel`／`afterModel` 都是圖裡的一個節點，**每一步多一個 super-step**；
  * `afterAgent` 一次執行只走一次。`beforeModel` 省不掉（工具邊界只有它），「說完了還有插話」那一半改掛 `afterAgent`，
- * 每一步只多一格。換算見 `apps/harness/src/settings/recursion-limit.ts`。
+ * 每一步只多一格。換算見 `harness/apps/harness/src/settings/recursion-limit.ts`。
  *
  * **只掛在要插話的組裝上**（`FoldOptions.stepInbox`）：CLI 一行一輪，沒有插話，不必付那一格。
  *
@@ -39,7 +39,7 @@
  * ## 背景子代理有自己的一份（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）
  *
  * 背景續行的子代理（#737）是最上層的圖，靠顯式的身分鍵認人。`compileSubagentGraph` 替它掛 `createStepInboxMiddleware('background')`，
- * host（`apps/harness/src/background-subagents.ts`）替每個正在跑的子代理持有一份 handle，經同一把 {@link STEP_INBOX_CONFIG_KEY}
+ * host（`harness/apps/harness/src/background-subagents.ts`）替每個正在跑的子代理持有一份 handle，經同一把 {@link STEP_INBOX_CONFIG_KEY}
  * 交進它的 `configurable`。`send_message` 給跑著的子代理就在它的下一步領走，同 dsh 的「a working agent receives it at its next step」。
  * 一次性子代理的圖裡沒有這顆，所以 `configurable` 被原樣展開也領不到。
  *

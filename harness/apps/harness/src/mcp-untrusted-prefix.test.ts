@@ -8,7 +8,7 @@
  * - `isError` 的錯誤文字不帶；
  * - 系統提示詞：有 MCP 才有那一句，沒掛 MCP 的 agent 沒有。
  *
- * 逐項的形狀（空結果不標、非文字塊先換說明再標）在 `packages/nexus-plugin-mcp/src/untrusted-mark.test.ts`。
+ * 逐項的形狀（空結果不標、非文字塊先換說明再標）在 `harness/packages/nexus-plugin-mcp/src/untrusted-mark.test.ts`。
  * 這一檔問的是「接上整條線之後，前綴還在不在」：拿掉 `tool-call.ts` 裡的 `markUntrusted`，或把 `hub.ts` 的那一句改成無條件出現，下面會紅。
  */
 

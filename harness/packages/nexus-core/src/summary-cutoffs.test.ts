@@ -1,6 +1,6 @@
 /**
  * 摘要的切點表（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：查找的四道判斷、鍵、最外層的讀與落表。
- * 經組裝的行為由 `apps/harness/src/summarizer-lifetime.test.ts` 負責；這裡釘住兩個 loop 都走不到的分支（沒有 id 的訊息）。
+ * 經組裝的行為由 `harness/apps/harness/src/summarizer-lifetime.test.ts` 負責；這裡釘住兩個 loop 都走不到的分支（沒有 id 的訊息）。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';

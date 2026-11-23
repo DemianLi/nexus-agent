@@ -9,7 +9,7 @@
  *
  * - **每一列都 import**，**包括停用的**：停用的列正是使用者可能重新打開的那一列，編輯的人正需要它的規格。
  *   停用的列可以省略必填的 `config`，但**有寫的值仍然要驗**（dsh `README.zh.md:62`）。這比載入器嚴
- *   （載入器對停用的列完全不驗設定，`packages/nexus-core/src/plugin.ts` 的 `resolveEntries`），是 dsh 自己就有的落差。
+ *   （載入器對停用的列完全不驗設定，`harness/packages/nexus-core/src/plugin.ts` 的 `resolveEntries`），是 dsh 自己就有的落差。
  * - **轉不出來的標成不完整，不靜靜丟掉**；只要有一列不完整、或有一列載不起來，結束碼就是 1，即使輸出的文件照樣可用。
  *   退出碼回答的是「這份文件能不能取代原本的驗證」。
  * - **沒有 `Config` 的列是「欄位未知」**（`absent`），不是「禁止設定」，不算不完整、不影響結束碼。
@@ -76,7 +76,7 @@ export interface ConfigSchemaDump extends JsonSchemaDocument {
   readonly 'x-nexus': ConfigSchemaAnnotation;
 }
 
-/** 疊完之後條目 id 的限制：不能有前後空白（`packages/nexus-core/src/plugin.ts` 的 `entryManifestSchema`，那是一條 `refine`，這裡用等價的 pattern 寫進去）。 */
+/** 疊完之後條目 id 的限制：不能有前後空白（`harness/packages/nexus-core/src/plugin.ts` 的 `entryManifestSchema`，那是一條 `refine`，這裡用等價的 pattern 寫進去）。 */
 const ID_PATTERN = '^\\S([\\s\\S]*\\S)?$';
 
 const LOSS_LABEL: Readonly<Record<ConfigSchemaLoss['kind'], string>> = {

@@ -1,6 +1,6 @@
 /**
  * 記憶的內容每條 thread 一份：同一個組裝上兩條 thread 交錯呼叫，各接各的。
- * 端到端（真的讀檔、同一條 thread 中途改檔不重載）在 `apps/harness/src/memory.test.ts`。
+ * 端到端（真的讀檔、同一條 thread 中途改檔不重載）在 `harness/apps/harness/src/memory.test.ts`。
  */
 
 import { SystemMessage } from '@langchain/core/messages';

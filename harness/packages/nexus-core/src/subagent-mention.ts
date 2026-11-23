@@ -35,7 +35,7 @@ export interface SubagentMentionRef {
 
 /**
  * root 委派子代理用的工具：一次性模式是基座的 `task`；背景續行模式模型手上只有 `subagent`（`task` 被藏起來，見
- * `apps/harness` 的 `background-delegation.ts`）。兩者的 `subagent_type` 同名同義。
+ * `harness/apps/harness` 的 `background-delegation.ts`）。兩者的 `subagent_type` 同名同義。
  */
 export type DelegationToolName = 'task' | 'subagent';
 

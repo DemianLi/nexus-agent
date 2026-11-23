@@ -708,7 +708,7 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
   });
 
   it('續接收得下 2 萬層：快照與凍結都是迭代的，最底那一層也凍過', () => {
-    // 落盤那一格（`apps/harness/src/session-log-json-snapshot.test.ts` 的 C）只能測到 Node 22 原生 `JSON.stringify`
+    // 落盤那一格（`harness/apps/harness/src/session-log-json-snapshot.test.ts` 的 C）只能測到 Node 22 原生 `JSON.stringify`
     // 撐得住的深度（CI 上約 4100 層），遞迴的凍結在那以上才爆，所以這一格只在記憶體裡驗、不經原生序列化。
     for (const shape of ['object', 'array'] as const) {
       let value: unknown = 'leaf';

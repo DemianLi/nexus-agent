@@ -1,7 +1,7 @@
 /**
  * ask-user 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1458](https://github.com/DemianLi/nexus-agent/issues/1458)）。
  *
- * ask-user 本身已經是樹上的函式插件（`packages/nexus-plugin-ask-user`，沒有一行 `@nexus/core`）。手搭 `PluginEntry` 清單、直接
+ * ask-user 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-ask-user`，沒有一行 `@nexus/core`）。手搭 `PluginEntry` 清單、直接
  * `createNexusAgent` 的測試要一顆「登記 `ask_user_question`」的 `NexusPlugin`，就走這個外殼——**工具本體、註冊選項（`rootOnly`、
  * `outputSchema`）都取自同一份**（`createAskUserTool`、`ASK_USER_REGISTER_OPTIONS`），所以行為只有一個出處。同
  * `feedback.fixture.ts`、`skills.fixture.ts` 的前例。

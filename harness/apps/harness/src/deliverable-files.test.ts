@@ -368,7 +368,7 @@ describe('預覽', () => {
      * 上面四條證的是「`createWireHandler` 收到什麼就用什麼」。缺的那一步是「`serve-run.ts` 起動期
      * 解出來的那一份，真的傳給了 handler」。以前那一步**在 serve 上觀察不到**：要看見它就得有一個
      * 宣告過的交付檔，而不帶 `--live` 的假模型腳本（`CLI_SCRIPT`）一次都不呼叫 `present`——#536 量過，
-     * 把 `serve-run.ts` 那一行 `deliverableLimits,` 刪掉，`apps/harness` 全套 1234 條全綠。
+     * 把 `serve-run.ts` 那一行 `deliverableLimits,` 刪掉，`harness/apps/harness` 全套 1234 條全綠。
      *
      * [#670](https://github.com/DemianLi/nexus-agent/issues/670) 之後有了行為測試：`serve-scripted-provider.test.ts` 在
      * 真的 `runServe` 上用 patch 換掉模型提供者、叫一次 `present`，上限調小的那一組讀不動。**這一條留著當第二道**：

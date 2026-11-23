@@ -7,7 +7,7 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、介面、契約版本，與投影單元的型別 | `@nexus/sdk`，與 `@nexus/core` 的型別與 `isLogicalTurnStart`（見下） |
- * | 提供者 | 樹上一列，行程級的投影登記處：同一個套件的另一個入口 `@nexus/projections/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
+ * | 提供者 | 樹上一列，行程級的投影登記處：同一個套件的另一個入口 `@nexus/projections/provider`，由宿主（`harness/apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
  * | 消費者 | 想登記投影單元的插件，今天是 `token-meter` 與 `trajectory` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * ## 偏離登記：這個定義套件相依 `@nexus/core`（#1421 Q2 (a)）
@@ -25,7 +25,7 @@
  * - 會話日誌的**讀法**（`loggedContentBlocks` 等四個值）不在這裡，由 `@nexus/session` 單向轉出（#1435 Q1 (c)）；`SessionEvent`、
  *   `isLogicalTurnStart` 日後歸 `@nexus/session`，撤除條件一併涵蓋。`ProjectionDetailError` 屬於投影（按需拉細節的錯誤），放這裡名實相符。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

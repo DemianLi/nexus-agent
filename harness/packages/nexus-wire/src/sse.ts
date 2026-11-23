@@ -48,7 +48,7 @@ export function encodeSseData(event: string, data: unknown): string {
 }
 
 /**
- * SSE 的註解行（`:` 開頭）。解碼端跳過它；伺服器端的心跳（`: ping`，#1504，寫在 `apps/harness/src/wire-server.ts`）
+ * SSE 的註解行（`:` 開頭）。解碼端跳過它；伺服器端的心跳（`: ping`，#1504，寫在 `harness/apps/harness/src/wire-server.ts`）
  * 與開線的 `: connected` 都是這種行，所以這個檔不產生心跳，只負責認得它不是封包。
  */
 function isComment(line: string): boolean {
@@ -59,7 +59,7 @@ function isComment(line: string): boolean {
  * 把一段 SSE 位元流解回 `Event`。
  *
  * 吃的是 `Response.body` 那種 `ReadableStream<Uint8Array>`——**streaming fetch，
- * 不是 `EventSource`**。這一點也照 dsh（`packages/host/apiproxy/src/fetch/client.ts`）：
+ * 不是 `EventSource`**。這一點也照 dsh（`harness/packages/host/apiproxy/src/fetch/client.ts`）：
  * `EventSource` 只能 GET、不能帶 body，而協定規定下行是 `POST … /stream` 帶
  * `EventStreamRequest`，兩者接不上。
  *

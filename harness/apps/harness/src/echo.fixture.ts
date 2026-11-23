@@ -1,7 +1,7 @@
 /**
  * echo 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試與基準任務用（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）。
  *
- * echo 本身已經是樹上的函式插件（`packages/nexus-plugin-echo`，沒有一行 `@nexus/core`）。大量測試手搭 `PluginEntry`
+ * echo 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-echo`，沒有一行 `@nexus/core`）。大量測試手搭 `PluginEntry`
  * 清單、直接呼叫 `createCliAgent` 或 `loadPlugins`，不經過 Cordis 樹；它們要一顆「註冊 `echo` 工具」的 `NexusPlugin`，
  * 就走這個外殼——**包的是同一個 `createEchoTool`**（經宿主的轉接器轉成 LangChain 工具），所以工具的定義只有一個出處。
  *

@@ -36,15 +36,15 @@
  * - `PipelineReporter`（`benchmark` 類別）：每一幀最後是整幀畫出（`STATE_PRESENTED_ALL`）、部分畫出（`…_PARTIAL`）還是掉了（`STATE_DROPPED`）。
  * - `Display::DrawAndSwap`（`viz` 類別）：顯示合成器每畫一幀花多久，blur 就在這裡算。
  *
- * 跑法（先 build web；serve 用同一個 worktree 的 `apps/web/dist`）：
+ * 跑法（先 build web；serve 用同一個 worktree 的 `web/dist`）：
  *
- *   env -u NVIDIA_API_KEY node apps/web/scripts/measure-frames.mjs [--runs 3] [--out <json>] [--headed] [--viewport 390x844]
+ *   env -u NVIDIA_API_KEY node web/scripts/measure-frames.mjs [--runs 3] [--out <json>] [--headed] [--viewport 390x844]
  *
  * `--viewport` 預設 1440x900（桌面）。寬度在 `use-mobile` 的斷點 1024 以下時，側欄是手機的抽屜（sheet，整面遮罩帶 blur），
  * 「開關側欄」量的就是抽屜的開關（#1583 驗收 H）。
  *
  * **不碰真的 key**：模型是腳本裡的假端點（OpenAI 相容、SSE 串流，只聽 127.0.0.1），serve 用 `--patch` 指過去；
- * serve 的 cwd 是沒有 `.env` 的 `apps/harness`；子行程環境裡的 `NVIDIA_API_KEY` **覆寫成假 key** `nvapi-fake-loopback-only`，
+ * serve 的 cwd 是沒有 `.env` 的 `harness/apps/harness`；子行程環境裡的 `NVIDIA_API_KEY` **覆寫成假 key** `nvapi-fake-loopback-only`，
  * 原本環境裡的值不會傳過去（外層照樣用 `env -u NVIDIA_API_KEY` 跑）。
  * home 與工作區都是新建的暫存目錄，跑完刪掉。輸出不印 serve 的網址（帶 token）。
  *

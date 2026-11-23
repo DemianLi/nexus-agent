@@ -166,7 +166,7 @@ describe('工具本體拋錯（#346）', () => {
     '%s那一輪的模型呼叫拋錯（#327 那次）：root 的 task 拿到錯誤、這一輪照跑完，沒有未處理的 rejection',
     async (_label, subagentType) => {
       // 對上 dsh：子代理失敗 → 父代理那顆委派工具 `isError`，父代理那一輪照跑
-      // （`packages/subagent/tool-subagent/src/index.ts:207-214`）。
+      // （`harness/packages/subagent/tool-subagent/src/index.ts:207-214`）。
       const root = await runOnce(
         [
           delegate(subagentType),

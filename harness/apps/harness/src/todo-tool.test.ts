@@ -128,7 +128,7 @@ describe('todo_write 在真的圖上', () => {
    * `todo/write（seq 0）落在任何開著的輪之外`，而它的去處是使用者的終端機。
    *
    * 規則因此改寫成看**這份日誌自己有沒有輪**，理由與另一條路的比較見
-   * `packages/nexus-plugin-todo/src/invariant.ts` 檔頭。
+   * `harness/packages/nexus-plugin-todo/src/invariant.ts` 檔頭。
    */
   it('subagent 那份沒有輪的日誌，十三個配套入口一句話都不說', async () => {
     const model = new ScriptedChatModel({

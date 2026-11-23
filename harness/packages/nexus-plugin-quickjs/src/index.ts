@@ -11,7 +11,7 @@
  * route 前綴下。也就是說把這個能力做成 backend，會讓 `permissions` 擴充點與它互斥——
  * 現有的 `permissions` 行為驗收會在**組裝期**炸掉。做成 custom tool 則完全不經過那條路：
  * 基座明文「custom tools from the agent or other middleware are left untouched」。
- * 絆索測試見 `apps/harness/src/sandbox-backend-conflict.test.ts`。
+ * 絆索測試見 `harness/apps/harness/src/sandbox-backend-conflict.test.ts`。
  *
  * **邊界有多寬，這裡說清楚**（與 `ContainedFilesystemBackend` 那句「policy fence 不是
  * kernel boundary」同一個位置的誠實宣告）：
@@ -35,7 +35,7 @@
  * 樹上的函式插件（#2353），具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src` 不 import
  * `@nexus/core` 與 LangChain。工具是 `NexusTool`（`@nexus/tools` 契約 `^2.0.0`），參數用 zod 寫、交出去的是
  * `z.toJSONSchema()` 以 input 模式編出來的 JSON Schema。不在出廠清單上，部署方用 patch `insert` 一列
- * `@nexus/plugin-quickjs` 才會掛。舊的 `NexusPlugin` 外殼住在 `apps/harness` 的 `quickjs.fixture.ts`，給不經樹的測試用。
+ * `@nexus/plugin-quickjs` 才會掛。舊的 `NexusPlugin` 外殼住在 `harness/apps/harness` 的 `quickjs.fixture.ts`，給不經樹的測試用。
  */
 
 import type { Context } from '@nexus/cordis';
@@ -183,7 +183,7 @@ export function createRunJavascriptTool(config: QuickJsConfig, modules: QuickJsM
 
 /**
  * 程式本身失敗的結果。文字與 `@nexus/core` 的 `formatToolFailure` 逐字相同（`工具 <名字> 執行失敗：<訊息>`，前面的 `Error: `
- * 由宿主加）：工具回 `ok: false` 與工具拋錯、由圍堵接住，模型看到的位元組一樣（`apps/harness` 的 `quickjs-migration.test.ts`
+ * 由宿主加）：工具回 `ok: false` 與工具拋錯、由圍堵接住，模型看到的位元組一樣（`harness/apps/harness` 的 `quickjs-migration.test.ts`
  * 對著對照組逐字比）。插件不能 import core，所以這句只能照抄。
  */
 function failed(error: CodeRunFailedError): NexusToolResult {

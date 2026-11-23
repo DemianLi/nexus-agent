@@ -37,7 +37,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
 /**
- * web 判斷工具被中止時手寫的兩個碼（`apps/web/src/lib/tool-aborted.ts`、`question-view.ts`）。web 的產品碼不從 `@nexus/core` 取值，core 改字串編譯不會紅，
+ * web 判斷工具被中止時手寫的兩個碼（`web/src/lib/tool-aborted.ts`、`question-view.ts`）。web 的產品碼不從 `@nexus/core` 取值，core 改字串編譯不會紅，
  * 所以這裡刻意也寫字面值，不從 core 匯入。量得到的只有生產者那一側；web 改值時要同改這兩個常數。
  */
 const WEB_TOOL_ABORTED_CODE = 'ABORTED';

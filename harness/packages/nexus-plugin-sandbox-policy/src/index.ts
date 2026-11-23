@@ -32,7 +32,7 @@
  * `references/deepseek-harness/packages/sandbox/sandbox-policy/src/index.ts:47`，SHA `ddefc45`）。
  * 在 dsh 這句成立，是因為它的檔案工具收的就是主機路徑。**我們的收的不是**：
  * `ContainedFilesystemBackend` 的圍堵靠基座 `FilesystemBackend` 的 `virtualMode: true`
- * （`apps/harness/src/contained-backend.ts`），在那個位址空間裡 `/` 就是工作區根。
+ * （`harness/apps/harness/src/contained-backend.ts`），在那個位址空間裡 `/` 就是工作區根。
  * 主機路徑傳進去會被當成根底下的一條子路徑。所以照抄那個字串，等於給了模型一個工具收不下的位址。
  * 第 2 階段 live 量到的後果：用到檔案工具的 30 輪裡，23 輪照著那個字串用了主機絕對路徑。
  * 工具回「找不到」，模型接著反覆 `ls`、回頭問人、寫到巢狀路徑。
@@ -43,7 +43,7 @@
  * **沒選的另一條路**：讓 backend 也收「主機根＋子路徑」，先剝掉前綴再交給基座，這樣就能維持 dsh 的形狀。
  * 沒選它，是因為那等於改圍堵的路徑解析：fence 判準、把工具路徑對到磁碟的共用規則（`@nexus/core`
  * 的 `virtualPathOf`／`hostPathOf`，present、交付讀檔路由、`workspace-changes` 都走它）都假設虛擬路徑。
- * 改了 backend 就要一起改那一份，`apps/harness/src/virtual-path.test.ts` 會紅著提醒。為了一句提示詞
+ * 改了 backend 就要一起改那一份，`harness/apps/harness/src/virtual-path.test.ts` 會紅著提醒。為了一句提示詞
  * 去動擋寫入的那一層，換錯的代價比說錯一句話大。
  * 給人看的 `/permission` 輸出報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
  * 而人要的正是磁碟上的位址。
@@ -51,7 +51,7 @@
  * ## 這個 plugin 是出貨清單上的一列；「有沒有圍堵」是組裝點另外交的一格事實
  *
  * [#669](https://github.com/DemianLi/nexus-agent/issues/669) 之前，組裝點在程式碼裡判「有 `--workspace` 才掛」。現在它是
- * `apps/harness/cordis.yml` 的一列（`sandbox-policy`），掛不掛不再由組裝點的條件判，**分支搬進這個 plugin**，照 dsh：
+ * `harness/apps/harness/cordis.yml` 的一列（`sandbox-policy`），掛不掛不再由組裝點的條件判，**分支搬進這個 plugin**，照 dsh：
  *
  * - **政策段落無條件貢獻**（dsh `packages/sandbox/sandbox-policy/src/index.ts:141-150`，`477b4f4`），措辭刻意不宣稱掛了哪些能力
  *   （同檔 `:41`）。**所以我們那句話改成不宣稱圍堵**——以前說「改不動任何檔案」「工作區根之下的變更直接放行」，是把「有一道 fence
@@ -61,8 +61,8 @@
  *   服務在不在當訊號**——那是控制器，不是事實。有圍堵：控制器、可寫根、`WORKSPACE_CAPABILITY`、`sandbox/mode`、升級
  *   全部掛上。沒有圍堵：只貢獻那一句話，其餘一樣都不掛（沒有東西可以切、可以升、可以記）。
  * - **有圍堵卻缺 `sandboxPolicy` 服務：載入當場拋**，訊息指名缺什麼（dsh 的 `tool-str-replace-editor` 有圍堵卻缺政策時同樣當場拋，
- *   `packages/fs/tool-str-replace-editor/src/index.ts:71-74`）。不把「沒有圍堵」與「有圍堵但缺件」併成同一種無聲退路。
- * - **有圍堵時整列被關掉：組裝點起不來**（`apps/harness/src/assembly-root.ts`），同上，因為這時 fence 還在擋、模型卻不知道、也請不到升級。
+ *   `harness/packages/fs/tool-str-replace-editor/src/index.ts:71-74`）。不把「沒有圍堵」與「有圍堵但缺件」併成同一種無聲退路。
+ * - **有圍堵時整列被關掉：組裝點起不來**（`harness/apps/harness/src/assembly-root.ts`），同上，因為這時 fence 還在擋、模型卻不知道、也請不到升級。
  *
  * ### 登記：沒有圍堵時 `/permission` 不註冊，dsh 是拋錯
  *
@@ -100,7 +100,7 @@ const DELEGATION_TOOL_NAME = 'task';
 
 /**
  * 一格模式對模型講的那一段話，**照 dsh 的措辭：每一句只講「受檔案沙箱管的操作」**
- * （`packages/sandbox/sandbox-policy/src/index.ts` 的 `renderPolicyContext`，`5badb15`）。
+ * （`harness/packages/sandbox/sandbox-policy/src/index.ts` 的 `renderPolicyContext`，`5badb15`）。
  *
  * 這個限定是句子「不宣稱圍堵」的來源：沒有圍堵的組裝上，沒有任何操作受沙箱管，句子照樣為真，
  * 不會暗示根外被擋著。以前的措辭（「改不動任何檔案」「直接放行」）把一道 fence 當前提，沒有圍堵時是謊。
@@ -210,7 +210,7 @@ export interface SandboxPolicyService {
 
 /**
  * 「這次組裝的檔案系統有圍堵」這一格事實的服務名，對應 dsh 的 `ctx.fs.sandboxMode`（capability fact，
- * `packages/fs/tool-fs/src/sandbox.ts:7`）：**有就是有圍堵，沒有就是沒有**。由組裝點經 host 服務交，與
+ * `harness/packages/fs/tool-fs/src/sandbox.ts:7`）：**有就是有圍堵，沒有就是沒有**。由組裝點經 host 服務交，與
  * {@link SANDBOX_POLICY_SERVICE}（控制器）分開——訊號不能是控制器在不在。
  */
 export const FS_CONTAINMENT_SERVICE = 'fsContainment';

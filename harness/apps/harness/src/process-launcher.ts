@@ -34,7 +34,7 @@ import { PROCESS_MODEL_ENTRY_NAME, processModelConfigSchema } from './settings/p
 import type { ProcessModel, ProcessModelConfig } from './settings/process-model.js';
 
 /** 產物裡監督行程的位置，相對於往上找到的那一層，同 spawner 的 `SPAWNER_PATH`。 */
-export const SUPERVISOR_PATH = 'native/nexus-supervisor';
+export const SUPERVISOR_PATH = 'harness/native/nexus-supervisor';
 
 /**
  * per-thread 時監督行程起的兩支入口，跟這個模組在同一個目錄（{@link sibling}）。產物裡要有 `lib/<名字>.js`：
@@ -306,7 +306,7 @@ export function childExecArgv(execArgv: readonly string[]): string[] {
   return kept;
 }
 
-/** 監督行程的命令列（見 `native/sandbox-spawner/README.md`〈監督行程〉）。純函式。 */
+/** 監督行程的命令列（見 `harness/native/sandbox-spawner/README.md`〈監督行程〉）。純函式。 */
 export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch {
   const { front, conversation } = splitServeArgv(input.serveArgv);
   const each = (flag: string, values: readonly string[]) =>

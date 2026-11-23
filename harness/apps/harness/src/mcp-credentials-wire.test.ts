@@ -1,6 +1,6 @@
 /**
  * **MCP 設定以憑證名引用受管憑證檔**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）的接線：值從 harness 的憑證服務來，
- * 跟模型 key 同一條規則。plugin 那一側的機制（代入、prefix、池鍵、失敗訊息）在 `packages/nexus-plugin-mcp/src/credentials.test.ts`。
+ * 跟模型 key 同一條規則。plugin 那一側的機制（代入、prefix、池鍵、失敗訊息）在 `harness/packages/nexus-plugin-mcp/src/credentials.test.ts`。
  *
  * | 入口 | 量什麼 | 拿掉哪一處會紅 |
  * | --- | --- | --- |

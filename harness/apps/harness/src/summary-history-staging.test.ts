@@ -13,7 +13,7 @@
  * | S2 生摘要的呼叫自己失敗 | 失敗那輪沒有事件、沒有段落；下一輪一段，原文不重複 |
  * | S3／S4／S10 摘要後主請求失敗／被停 | 事件在日誌上，那一段就在；下一輪的段落接著它，互不重複 |
  *
- * 沒接日誌的組裝寫歷史檔，那一層的暫存提交（`packages/nexus-core/src/summary-history-staging.ts`）在它旁邊的單元測試裡量。
+ * 沒接日誌的組裝寫歷史檔，那一層的暫存提交（`harness/packages/nexus-core/src/summary-history-staging.ts`）在它旁邊的單元測試裡量。
  *
  * 零憑證、零外部連線。
  */

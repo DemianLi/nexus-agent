@@ -2,7 +2,7 @@
  * 解不開的工具參數：改寫與拒絕兩條規則本身（[#281](https://github.com/DemianLi/nexus-agent/issues/281)）。
  *
  * 這一份用手搭的訊息量規則；真的 `ChatOpenAI` 產出的形狀、兩條產品路徑與核准、子代理，量在
- * `apps/harness/src/invalid-tool-args.test.ts`。
+ * `harness/apps/harness/src/invalid-tool-args.test.ts`。
  */
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';

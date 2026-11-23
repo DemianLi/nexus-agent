@@ -718,7 +718,7 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
       build: { commit: 'abcdef0123456789', dirty: false },
       plugins: [{ name: '@nexus/plugin-todo', id: 'todo', disabled: true }],
       configHash: 'hmac-sha256:0011223344556677',
-      modelEntryId: 'vendor/model',
+      modelEntryId: 'harness/vendor/model',
     });
     await recorded.append(events([turn('message')]));
     await recorded.close();
@@ -732,7 +732,7 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
       { threshold: 5 },
     ).join('\n');
     expect(text).toContain(
-      '建置 abcdef012345（未提交的改動：無） ｜模型 vendor/model ｜插件 1 列（停用 1） ｜' +
+      '建置 abcdef012345（未提交的改動：無） ｜模型 harness/vendor/model ｜插件 1 列（停用 1） ｜' +
         '設定雜湊 hmac-sha256:0011223344556677',
     );
     expect(text).toContain('建置 — ｜模型 — ｜插件 — ｜設定雜湊 —');

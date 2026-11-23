@@ -1,7 +1,7 @@
 /**
  * 設定裡的憑證引用（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：真的起 stdio 子行程與 HTTP 夾具，量 server 那一側
  * 拿到的值。憑證服務經 `createHostServicesPlugin` 交進去，跟 harness 交的方式一樣；harness 那一側的接線在
- * `apps/harness/src/mcp-credentials-wire.test.ts`。
+ * `harness/apps/harness/src/mcp-credentials-wire.test.ts`。
  */
 
 import { fileURLToPath } from 'node:url';

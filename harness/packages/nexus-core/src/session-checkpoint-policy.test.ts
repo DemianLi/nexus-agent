@@ -3,7 +3,7 @@
  * （`attachSessionPersistence`），窗口開到上限——**這些測試裡的東西只有檢查點排空得下去**，
  * 所以 handler 裡看到的「後端已經收到」一定是檢查點做的，不是窗口剛好到期。
  *
- * 掛進真的組裝、真的 serve 之後的行為在 `apps/harness` 的 `serve-shutdown.test.ts`。
+ * 掛進真的組裝、真的 serve 之後的行為在 `harness/apps/harness` 的 `serve-shutdown.test.ts`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';

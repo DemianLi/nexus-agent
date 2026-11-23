@@ -3,7 +3,7 @@
  * 驗不過就走通用卡。畫法在 `features/tool/result.tsx`。
  *
  * 照 dsh `readCardModel`／`searchCardModel`（`packages/client/ui-tool/src/client/tool/models/read-card-model.ts`、
- * `search-card-model.ts`，master `477b4f4`），`meta` 的形狀逐字相同（harness 的 `packages/nexus-core/src/tool-result-meta.ts`）。
+ * `search-card-model.ts`，master `477b4f4`），`meta` 的形狀逐字相同（harness 的 `harness/packages/nexus-core/src/tool-result-meta.ts`）。
  * 跟 dsh 不同的三處，都是基座的參數或結果文字跟 dsh 的工具不一樣：
  *
  * - **不驗結果文字的外框**：dsh 讀檔卡要求結果文字是它自己的 `<path>…<content>` 外框（`read-card-model.ts:111`），

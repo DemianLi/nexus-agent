@@ -3,7 +3,7 @@
  *
  * 照 dsh 的 `session-query-sqlite` 那一列（`packages/session-query/session-query-sqlite/src/index.ts:92-119`，`477b4f4`）的
  * `openAt`，**出廠寫 `never`**，同 dsh `base` 與 `web-app` 兩個 bundle（`packages/bundle/base/cordis.patch.yml:141-153`、
- * `packages/bundle/web-app/cordis.patch.yml:22-30`）：要不要多背一份索引是部署自己的選擇，產品預設不背
+ * `harness/packages/bundle/web-app/cordis.patch.yml:22-30`）：要不要多背一份索引是部署自己的選擇，產品預設不背
  * （`.agents/notes/archived/architecture/2026-08-13-session-content-search-opt-in.zh.md:10`）。demian 2026-09-26 拍板照做。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-title-llm` 那一列：值由 `startupSetting` 在起動期讀出來，
@@ -21,7 +21,7 @@
  * ## 這一列關得掉，而且關掉跟 `never` 不一樣
  *
  * `disabled: true` 是沒掛這一列：搜尋一律回失敗，連「沒有東西可搜」也是，同 dsh 沒掛 `sessionQuery` 的那條
- * （`packages/api/session-controller/src/list.ts:170-177`）。`never` 是掛了但不開：沒有東西可搜時照樣回空。所以它跟
+ * （`harness/packages/api/session-controller/src/list.ts:170-177`）。`never` 是掛了但不開：沒有東西可搜時照樣回空。所以它跟
  * `thread-title-llm` 一樣不在 `PROTECTED_ENTRY_NAMES` 上，掛沒掛由 `startupEntryMounted` 判。
  *
  * ## dsh 那一列其他的格我們沒有

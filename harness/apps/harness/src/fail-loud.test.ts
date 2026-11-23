@@ -1,6 +1,6 @@
 /**
  * 行程層致命例外處理（[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)），逐條照 dsh
- * `packages/boot/app-boot/tests/app-boot.spec.ts` 的 `installFailLoud` 那一組（`:362` 起，SHA `1517a4db`）。
+ * `harness/packages/boot/app-boot/tests/app-boot.spec.ts` 的 `installFailLoud` 那一組（`:362` 起，SHA `1517a4db`）。
  *
  * 用假的 `proc` 與假計時器，不碰真的行程。dsh 那組裡的「啟動稽核去重」沒有抄（見 `fail-loud.ts` 檔頭）。
  */

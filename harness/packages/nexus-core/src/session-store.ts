@@ -48,7 +48,7 @@
  *   拒絕——撞名照樣會響，續接不會被當成撞名。
  * - **原版號另外交一格 `storedFormatVersion`**（{@link ReadonlyStoredSession.storedFormatVersion} 等三處；理由 1，
  *   **類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：dsh 的邏輯 header 永遠是目前版，
- *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`packages/core/session/src/types.ts:96-100`，`687f282e`），
+ *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`harness/packages/core/session/src/types.ts:96-100`，`687f282e`），
  *   所以介面上沒有原版號。我們沒有遷移鏈：續接把舊檔的事件原樣搬進目前版的世代檔
  *   （[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③），只讀打開不遷，舊檔一直是舊版號的那一份。讀方
  *   （本文解析、引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交
@@ -56,16 +56,16 @@
  *   （[#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第四刀）落地。跟 #1594 ③ 的遷移無關：只讀不寫的會話永遠
  *   不遷，這一格在它們身上一直有意義。
  * - **引用快照的 `capturedFormatVersion` 記原版號**（`SessionReferenceSourceEntry.capturedFormatVersion`，寫在
- *   `apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
+ *   `harness/apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
  *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`，`687f282e`），也就是目前版——
- *   前提是 store 先把事件轉成目前版才交出去（`packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
+ *   前提是 store 先把事件轉成目前版才交出去（`harness/packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
  *   （`session-format.ts` 模組說明），交給讀方的事件是磁碟上的原樣，不是目前版的表示法，所以記原版號才對得上內容。
  *   **撤除條件**：遷移鏈把事件轉成目前版再交給讀方的那一刀（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)
  *   第四刀）落地時，改成照 dsh 記目前版。跟上一條的撤除條件不同，兩條分開撤。
  *
  * **跨行程的寫租約照抄了**（{@link SessionAlreadyOwnedError}）：兩個行程寫同一份會話的話
  * `seq` 會撞號，dsh 靠 `open(id, 'write')` 的所有權把第二個擋掉，我們同樣。**擋的機制是後端
- * 的事**（JSONL 那個見 `apps/harness/src/session-lease.ts`），這裡只定契約：`resume` 撞上
+ * 的事**（JSONL 那個見 `harness/apps/harness/src/session-lease.ts`），這裡只定契約：`resume` 撞上
  * 別人握著就拋它，而且在讀之前就拋。有了它，上面那條 `create` 的拒絕從「唯一的防線」變成
  * 「多一道」——撞名仍然由它擋，同名同時寫由租約擋。
  *
@@ -85,12 +85,12 @@ import type { SessionEvent } from './session-log.js';
  *
  * **格式紀錄在兩個地方**：50 版以前每一次升版改了什麼、讀舊檔怎樣，寫在下面這些段落。從
  * [#1856](https://github.com/DemianLi/nexus-agent/issues/1856) 起，不論同版還是升版，每一次持久化型別變更都在
- * `docs/persistence-changes/` 有一筆由驗證器核過的紀錄（`apps/harness/src/persistence-changes.ts`，CI 擋；50 版以前
+ * `docs/persistence-changes/` 有一筆由驗證器核過的紀錄（`harness/apps/harness/src/persistence-changes.ts`，CI 擋；50 版以前
  * 同一版之內的新增寫在那裡的基線 `2026-10-23-initial.md`）。這份檔頭的段落是讀舊檔的敘事說明：營運者讀的升級指南
  * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
  * **偏離 dsh，已部分撤除**（#1537 Q2 (a)，demian 2026-10-17 拍板）：dsh 的格式紀錄是機器檢查的——
  * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
- * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的
+ * 由 `harness/scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的
  * 段落（理由 1）；機器檢查那一半已由 #1856 補上（`82c95e1a`）。剩下 `finalized/` 凍結點與 `session-format-status.md`，
  * **類別：過渡**（型別抽取的工具鏈已經有了，不再是理由 1；延到發版節奏定了再做），撤除條件
  * [#1890](https://github.com/DemianLi/nexus-agent/issues/1890)。七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條的來歷。
@@ -160,7 +160,7 @@ import type { SessionEvent } from './session-log.js';
  * **這一次比前幾次更非升不可。** 前幾次升版是慣例，這一次是閘：一個讀不懂 9 的舊 runtime 接續新檔的話，
  * 它寫下去的輪次沒有回覆、沒有結果內容，推出來的歷史就有洞。它得看到「版本太新」而拒讀
  * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：那時我們的 body parser 對不認得的
- * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標（32 補上了，見下）。
+ * `type` 照收（`harness/apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標（32 補上了，見下）。
  *
  * ## 10：評分指名回覆，不指名輪
  *
@@ -189,16 +189,16 @@ import type { SessionEvent } from './session-log.js';
  *
  * **非升不可，而且機制指得出來。** 不升的話：一台停在 12 的 server 接回一份帶著
  * `workspaceRoot: /A` 的日誌，續接重寫 header 那一行是 `{ ...header, version: … }`
- * （`apps/harness/src/jsonl-session-store.ts`），**未知欄位原樣活過重寫**；而 12 沒有任何守衛
+ * （`harness/apps/harness/src/jsonl-session-store.ts`），**未知欄位原樣活過重寫**；而 12 沒有任何守衛
  * 在比這一格，於是它在 `/B` 底下跑、把 `/B` 生出來的事件續寫進同一份日誌，之後一台 13 讀它，
  * 照 header 把 `/B` 的檔錨到 `/A`。升到 13 把這條路封掉——12 讀 header 的時候就以
  * {@link SessionFormatUnsupportedError} 拒讀。這正是 dsh 那條門檻寫的原文情形
- * （`packages/core/session/src/types.ts:75-87`，`ddefc45`：「parses without error」不算 correctness，
+ * （`harness/packages/core/session/src/types.ts:75-87`，`ddefc45`：「parses without error」不算 correctness，
  * 靜靜略過會左右重建的內容就是一次讀錯）。
  *
  * 12 以前的檔直接讀，但這一次「舊檔怎麼讀」跟前幾次不同：**沒有那一格是常態，不是異常**
  * ——每一份 13 以前的日誌都缺它，而且續接**不回填**。所以續接的守衛對「沒記」放行，
- * 跟 `cwd` 那一格的「沒記就拒」相反，四格表在 `apps/harness/src/resume-guards.ts`。
+ * 跟 `cwd` 那一格的「沒記就拒」相反，四格表在 `harness/apps/harness/src/resume-guards.ts`。
  *
  * ## 14：`context/measure`
  *
@@ -211,7 +211,7 @@ import type { SessionEvent } from './session-log.js';
  * root 的回覆撞到輸出上限的那一輪以 `reason: {kind:'max-tokens'}` 收尾（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。
  * **非升不可**：14 讀到它會當成正常結束——14 的 goal 續行只認得 `aborted`，於是在一輪撞到上限之後照樣
  * 排下一輪，而 15 在那一刻收回了續行授權。同 dsh 那條門檻（「no longer handle a new log with full semantic
- * correctness」，`packages/core/session/src/types.ts:74-85`，`477b4f4`）。
+ * correctness」，`harness/packages/core/session/src/types.ts:74-85`，`477b4f4`）。
  *
  * v14 的檔直接讀：沒有這一種就是那時候沒記——**不是沒撞到**。那時候的 `assistant/message` 已經帶著
  * `response_metadata.finish_reason`，要數舊檔的截斷得從那一格推，不能讀 `turn/end`。
@@ -348,8 +348,8 @@ import type { SessionEvent } from './session-log.js';
  * 四格都是**建立者的描述**，見 {@link StoredSessionHeader} 各格。這是 header 的形狀第二次變（第一次是 13）。
  *
  * 升版照新增欄位的慣例（同 27），也照 dsh 那條門檻把 header 的形狀列為結構性變更、「拿不準就升」
- * （`packages/core/session/src/types.ts:74-87`，`5badb15`），**不是 13 那種非升不可**：29 續接一份 30 的日誌時，
- * 重寫 header 那一行是 `{ ...header, version: … }`（`apps/harness/src/jsonl-session-store.ts`），這四格原樣活過重寫；
+ * （`harness/packages/core/session/src/types.ts:74-87`，`5badb15`），**不是 13 那種非升不可**：29 續接一份 30 的日誌時，
+ * 重寫 header 那一行是 `{ ...header, version: … }`（`harness/apps/harness/src/jsonl-session-store.ts`），這四格原樣活過重寫；
  * 而它們描述的本來就是**最初寫這份日誌的那一個行程**，續接的行程不該蓋掉它（30 自己續接也不蓋），沒有任何讀方拿它們
  * 判准不准續接、怎麼重建對話。
  *
@@ -389,7 +389,7 @@ import type { SessionEvent } from './session-log.js';
  *   **種類只增不減**（缺席＝必需，所以任何一版寫過的種類這一版都必須認得；要退役一種，留在表裡、只是不再寫）。
  *   這是一條要守的前提，`session-log.test.ts` 有一份凍結的清單釘它。
  * - **守衛只在讀方**，不在 append：append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住（同 dsh）。離線掃描
- *   （`apps/harness/src/eval/session-scan.ts`，產品路徑外）不守，它照格式版本表態、認不得的略過並報數。
+ *   （`harness/apps/harness/src/eval/session-scan.ts`，產品路徑外）不守，它照格式版本表態、認不得的略過並報數。
  * - **不追溯改前三十一次的版本號**：寫下的 header 就是那些號。
  *
  * ### 32 之內新增、沒有升版的欄位
@@ -497,7 +497,7 @@ import type { SessionEvent } from './session-log.js';
  * 40 以前的檔直接讀：那時沒有人工改名，一顆 `user` 都沒有就是當時的樣子。
  *
  * 升版照新增詞彙的慣例（同 18、19），不是非升不可：40 讀到 `user` 標題照樣拿最後一顆（列表、歷史讀的就是文字），一字不差。釘住由寫標題的人
- * 守：退回標題只在沒有標題時寫，模型標題在寫入前看到最後一顆是 `user` 就放棄（見 `apps/harness/src/session-title.ts` 的 `titlePinnedByUser`）。
+ * 守：退回標題只在沒有標題時寫，模型標題在寫入前看到最後一顆是 `user` 就放棄（見 `harness/apps/harness/src/session-title.ts` 的 `titlePinnedByUser`）。
  *
  * ## 42：訊息點名子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）
  *
@@ -605,7 +605,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * 一輪的時鐘到點（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）時，這一輪照停止鍵的路收尾，
  * 日誌以 `reason: {kind:'aborted', cause:{kind:'hook', reason:'turn-timeout'}}` 收尾；root 與背景子代理的日誌都會寫。形狀照 dsh 的
- * `AgentCancelCause`（`packages/core/session/src/types.ts:189-193`，`687f282e`）。v49 的檔直接讀：那時候沒有時鐘，`cause` 只有
+ * `AgentCancelCause`（`harness/packages/core/session/src/types.ts:189-193`，`687f282e`）。v49 的檔直接讀：那時候沒有時鐘，`cause` 只有
  * `user` 與 `parent`。
  *
  * 升版照新增詞彙的慣例（同 22），不是非升不可：讀 `aborted` 的 goal 續行與掃描只看 `reason.kind`，一樣當成「被打斷」；歷史把 `cause` 原樣帶上收尾的 frame。
@@ -617,7 +617,7 @@ import type { SessionEvent } from './session-log.js';
  * - header 多兩格：`origin: 'subagent'`（新建的子代理一律寫）與 `isSeeded: true`（分叉來的，只在 true 時寫）。見 {@link StoredSessionHeader}。
  * - `session/end-seed` 的 data 可以帶 `inherited: true`，標出繼承來的前綴在哪裡切（`session-log.ts` 的 `inheritedEventCount`）。切點**不另外落盤**，
  *   照 dsh 讀盤從最後一顆標記推（`packages/session/session-format-v1-to-v2/src/codec.ts:114-127`），所以 dsh v0 的 `seedLength` 沒有對應的鍵。
- * - 讀盤驗證照 dsh `session-format-v3-to-v4/src/validation.ts:52-76`：seeded 就一定要有標記、沒 seeded 就不能有（`apps/harness/src/session-log-validation.ts`）。
+ * - 讀盤驗證照 dsh `session-format-v3-to-v4/src/validation.ts:52-76`：seeded 就一定要有標記、沒 seeded 就不能有（`harness/apps/harness/src/session-log-validation.ts`）。
  *
  * **升版，不是可選的**（判準見上面 32 那段）。這張 PR 開工時實測過 50 的讀方（develop `f210b3ac`）：header 帶 `origin` 或 `isSeeded` 的 50 檔，
  * `parseHeader` 的白名單（#1549）拒成 `SessionCorruptionError`（「header 有這一版不寫的鍵」）——**把一份好好的新檔判成壞檔**，列表也把它算成壞的；
@@ -708,7 +708,7 @@ export const SESSION_LOG_FORMAT_VERSION = 56;
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
  *
- * 取法同 eval 結果檔（`apps/harness/src/eval/result-file.ts` 的 `readGitProvenance`，#1000）：**拿不到就是 `null`**，
+ * 取法同 eval 結果檔（`harness/apps/harness/src/eval/result-file.ts` 的 `readGitProvenance`，#1000）：**拿不到就是 `null`**，
  * 不填 `'unknown'` 字串——字串會被當成一個 SHA 比對，`null` 不會。
  */
 export interface StoredSessionBuild {
@@ -787,7 +787,7 @@ export interface StoredSessionHeader {
    * `--workspace`，兩次跑的根不同而 `cwd` 一模一樣——`cwd` 那一格分不出這件事。記下它是為了
    * 讓一顆重播的 `deliverables/presented` 有錨（#452），而
    * [#519](https://github.com/DemianLi/nexus-agent/issues/519) 起真的有人在讀它：
-   * `apps/harness/src/wire-handler.ts` 的 `locateAt` 拿「這一格在不在」當准不准用今天
+   * `harness/apps/harness/src/wire-handler.ts` 的 `locateAt` 拿「這一格在不在」當准不准用今天
    * 這個根的判準（**不是拿 {@link version} 判**，理由見那裡與下一段）。
    *
    * **舊日誌永遠沒有這一格，而且續接不回填。** 續接時 root 那一份走的是已存的把手，
@@ -808,7 +808,7 @@ export interface StoredSessionHeader {
   readonly parentSession?: string;
   /**
    * 這份是 spawn 出來的子代理（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh `SessionHeader.origin`
-   * （`packages/core/session/src/types.ts:95-131`，`687f282e`）。51 起新建的子代理一律寫；50 以前的沒有，見 {@link isSubagentSessionHeader}。
+   * （`harness/packages/core/session/src/types.ts:95-131`，`687f282e`）。51 起新建的子代理一律寫；50 以前的沒有，見 {@link isSubagentSessionHeader}。
    */
   readonly origin?: 'subagent';
   /**
@@ -816,7 +816,7 @@ export interface StoredSessionHeader {
    * 但**只在 true 時寫**（dsh 是必填的 boolean；我們沒寫就是 false，50 以前的檔一格都沒有）。
    *
    * **繼承了幾顆不另外落盤**：照 dsh 讀盤的求法，從最後一顆 `session/end-seed {inherited: true}` 推（`inheritedEventCount`，
-   * `session-log.ts`）。讀盤時兩者要對得上，見 `apps/harness/src/session-log-validation.ts`。
+   * `session-log.ts`）。讀盤時兩者要對得上，見 `harness/apps/harness/src/session-log-validation.ts`。
    */
   readonly isSeeded?: true;
   /**
@@ -979,7 +979,7 @@ export interface StoredSessionListOptions {
 
 /**
  * {@link SessionStore.list} 的一格，照 dsh 的 `SessionPersistenceSnapshot`
- * （`packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
+ * （`harness/packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
  */
 export interface StoredSessionSnapshot {
   /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
@@ -1052,7 +1052,7 @@ export interface ResumedStoredSession {
 
 /**
  * 這一版拒絕解讀的那份原始日誌在哪裡，照 dsh 的 `SessionLocation`
- * （`packages/session/session-persistence/src/errors.ts:85-90`）：只給拒絕診斷用，讓管理員找得到那份檔。
+ * （`harness/packages/session/session-persistence/src/errors.ts:85-90`）：只給拒絕診斷用，讓管理員找得到那份檔。
  */
 export interface SessionLocation {
   /** 後端的種類，例如 `'jsonl'`。 */
@@ -1156,7 +1156,7 @@ export class SessionNotFoundError extends Error {
 
 /**
  * 另一個寫入把手握著這份會話——照 dsh 的 `SessionAlreadyOwnedError`
- * （`packages/session/session-persistence/src/errors.ts`，SHA `c291e79`）。
+ * （`harness/packages/session/session-persistence/src/errors.ts`，SHA `c291e79`）。
  *
  * 多半是另一個行程還開著它：兩邊都寫的話 `seq` 會撞號，所以第二個不寫。行程死了租約就跟著
  * 放掉（kernel 放的），**沒有逾期**——卡住但還活著的持有者不會被搶，照 dsh。

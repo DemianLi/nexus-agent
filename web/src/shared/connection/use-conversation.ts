@@ -100,7 +100,7 @@ export const JUMP_PAGE_MESSAGES = 200;
 /**
  * 往前讀歷史（`loadEarlier`、`loadThrough`、`findPlan`）拋錯時給畫面的那一句。伺服器送來看不懂的資料（`WireProtocolError`，
  * [#1866](https://github.com/DemianLi/nexus-agent/issues/1866)）：原文只進 `console.error`，照 dsh `Session.loadOlder`／`loadThrough`
- * （`packages/api/session-controller/src/client/sessions/session.ts:418-420`、`:466-468`）在這個位置的做法；畫面講固定的一句，可以再按一次。
+ * （`harness/packages/api/session-controller/src/client/sessions/session.ts:418-420`、`:466-468`）在這個位置的做法；畫面講固定的一句，可以再按一次。
  * 開線時停住那條（`halt`）是另一個位置：不再自動重連、等人按，用 `console.warn`。其他錯誤照舊回原因。
  */
 function pagingFailureText(error: unknown): string {

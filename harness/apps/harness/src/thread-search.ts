@@ -3,7 +3,7 @@
  * `THREAD_SEARCH_PATH`，設定見 `settings/thread-search.ts`。
  *
  * 照 dsh 的兩層（`477b4f4`）：host 的 `ApiSessionList.search`（`packages/api/session-controller/src/list.ts:163-266`）與
- * `session-query-sqlite` 的提供方（`packages/session-query/session-query-sqlite/src/index.ts`）。我們沒有「提供方」這一層
+ * `session-query-sqlite` 的提供方（`harness/packages/session-query/session-query-sqlite/src/index.ts`）。我們沒有「提供方」這一層
  * 服務，兩層併在這一個類別裡，順序照 host 那一支。
  *
  * ## 搜得到的一定列得出來；活的讀記憶體
@@ -28,7 +28,7 @@
  * 把批次窗口寫出去，之後全部冷讀（#2689）。沒有記憶體那份 header 可比，對不上的 header 只剩冷讀那一道。
  *
  * **盤上還沒有檔的活 thread 不進索引**（範圍取捨，#1599）：dsh 的 live 那一組不看持久層有沒有它。我們的可見集合是列表，列表本身也不列
- * 它（web 把不在清單上的內容命中丟掉，`apps/web/src/lib/thread-search.ts` 的檔頭），收進來也看不到。
+ * 它（web 把不在清單上的內容命中丟掉，`web/src/lib/thread-search.ts` 的檔頭），收進來也看不到。
  *
  * ## 索引：`node:sqlite` 的 FTS5，只放在記憶體裡
  *

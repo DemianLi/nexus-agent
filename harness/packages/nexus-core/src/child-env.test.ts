@@ -1,6 +1,6 @@
 /**
  * 子行程環境的清洗。兩個使用者各自走真的子行程量過：git 快照在
- * `packages/nexus-plugin-workspace-changes/src/git.test.ts`，MCP 在 `packages/nexus-plugin-mcp/src/index.test.ts`。
+ * `harness/packages/nexus-plugin-workspace-changes/src/git.test.ts`，MCP 在 `harness/packages/nexus-plugin-mcp/src/index.test.ts`。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';

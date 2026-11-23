@@ -1,6 +1,6 @@
 //! 一對裡的組合行程與葉子行程之間那條橋的協定（#2583）。框格式同 [`nexus_sandbox_spawner::protocol`]（u32 LE 長度＋內容），內容是一份
 //! JSON 物件（[`crate::json`]），`type` 欄位分種類。兩種語言從同一份向量檔 `pair-vectors.json` 驗；TS 那一側是
-//! `packages/nexus-host-bridge/src/pair-protocol.ts`。組合行程那一端的連線邏輯在 [`crate::pair`]。
+//! `harness/packages/nexus-host-bridge/src/pair-protocol.ts`。組合行程那一端的連線邏輯在 [`crate::pair`]。
 //!
 //! # 連線與 `hello`
 //!

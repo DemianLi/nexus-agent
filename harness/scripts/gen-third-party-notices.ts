@@ -10,15 +10,15 @@
  * - 授權 allowlist 照 dsh `:652-699`（`PERMISSIVE_LICENSES`、`isPermissive`、`assertRuntimeLicenses`）：執行期那層的授權
  *   不在清單上就硬失敗；開發那層只標註。
  * - vendor 的原始碼另列一段（dsh `:438-493`）：`vendor/` 的 Cordis，以及網頁的 solid-glass。
- * - 沙箱 spawner 的 Rust crate 另列一段（#1946）：清單在 `scripts/release/spawner.ts` 的 `SPAWNER_CRATES`，跟 `Cargo.lock` 兩個方向核對；
+ * - 沙箱 spawner 的 Rust crate 另列一段（#1946）：清單在 `harness/scripts/release/spawner.ts` 的 `SPAWNER_CRATES`，跟 `Cargo.lock` 兩個方向核對；
  *   連進執行檔的那幾個授權照執行期那層擋。
  *
  * 套件的 license 與 repository 讀安裝好的 store，所以要先 `pnpm install`。`--check` 只比對、不寫檔。
  *
  * 跟 dsh 不同、但不是偏離的地方（nexus 沒有那些東西）：沒有 Python、沒有 Claude SDK 與 LibreOffice 的授權例外（字型的 OFL 例外照 LibreOffice 那一條的形狀，見 `OFL_FONT_PACKAGES`）、沒有
  * `patchedDependencies`。dsh 的「web 不是 private 才收」換成「網頁 dist 會進 tarball」：nexus 的 `apps/web` 是 private，
- * 但它的 `dist` 由 `scripts/release/payload.ts` 確認一定在產物裡。dsh `:420-421` 把 `tsx` 硬標成執行期（它的根腳本經 tsx 的
- * ESM hook 跑）；nexus 的產物不帶 tsx（`scripts/release/payload.ts` 的 `DEV_TOOLS` 把它當開發工具擋），所以不抄。dsh `:44-50`
+ * 但它的 `dist` 由 `harness/scripts/release/payload.ts` 確認一定在產物裡。dsh `:420-421` 把 `tsx` 硬標成執行期（它的根腳本經 tsx 的
+ * ESM hook 跑）；nexus 的產物不帶 tsx（`harness/scripts/release/payload.ts` 的 `DEV_TOOLS` 把它當開發工具擋），所以不抄。dsh `:44-50`
  * 的 `FIRST_PARTY`（`:404` 過濾掉）列的是 dsh 自己發布的原生套件；nexus 自己的套件全在 workspace 裡，`names` 已經排除，沒有要另列的。
  *
  * SPDX 運算式用 dsh 同一顆 `spdx-expression-parse` 解（dsh 根 `package.json` 的 devDependencies）。
@@ -90,7 +90,7 @@ const SHIPPED_LIBVIPS = `${LIBVIPS_PACKAGE_PREFIX}linux-x64`;
 
 /**
  * 不是寬鬆授權、但審過可以隨產物散布的套件：OFL 的三顆字型與 sharp 的 libvips。發版腳本的 SBOM 核對用它檢查完整閉包
- * （`scripts/release/sbom.ts` 的 `licenseProblems`），所以遞移進來的也擋得到。
+ * （`harness/scripts/release/sbom.ts` 的 `licenseProblems`），所以遞移進來的也擋得到。
  *
  * @param name - 套件名。
  * @param license - manifest 的 `license`。
@@ -133,9 +133,9 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T;
 }
 
-/** `yaml` 是 apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解（同 `scripts/release/payload.ts`）。 */
+/** `yaml` 是 harness/apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解（同 `harness/scripts/release/payload.ts`）。 */
 const parseYaml = (
-  createRequire(join(ROOT, 'apps/harness/package.json'))('yaml') as {
+  createRequire(join(ROOT, 'harness/apps/harness/package.json'))('yaml') as {
     parse: (text: string) => unknown;
   }
 ).parse;
@@ -419,7 +419,7 @@ export function cssBareImportsIn(css: string, installed: (name: string) => boole
  * **偏離 dsh，理由 1（基座表達不出來）。** dsh 只靠上面的 `recorder` 掛在 vite 的 `resolveId` 上收集。nexus 的樣式走 Tailwind 4
  * 的 `@tailwindcss/vite`：它用自己的解析器處理 CSS 的 `@import`／`@plugin`，vite 解 CSS 的 `url()` 也走內部解析器，兩者都不經
  * 使用者外掛的 `resolveId`，所以 `tailwindcss`、`tw-animate-css`、`@fontsource-variable/*` 這些整份打包進 `dist` 的套件 recorder
- * 一個都收不到，會被歸進開發用的那一層（實測：補這一段之前，字型被寫成「只在開發時當工具跑」）。退到：另外掃 `apps/web/src`
+ * 一個都收不到，會被歸進開發用的那一層（實測：補這一段之前，字型被寫成「只在開發時當工具跑」）。退到：另外掃 `web/src`
  * 底下每一份 `.css` 的裸 `@import`／`@plugin` 與指到已安裝套件的 `url()`。
  * 掃全部 `.css` 而不是跟著 `@import` 圖走，寧可多列，不可漏列。
  */
@@ -447,7 +447,7 @@ interface ViteApi {
 /** 網頁 build 直接打包的第三方套件：用 `apps/web` 自己的 vite 設定真的 build 一次，不寫檔（dsh `:127-161`）。 */
 export async function browserBundledExternals(): Promise<Set<string>> {
   // vite 經原生 realpath 解析 HTML，root 先 realpath，路徑比對才一致（dsh `:169-170`）。
-  const dir = realpathSync.native(join(ROOT, 'apps/web'));
+  const dir = realpathSync.native(join(ROOT, 'web'));
   const vitePath = createRequire(join(dir, 'package.json')).resolve('vite');
   const vite = (await import(pathToFileURL(vitePath).href)) as ViteApi;
   const seen = new Set<string>(cssBareImports(dir));
@@ -475,7 +475,7 @@ export interface VendoredRow {
 }
 
 /**
- * 讀 `vendor/README.md` 的清單表（`| 目錄 | 套件名 | 上游套件名 | 版本 | 上游 | commit |`）。
+ * 讀 `harness/vendor/README.md` 的清單表（`| 目錄 | 套件名 | 上游套件名 | 版本 | 上游 | commit |`）。
  * @returns 表裡每一列，照表的順序。
  */
 export function parseVendoredRows(text: string): Omit<VendoredRow, 'sourceDirectory'>[] {
@@ -493,11 +493,11 @@ export function parseVendoredRows(text: string): Omit<VendoredRow, 'sourceDirect
 }
 
 /**
- * 解析清單表並確認 `vendor/` 底下每個目錄都有一列：要揭露的是目錄，不是表，所以表的格式變了要當場錯，不能讓套件
+ * 解析清單表並確認 `harness/vendor/` 底下每個目錄都有一列：要揭露的是目錄，不是表，所以表的格式變了要當場錯，不能讓套件
  * 靜靜從清單上消失（dsh `:464-493`）。
  */
 function collectVendored(): VendoredRow[] {
-  const rows = parseVendoredRows(readFileSync(join(ROOT, 'vendor/README.md'), 'utf8'));
+  const rows = parseVendoredRows(readFileSync(join(ROOT, 'harness/vendor/README.md'), 'utf8'));
   const onDisk = new Map<string, string>();
   for (const entry of readdirSync(join(ROOT, 'vendor'), { withFileTypes: true })) {
     if (!entry.isDirectory() || !existsSync(join(ROOT, 'vendor', entry.name, 'package.json')))
@@ -509,14 +509,14 @@ function collectVendored(): VendoredRow[] {
   const missing = [...onDisk.keys()].filter((name) => !parsed.has(name));
   if (missing.length > 0) {
     throw new Error(
-      `gen-third-party-notices：vendor/README.md 的清單表沒有 ${missing.join('、')}；表的格式變了，或同步沒做完。`,
+      `gen-third-party-notices：harness/vendor/README.md 的清單表沒有 ${missing.join('、')}；表的格式變了，或同步沒做完。`,
     );
   }
   return rows.map((row) => {
     const dir = onDisk.get(row.npmName);
     if (dir === undefined)
       throw new Error(
-        `gen-third-party-notices：vendor/README.md 列的 ${row.npmName} 沒有 vendor/ 目錄。`,
+        `gen-third-party-notices：harness/vendor/README.md 列的 ${row.npmName} 沒有 harness/vendor/ 目錄。`,
       );
     const license = readJson<Manifest>(join(ROOT, 'vendor', dir, 'package.json')).license;
     if (license !== 'MIT') {
@@ -524,11 +524,11 @@ function collectVendored(): VendoredRow[] {
         `gen-third-party-notices：vendor 的 ${row.npmName} 宣告 ${JSON.stringify(license)}；這一段假設全部是 MIT。`,
       );
     }
-    return { ...row, sourceDirectory: `vendor/${dir}` };
+    return { ...row, sourceDirectory: `harness/vendor/${dir}` };
   });
 }
 
-const SOLID_GLASS_DIR = 'apps/web/src/vendor/solid-glass';
+const SOLID_GLASS_DIR = 'web/src/vendor/solid-glass';
 
 /** 網頁 vendor 的 solid-glass 與 shadcn 的 tailwind.css：上游與版本只記在 `manifest.json` 的 `sources`。 */
 function collectWebVendored(): { name: string; upstream: string; pin: string; license: string }[] {
@@ -580,7 +580,7 @@ OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能�
 
 /**
  * libvips 那一段：根 lockfile 裡有 {@link SHIPPED_LIBVIPS} 時才產生，版本取自 lockfile（各平台的開發機裝的是自己平台那一顆，
- * 讀 store 會因機器而異）。這一段同時是 LGPL-3.0 第 4 節 a) 要的「顯著告知」；b) 要的兩份全文由 `scripts/release/pack.ts`
+ * 讀 store 會因機器而異）。這一段同時是 LGPL-3.0 第 4 節 a) 要的「顯著告知」；b) 要的兩份全文由 `harness/scripts/release/pack.ts`
  * 從 `licenses/` 複製進產物。
  */
 function renderLibvips(): string {
@@ -648,7 +648,7 @@ function renderSpawnerCrates(): string {
   return `
 ## 沙箱 spawner 連進去的程式碼
 
-\`native/sandbox-spawner/\` 編成 Linux 產物裡的 \`${SPAWNER_PATH}\`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [\`${SPAWNER_LOCK}\`](${SPAWNER_LOCK}) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 \`${SPAWNER_LICENSES_DIR}/\`；標準函式庫自己內附的第三方程式碼列在那裡的 \`rust-std/COPYRIGHT-library.html\`；C 函式庫的授權原文也附在本節最後。
+\`harness/native/sandbox-spawner/\` 編成 Linux 產物裡的 \`${SPAWNER_PATH}\`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [\`${SPAWNER_LOCK}\`](${SPAWNER_LOCK}) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 \`${SPAWNER_LICENSES_DIR}/\`；標準函式庫自己內附的第三方程式碼列在那裡的 \`rust-std/COPYRIGHT-library.html\`；C 函式庫的授權原文也附在本節最後。
 
 | crate | 版本 | 授權 | 連進執行檔 |
 | --- | --- | --- | --- |
@@ -690,22 +690,22 @@ export async function render(): Promise<string> {
   const vendored = collectVendored();
   const webVendored = collectWebVendored();
 
-  return `<!-- 由 scripts/gen-third-party-notices.ts 產生，不要手改。
+  return `<!-- 由 harness/scripts/gen-third-party-notices.ts 產生，不要手改。
      改了相依之後跑 \`pnpm run gen-third-party-notices\` 重新產生。 -->
 
 # 第三方元件
 
 nexus-agent 用到下列第三方軟體。每個專案各自適用自己的授權，這個檔不改變任何授權條件。
 
-這裡列的是 workspace **直接**宣告的相依。檔案由 \`scripts/gen-third-party-notices.ts\` 產生，\`apps/harness/src/third-party-notices.test.ts\` 在測試裡斷言進版控的內容跟重新產生的一致。改了相依跑 \`pnpm run gen-third-party-notices\`；只想檢查就跑 \`pnpm run verify-third-party-notices\`。
+這裡列的是 workspace **直接**宣告的相依。檔案由 \`harness/scripts/gen-third-party-notices.ts\` 產生，\`harness/apps/harness/src/third-party-notices.test.ts\` 在測試裡斷言進版控的內容跟重新產生的一致。改了相依跑 \`pnpm run gen-third-party-notices\`；只想檢查就跑 \`pnpm run verify-third-party-notices\`。
 
 完整的遞移閉包連同精確版本記在 [\`pnpm-lock.yaml\`](pnpm-lock.yaml)，可以用 \`pnpm licenses list\` 查看。
 
 ## vendor 的原始碼
 
-### \`vendor/\`
+### \`harness/vendor/\`
 
-Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 安裝，改名放在 \`@nexus\` scope 底下。三個都是 MIT，每個目錄保留上游的 \`LICENSE\`。上游 commit 與本地修改記在 [\`vendor/README.md\`](vendor/README.md)。
+Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 安裝，改名放在 \`@nexus\` scope 底下。三個都是 MIT，每個目錄保留上游的 \`LICENSE\`。上游 commit 與本地修改記在 [\`harness/vendor/README.md\`](harness/vendor/README.md)。
 
 | 套件 | 上游套件名 | 來源 | 授權 |
 | --- | --- | --- | --- |
@@ -721,7 +721,7 @@ ${webVendored.map((row) => `| [${row.name}](${row.upstream}) | ${row.pin} | ${ro
 
 ## 執行期的 npm 相依
 
-安裝來在執行期使用，或打包進網頁 \`dist\` 的外部套件。網頁打包了哪些，是用 \`apps/web\` 自己的 vite 設定真的 build 一次收集的，不看它宣告在哪一段。這一層涵蓋每一顆可以從 \`cordis.yml\` 掛上的插件，不只預設載入的那些。
+安裝來在執行期使用，或打包進網頁 \`dist\` 的外部套件。網頁打包了哪些，是用 \`web\` 自己的 vite 設定真的 build 一次收集的，不看它宣告在哪一段。這一層涵蓋每一顆可以從 \`cordis.yml\` 掛上的插件，不只預設載入的那些。
 
 ${renderNpmTable(runtimeDeps)}
 ${renderOflFonts(runtimeDeps)}${renderLibvips()}

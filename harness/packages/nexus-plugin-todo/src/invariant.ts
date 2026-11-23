@@ -20,7 +20,7 @@
  * `turn/start`：發 turn 事件的是進入點（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的
  * `runTurn`），而 subagent 不經過進入點。那是
  * [#137](https://github.com/DemianLi/nexus-agent/issues/137) 釘下來的約定，不是缺陷
- * （`apps/harness/src/subagent-session-consumers.test.ts` 的「輪的擁有者是進入點」那一組）。
+ * （`harness/apps/harness/src/subagent-session-consumers.test.ts` 的「輪的擁有者是進入點」那一組）。
  *
  * 所以規則改成**看這份日誌自己有沒有輪**：見過 `turn/start` 的日誌要守配對，沒見過的
  * 就是沒有輪這個概念，這條規則對它沒有指涉對象。
@@ -36,7 +36,7 @@
  *
  * 代價講明白：**一顆落在這份日誌第一顆 `turn/start` 之前的 `todo/write` 檢不到**。那個
  * 缺口有鄰居補——進入點若真的漏發 `turn/start`，它收工時那顆 `turn/end` 會讓
- * `@nexus/core` 的 turn 配對當場報（`packages/nexus-core/src/invariant.ts`）。
+ * `@nexus/core` 的 turn 配對當場報（`harness/packages/nexus-core/src/invariant.ts`）。
  *
  * @see [#132](https://github.com/DemianLi/nexus-agent/issues/132)
  * @module

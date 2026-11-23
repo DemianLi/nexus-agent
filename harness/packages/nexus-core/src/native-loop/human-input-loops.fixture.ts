@@ -105,7 +105,7 @@ interface Projections {
 
 /**
  * 工具一發 `tool-error`，`langgraph` 那條的投影就 reject 那顆的 `output`，沒人讀就成了未處理的 rejection。標成已處理，同
- * `apps/harness/src/thread-pump.ts` 的 `markProjectionsHandled`（[#346](https://github.com/DemianLi/nexus-agent/issues/346)）。
+ * `harness/apps/harness/src/thread-pump.ts` 的 `markProjectionsHandled`（[#346](https://github.com/DemianLi/nexus-agent/issues/346)）。
  * @param run - `streamEvents` 交出的 run。
  */
 function markToolCallsHandled(run: Projections): void {

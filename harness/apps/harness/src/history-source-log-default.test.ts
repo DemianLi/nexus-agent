@@ -83,7 +83,7 @@ describe('預設', () => {
   });
 
   it('自己 copy 的 cordis.yml 寫 source: state（真的從檔載入）：仍是 state，不會被預設蓋成 log', async () => {
-    const shipped = await readFile(join(repositoryRoot(), 'apps/harness/cordis.yml'), 'utf8');
+    const shipped = await readFile(join(repositoryRoot(), 'harness/apps/harness/cordis.yml'), 'utf8');
     const copy = shipped.replace(
       /(- id: history-source\n(?: {2}.*\n)*? {4}source: )log/u,
       '$1state',

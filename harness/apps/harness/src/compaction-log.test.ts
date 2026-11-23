@@ -2,8 +2,8 @@
  * **壓縮發生過這件事，在會話日誌裡留得下來**——[#143](https://github.com/DemianLi/nexus-agent/issues/143)
  * 的驗收，量的是真的跑一場會摘要的對話之後日誌裡有什麼。
  *
- * 事件的欄位語義在 `packages/nexus-core/src/session-log.ts`，判別式的邊界在
- * `packages/nexus-core/src/summarization.test.ts`。這裡只問**接起來之後有沒有到**。
+ * 事件的欄位語義在 `harness/packages/nexus-core/src/session-log.ts`，判別式的邊界在
+ * `harness/packages/nexus-core/src/summarization.test.ts`。這裡只問**接起來之後有沒有到**。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，backend 是一個 mkdtemp 出來的目錄。
  *
@@ -309,7 +309,7 @@ describe('壓縮發生時，日誌裡留得下來', () => {
 /**
  * **射程：subagent 那側寫得進去。**
  *
- * `foldSummarizer`（`packages/nexus-core/src/fold.ts:1630`）逐個 agent 建一份摘要器，
+ * `foldSummarizer`（`harness/packages/nexus-core/src/fold.ts:1630`）逐個 agent 建一份摘要器，
  * subagent 那份就在 subagent 自己的圖裡跑（`summarization.ts:1602` 的 `withCompactionLog`），摘要當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
  * 不經過 root 的 state，所以不受基座 `task` 的 `EXCLUDED_STATE_KEYS` 擋（它擋的是 root 的快照讀得到什麼）。
  *
@@ -477,7 +477,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
    *
    * 失敗那輪模型沒回來。切點若只在呼叫回來後才落，下一次呼叫會從沒摘要過的串再摘一次，日誌緊接著第二筆、同一段原文被摘兩次；
    * 切點在日誌寫進去的同一刻落在切點表，下一次呼叫直接拿那份摘要送出去，沒有第二次摘要。後面照常門檻到了再摘（切點接著第一筆往後走，由「單調」那條管）。
-   * 重放那一頭在 `packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史。
+   * 重放那一頭在 `harness/packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史。
    */
   it('摘要之後的模型呼叫失敗：事件仍在日誌裡，下一次呼叫接著它走，不重摘', async () => {
     const summarization = {

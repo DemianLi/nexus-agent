@@ -1,4 +1,4 @@
-// 我們自己的回歸測試，不是上游的：vendor/sync.mjs 不碰這個目錄。
+// 我們自己的回歸測試，不是上游的：harness/vendor/sync.mjs 不碰這個目錄。
 //
 // cordiverse/cordis#127：fiber 不是 ACTIVE 時被卸載，狀態停在原地、收不到 DISPOSED。
 // 上游 #133 的測試只量 PENDING 與 FAILED，這裡三種起點都量。

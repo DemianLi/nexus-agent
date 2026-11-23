@@ -5,7 +5,7 @@
  * （`@nexus/sdk` 的 {@link checkSharedAcrossThreads}，SDK 不 import core，轉接在這裡寫）。
  *
  * **這一檔量的是插件本身**：它不保存任何逐條 thread 的狀態，每次呼叫都問會話查找（`apply` 抓進閉包的那一份）。**行程裡
- * 活著哪幾條 thread 的挑法**不在這裡——那是宿主的、與相容層共用的 `pickSessionForCall`，在 `apps/harness/src/todo-on-tree.test.ts`
+ * 活著哪幾條 thread 的挑法**不在這裡——那是宿主的、與相容層共用的 `pickSessionForCall`，在 `harness/apps/harness/src/todo-on-tree.test.ts`
  * 量。
  */
 

@@ -22,7 +22,7 @@
  * ## `limit`：平常不送，收到 `too-large` 才送
  *
  * 每頁幾行的上限是 `#settings/deliverable-files` 那一列的 `maxLines`，預設值
- * `DEFAULT_DELIVERABLE_MAX_LINES` 住在 `apps/harness/src/settings/deliverable-files.ts`、沒有從 `@nexus/wire`
+ * `DEFAULT_DELIVERABLE_MAX_LINES` 住在 `harness/apps/harness/src/settings/deliverable-files.ts`、沒有從 `@nexus/wire`
  * 匯出——而且部署可以改掉它，所以抄一份過來連「對」都說不上。路由不給 `limit` 時用的就是那一列的值，
  * 翻頁只需要回應裡的 `lines`。
  *

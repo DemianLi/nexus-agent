@@ -3,7 +3,7 @@
  *
  * 這些形狀的出處是 `deepagents` 的 `CreateDeepAgentParams`，不是我們自己定的——
  * 用索引存取而不是重打一份，是為了讓基座升版時 `tsc` 當場指出對不上的地方，而不是
- * 讓兩份定義各自漂走。順帶讓 `packages/nexus-core` 不必為了 `AgentMiddleware`
+ * 讓兩份定義各自漂走。順帶讓 `harness/packages/nexus-core` 不必為了 `AgentMiddleware`
  * 與 checkpointer 的型別去相依 `langchain` 與 `@langchain/langgraph-checkpoint`
  * （版本範圍規則：每個 package 只宣告它直接 import 的那幾個）。
  */

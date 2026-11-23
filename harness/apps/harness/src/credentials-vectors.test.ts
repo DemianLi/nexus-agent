@@ -1,5 +1,5 @@
 /**
- * 受管憑證檔的共用樣本（#2666）：TS 用 `parseCredentialsDocument` 跑 `native/sandbox-spawner/credentials-vectors.json`，
+ * 受管憑證檔的共用樣本（#2666）：TS 用 `parseCredentialsDocument` 跑 `harness/native/sandbox-spawner/credentials-vectors.json`，
  * Rust 端若自己解析，跑同一份。契約見 `docs/credentials-file.md`。
  */
 

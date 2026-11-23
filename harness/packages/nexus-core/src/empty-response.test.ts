@@ -2,7 +2,7 @@
  * 「stop 但什麼都沒有」的判準（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）。
  *
  * 判準的方向是**不誤傷**：全部成立才算空——`finish_reason` 明確是 `stop`、沒有文字、沒有工具呼叫、沒有推理。
- * 端到端（回報進 `llm/retry`、`turn/failed.error.code`）在 `apps/harness/src/empty-response.test.ts`。
+ * 端到端（回報進 `llm/retry`、`turn/failed.error.code`）在 `harness/apps/harness/src/empty-response.test.ts`。
  */
 
 import { AIMessage } from '@langchain/core/messages';

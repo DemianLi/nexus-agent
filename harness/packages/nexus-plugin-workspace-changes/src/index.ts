@@ -15,7 +15,7 @@
  * ## 掛法：出貨清單的 serve 專屬層，一列；不合格由工作區根缺席表達
  *
  * - dsh 由 web-app bundle 出廠掛（`packages/bundle/web-app/cordis.patch.yml:300`），終端機那側不掛；我們同樣
- *   只在 serve 掛，做法是 `apps/harness/cordis.serve.yml`（疊在 `cordis.yml` 之上的 serve 專屬出貨層，
+ *   只在 serve 掛，做法是 `harness/apps/harness/cordis.serve.yml`（疊在 `cordis.yml` 之上的 serve 專屬出貨層，
  *   [#669](https://github.com/DemianLi/nexus-agent/issues/669)），CLI 不載那一層，沒有人讀摘要。
  * - dsh 的 `eligible` 看會話 header 的 `cwd`，沒有就不記（`src/index.ts:58-61`）；我們的「沒有工作區」＝沒給 `--workspace`，
  *   組裝點只在有根的時候經 host 服務交 {@link WORKSPACE_ROOT_SERVICE}。**這一列在 `apply` 當下讀它，沒有就什麼都不註冊**
@@ -137,7 +137,7 @@ export type WorkspaceChangesConfig = z.infer<typeof workspaceChangesConfigSchema
 /**
  * **這一次組裝**講話的地方。
  *
- * 不是部署協作者，是**測試縫**：生產路徑一次都沒有傳過它們（`apps/harness/src/cli.ts`），走的是
+ * 不是部署協作者，是**測試縫**：生產路徑一次都沒有傳過它們（`harness/apps/harness/src/cli.ts`），走的是
  * `console.*`。它們是函式，所以不進 Config——見檔頭偏離 7。
  */
 export interface WorkspaceChangesSeams {
@@ -351,7 +351,7 @@ export default workspaceChangesPlugin;
 /**
  * 建一個條目。**薄薄一層**：沒有縫的時候回的就是 {@link workspaceChangesPlugin} 本人。
  *
- * 那個身分是承重的，不是省一顆物件：兩道縫幾乎只有測試在用，而生產路徑（`apps/harness/src/cli.ts`）
+ * 那個身分是承重的，不是省一顆物件：兩道縫幾乎只有測試在用，而生產路徑（`harness/apps/harness/src/cli.ts`）
  * 一道都不傳。包一層新的 plugin 物件就會讓「測試量到的」與「出廠跑的」是兩顆不同的東西——
  * 相似品，不是交付物。絆索見 `index.test.ts` 的身分那一條。
  *

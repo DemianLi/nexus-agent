@@ -2,7 +2,7 @@
  * 工具結果剪刀的決定在日誌裡（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）：
  * 純函式（讀、換）與剪刀的「先換記過的、再剪新的、新剪的當場記」。
  *
- * 剪刀接真的註冊表與會話日誌的那一頭在 `apps/harness/src/prune-log.test.ts`。這裡用手造的接口，只問剪刀自己的行為。
+ * 剪刀接真的註冊表與會話日誌的那一頭在 `harness/apps/harness/src/prune-log.test.ts`。這裡用手造的接口，只問剪刀自己的行為。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';

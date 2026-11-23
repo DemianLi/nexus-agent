@@ -36,7 +36,7 @@
  * **生摘要的那次不在任何一份的 `model/usage` 裡**，同 dsh（它記在 `compaction/summary.usage`、不進 `tokenUsage`）：基座在自己的
  * `wrapModelCall` 裡直接 `request.model.invoke` 生摘要（`summarization.ts` 的 `withQuietSummaryCall` 那段說明），
  * 不經過 `handler`，而記帳只記 `handler` 回來的那一顆。它的用量在 `compaction/summary.usage`（#1022，選填），這一道加總
- * 不含它——要算它的人（#1028）明寫口徑另加。實測在 `apps/harness/src/context-pressure.test.ts` 的
+ * 不含它——要算它的人（#1028）明寫口徑另加。實測在 `harness/apps/harness/src/context-pressure.test.ts` 的
  * 「會話總帳不含生摘要的那一次」。**生標題那一次也不記**：dsh 的標題套件（`session-title*`）沒有任何用量欄位，我們同。
  *
  * @module

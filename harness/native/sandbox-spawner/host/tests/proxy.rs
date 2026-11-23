@@ -1,4 +1,4 @@
-//! `nexus_host::proxy`：跑 TS 也在跑的 `proxy-vectors.json`（`packages/nexus-core/src/http-proxy/policy-vectors.test.ts`），
+//! `nexus_host::proxy`：跑 TS 也在跑的 `proxy-vectors.json`（`harness/packages/nexus-core/src/http-proxy/policy-vectors.test.ts`），
 //! 再測 config 的解析與錯誤訊息不帶值。
 
 use nexus_host::json::Value;

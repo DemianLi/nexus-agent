@@ -13,7 +13,7 @@
  * ## 「同一個呼叫」只有一份判法
  *
  * 鍵與射程直接用提醒器匯出的 `repeatCallKey`／`repeatReminderTracks`
- * （`packages/nexus-core/src/repeat-reminder.ts`）。**日誌上的 `arguments` 是
+ * （`harness/packages/nexus-core/src/repeat-reminder.ts`）。**日誌上的 `arguments` 是
  * `JSON.stringify(args)`，不是規範字串**，所以先解析再交給那個鍵——拿原字串比的話，只差屬性
  * 順序的兩次呼叫會被當成兩個。
  *

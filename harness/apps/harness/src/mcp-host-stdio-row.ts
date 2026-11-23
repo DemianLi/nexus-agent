@@ -1,11 +1,11 @@
 /**
- * 一台 stdio MCP server 交給宿主（`native/sandbox-spawner/host`，#2570 D2b-2）的那一段 `connection`。
+ * 一台 stdio MCP server 交給宿主（`harness/native/sandbox-spawner/host`，#2570 D2b-2）的那一段 `connection`。
  *
  * 宿主不算政策、不疊自己的環境，原樣照這裡的成品起子行程（`env_clear` 之後只放 `env`）：
  *
  * - `command`／`args`：呼叫端已經照沙箱政策包好的（`wrapStdio`），這裡不重算。`command` 要是絕對路徑；沒被沙箱包裝的 `npx` 這類要先解析成路徑。
  * - `cwd`：一律交絕對路徑。省略就是對話行程的工作目錄（同 TS 的 `StdioClientTransport`），相對路徑照同一個目錄解。
- * - `env`：{@link scrubbedParentEnv} 清過的父環境在前、設定的 `env`（憑證引用已代入）在後，同 `packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`。
+ * - `env`：{@link scrubbedParentEnv} 清過的父環境在前、設定的 `env`（憑證引用已代入）在後，同 `harness/packages/nexus-plugin-mcp/src/connection.ts` 的 `openClient`。
  * - `credentialEnv`：`env` 裡值來自憑證的名字。**只有這些值進宿主的遮蔽器**；`PATH`、`HOME` 這類不進，否則成功結果會被遮得不能用。
  *   每個值照 {@link assertUsableMcpCredential} 檢查（修頭尾空白、不到 8 個字元拒收），交出去的是修過的。
  *

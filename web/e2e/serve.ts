@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * e2e 用的 serve（#1602）：子行程起真的 `apps/harness/src/serve.ts`，模型換成腳本提供者，網頁是 serve 自己供應的
+ * e2e 用的 serve（#1602）：子行程起真的 `harness/apps/harness/src/serve.ts`，模型換成腳本提供者，網頁是 serve 自己供應的
  * 出貨 `dist/`（跟產品同源，cookie 照登入網址換）。
  *
  * - **子行程，不 import harness**：`@nexus/harness` 依賴 `@nexus/web`，反過來就成環；同行程起 serve 也要搬 harness 那一整套
  *   測試設定（模組解析、工具子行程與檔案鎖的 mock）。
  * - **腳本走 `--patch`**：`insert` 一列 `#settings/scripted-model`，再把 `agent-default-model` 指過去，跟
- *   `apps/harness/src/scripted-serve.ts` 的 `scriptedPatchText` 同一個約定（照上一條不 import 它）。腳本欄位見
- *   `apps/harness/src/settings/scripted-model.ts` 檔頭。呼叫方可在前面多接幾列（`extraRows`）。
+ *   `harness/apps/harness/src/scripted-serve.ts` 的 `scriptedPatchText` 同一個約定（照上一條不 import 它）。腳本欄位見
+ *   `harness/apps/harness/src/settings/scripted-model.ts` 檔頭。呼叫方可在前面多接幾列（`extraRows`）。
  * - **零憑證**：子行程的環境只有 `PATH` 與暫存的 `HOME`、`NEXUS_AGENT_HOME`，不繼承呼叫端的環境；cwd 與 home 都是暫存目錄，
  *   讀不到任何 `.env`，key 進不來。模型是行程內的腳本，不打模型端點。
  * - **行程模型**：跑 e2e 的環境設了 `NEXUS_E2E_PROCESS_MODEL=per-thread` 就用 per-thread 起（#2341，只在 Linux
@@ -85,7 +85,7 @@ export interface E2eServeInvocation {
  *
  * - `NEXUS_E2E_PROCESS_MODEL` 沒設或是空字串：不加旗標、不動 `process-model` 那一列（出廠 `single`）；有 `prepareHome` 才先建 home。
  * - `per-thread`：加 `--process-model per-thread`，patch 最前面改 `process-model` 那一列，`supervisorBinary` 是 `NEXUS_SUPERVISOR_BIN`
- *   （旗標不收路徑）。沒給 `NEXUS_SUPERVISOR_BIN` 就拋，不退回 harness 的 `findSupervisorBinary`（`apps/harness/src/process-launcher.ts`）。home 一律先建（`0700`）。
+ *   （旗標不收路徑）。沒給 `NEXUS_SUPERVISOR_BIN` 就拋，不退回 harness 的 `findSupervisorBinary`（`harness/apps/harness/src/process-launcher.ts`）。home 一律先建（`0700`）。
  * - 其他值拋錯。
  *
  * `NEXUS_E2E_AGENT_LOOP` 沒設或是空字串不加旗標；`langgraph`、`native` 加 `--agent-loop <值>`，接在 `--process-model` 前面；其他值拋錯。

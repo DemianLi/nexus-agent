@@ -10,7 +10,7 @@
  *
  * 出貨檔（`cordis.yml`）是**條目清單**，使用者的檔（`cordis.patch.yml`、`--patch`）是
  * **patch 清單**。dsh 的 `renderConfigDump(binName, absoluteConfigPath, layers, warn)` 就是
- * 這個形狀：一個 base 設定檔加上若干層 patch（`packages/boot/app-boot/src/index.ts:403`）。
+ * 這個形狀：一個 base 設定檔加上若干層 patch（`harness/packages/boot/app-boot/src/index.ts:403`）。
  *
  * ## 疊加順序
  *
@@ -19,13 +19,13 @@
  *
  * **home 的 `cordis.patch.yml` 不再是一層**（#1412，demian 2026-10-13 Q2）：第一次啟動時遷進變更紀錄（{@link prepareJournal}），
  * 之後出現這個檔只警告、不讀。`--patch` 是部署端在命令列給的，照 dsh 的覆蓋層留著。照 dsh 的層序
- * （`packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
+ * （`harness/packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
  * 後台只寫 profile 那一層，我們把它與 home 那層併成一份稽核過的紀錄。
  *
  * ## 權限檢查只管使用者那兩層
  *
  * {@link assertPrivateFile} 跑在 home 那一層與 `--patch` 上，以及它們 `insert` 進來、指到檔案的
- * 模組上（{@link resolveEntryModule}，#542），**不跑在出貨的 `cordis.yml` 上**。這不是漏掉：信任邊界劃在安裝目錄上——`cordis.yml` 跟著 `apps/harness/` 一起來，
+ * 模組上（{@link resolveEntryModule}，#542），**不跑在出貨的 `cordis.yml` 上**。這不是漏掉：信任邊界劃在安裝目錄上——`cordis.yml` 跟著 `harness/apps/harness/` 一起來，
  * 別人動得了它就等於別人動得了整棵樹的原始碼，那時候檢查一個檔的模式位沒有任何意義。
  * 使用者那兩層不一樣：它們住在 home 底下，是安裝之後才出現、而且**預期會被編輯**的東西。
  *
@@ -39,11 +39,11 @@
  * （[#453](https://github.com/DemianLi/nexus-agent/issues/453)），而且要等 id 發完才有東西
  * 可以指名。這裡只驗「這一列長得像不像一個條目」。
  *
- * ## 這個模組住在 `apps/harness/src/` 是承重的
+ * ## 這個模組住在 `harness/apps/harness/src/` 是承重的
  *
  * `name` 用動態 import 解析，而**裸 specifier 的解析錨點是做 import 的那個模組的位置**，
  * 不是 `process.cwd()`。實測：同一支探針放在 repo 外就 `Cannot find package '@nexus/...'`，
- * 放進 `apps/harness/src/` 才解析得到（`@nexus/*` 全部是 `@nexus/harness` 的相依）。所以
+ * 放進 `harness/apps/harness/src/` 才解析得到（`@nexus/*` 全部是 `@nexus/harness` 的相依）。所以
  * 這裡不能改寫成一個吃路徑參數的泛用工具搬去別的地方。
  *
  * @module
@@ -110,7 +110,7 @@ import type {
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 
-/** 出貨的預設清單，放在 `apps/harness/` 底下。 */
+/** 出貨的預設清單，放在 `harness/apps/harness/` 底下。 */
 export const SHIPPED_CONFIG_FILENAME = 'cordis.yml';
 
 /**
@@ -357,7 +357,7 @@ const warnToStderr: PluginConfigWarn = (message) => {
  *
  * 兩種方言共用這一段，因為它們的檔案層級規則一樣：**不是頂層陣列就是設定錯了，一律拋**。
  * 空檔與只有註解的檔會 parse 成 `null`，落在同一條——要停用某一層請寫 `[]`，照 dsh
- * （`packages/boot/app-boot/README.zh.md` 的「本机偏好」一節）。
+ * （`harness/packages/boot/app-boot/README.zh.md` 的「本机偏好」一節）。
  *
  * @param source - 檔案全文。
  * @param label - 錯誤訊息裡怎麼稱呼這個檔（路徑）。
@@ -700,7 +700,7 @@ export const PLUGIN_MODULE_ROLE: PrivateFileRole = {
  *
  * **同一條理由也蓋住被 import 的那個模組檔**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)），
  * 所以 {@link resolveEntryModule} 對指到檔案的條目也跑這一條——射程往前推一跳，登記不變。dsh 在這條路上
- * 什麼都不檢查（`packages/boot/app-boot/src/index.ts:519` 的 `Include.import` 只做 specifier 解析）。
+ * 什麼都不檢查（`harness/packages/boot/app-boot/src/index.ts:519` 的 `Include.import` 只做 specifier 解析）。
  *
  * **這句理由改過一次，而改的是理由不是結論**（#456 第四刀）：原本寫的是「patch 檔停得掉
  * 核准」。那件事現在擋住了——`approval-gate` 那一列在 {@link PROTECTED_ENTRY_NAMES} 上，
@@ -808,7 +808,7 @@ export function loadOverlayPatches(path: string): ConfigPatch[] {
 }
 
 /**
- * 出貨那一份的絕對路徑。`apps/harness/src/` 往上一層就是 `apps/harness/`。
+ * 出貨那一份的絕對路徑。`harness/apps/harness/src/` 往上一層就是 `harness/apps/harness/`。
  *
  * **`fileURLToPath` 而不是 `.pathname`**：`.pathname` 不做百分號解碼，安裝路徑裡只要有一個
  * 空白就會變成 `%20`，而 `readFileSync` 開不了那個字面路徑。本機的路徑剛好沒有這種字元，

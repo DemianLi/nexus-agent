@@ -154,7 +154,7 @@ export function hubPromptText(sources: Iterable<McpSource>): string {
 }
 
 /**
- * 兩份 schema 的鍵與鍵序照 `apps/harness/src/mcp-migration.baseline.json` 釘住的上線位元組寫，`cursor` 的 `description` 在
+ * 兩份 schema 的鍵與鍵序照 `harness/apps/harness/src/mcp-migration.baseline.json` 釘住的上線位元組寫，`cursor` 的 `description` 在
  * `type` 前是刻意的；`additionalProperties: false` 由 `@nexus/tool-adapter` 的 `closed` 補。
  */
 const SERVER_PARAMETER = { type: 'string', description: 'Configured MCP server name.' } as const;

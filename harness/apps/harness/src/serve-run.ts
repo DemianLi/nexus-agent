@@ -1,5 +1,5 @@
 /**
- * 把 agent 掛上 HTTP，給 `apps/web` 連。這支是 serve 的本體，沒有 main guard：入口是 `serve.ts`，
+ * 把 agent 掛上 HTTP，給 `web` 連。這支是 serve 的本體，沒有 main guard：入口是 `serve.ts`，
  * `front-process.ts`、`conversation-process.ts` 與測試都 import 這一支。
  *
  *   pnpm --filter @nexus/harness run serve             # 假模型

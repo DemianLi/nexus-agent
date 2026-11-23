@@ -11,7 +11,7 @@
  *
  * 這一檔量的組裝點明給 `historySource` 與 `agentLoop`，那兩個 setup 的 mock 只在沒給時補值，所以不影響；
  * 每個場景斷言組裝回報的 `historySource`（`state`／`log`）。這一檔分不出「`log` 的 root 退回讀 state」（基準本身就是 state 讀法），
- * 讀哪一串由 `packages/nexus-core/src/repeat-reminder.test.ts` 擋。
+ * 讀哪一串由 `harness/packages/nexus-core/src/repeat-reminder.test.ts` 擋。
  */
 
 import { HumanMessage } from '@langchain/core/messages';

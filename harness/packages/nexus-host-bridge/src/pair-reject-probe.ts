@@ -1,5 +1,5 @@
 /**
- * 只給 `native/sandbox-spawner/host/tests/pair_leaf.rs` 起：一條接一條連組合行程那一端，每條都會在收下時被拒，
+ * 只給 `harness/native/sandbox-spawner/host/tests/pair_leaf.rs` 起：一條接一條連組合行程那一端，每條都會在收下時被拒，
  * `connect` 事件當下就寫 `hello`，數寫了之後還讀不讀得到 `rejected`（#2737）。直接用 `node:net`，不經 `PairClient`：
  * 它先讀一輪才寫，這裡要的是不讀就寫的那個先後次序。
  *

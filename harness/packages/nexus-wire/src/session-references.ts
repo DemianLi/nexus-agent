@@ -1,7 +1,7 @@
 /**
  * `@` 引用別的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）上線的形狀：引用文字的編碼、候選的列法。
  *
- * 照 dsh 的 `session-reference`（`packages/context/session-reference/src/{uri,config,types}.ts`，`477b4f4`）。選中的候選在輸入框裡是一段
+ * 照 dsh 的 `session-reference`（`harness/packages/context/session-reference/src/{uri,config,types}.ts`，`477b4f4`）。選中的候選在輸入框裡是一段
  * 完整的引用文字 `@[標題](nexus-session:<base64url>)`（Q2：第一版不做標籤），送出、排隊、重新編輯都照原樣走，伺服器在
  * 準備那一步才把它換成 `@標題` 並附上那條會話的快照。
  *

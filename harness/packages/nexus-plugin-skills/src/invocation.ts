@@ -9,7 +9,7 @@
  * ## 為什麼是同一個套件的另一列
  *
  * `/名字` 叫用由**一顆** listener 負責，技能的提供者可以有很多顆。`@nexus/plugin-skills` 的主入口是提供者那一半：
- * 每一列登記自己的來源，清單上可以有好幾列（`apps/harness/src/skills-on-tree.test.ts` 的 F、G）。叫用是「整個行程一份」，所以單獨一列，
+ * 每一列登記自己的來源，清單上可以有好幾列（`harness/apps/harness/src/skills-on-tree.test.ts` 的 F、G）。叫用是「整個行程一份」，所以單獨一列，
  * 不管有幾列 skills 都只有一位 listener，位置也由這一列決定（PM 裁決 issuecomment-6359103754 (a)；Q3 (a) 的「listener 在 plugin-skills」照舊）。
  *
  * - **手勢**：`SKILL_GESTURE`：前後是空白或行首行尾，所以 `/usr/bin`、`5/8`、`/deploy/x` 都不算；依第一次出現的
@@ -44,7 +44,7 @@
  * ## 代價
  *
  * 宿主為每位 listener 建一顆 `beforeAgent` middleware，每次 invoke（root 與每個子代理）多走一格節點；話裡沒有手勢就不掃 backend。
- * 2026-10-23 用 `LoopingChatModel` 實測（`apps/harness/src/time-context-on-tree.test.ts` J 組）：每輪三格時
+ * 2026-10-23 用 `LoopingChatModel` 實測（`harness/apps/harness/src/time-context-on-tree.test.ts` J 組）：每輪三格時
  * `輪數 = floor((上限 - 2 - k) / 3)`，k 是 pre-step 的 `beforeAgent` 顆數。出貨清單加上這一列後 k = 3，**預設上限 100 從 32 輪變 31 輪**；
  * serve 的形狀（每輪四格）從 24 變 23。這一格是 LangGraph 基座的代價
  * （同 `@nexus/agent-loop` 偏離 2），併成一顆節點的討論在 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)。
@@ -199,7 +199,7 @@ export type SkillInvocationLimits = Partial<SkillInvocationConfig>;
 
 /**
  * 這一次的上限：`min(maxBytes, floor(窗口 × 4 × contextFraction))`。同 `@nexus/core` 的 `injectionLimitFor`；插件不 import core，算法照抄，
- * `apps/harness` 的測試把兩邊釘成相等。
+ * `harness/apps/harness` 的測試把兩邊釘成相等。
  */
 function invocationBudget(
   limits: SkillInvocationLimits,
@@ -215,7 +215,7 @@ function invocationBudget(
 /**
  * 這一則注入有多少原文位元組放不下、沒放進去，記在 `additional_kwargs` 的這一格（正整數；沒有延後就不放），`context/measure` 的
  * `sources[].deferredBytes` 從它讀（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core` 的
- * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`apps/harness` 的測試把兩邊釘成相等。
+ * `INJECTION_DEFERRED_BYTES_KEY`；插件不 import core，鍵名照抄，`harness/apps/harness` 的測試把兩邊釘成相等。
  */
 export const INJECTION_DEFERRED_BYTES_KEY = 'nexus_injection_deferred_bytes';
 

@@ -3,7 +3,7 @@
  * 換成計數代理（`smoke/counting-proxy.ts`，在出口數、超過上限的不轉出去）。不進測試：要真金鑰，手動跑。
  *
  * ```
- * cd apps/harness
+ * cd harness/apps/harness
  * node_modules/.bin/tsx --tsconfig ../../tsconfig.runtime.json src/snapshot/record.ts \
  *   --env-dir <放 .env 的目錄> --reject-dir <本機證據目錄> --cap 10 <場景名…>
  * ```

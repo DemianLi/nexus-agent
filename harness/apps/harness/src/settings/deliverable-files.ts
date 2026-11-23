@@ -21,13 +21,13 @@
  * ## 與 dsh 的偏離
  *
  * 1. **擁有者是 package-internal specifier（`#settings/deliverable-files`），不是套件名。** 同
- *    {@link ./thread-title.ts | thread-title} 登記過的那一條，四列共用，成因一樣：`apps/harness`
+ *    {@link ./thread-title.ts | thread-title} 登記過的那一條，四列共用，成因一樣：`harness/apps/harness`
  *    解不到自己。
  * 2. **`apply` 是空的、也不註冊服務**，同起動期那幾列：這一層沒有註冊表可以讀服務，值由
  *    {@link ./startup.ts | startupSetting} 在起動期解一次、往下傳一份。
  *
  * **形狀與數值本身沒有偏離**：dsh 的 `@deepseek-ai/dsh-api-workspace-files` 就是**一顆 plugin 三格**
- * （`packages/api/workspace-files/src/index.ts:185-189`，`ddefc45`），三個預設值逐字相同——
+ * （`harness/packages/api/workspace-files/src/index.ts:185-189`，`ddefc45`），三個預設值逐字相同——
  * `maxBytes` 2 MiB、`maxFileBytes` 32 MiB、`maxLines` 5000。欄位名照它。
  *
  * ## `maxLines` 是雙用的，那是 dsh 的形狀

@@ -1,6 +1,6 @@
 /**
  * 續接時補寫當掉那一輪的收尾（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：算補結的規則、
- * 寫回的把手、冪等，以及補寫之後模型那一側與不變量都不變。接到 CLI／serve 的整合在 `apps/harness`。
+ * 寫回的把手、冪等，以及補寫之後模型那一側與不變量都不變。接到 CLI／serve 的整合在 `harness/apps/harness`。
  */
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';

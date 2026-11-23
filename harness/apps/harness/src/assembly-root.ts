@@ -189,7 +189,7 @@ export interface CliInvocation {
    * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
    *
    * **CLI 預設關，而且那是一個決定不是保守**（serve 的預設是開，見下面 2026-10-07 那段）。dsh 的續行驅動器是「需要你刻意掛載的可選消費
-   * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
+   * 方」（`harness/packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
    * 這個旗標**。
    *
    * （2026-09-19 註：引文是 dsh 當時 README 的原話，但 dsh 的 base 其實出廠就掛著續行驅動器——
@@ -398,7 +398,7 @@ export const SESSION_LOG_OFF_DISCLOSURE =
  *
  * - **`--resume`**：續接答應呼叫端「這一次也接得回來」，而沒有落盤的話這一次一個位元組都不寫回去。
  *   照 dsh：headless 的 `--session-id` 沒有持久化服務就當場拋，理由正是「跑完會印出 id，卻在
- *   行程結束時丟掉整段歷史」（`packages/bundle/headless/src/index.ts:253-258`，`477b4f4`）。
+ *   行程結束時丟掉整段歷史」（`harness/packages/bundle/headless/src/index.ts:253-258`，`477b4f4`）。
  * - **`--session-log`**：一個明說的旗標跟一份明說的設定互相矛盾。安靜地讓哪一邊贏都是 #612 要擋
  *   的那種誤讀——使用者以為日誌在寫（或以為沒寫），實際上是另一回事。
  *
@@ -463,7 +463,7 @@ export function resolveWorkspaceRoot(
  *
  * 可寫根從行程級的一格改成逐條 thread 的一格：serve 的 `createAgent` 與 CLI 每條 thread 組裝時問它一次，得到的值**同時**交給續接守衛
  * （`assertSameWorkspaceRoot`）與組裝點，兩邊才不會分岔。dsh 的對應物是 `resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)`
- * （`packages/sandbox/sandbox-policy/src/index.ts:164-171`）：根是會話自己的一格，行程級那一格只是備援。
+ * （`harness/packages/sandbox/sandbox-policy/src/index.ts:164-171`）：根是會話自己的一格，行程級那一格只是備援。
  */
 export type WorkspaceRootOf = (threadId: string) => string | undefined;
 
@@ -585,8 +585,8 @@ export interface LaunchPathsCheck {
  * ## 與 dsh 的偏離（理由 2：產品需求超出 dsh 的射程）
  *
  * dsh 沒有這道檢查：`loadLayeredEnv` 讀 `$cwd/.env` 與 `$DSH_HOME/.env`，不看工作區在哪
- * （`packages/boot/app-boot/src/index.ts:238-259`，`687f282e`），而它的工作區預設就是 `process.cwd()`
- * （`packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
+ * （`harness/packages/boot/app-boot/src/index.ts:238-259`，`687f282e`），而它的工作區預設就是 `process.cwd()`
+ * （`harness/packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
  * （`packages/fs/fs-sandbox/README.zh.md:12`）。dsh 是單人的寫程式代理，跟模型對話的人就是 key 的主人。我們的 serve 是
  * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
  * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）。讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
@@ -1232,7 +1232,7 @@ export async function createCliAgent(
   // **核准政策的控制器也建在這裡**，理由同上（一條 thread 一格）。`approvals.policy` 把它的來源交給閘門與升級工具，
   // `approvalPolicy` 服務把控制器本身交給 `approval-gate` 那一列去接日誌；**與 `approvals.enabled`（入口有沒有人在）是兩件事**。
   //
-  // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `packages/nexus-plugin-permission-presets/src/index.ts` 檔頭第 1 條）：
+  // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `harness/packages/nexus-plugin-permission-presets/src/index.ts` 檔頭第 1 條）：
   // 全開就是 `never`、其他是 `ask`，同 dsh 的 `DSH_PERMISSION_MODE`。**續接的呼叫端一定會把 `approvalPolicy` 給滿**
   // （`cli.ts`、`serve-run.ts` 的合併：記著的，沒記就 `ask`）——否則一份只記了全開沙箱、沒記核准的舊日誌會在這裡被推成 `never`。
   const approvalPolicy = new ApprovalPolicyController(

@@ -76,7 +76,7 @@ export type MemoryPluginOptions = z.input<typeof memoryConfigSchema>;
  * `normalizeSubagentSpec`（`isForkable` 為 false）。基座自己補的那份也一樣拿不到。
  *
  * 也就是說「subagent 也有記憶」在 1.13.1 上**沒有任何公開介面可以做到**（`mode: 'fork'`
- * 的 subagent 除外）。這是基座的邊界，不是這裡漏寫；`apps/harness` 有一條絆索測試釘著它，
+ * 的 subagent 除外）。這是基座的邊界，不是這裡漏寫；`harness/apps/harness` 有一條絆索測試釘著它，
  * 基座哪天補上了那條會紅。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)

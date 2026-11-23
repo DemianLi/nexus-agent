@@ -1,4 +1,4 @@
-//! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。退避、預算歸零、收連上過的一代的期限與記的訊息照 `packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同；`stop` 時直接丟下進行中的 [`Hooks::connect`]，不等它落定。
+//! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。退避、預算歸零、收連上過的一代的期限與記的訊息照 `harness/packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同；`stop` 時直接丟下進行中的 [`Hooks::connect`]，不等它落定。
 //! 失敗的連線嘗試監督者不收也不設期限（TS 的 `abandon` 沒有對應，失敗的嘗試也就不會因收不乾淨而停止重連）：
 //! [`Hooks::connect`] 回錯之前要自己把開出來的東西真的關掉；`stop` 時被丟下的嘗試靠 drop 收。
 //!

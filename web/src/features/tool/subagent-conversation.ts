@@ -13,7 +13,7 @@ export const SUBAGENT_HISTORY_MAX_MESSAGES = 40;
 
 /**
  * harness 派出去時，在第一句話（也就是派出的任務）後面接的一段指示，用來要子代理收尾前回報給母代理
- * （`apps/harness/src/background-subagents.ts` 的 `withReturnGuidance`，照 dsh）。那一段是寫給模型看的英文，人不必看
+ * （`harness/apps/harness/src/background-subagents.ts` 的 `withReturnGuidance`，照 dsh）。那一段是寫給模型看的英文，人不必看
  * 到；認不得（措辭改了）就原樣畫，寧可多顯示，不要吃掉人的字。
  */
 export const RETURN_GUIDANCE_MARKER = '\n\nYour parent agent id is ';

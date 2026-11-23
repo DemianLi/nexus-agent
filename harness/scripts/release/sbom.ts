@@ -21,9 +21,9 @@
  * 的 checksum）。crate 產生用 `spawner.ts` 的 `runtimeCrates`（crate 表加 `Cargo.lock`），核對用產物裡的授權目錄（`bundledCrates`，
  * CI 的 `cargo tree` 收的），同樣是兩種獨立的列法。
  *
- * **我們自己的套件**（`@nexus/*`，含 `vendor/*`）：lockfile 不記 workspace 套件的 integrity，所以不帶 `hashes`。版本與 tarball
- * 一起由 `.sha256` 釘住。`apps/*`、`packages/*` 的 manifest 沒有 `license` 欄位，授權取 repo 根 `LICENSE`（MIT，見
- * {@link repoLicense}）。`vendor/*` 自己宣告 MIT，照它的 manifest。
+ * **我們自己的套件**（`@nexus/*`，含 `harness/vendor/*`）：lockfile 不記 workspace 套件的 integrity，所以不帶 `hashes`。版本與 tarball
+ * 一起由 `.sha256` 釘住。`apps/*`、`harness/packages/*` 的 manifest 沒有 `license` 欄位，授權取 repo 根 `LICENSE`（MIT，見
+ * {@link repoLicense}）。`harness/vendor/*` 自己宣告 MIT，照它的 manifest。
  *
  * @module
  */
@@ -50,9 +50,9 @@ import {
   rustChannel,
 } from './spawner.js';
 
-/** `yaml` 是 apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解（同 `payload.ts`）。 */
+/** `yaml` 是 harness/apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解（同 `payload.ts`）。 */
 const parseYaml = (
-  createRequire(join(ROOT, 'apps/harness/package.json'))('yaml') as {
+  createRequire(join(ROOT, 'harness/apps/harness/package.json'))('yaml') as {
     parse: (text: string) => unknown;
   }
 ).parse;

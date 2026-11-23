@@ -294,7 +294,7 @@ const reducedBlock =
 // `data-glass="opaque"`（#1468 Q7）：SG 在那裡只拿掉 blur（`solid-glass.css` 的 [data-glass="opaque"] 那條），面還是半透明的；
 // 照 reduced-transparency 那條路換成同一組不透明值（1b）。暗色要高一階 specificity，不然 `.dark` 的值會蓋回來或吃到亮色。
 const opaqueBlock =
-  `\n/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 vendor/solid-glass/README.md）。 */\n` +
+  `\n/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 harness/vendor/solid-glass/README.md）。 */\n` +
   block("[data-glass='opaque']", OPAQUE.light) +
   block(".dark[data-glass='opaque'],\n.dark [data-glass='opaque']", OPAQUE.dark);
 writeFileSync(

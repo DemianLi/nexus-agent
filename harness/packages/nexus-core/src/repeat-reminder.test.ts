@@ -381,7 +381,7 @@ describe('參數預覽的上限', () => {
 
 /**
  * [#1665](https://github.com/DemianLi/nexus-agent/issues/1665)：提醒與通知都進模型歷史，日誌那一關拒收就照 dsh 讓這一步失敗
- * （`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`），不吞。提醒的內容是工具名與截過的參數預覽，日誌那一關拒不了它的值，
+ * （`harness/packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`），不吞。提醒的內容是工具名與截過的參數預覽，日誌那一關拒不了它的值，
  * 所以這幾格用 spy 造拒收。
  */
 describe('記不進去：這一步失敗', () => {

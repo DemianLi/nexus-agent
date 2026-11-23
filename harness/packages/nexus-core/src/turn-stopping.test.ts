@@ -1,6 +1,6 @@
 /**
  * `langgraph` 下的 `agent/turn-stopping` 轉接格：只看這一顆自己派了什麼；插話跳回模型時不派、真的停時只派一次，由
- * `apps/harness/src/workspace-changes.test.ts` 在真的圖上驗。
+ * `harness/apps/harness/src/workspace-changes.test.ts` 在真的圖上驗。
  */
 
 import { describe, expect, it } from 'vitest';

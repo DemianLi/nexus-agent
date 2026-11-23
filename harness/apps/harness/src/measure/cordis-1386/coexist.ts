@@ -7,7 +7,7 @@
  *
  * 各層是什麼：
  *
- * - **版本副本**：`packages/nexus-plugin-mcp/src` 複製成 `v1`、`v2` 兩份放在套件目錄底下（相依住在套件自己的
+ * - **版本副本**：`harness/packages/nexus-plugin-mcp/src` 複製成 `v1`、`v2` 兩份放在套件目錄底下（相依住在套件自己的
  *   `node_modules`，見 `plugin-coexist-real.ts`），各自 `import()`——兩份模組、兩個實例。每一份的樹上 `apply` 經
  *   {@link treeVersion} 與宿主的 `runThreadSources` 包成一顆 `NexusPlugin`。
  * - **一個版本＝Loader 的一列**：{@link nexusVersion} 把一顆 `NexusPlugin` 包成 Cordis 插件，`apply` 裡

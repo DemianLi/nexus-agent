@@ -2,7 +2,7 @@
  * 會話日誌**事件之間的關係**：逐顆餵入、不做 I/O、不拋錯的檢查，一份日誌一份狀態（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597)）。
  *
  * 兩個使用者共用這一份規則：執行期的配套入口（`./invariant.ts` 的 `sessionInvariant`，違規交給 `fail`）與 harness 的讀盤
- * （`apps/harness/src/session-log-validation.ts` 的 `assertStoredRelationships`，違規就拒開）。規則只寫在這裡，兩邊才不會判法不同。
+ * （`harness/apps/harness/src/session-log-validation.ts` 的 `assertStoredRelationships`，違規就拒開）。規則只寫在這裡，兩邊才不會判法不同。
  *
  * 違規以回傳值交出，不拋錯：要不要擋由呼叫方決定。讀盤讀到的事件只驗過信封，`data` 的形狀不保證合型別，所以欄位一律經
  * {@link field} 取，形狀不對的那一格當成沒有，不會在這裡拋 `TypeError`。
@@ -50,7 +50,7 @@ export interface SessionRelationshipChecker {
  * 建一份從空日誌開始的檢查狀態。
  *
  * - **turn 配對**：`turn/start` 來的時候上一輪不能還開著，`turn/end`／`turn/failed` 要關一個開著的輪，`interrupt/raised` 要落在輪內。
- *   兩個生產者（`apps/harness/src/thread-pump.ts` 的 `#runOnce`、`apps/harness/src/cli.ts` 的 `runTurn`）都是
+ *   兩個生產者（`harness/apps/harness/src/thread-pump.ts` 的 `#runOnce`、`harness/apps/harness/src/cli.ts` 的 `runTurn`）都是
  *   `turn/start` →（`interrupt/raised`）* → `turn/end` 或 `turn/failed`，而且 pump 的輪排隊跑、不交錯。
  * - **刻意不檢「日誌結尾還有一輪開著」**：那跟「跑到一半」或行程中途死掉長得一模一樣，不是違規。
  * - **同一個理由，turn 的狀態在 `session/end-seed` 重設**（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）：seed 結尾
@@ -74,7 +74,7 @@ export interface SessionRelationshipChecker {
  *   （#2361，格式不升版）：失敗收尾**之後**（`langgraph` 下 pump 在圖外收通知才寫），或那次呼叫的起訖**之內**、失敗收尾之前
  *   （native 下由模型呼叫的起訖紀錄器寫）。落在起訖之內的，那次呼叫之後必須以 `error` 或 `aborted` 收尾；正常收尾是違規，已經正常收尾了
  *   才來的也是；呼叫一直沒收尾（行程死在中途）不報，理由同 `openModelCalls`。檢查器分不出 native 寫在哪個位置，那由
- *   `apps/harness/src/attempt-native-write.test.ts` 釘。跟下一次嘗試的 `model/start` 誰先誰後不檢：`langgraph` 下 pump 在圖外
+ *   `harness/apps/harness/src/attempt-native-write.test.ts` 釘。跟下一次嘗試的 `model/start` 誰先誰後不檢：`langgraph` 下 pump 在圖外
  *   收通知，下一次嘗試在圖裡照跑。
  *   **撤除條件**：下一次因別的事升版時，舊位置的分支一起收（#2336 後續清單）。
  *
@@ -321,7 +321,7 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
           break;
         }
         // 輪已收：沒配到的呼叫屬於上一個行程，再也配不到。同一個行程裡被中斷的那次，resume 後 LangGraph 會重放那個沒跑完的 task、以同一個 callId 再記一顆
-        // （`apps/harness/src/tool-events.test.ts` 的中斷那一組量過）。**跨重啟沒有這條路**——續接重建的是日誌推出來的
+        // （`harness/apps/harness/src/tool-events.test.ts` 的中斷那一組量過）。**跨重啟沒有這條路**——續接重建的是日誌推出來的
         // 對話，不是 checkpointer（`MemorySaver` 住在行程內，讀碼推得，沒另外實測）。
         pendingCalls.clear();
         // 上一個行程中途死掉的那次模型呼叫永遠等不到結尾。

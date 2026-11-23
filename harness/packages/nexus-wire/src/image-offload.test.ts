@@ -1,7 +1,7 @@
 /**
  * 圖片額度省略（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）在折疊器裡的樣子：冷載入的人話帶 `omittedAttachments`，
  * 即時的 `image-offload` frame 累加進同一格，並且用 `inboxId` 或 `history-<seq>` 認條目。產出這些 frame 的一半在
- * `apps/harness/src/image-offload-pump.test.ts`。
+ * `harness/apps/harness/src/image-offload-pump.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

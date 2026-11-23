@@ -79,7 +79,7 @@ export type SpillSource =
 /**
  * 存一份全文的請求，照 dsh `spill/src/types.ts:61-72` 的 `SaveTextSpill`。
  *
- * **沒有 `owner`**（偏離登記在 `apps/harness/src/tool-result-stash.ts` 的偏離 3）：一個存檔服務的實例只服務一個會話，
+ * **沒有 `owner`**（偏離登記在 `harness/apps/harness/src/tool-result-stash.ts` 的偏離 3）：一個存檔服務的實例只服務一個會話，
  * 分區在建實例時就定了，請求帶 owner 也沒有第二個去處。
  */
 export interface SpillSaveRequest {

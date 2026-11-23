@@ -41,7 +41,7 @@
  * ## 副作用：工具卡多半收到兩顆 `tool-finished`
  *
  * 工具那一側多一層 `async` 包在本體外面，本體回來之後，圍堵記 `tool/result` 會晚幾個 microtask；
- * 而基座那顆 `tool-finished` 是在本體裡發的。所以 `apps/harness` 的 pump 多半先轉發基座那顆、
+ * 而基座那顆 `tool-finished` 是在本體裡發的。所以 `harness/apps/harness` 的 pump 多半先轉發基座那顆、
  * 日誌判定後到，於是補發一顆同 id 的更正（`thread-pump.ts` 的 `#noteVerdict`，#296）。兩種先後
  * pump 本來就都處理，卡的終態不變；變的是線上多一顆 frame、卡上的文字晚一拍。實測（#599，腳本
  * 模型一輪兩次 echo）：關掉這一顆時兩次呼叫分別走「pump 自己收卡」與「判定先到」，開著時兩次都
@@ -50,7 +50,7 @@
  * ## 代價
  *
  * 每次模型呼叫與每次工具呼叫（root 與子代理）多一次排空：把還在佇列裡的事件交給後端 `append`。
- * JSONL 後端（`apps/harness/src/jsonl-session-store.ts`）**每一批 `append` 都寫滿並 fsync 一次**
+ * JSONL 後端（`harness/apps/harness/src/jsonl-session-store.ts`）**每一批 `append` 都寫滿並 fsync 一次**
  * （[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)，同 dsh 的 `appendLines`），所以
  * fsync 次數等於**批數**：背景窗口的排空與檢查點的排空都算，不是等於檢查點數。排空本身不再多一次
  * `datasync`——把手已經開著時，{@link ./session-persistence.ts | SessionPersistenceCoordinator.flush}

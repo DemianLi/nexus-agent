@@ -4,7 +4,7 @@ import type { QueueUpdateRejected } from '@/shared/connection/use-conversation';
 
 /**
  * 把送出佇列裡排著的話改成插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710) 第二步）。照 dsh
- * （`packages/client/ui-conversation/src/client/queue/QueueDock.tsx:347` 的每列插話鈕、`client/input/hub.ts:223` 的
+ * （`harness/packages/client/ui-conversation/src/client/queue/QueueDock.tsx:347` 的每列插話鈕、`client/input/hub.ts:223` 的
  * `steerQueue`，`477b4f4`）：
  *
  * - **只有這一輪跑著時能插話**：停了、停在核准點都不行（伺服器也回 `steer_unavailable`，這裡先擋一道）。

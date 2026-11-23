@@ -12,7 +12,7 @@ import { firstLine } from '@/features/tool/view';
  * @module
  */
 
-/** 模型看到的工具名（`apps/harness/src/background-delegation.ts` 的 `SEND_MESSAGE_TOOL_NAME`，照 dsh）。 */
+/** 模型看到的工具名（`harness/apps/harness/src/background-delegation.ts` 的 `SEND_MESSAGE_TOOL_NAME`，照 dsh）。 */
 export const SEND_MESSAGE = 'send_message';
 
 /** 對不到名字時的稱呼：重新整理後委派卡不在了、或編號不是這條對話派出去的。寧可說不知道，不要說錯。 */

@@ -12,7 +12,7 @@ import type { Script } from '@/test/conversation-frames';
 import { projectionFrame } from '@/test/trajectory-fixtures';
 
 /**
- * 用量投影的測試建構器。形狀照 `packages/nexus-wire/src/token-meter.ts`；值是手寫的（插件那一側有自己的折疊測試，
+ * 用量投影的測試建構器。形狀照 `harness/packages/nexus-wire/src/token-meter.ts`；值是手寫的（插件那一側有自己的折疊測試，
  * 這裡只管 web 怎麼讀），但送進 `reduceAll` 的是真的 `projection` frame，閘門與 `subagentProjections` 走的是真路徑。
  */
 export function span(overrides: Partial<TokenMeterSpan> = {}): TokenMeterSpan {

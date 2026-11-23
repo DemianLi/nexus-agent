@@ -11,7 +11,7 @@
  *
  * - **不是每個套件各自用預設 Config 單獨啟動。** dsh 的 Config 都有 schema 預設值，單獨啟動得出合法設定；我們好幾個
  *   plugin 的設定欄位是必填（`todo` 的 `allowParallelInProgress`、`workspace-changes` 的 `root`…），出廠值寫在
- *   `apps/harness/cordis.yml` 的條目上，而且有的要別的 plugin 先提供服務（`sandbox-policy`）。所以出廠
+ *   `harness/apps/harness/cordis.yml` 的條目上，而且有的要別的 plugin 先提供服務（`sandbox-policy`）。所以出廠
  *   清單**一次**載進產品組裝，工具各自歸給註冊它的 plugin（`registry.tools` 的 `origin`）。不在出廠清單裡的套件
  *   （選配或由外部決定工具的），清單裡明寫是哪一種，選配的用清單上給的設定單獨載。
  * - **目錄讀的是 `bindTools` 收到的那一份**（`convertToOpenAITool` 轉出來的線上形狀），不是 plugin 註冊時的原物件：
@@ -95,7 +95,7 @@ export type PackageExpectation =
   | { readonly kind: 'none'; readonly reason: string };
 
 /**
- * `packages/nexus-plugin-*` 每一個套件都要在這裡有一列，說它**預期**怎麼貢獻工具：
+ * `harness/packages/nexus-plugin-*` 每一個套件都要在這裡有一列，說它**預期**怎麼貢獻工具：
  *
  * - `shipped`：在出廠清單裡，註冊至少一個工具；
  * - `standalone`：不在出廠清單裡，用這一列給的設定單獨載入，要有至少一個工具；
@@ -223,7 +223,7 @@ export function assertManifestComplete(
     throw new Error(`工具目錄的套件清單對不上：\n- ${problems.join('\n- ')}`);
 }
 
-/** `packages/` 底下有 `package.json` 的 `nexus-plugin-*`，依目錄名排序。 */
+/** `harness/packages/` 底下有 `package.json` 的 `nexus-plugin-*`，依目錄名排序。 */
 export function pluginPackageDirs(packagesRoot: string): readonly string[] {
   return readdirSync(packagesRoot)
     .filter(
@@ -458,7 +458,7 @@ async function treeTools(mod: object, config: unknown): Promise<Map<string, Cata
 /**
  * 產生目錄的資料。
  *
- * @param repoRoot - repo 根（找 `packages/`）。
+ * @param repoRoot - repo 根（找 `harness/packages/`）。
  * @returns 依來源排序的區段，區段內依工具名排序。
  * @throws {Error} 完整性檢查沒過，見 {@link assertManifestComplete}。
  */
@@ -546,7 +546,7 @@ export async function collectToolCatalog(repoRoot: string): Promise<readonly Cat
     const dir = facts.find((pkg) => pkg.pluginName === pluginName)?.dir;
     sections.push({
       source: pluginName,
-      note: dir === undefined ? 'plugin' : `plugin，套件 packages/${dir}`,
+      note: dir === undefined ? 'plugin' : `plugin，套件 harness/packages/${dir}`,
       tools: [...(byPlugin.get(pluginName) ?? [])].sort(byName),
     });
   }
@@ -585,8 +585,8 @@ export function renderToolCatalog(sections: readonly CatalogSection[]): string {
     CATALOG_REGEN_COMMAND,
     '```',
     '',
-    '`apps/harness/src/tool-catalog.test.ts` 在 CI 裡驗它沒有過期；改了工具的名稱、描述或參數，重新產生並一起提交，',
-    'review 時就看得到模型看到的字變了什麼。範圍與做法見 `apps/harness/src/tool-catalog.ts` 的檔頭（#442）。',
+    '`harness/apps/harness/src/tool-catalog.test.ts` 在 CI 裡驗它沒有過期；改了工具的名稱、描述或參數，重新產生並一起提交，',
+    'review 時就看得到模型看到的字變了什麼。範圍與做法見 `harness/apps/harness/src/tool-catalog.ts` 的檔頭（#442）。',
     '',
   ];
   for (const section of sections) {

@@ -16,7 +16,7 @@ import {
 /**
  * 超過頁上限的行、中長的行太多（#555）。
  *
- * 假 server 照兩支命令的規則回應（`apps/harness/src/deliverable-files.ts`、`deliverable-window.ts`）：
+ * 假 server 照兩支命令的規則回應（`harness/apps/harness/src/deliverable-files.ts`、`deliverable-window.ts`）：
  * 文字頁一頁超過 `maxBytes` 是 `deliverable/too-large`（**拒絕不是截斷**）、`limit` 超過 `maxLines` 是協定錯誤
  * `invalid_argument`、當頁含 NUL 或不是 UTF-8 是 `deliverable/not-text`、只有檔頭的 BOM 被吃掉；位元組窗口不解碼，
  * `length` 預設且最多 `maxBytes`，**`offset` 與 `length` 都不給是整檔下載**（所以送窗口時 `offset` 一定要送，包括 0）。**判準是把整個檔讀完、

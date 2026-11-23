@@ -1,6 +1,6 @@
 /**
  * 會話參與者的登記（#1491 Q2）：`sessionLookup.join` 與提供者的 `participants()`／`registrations()`。
- * 「折進 thread 的位置」與「冷復活」在 `apps/harness` 的 `permission-presets-on-tree.test.ts`；這裡只管登記簿本身。
+ * 「折進 thread 的位置」與「冷復活」在 `harness/apps/harness` 的 `permission-presets-on-tree.test.ts`；這裡只管登記簿本身。
  */
 
 import { Context } from '@nexus/cordis';

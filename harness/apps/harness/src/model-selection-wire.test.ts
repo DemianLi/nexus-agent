@@ -1,6 +1,6 @@
 /**
  * **`model.catalog`／`model.select` 與選擇的即時推送，走完 serve**——[#723](https://github.com/DemianLi/nexus-agent/issues/723)
- * 的線上驗收。機制在 `packages/nexus-core/src/model-selection.test.ts`，組裝後的請求本體在 `model-selection.test.ts`。
+ * 的線上驗收。機制在 `harness/packages/nexus-core/src/model-selection.test.ts`，組裝後的請求本體在 `model-selection.test.ts`。
  *
  * 真的 `runServe`（`--live`，`live-model` 那一列用 `--patch` 指向本機假端點）、真的 handler、真的 client。
  * 量的是：型錄與目前選擇；選不上的原因與選擇不變；選了之後即時多一顆 `model-selection` 投影 frame，重新整理（歷史）長出同一份；

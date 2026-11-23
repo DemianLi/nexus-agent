@@ -14,7 +14,7 @@
  *   會少估到一半。dsh 表達得出來的做法（固定密度加錨）在同一批資料上更差，所以這是我們才有的缺口，記在條目上、跟 id
  *   同一筆（理由同下面的 `compat`：換模型時要一起換）。
  * - **多一格 `imageBudget`（#1270）。** dsh 的圖片請求額度住在 adapter 的部署 profile（`maxRequestImageBytes`，
- *   `packages/llm/llm-pi-ai/src/adapter.ts:370`，`5badb150`），是一個部署一份；我們沒有 profile 這一層，而端點的收圖上限是
+ *   `harness/packages/llm/llm-pi-ai/src/adapter.ts:370`，`5badb150`），是一個部署一份；我們沒有 profile 這一層，而端點的收圖上限是
  *   **每顆模型各自的**（`meta/llama-3.2-90b-vision-instruct` 每次請求最多一張），跟 id 同一筆、換模型時一起換。形狀照
  *   `LlmImageRequestBudget`（`maxImages`、`maxBytes`），單位是張數與位元組。
  * - **`compat` 收 `chatTemplateKwargs` 與 `supportsFinishReason`（#1538）。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
@@ -215,7 +215,7 @@ export type ImageSupport = 'accepts' | 'rejects' | 'undeclared';
 
 /**
  * 這一筆收不收圖。**沒宣告 `input` 就回 `'undeclared'`，不當成收圖**——同 dsh 的 `read_image` 要明確宣告才放行
- * （`packages/fs/tool-fs/src/read-image.ts:128-130`）。
+ * （`harness/packages/fs/tool-fs/src/read-image.ts:128-130`）。
  *
  * @param entry - 型錄條目。
  * @returns `'accepts'`（宣告了 `image`）、`'rejects'`（宣告了 `input` 但沒有 `image`）、`'undeclared'`（沒宣告）。

@@ -69,7 +69,7 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
-/** 出廠型錄的真數字（`apps/harness/cordis.yml` 的 `live-model`）：預設那顆，與型錄裡窗口最小的那顆。 */
+/** 出廠型錄的真數字（`harness/apps/harness/cordis.yml` 的 `live-model`）：預設那顆，與型錄裡窗口最小的那顆。 */
 const DEFAULT_LIMITS: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
 const SMALL_LIMITS: ModelContextLimits = { contextWindow: 32_768, maxOutputTokens: 4_096 };
 

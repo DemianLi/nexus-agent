@@ -1,7 +1,7 @@
 /**
  * 讀盤用的是執行期配套入口那一支（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597) 驗收 E 的 harness 那一側）：
  * `assertStoredRelationships` 要經 `@nexus/core` 的 `createSessionRelationshipChecker` 判，自己另寫一份狀態機就紅。執行期那一側在
- * `packages/nexus-core/src/invariant-shared-checker.test.ts`。
+ * `harness/packages/nexus-core/src/invariant-shared-checker.test.ts`。
  */
 
 import { createSessionRelationshipChecker } from '@nexus/core';

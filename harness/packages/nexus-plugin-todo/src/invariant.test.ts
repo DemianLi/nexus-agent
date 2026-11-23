@@ -141,7 +141,7 @@ describe('歸屬', () => {
    * dsh 那條無條件的規則照抄過來的話，**每一次 subagent 的 `todo_write` 都會變成違規**，
    * 而違規的去處是使用者的終端機。
    *
-   * 端到端的那一半在 `apps/harness/src/todo-tool.test.ts`：真的跑一次委派，確認十三個
+   * 端到端的那一半在 `harness/apps/harness/src/todo-tool.test.ts`：真的跑一次委派，確認十三個
    * 配套入口一句話都不說。
    */
   it('一份從來沒有輪的日誌——規則對它沒有指涉對象，不報', () => {

@@ -24,7 +24,7 @@
  *   （{@link LoadedPluginConfig.acceptedSeq}）：serve 跑著時 `--patch`、出貨設定、環境變數都不變，依賴的列在不在只會因為紀錄
  *   改了而變。對得上就照上一條不重試；對不上，下一條 thread 重新組裝它一次，又掉了就用新的 `seq` 記住（只重試一次）。
  *   **只動 `requires` 這一階段**：`module`、`config`、`apply` 照上一條不變。相容層的 `requires` 檢查排在 `apply` 之後
- *   （`packages/nexus-core/src/load.ts`），重試一次就是真的跑一次 `apply` 再撤掉，所以不能每條 thread 都試。
+ *   （`harness/packages/nexus-core/src/load.ts`），重試一次就是真的跑一次 `apply` 再撤掉，所以不能每條 thread 都試。
  *   「被接受」用 `isAcceptedRecord`：`failed`、`rejected` 是只記不折的筆，要是算進去，重試又掉時記下的那一筆 `failed`
  *   就會讓下一條 thread 再試一次，永遠停不下來。不處理的邊角：B 因為工作區而 `apply` 失敗、連帶 A 掉在 `requires`，
  *   B 自己也照上一條不重試，所以 A 等到紀錄有改動才回來，跟 B 的待遇一致。

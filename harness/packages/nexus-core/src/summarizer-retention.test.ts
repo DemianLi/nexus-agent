@@ -27,7 +27,7 @@ import type { ModelContextLimits, SummarizationSettings } from './summarization.
 import { SummaryCutoffTable } from './summary-cutoffs.js';
 import { estimateMessageTokens, TokenAnchorBook } from './token-estimate.js';
 
-/** 出廠型錄三顆（`apps/harness/cordis.yml`）：窗口與輸出上限。 */
+/** 出廠型錄三顆（`harness/apps/harness/cordis.yml`）：窗口與輸出上限。 */
 const DEFAULT_MODEL: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
 const MID_MODEL: ModelContextLimits = { contextWindow: 131_072, maxOutputTokens: 4_096 };
 const SMALL_MODEL: ModelContextLimits = { contextWindow: 32_768, maxOutputTokens: 4_096 };

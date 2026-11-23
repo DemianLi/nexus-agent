@@ -4,9 +4,9 @@
  *
  * 出貨的 spawner 是靜態連結 musl 的執行檔，工具子行程卻是主機上動態連 glibc 的程式（git 就是一支）。這一步起產物裡那支
  * spawner，等它送 `Ready`，再經它起一次主機的 `/usr/bin/git --version`，收 stdout 與結局。判斷是純函式
- * {@link spawnerProbeProblems}，單元測試在 `apps/harness/src/verify-packed-install.test.ts`。
+ * {@link spawnerProbeProblems}，單元測試在 `harness/apps/harness/src/verify-packed-install.test.ts`。
  *
- * 控制通道的編解碼用 `apps/harness/src/sandbox-protocol.ts`。stdio 連線要由起 spawner 的這個行程自己 connect：
+ * 控制通道的編解碼用 `harness/apps/harness/src/sandbox-protocol.ts`。stdio 連線要由起 spawner 的這個行程自己 connect：
  * spawner 用 `SO_PEERCRED` 核對對方是不是它的父行程。
  *
  * @module

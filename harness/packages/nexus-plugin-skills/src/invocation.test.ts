@@ -1,6 +1,6 @@
 /**
  * 薄測試：`/名字` 那一列的一致性、manifest 與手勢。listener 本身（真的訊息、真的 backend、樹上的落點、日誌的來源）在
- * `apps/harness/src/skill-invocation-on-tree.test.ts`：這個套件不相依 `@langchain/core`，造不出真的訊息。
+ * `harness/apps/harness/src/skill-invocation-on-tree.test.ts`：這個套件不相依 `@langchain/core`，造不出真的訊息。
  */
 
 import { createAgentLoopProvider } from '@nexus/agent-loop/provider';

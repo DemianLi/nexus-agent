@@ -1,6 +1,6 @@
 /**
  * `el.signIn(ticket)` 的那一下（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：拿宿主系統後端換來的登入票打
- * `POST /embed/session`，serve 設一顆只打得到嵌入路由的 cookie。回應的形狀與每一種失敗見 serve 的 `apps/harness/src/embed-session.ts` 檔頭。
+ * `POST /embed/session`，serve 設一顆只打得到嵌入路由的 cookie。回應的形狀與每一種失敗見 serve 的 `harness/apps/harness/src/embed-session.ts` 檔頭。
  *
  * 票只當參數收，不放進屬性，也不記在任何地方：留在 DOM 或 storage 裡，宿主頁上的任何腳本都讀得到。
  *

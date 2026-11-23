@@ -17,7 +17,7 @@
  *
  * - 血緣：三顆工具用 `rootOnly` 註冊，fold 把每個 subagent 那一份裡的同名項換成拒絕樁
  *   （`@nexus/core` 的 `fold.ts`）——而**「拒絕 subagent」正是 dsh 對 `tool-goal` 的政策
- *   本身**，不是我們的收窄（`packages/goal/tool-goal/src/authority.ts` 的
+ *   本身**，不是我們的收窄（`harness/packages/goal/tool-goal/src/authority.ts` 的
  *   `ctx.agents.roots().includes(execution.agent)`，描述寫著 “rejects non-human and
  *   subagent authority”）。
  * - 人類輪次：讀會話日誌的 `turn/start`，判準與它為什麼不能寫成「看最後一顆」在
@@ -30,7 +30,7 @@
  * 一輪，輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`）。
  * 所以：
  *
- * - **排程器落在 `apps/harness`**，由 `--goal-driver` 旗標決定掛不掛。載體丟掉、紀律
+ * - **排程器落在 `harness/apps/harness`**，由 `--goal-driver` 旗標決定掛不掛。載體丟掉、紀律
  *   照抄，同 `containment.ts` 對 `guard/timeout-policy` 那一筆。
  * - **檢查與 renderer 留在這裡**：`prompt.ts` 是續行文字的唯一來源，`invariant.ts` 驗
  *   每一顆 goal 輪次逐字等於它。判準是**只要 `kind: 'goal'` 這個詞彙存在，伴生就武裝**
@@ -46,7 +46,7 @@
  *
  * **上一張 PR 這裡寫的是「不進」**，理由是「域在 `/goal` 落地之前沒有任何人打得到的
  * 入口」。`/goal` 落地了，那個理由就沒了：這一列現在同時掛域與命令，
- * 兩件事一起進出貨清單（`apps/harness/cordis.yml`）。位置跟在計劃模式後面、所有配套入口前面——啟動時印的
+ * 兩件事一起進出貨清單（`harness/apps/harness/cordis.yml`）。位置跟在計劃模式後面、所有配套入口前面——啟動時印的
  * `plugin：` 那一行按清單順序走，域與配套入口混在一起會讓那行讀不出誰是誰。
  *
  * **域與命令不拆成兩個 plugin。** dsh 拆（`dsh-goal` 與 `dsh-command-goal` 是兩個套件），
@@ -72,7 +72,7 @@
  *   （`GOAL_TOOL_NOT_ROOT_MESSAGE`，文字沿用原句）：直接帶子代理的 `checkpoint_ns` 呼叫真工具今天就走得到。
  *
  * 要的三個服務都由宿主在樹上提供：`tools`（`^2.0.0`，三顆工具一律 `rootOnly` 並帶 `outputSchema`）、`commands`（`^1.1.0`）、
- * `sessionLookup`（`^1.0.0`）。**舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/goal.fixture.ts` 給 harness 的測試，這個套件自己的測試用 `goal-shell.test.helper.ts`，同 todo、feedback 的前例）：它與樹上這一列共用
+ * `sessionLookup`（`^1.0.0`）。**舊的 `NexusPlugin` 外殼搬走了**（`harness/apps/harness/src/goal.fixture.ts` 給 harness 的測試，這個套件自己的測試用 `goal-shell.test.helper.ts`，同 todo、feedback 的前例）：它與樹上這一列共用
  * 同一份 lazy 核心（{@link createGoalCore}），只有「這次呼叫的會話怎麼來」那一格不同。
  *
  * **`src/invariant.ts` 不在這條路上**：配套入口還是相容層的列（`goal-invariant`），它 import `@nexus/core` 並寫 `NexusPlugin`。它從 SDK lint 排除
@@ -350,7 +350,7 @@ export interface GoalMountHost {
 }
 
 /**
- * 把三顆工具與 `/goal` 掛上去。**樹上那一列（{@link createGoalApply}）與相容層的測試外殼（`apps/harness/src/goal.fixture.ts`）共用這一份**：
+ * 把三顆工具與 `/goal` 掛上去。**樹上那一列（{@link createGoalApply}）與相容層的測試外殼（`harness/apps/harness/src/goal.fixture.ts`）共用這一份**：
  * 兩邊唯一不同的是「這次呼叫的會話怎麼來」（`host.forCall`），所以工具本體、命令 handler 與 lazy 核心只有一個出處。
  *
  * @param host - 登記處與會話查找。

@@ -4,7 +4,7 @@
  * 量的是產品路徑——真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的寫入口 `changePlugin`、真的相容層
  * `assembly.create`（serve 每條 thread 一次）、真的 `attachSessions`、真的檔案系統 backend 與 fence；不手搭 `ctx.plugin`。
  *
- * 驗收 A（SDK lint、一致性套件、套一次服務兩條 thread）在 `packages/nexus-plugin-submit-record` 與 `migrated-plugin-gate.test.ts`；
+ * 驗收 A（SDK lint、一致性套件、套一次服務兩條 thread）在 `harness/packages/nexus-plugin-submit-record` 與 `migrated-plugin-gate.test.ts`；
  * 驗收 D（既有測試的斷言一個字不動、組裝換成 fixture）是 `approval-gate-order.test.ts`、`background-delegation.test.ts`、
  * `delegated-subagent.test.ts`、`subagent-background-probe.test.ts`、`submit-record-mounts/sandbox/wire.test.ts`；驗收 C
  * （golden）是一次性錄製，做法與數字寫在 PR 內文。

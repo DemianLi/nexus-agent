@@ -18,7 +18,7 @@
 
 ## Consequences
 
-- 會話日誌格式會變（每筆加雜湊、thread 加擁有者、刪除換路徑），碰到「磁碟上的日誌是真相」那條線（`apps/harness/src/wire-handler.ts:714`）與 web 讀日誌的一側，兩側要一起改。
-- 登入機制換掉：目前每個 serve 行程一顆啟動 token 換簽章 cookie 的做法（`apps/harness/src/browser-auth.ts:12`）退場；變更紀錄的操作者今天是自報的（`docs/operations.md:271`），之後改成驗證過的身分。
+- 會話日誌格式會變（每筆加雜湊、thread 加擁有者、刪除換路徑），碰到「磁碟上的日誌是真相」那條線（`harness/apps/harness/src/wire-handler.ts:714`）與 web 讀日誌的一側，兩側要一起改。
+- 登入機制換掉：目前每個 serve 行程一顆啟動 token 換簽章 cookie 的做法（`harness/apps/harness/src/browser-auth.ts:12`）退場；變更紀錄的操作者今天是自報的（`docs/operations.md:271`），之後改成驗證過的身分。
 - 動工時間與順序看地圖 #1428，不在這份寫死。
 - 全文（含各條的附表十依據）在 tag `archive/docs-2026-11`。

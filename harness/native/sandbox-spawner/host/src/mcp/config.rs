@@ -1,7 +1,7 @@
 //! 一台 MCP server 的設定：`mcpConfigSchema` 的 HTTP 與 stdio 兩支怎麼解、池的鍵、日誌裡的名字，與錯誤訊息裡要換掉的秘密。
-//! 照 `packages/nexus-plugin-mcp/src/index.ts` 的設定；錯誤訊息講欄位，不帶值。
+//! 照 `harness/packages/nexus-plugin-mcp/src/index.ts` 的設定；錯誤訊息講欄位，不帶值。
 //!
-//! stdio 收的是 TS 算好的成品（`apps/harness/src/mcp-host-stdio-row.ts`）：`command`／`args` 已經照沙箱政策包好，`env` 是清洗過的父環境疊上
+//! stdio 收的是 TS 算好的成品（`harness/apps/harness/src/mcp-host-stdio-row.ts`）：`command`／`args` 已經照沙箱政策包好，`env` 是清洗過的父環境疊上
 //! 設定的整份，`credentialEnv` 標出其中哪幾個名字的值來自憑證。宿主只驗形狀，不重算政策、不疊自己的環境。
 
 use std::time::Duration;
@@ -136,7 +136,7 @@ fn boolean(fields: &Map<String, Value>, name: &str, default: bool) -> Result<boo
     })
 }
 
-/// 需要列進 `credentialHeaders` 的 header：值沒有不是憑證的用法。與 TS 的 `AUTHORIZATION_HEADER_NAMES`（`packages/nexus-plugin-mcp/src/credentials.ts`）同一份，
+/// 需要列進 `credentialHeaders` 的 header：值沒有不是憑證的用法。與 TS 的 `AUTHORIZATION_HEADER_NAMES`（`harness/packages/nexus-plugin-mcp/src/credentials.ts`）同一份，
 /// 兩邊各有一支測試對 `credentials-vectors.json` 的 `credentialHeaderNames`。
 pub const AUTHORIZATION_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
 

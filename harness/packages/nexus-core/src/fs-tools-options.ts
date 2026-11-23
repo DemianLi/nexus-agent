@@ -1,7 +1,7 @@
 /**
  * 檔案工具的組態（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0355）：哪幾顆基座工具模型看得到、讀檔的上限。
  * 欄位與意義照 dsh `tool-fs` 的 Config（`packages/fs/tool-fs/src/index.ts:20-98`，`687f282e`）；設定列住在
- * `apps/harness/src/settings/tool-fs.ts`，組裝點把驗過的值交給 `foldRegistry`（{@link FoldOptions.fileTools}），這裡是 core 側的形狀與換算。
+ * `harness/apps/harness/src/settings/tool-fs.ts`，組裝點把驗過的值交給 `foldRegistry`（{@link FoldOptions.fileTools}），這裡是 core 側的形狀與換算。
  *
  * ## 開關換算成基座的 `tools` 白名單
  *

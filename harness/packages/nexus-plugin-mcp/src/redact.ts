@@ -1,7 +1,7 @@
 /**
  * MCP 連線手上已解析的憑證值，從錯誤與診斷的文字裡遮掉（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)、
- * [#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。規則、形式與樣本同 Rust 宿主的 `native/sandbox-spawner/host/src/mcp/redact.rs`，
- * 兩邊跑同一份 `native/sandbox-spawner/credentials-vectors.json` 的 `redact[]`（見 `redact.test.ts`）。
+ * [#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。規則、形式與樣本同 Rust 宿主的 `harness/native/sandbox-spawner/host/src/mcp/redact.rs`，
+ * 兩邊跑同一份 `harness/native/sandbox-spawner/credentials-vectors.json` 的 `redact[]`（見 `redact.test.ts`）。
  * 成功結果用的 {@link Redactor.redactText} 還沒有呼叫端，只有共用樣本在跑。
  *
  * 做法：每個值連同它的幾種編碼形式，在原文上找出所有命中的區間，合併重疊與相鄰的，一次換成 `[redacted]`。

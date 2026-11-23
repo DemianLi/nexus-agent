@@ -37,7 +37,7 @@ export const FORK_RENAME_FAILED_TEXT = '已分出新對話，但改名失敗';
 
 /**
  * 這台 server 分得了叉嗎：清單回 `not_supported` 就是沒接落盤，分叉也必定回 `not_supported`——server 的列表與冷讀兩支由同一個
- * 開關給（`apps/harness/src/serve.ts` 的 `sessionStore`，[#1964](https://github.com/DemianLi/nexus-agent/issues/1964)）。
+ * 開關給（`harness/apps/harness/src/serve.ts` 的 `sessionStore`，[#1964](https://github.com/DemianLi/nexus-agent/issues/1964)）。
  * 這時鈕整顆不畫，同 dsh `TurnTailNodeView.tsx:32,70` 沒有 `session/fork` 權限時 `onBranch` 是 `undefined`。
  * 還在讀、清單別的原因失敗都照畫：按下去由 server 回錯誤。
  */

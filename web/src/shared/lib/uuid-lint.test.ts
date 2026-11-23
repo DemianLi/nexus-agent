@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
- * `apps/web/eslint.config.js` 擋 `crypto.randomUUID` 的那一條（[#1548](https://github.com/DemianLi/nexus-agent/issues/1548)）。
+ * `web/eslint.config.js` 擋 `crypto.randomUUID` 的那一條（[#1548](https://github.com/DemianLi/nexus-agent/issues/1548)）。
  *
  * 量的是 web **真的那份**設定（`overrideConfigFile`），違規碼放在記憶體裡、不落成檔（理由同
- * `packages/nexus-sdk/src/lint.test.ts` 檔頭：落地的違規夾具會被 lint、typecheck 與 prettier 掃到）。`filePath` 是虛擬路徑。
+ * `harness/packages/nexus-sdk/src/lint.test.ts` 檔頭：落地的違規夾具會被 lint、typecheck 與 prettier 掃到）。`filePath` 是虛擬路徑。
  */
 
 import { fileURLToPath } from 'node:url';

@@ -5,12 +5,12 @@
  * [#16](https://github.com/DemianLi/nexus-agent/issues/16) 原本列的兩個強化方向
  * （每步多一次 LLM 呼叫的自我批判、顯式意圖分類）在 dsh 全樹**都不存在**——
  * `reflection` 的命中全是 TypeScript 型別反射，`intent classif` 零命中。它對「先想
- * 再做」的答案是**計劃模式**（`packages/plan/plan-mode/`），配上 todo 與 goal：
+ * 再做」的答案是**計劃模式**（`harness/packages/plan/plan-mode/`），配上 todo 與 goal：
  * 讓模型自己承擔規劃、把狀態外顯，人可以介入。三件裡我們一件都沒有，所以先補的是這
  * 一件。細節見 [#116](https://github.com/DemianLi/nexus-agent/issues/116)。
  *
  * **這裡原本寫的是「`TodoListMiddleware` 已經蓋掉 todo 那塊」，那句話是假的。**
- * 基座的預設 middleware stack 不帶 todo（`apps/harness/src/baseline.test.ts` 第一條的
+ * 基座的預設 middleware stack 不帶 todo（`harness/apps/harness/src/baseline.test.ts` 第一條的
  * 全集斷言裡沒有 `write_todos`），`todoListMiddleware` 得自己掛。那句話是承重的——它在
  * 論證「所以補的是計劃模式這塊」——但前提錯了不影響結論：三件當時都缺。goal 由
  * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 補上，todo 由
@@ -55,7 +55,7 @@
  *   （{@link EXIT_PLAN_MODE_CONCLUDES_TURN}）：**只有標了才收**，其餘結局（拒絕、參數錯、核准閘門擋下、拋錯）照常回頭叫模型；
  *   **`next-step` 還有插話就不收**、接著叫模型（step-inbox 的 `afterAgent`，dsh `agent.ts:361-365`）。
  *   不是 `ask_user_question` 那句放棄訊息：那句叫模型別重問同一組，說的是它沒呼叫過的工具。
- * - 停止這一輪 → 由 `apps/harness` 的 `ThreadPump` 收回掛著的呼叫，工具本體不會再跑，中止保留它自己那句。
+ * - 停止這一輪 → 由 `harness/apps/harness` 的 `ThreadPump` 收回掛著的呼叫，工具本體不會再跑，中止保留它自己那句。
  * - **沒有人可以回答**（`approvalChannel` 服務的 `current()` 說 `policy-never` 或 `no-channel`，或宿主沒有指定答題者）→ 拒絕，請使用者自己切模式，
  *   同 dsh「沒有提問通道就拋錯」。CLI 與 eval 走這條。
  *
@@ -104,7 +104,7 @@
  *
  * 退法丟掉過的東西也跟著回來了：`eval/runner.ts` 沒有 checkpointer、CLI 與 `serve.ts` 的
  * `MemorySaver` 重啟就沒，這些以前都讓模式留不住；模式住在日誌上之後，它們都碰不到它。
- * 壓縮那一條的測試照舊留著（`apps/harness/src/plan-mode.test.ts`）——它釘的是一句宣稱，
+ * 壓縮那一條的測試照舊留著（`harness/apps/harness/src/plan-mode.test.ts`）——它釘的是一句宣稱，
  * 不是一個機制。
  *
  * **與 dsh 仍然不一樣的地方**：dsh 的投影是 core 那一層帶版本的快取（`sessionProjections`），
@@ -133,9 +133,9 @@
  * **當場寫的前提是命令跑在兩輪之間。** dsh 在輪還開著時把選擇排著、到下一個
  * `agent/pre-step` 才提交，免得模式在一輪中間翻面。命令那側我們不需要那一格：REPL 一行一輪；
  * `serve.ts` 那條線的發派面在 run 飛在半空、停在核准點、或另一個命令在跑時一律拒收
- * （`apps/harness/src/wire-handler.ts` 的 `handleSlash`，
+ * （`harness/apps/harness/src/wire-handler.ts` 的 `handleSlash`，
  * [#123](https://github.com/DemianLi/nexus-agent/issues/123)），絆索在
- * `apps/harness/src/slash-wire.test.ts`。那道閘哪天放寬成排隊，這裡就要長回 dsh 那一格。
+ * `harness/apps/harness/src/slash-wire.test.ts`。那道閘哪天放寬成排隊，這裡就要長回 dsh 那一格。
  *
  * ### 兩值，不是 dsh 的四值
  *
@@ -159,7 +159,7 @@
  *      `command/run` → `command/done` 的配對先完整收掉，才有 `turn/start`，序列性規則看不到這一輪。
  *
  *   **一個表達上的退路，登記在這裡：** dsh 的 handler 拿到 agent，閒著時 steer 會喚醒一輪
- *   （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
+ *   （`harness/packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
  *   我們的命令沒有 agent 把手，而且只跑在兩輪之間（見上），所以 steer 永遠是閒著的那一種，
  *   退成「宿主在命令落定後開一輪」（`serve` 進送出佇列、REPL 逐句跑）。這一輪的訊息是普通的 `user` 來源，
  *   同 dsh 的 `source: { kind: 'user' }`。命令落定成 `error` 時，已經收下的 steer 作廢（dsh 沒有這一條，
@@ -173,7 +173,7 @@
  *   dsh 還有 `narrate: false`（`exit_plan_mode` 同意那條路，工具結果已經講過）與「從沒送過請求就不講」兩條；
  *   旁白要一種新的訊息來源，會牽動 goal 的 authority 絆索、各套件的 fold 測試、日誌版號與 web 的畫法。
  * - **附件**（`input.attachments: true`，[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）：照 dsh
- *   （`packages/plan/plan-mode/src/index.ts:228-275`）。`/plan <字>`＋附件與**只有附件的 `/plan`** 都進計劃模式並送出一輪
+ *   （`harness/packages/plan/plan-mode/src/index.ts:228-275`）。`/plan <字>`＋附件與**只有附件的 `/plan`** 都進計劃模式並送出一輪
  *   （附件隨 steer 那句話走，字可以是空的）；`/plan off`＋附件回 `error`（{@link PLAN_OFF_ATTACHMENTS_MESSAGE}），在 steer 與寫日誌之前判。
  *   以前這一格寫「我們沒有 attachment store」，[#732](https://github.com/DemianLi/nexus-agent/issues/732) 之後已過時。
  */
@@ -229,7 +229,7 @@ export const PLAN_POLICY_SECTION_NAME = 'plan:policy';
 
 /**
  * 指引最多幾個 UTF-8 位元組，超過在載入設定時失敗（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。同 `@nexus/core`
- * 預算表 `plan:policy` 那一列；插件不 import core，數字照抄，`apps/harness` 的測試把兩邊釘成相等。
+ * 預算表 `plan:policy` 那一列；插件不 import core，數字照抄，`harness/apps/harness` 的測試把兩邊釘成相等。
  */
 export const MAX_GUIDANCE_BYTES = 16384;
 
@@ -311,8 +311,8 @@ export function planFeedbackMessage(feedback: string): string {
  * `{ approved: false }`，模型讀到 `:291-296` 那句 "The user dismissed the plan review to reply in their own words; plan mode
  * remains active."。以前（dsh `477b4f4` 那一版）這裡拋一般 `Error`、這一輪不停（#652 拍板 3），alpha.5 改了，前提跟著變（#1607）。
  *
- * **這句同時寫死在 web 的 `PLAN_REVIEW_DISMISSED_TEXT`（`apps/web/src/lib/plan-review.ts`）**，兩邊必須逐字相同；
- * web 的測試用正則讀這個檔，所以**常數名與單引號字面量的寫法都不能變**（`apps/web/src/lib/plan-review.test.ts`）。
+ * **這句同時寫死在 web 的 `PLAN_REVIEW_DISMISSED_TEXT`（`web/src/lib/plan-review.ts`）**，兩邊必須逐字相同；
+ * web 的測試用正則讀這個檔，所以**常數名與單引號字面量的寫法都不能變**（`web/src/lib/plan-review.test.ts`）。
  */
 export const PLAN_REVIEW_DISMISSED_MESSAGE =
   '使用者關掉了計劃審核，要用自己的話回覆；計劃模式仍開著。';
@@ -327,7 +327,7 @@ export const planModeConfigSchema = z.strictObject({
    * （[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
    *
    * **它是部署持有的原樣文本**，照 dsh：這個套件不替部署決定要怎麼講話，所以沒有預設值。出貨的那一句寫在
-   * `apps/harness/cordis.yml` 的 `plan-mode` 那一列（以前是這裡的 `DEFAULT_PLAN_GUIDANCE`）：
+   * `harness/apps/harness/cordis.yml` 的 `plan-mode` 那一列（以前是這裡的 `DEFAULT_PLAN_GUIDANCE`）：
    * 說清楚現在在計劃模式、先探索與設計、完成後經 `exit_plan_mode` 交出去。
    */
   guidance: z
@@ -493,7 +493,7 @@ type PlanModeLookup =
  * ## 登記的偏離（理由 1：基座表達不出來）
  *
  * dsh 是批內**任何一個**工具 `concludeTurn()` 就收；這裡**只有 `exit_plan_mode` 是那一批唯一的工具呼叫時才收**
- * （`turn-conclusion.ts` 與 `apps/harness/src/returndirect-route.test.ts` 釘住：基座混批會擲 `InvalidUpdateError`）。
+ * （`turn-conclusion.ts` 與 `harness/apps/harness/src/returndirect-route.test.ts` 釘住：基座混批會擲 `InvalidUpdateError`）。
  */
 export const EXIT_PLAN_MODE_CONCLUDES_TURN = true;
 
@@ -521,7 +521,7 @@ const exitPlanModeParameters = z.toJSONSchema(
  *
  * **`exec.interrupt()` 在 `langgraph` 下用拋例外傳播**，只接住「這裡沒有人可以回答」（#2358，回 {@link PLAN_NO_REVIEWER_MESSAGE}），其餘原樣往外拋。`langgraph` resume 時整個本體從頭再跑一次、
  * `exec.interrupt()` 直接回人的答案，所以前面那幾條檢查會再判一次，結果不變（它們讀的東西在兩輪之間動不了：
- * 停在提問上時斜線命令一律拒收，見 `apps/harness` 的 `wire-handler.ts`）。
+ * 停在提問上時斜線命令一律拒收，見 `harness/apps/harness` 的 `wire-handler.ts`）。
  *
  * **日誌問的是這次呼叫的 `exec`，不是組裝的閉包**（同 `@nexus/plugin-goal` 的工具，理由見
  * `@nexus/core` 的 `sessions.ts`）。在 subagent 裡被呼叫時，`forCall` 認出來的是那個

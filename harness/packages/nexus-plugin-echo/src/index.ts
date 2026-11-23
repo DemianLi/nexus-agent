@@ -17,7 +17,7 @@
  * - 工具本體是純函式 {@link createEchoTool}，只閉包 `prefix`、不碰 `ctx`：樹上這一列卸了之後，開著的對話手上的舊工具
  *   物件照樣能跑（決議 §3-2 第 6 條，插件更新只給新對話）。
  *
- * 舊的 `NexusPlugin` 外殼（`createEchoPlugin`、`echoPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的
+ * 舊的 `NexusPlugin` 外殼（`createEchoPlugin`、`echoPlugin`）不在這裡：它是測試夾具，住在 `harness/apps/harness` 的
  * `echo.fixture.ts`，包同一個 {@link createEchoTool}，讓工具定義只有一個出處。
  *
  * @module

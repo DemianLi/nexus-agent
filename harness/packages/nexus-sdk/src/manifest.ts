@@ -24,7 +24,7 @@
  * （demian 2026-10-13 拍板，Q4）。
  *
  * **插件只宣告自己知道的那一半。** 宿主那一半（這一列被宿主 import、自建、起動期讀）由宿主機械算出，今天是
- * `apps/harness/src/plugin-row-classes.ts`；{@link effectiveReload} 取兩邊較嚴的那個，不是只看 manifest。
+ * `harness/apps/harness/src/plugin-row-classes.ts`；{@link effectiveReload} 取兩邊較嚴的那個，不是只看 manifest。
  *
  * @module
  */

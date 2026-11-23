@@ -10,7 +10,7 @@
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、介面、契約版本、`SECTION_ORDERS`、嚴格插值與前後段的組法 | 只有 `@nexus/sdk`，**不 import `@nexus/core`**，也不碰訊息型別 |
  * | 提供者 | `@nexus/plugin-system-prompt` 那一列：`apply` 裡 `new` 一個 `ContractService`（同 #1456 的 `feedback`） | 這個套件、`@nexus/sdk` |
- * | 消費者 | 宿主（`apps/harness`）：組 thread 時取一次快照，之後每次模型呼叫只代入變數、渲染成請求；以及日後要加段的插件 | 這個套件 |
+ * | 消費者 | 宿主（`harness/apps/harness`）：組 thread 時取一次快照，之後每次模型呼叫只代入變數、渲染成請求；以及日後要加段的插件 | 這個套件 |
  *
  * ## 快照是資料（決議 §3-2 第 6 條）
  *
@@ -57,7 +57,7 @@ export const SYSTEM_PROMPT_CONTRACT_VERSION = '1.2.0';
  *
  * 頭尾三格由 `system-prompt` 那一列登記。`PLUGIN_POLICY`（契約 `1.1.0` 起）與 `PLAN_POLICY`（`1.2.0` 起）是開給插件經
  * `thread.section()` 交的中段值；`PLAN_POLICY` 給計劃模式的 `plan:policy` 段。宿主只收 `@nexus/core` 開放給插件的中段值，
- * 所以兩格必須等於 core 的 `MIDDLE_SECTION_ORDERS` 同名格，兩邊相等由 `apps/harness/src/middle-section-orders.test.ts` 釘住。
+ * 所以兩格必須等於 core 的 `MIDDLE_SECTION_ORDERS` 同名格，兩邊相等由 `harness/apps/harness/src/middle-section-orders.test.ts` 釘住。
  */
 export const SECTION_ORDERS = {
   /** 最前面一句身分句。 */

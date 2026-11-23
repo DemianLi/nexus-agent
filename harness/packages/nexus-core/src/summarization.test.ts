@@ -739,7 +739,7 @@ describe('compaction/summary 帶 durationMs（接線）', () => {
 /**
  * **生摘要的那次呼叫帶「不上線」的標記，交下去的是本尊**（[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
  *
- * 即時與重新整理對得上的那條驗收在 `apps/harness/src/context-pressure.test.ts`，走的是產品路徑。那條驗不到「換回本尊」：
+ * 即時與重新整理對得上的那條驗收在 `harness/apps/harness/src/context-pressure.test.ts`，走的是產品路徑。那條驗不到「換回本尊」：
  * 主模型那次先經過 `bindTools`，拿到的是新實例，替身的 `invoke` 本來就碰不到它。換回本尊防的是下一層直接
  * `invoke`、不先 `bindTools` 的那條路，所以釘在這裡：直接叫 `wrapModelCall`，看交下去的是哪一顆。
  */

@@ -3,7 +3,7 @@
  * `returnDirect` 工具的結果，**標了才保留 `name`**；沒標、混批、拋錯、被拒絕都拿掉 `name`。
  *
  * 直接餵圍堵一個假 handler，看它交回什麼——`name` 在不在就是基座路由（`ReactAgent.js:359-365`）收不收的判準
- * （`apps/harness/src/returndirect-route.test.ts` 釘基座那一側）。
+ * （`harness/apps/harness/src/returndirect-route.test.ts` 釘基座那一側）。
  */
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';

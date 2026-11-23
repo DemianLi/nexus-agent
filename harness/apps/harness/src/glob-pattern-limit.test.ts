@@ -1,7 +1,7 @@
 /**
  * glob pattern 大括號上限的接線：經 `createNexusAgent` 組裝、基座真的 `glob` 工具、真的工作區 backend。
  * 超過上限的那一次，模型收到錯誤、帶 `SEARCH_INVALID_PATTERN`，backend 的 `glob` 一次都沒被叫。
- * 量法本身的測試在 `packages/nexus-core/src/glob-pattern-limit.test.ts`。
+ * 量法本身的測試在 `harness/packages/nexus-core/src/glob-pattern-limit.test.ts`。
  *
  * 零憑證、零外部連線：模型是 `ScriptedChatModel`。
  */

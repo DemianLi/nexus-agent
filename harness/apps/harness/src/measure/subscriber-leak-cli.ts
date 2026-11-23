@@ -4,7 +4,7 @@
  * ```bash
  * pnpm --filter @nexus/harness exec tsx src/measure/subscriber-leak-cli.ts --total 400 --concurrency 16
  * # 對照修前的 wire-server：
- * git show d63afae^:apps/harness/src/wire-server.ts | sed "s#'./wire-handler.js'#'../wire-handler.js'#" > src/measure/_old-wire-server.ts
+ * git show d63afae^:harness/apps/harness/src/wire-server.ts | sed "s#'./wire-handler.js'#'../wire-handler.js'#" > src/measure/_old-wire-server.ts
  * pnpm --filter @nexus/harness exec tsx src/measure/subscriber-leak-cli.ts --wire-server ./src/measure/_old-wire-server.ts
  * ```
  */

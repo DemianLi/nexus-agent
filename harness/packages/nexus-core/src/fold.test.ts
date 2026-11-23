@@ -389,7 +389,7 @@ describe('middleware 註冊點', () => {
 
   /**
    * **例外：名字撞上摘要器的那一顆只到 root**（#327）。它是一份實例，認不出身分的呼叫用實例自己的會話名，
-   * 攤過去會蓋掉 fold 替子代理各建的那份，root 與子代理的那種呼叫混進同一個檔。行為面的證據在 `apps/harness/src/summarization.test.ts`
+   * 攤過去會蓋掉 fold 替子代理各建的那份，root 與子代理的那種呼叫混進同一個檔。行為面的證據在 `harness/apps/harness/src/summarization.test.ts`
    * 的「註冊點只蓋到 root」。
    */
   it('名字撞上摘要器的 plugin middleware 只到 root，不攤進子代理', async () => {
@@ -606,7 +606,7 @@ describe('「先讀後改」策略打底', () => {
    *
    * 觀測紀錄在 closure 裡：共用一份等於 root 讀過的檔每個 subagent 都可以直接改，
    * 那正好把這件事要擋的東西放掉。dsh 那側 owner 是 `agent.session`、child agent 各自
-   * 一份，所以這不是我們的發明。行為面的證據在 `apps/harness/src/observation.test.ts`。
+   * 一份，所以這不是我們的發明。行為面的證據在 `harness/apps/harness/src/observation.test.ts`。
    */
   it('**root 與每個 subagent 各一份實例，不共用**', async () => {
     const params = await fold(
@@ -652,7 +652,7 @@ describe('「先讀後改」策略打底', () => {
 
   it('有人掛路由時拿的是折出來的那個，不是兜底那個', async () => {
     // 版本 token 必須從工具實際讀寫的那一個取。這一條只釘「折得出來、不當場炸」——
-    // 拿錯哪一個的行為證據在 `apps/harness/src/observation.test.ts`。
+    // 拿錯哪一個的行為證據在 `harness/apps/harness/src/observation.test.ts`。
     const params = await fold(
       [fakePlugin('r', (r) => void r.backend.mount('/data/', fakeBackend('routed')))],
       on,
@@ -1430,7 +1430,7 @@ describe('組裝點自有的那五樣', () => {
 /**
  * **摘要器打底**——[#142](https://github.com/DemianLi/nexus-agent/issues/142) 的決定 1 與
  * 決定 2 在 core 這一側的驗收。行為（門檻真的觸發、歷史真的落在我們指定的前綴）由
- * `apps/harness/src/summarization.test.ts` 量，這裡量的是折出來的形狀。
+ * `harness/apps/harness/src/summarization.test.ts` 量，這裡量的是折出來的形狀。
  *
  * 這個檔的入口 helper 預設 `summarization: false`（其餘測試都不關心摘要，而打底需要一個
  * default backend），所以**這一組要自己明著打開**——不然 fold 產出的摘要器在 core 這側
@@ -2179,7 +2179,7 @@ describe('先讀後改的條目', () => {
  *
  * **這裡量的是 stack 的形狀，那不是完整的判準。** 它寫不寫得進日誌還取決於
  * `sessions.forCall()`，而 `not-attached` 是常態——行為那一半（配正對照）在
- * `apps/harness/src/model-usage-log.test.ts`。兩邊缺一不可：只量形狀的話，一個「在 stack 裡
+ * `harness/apps/harness/src/model-usage-log.test.ts`。兩邊缺一不可：只量形狀的話，一個「在 stack 裡
  * 但被接錯通道」照樣綠；只量行為的話，subagent 與 general-purpose 那兩疊看不到。
  */
 describe('用量記錄器的條目', () => {

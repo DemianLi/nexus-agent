@@ -1,7 +1,7 @@
 /**
  * 清單少一列時，`PluginTree.sync` 回傳之前那一列已經收完（[#1636](https://github.com/DemianLi/nexus-agent/issues/1636)，Q1 (d)）。
  *
- * Loader 的 `EntryGroup.remove`（`vendor/loader/src/config/group.ts:44-45`）先把列從 store 刪掉、再 `entry.fiber?.dispose()` 而不等；
+ * Loader 的 `EntryGroup.remove`（`harness/vendor/loader/src/config/group.ts:44-45`）先把列從 store 刪掉、再 `entry.fiber?.dispose()` 而不等；
  * `loader.await()` 只看 store 裡還在的列（`tree.ts:50-54`）。所以不另外等的話，`sync` 回傳那一刻被刪的列可能還在收。
  *
  * | 驗收 | 在哪 |

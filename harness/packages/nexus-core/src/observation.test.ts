@@ -2,7 +2,7 @@
  * 「先讀後改」策略自己的邏輯——餵它一個假的 backend 與假的 `handler`，看它放行還是拒絕。
  *
  * 這一層問的是**決策**：三個狀態各自導向哪一格、版本 token 什麼時候算陳舊。
- * 「掛進真的 agent、跑在真的磁碟上會怎樣」在 `apps/harness/src/observation.test.ts`；
+ * 「掛進真的 agent、跑在真的磁碟上會怎樣」在 `harness/apps/harness/src/observation.test.ts`；
  * 「掛在哪、排第幾、幾份實例」在 [`fold.test.ts`](./fold.test.ts)。
  */
 

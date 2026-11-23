@@ -1,6 +1,6 @@
 /**
- * nexus 層（#1638 PR C）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/questionnaire.tsx`），外觀照 SG（#1468 Q8）。
- * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 45 條）：
+ * nexus 層（#1638 PR C）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/questionnaire.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 45 條）：
  *
  * - 上一題、跳過、下一題、送出答案四顆按鈕的預設字換成中文（§8）。vendor 預設是英文；`question-panel` 自己有給字，
  *   這裡管的是新的呼叫端忘了給字時不漏出英文。只補預設 children、不必複製上游標記，所以走包裝層（同第 26 條）。

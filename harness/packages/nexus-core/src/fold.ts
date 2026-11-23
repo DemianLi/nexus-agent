@@ -2,7 +2,7 @@
  * fold：把載入完的 registry 折成一次 `createDeepAgent(...)` 要的參數。
  *
  * core 是純轉換層——**不呼叫** `createDeepAgent`，只產出參數；那一次呼叫住在
- * `apps/harness`，而且只有那一個地方。組裝點自有的七樣（default backend、工具
+ * `harness/apps/harness`，而且只有那一個地方。組裝點自有的七樣（default backend、工具
  * 呈現順序清單、model、checkpointer / store、核准政策的 session 開關、摘要的門檻與
  * 去向、重複呼叫提醒的門檻與射程）從 {@link FoldOptions} 傳進來：所有權留在 harness，
  * 檢查跑在這裡。
@@ -479,7 +479,7 @@ export interface FoldOptions {
    * 才會被問到；三顆生產者 middleware 進槽位表。**沒有任何監聽者時全部是直通**，連請求物件都不造。位置與理由見 {@link ./tool-pipeline.ts}。
    *
    * 省略時插件的監聽者不會被問到；core 自己的監聽者照常掛：有 core 監聽者的那幾顆生產者（`tools/execute`、`tools/post-execute`，
-   * 有基座工具被遮時子代理的 `tools/pre-execute`）不給派發面也建。產品路徑只有 `apps/harness/src/agent-factory.ts`
+   * 有基座工具被遮時子代理的 `tools/pre-execute`）不給派發面也建。產品路徑只有 `harness/apps/harness/src/agent-factory.ts`
    * 呼叫 `foldRegistry`，且傳了 `registry.dispatch`；自己折 registry 的測試或量測要載入有監聽者的 plugin 時也得傳。
    * 沒傳而載了 `@nexus/plugin-present` 的組裝，`present` 會叫得動卻靜靜不交付（它的交付寫入掛在 `tools/result` 上，#1286）。
    */
@@ -1300,7 +1300,7 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * **這裡有兩個時刻疊在一起，值得說破。** 閘門答的是 `tools/pre-execute`
  * （決策詞彙見 {@link ./approval.ts}），但**承載它的是一個 `tools/execute` 位置的
  * `wrapToolCall`**——兩個時刻在這裡是同一種機制的兩個
- * 陣列位置，而位置由這個檔案決定、不由註冊順序決定。索引見 `apps/harness/src/interception-index.test.ts`。
+ * 陣列位置，而位置由這個檔案決定、不由註冊順序決定。索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * 閘門不在建構期拋，在執行期確定性拒絕（[#111](https://github.com/DemianLi/nexus-agent/issues/111)）：工具名不是宣告出來的，
  * 閘門用執行當下拿到的名字；核准關掉與沒有管道各是一種確定性拒絕，在問人之前攔下（實測沒有 checkpointer 時 `interrupt()` 是執行期拋
@@ -1606,7 +1606,7 @@ interface PluginMiddleware {
 /**
  * 攤進子代理的那一份：{@link pluginMiddleware} 去掉名字撞上摘要器的那一顆。
  *
- * **只到 root**（#327）：plugin 用同名換掉摘要器（`apps/harness/src/contained-backend.ts`
+ * **只到 root**（#327）：plugin 用同名換掉摘要器（`harness/apps/harness/src/contained-backend.ts`
  * 教的那條路）的那一顆是**一份實例**，而摘要器認不出身分的呼叫用實例自己的會話名。攤過去的話它會蓋掉 {@link foldSubAgents}
  * 替每個子代理各建的那份，root 與子代理的那種呼叫混進同一個檔——{@link foldSummarizer} 做成工廠要防的正是這件事。
  * 沒有「逐個建」的註冊介面，所以退一步：**那一顆只到
@@ -1961,7 +1961,7 @@ function foldBackend(
  * 它拿到的一樣是整組 stack。
  *
  * 照抄的：名字、描述、提示詞與 `mode` 取基座匯出的 `GENERAL_PURPOSE_SUBAGENT`；root 的
- * `skills` 照基座那份傳過去（`apps/harness/src/skills.test.ts` 守著）。
+ * `skills` 照基座那份傳過去（`harness/apps/harness/src/skills.test.ts` 守著）。
  *
  * **抄不到的兩格，是偏離**：harness profile 對 gp 提示詞的改寫（`applyProfilePrompt`）與
  * profile 的 `generalPurposeSubagent` 設定。profile 是基座在 fold 之後才從 model 解出來的，

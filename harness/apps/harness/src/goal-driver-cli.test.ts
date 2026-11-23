@@ -653,7 +653,7 @@ describe('披露', () => {
 /**
  * **排程器問的是哪一份 goal 域**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
  *
- * 這一組量的是交付物：出貨的那份清單（`apps/harness/cordis.yml`），與 `createCliAgent` 真的組出來的東西。
+ * 這一組量的是交付物：出貨的那份清單（`harness/apps/harness/cordis.yml`），與 `createCliAgent` 真的組出來的東西。
  * 在手搭的 registry 上驗隔離證明不了這條——**清單裡掛的是哪一顆物件**才是以前串台的來源。
  */
 describe('goals 服務綁的是這一次組裝', () => {

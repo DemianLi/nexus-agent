@@ -8,9 +8,9 @@
  * ## 與 dsh 的偏離：沒有 subprocess 服務，只有一個函式
  *
  * dsh 把它放在 `subprocess` 能力那一層，所有 spawner 經那個服務起子行程；我們沒有這個服務，兩個使用者各自 spawn
- * （git 那側的登記見 `packages/nexus-plugin-workspace-changes/src/git.ts` 檔頭）。**退掉的是載體，規則照抄**：
+ * （git 那側的登記見 `harness/packages/nexus-plugin-workspace-changes/src/git.ts` 檔頭）。**退掉的是載體，規則照抄**：
  * dsh 自己也把它匯出成一般函式，給不經那個服務的 spawner（SDK 管的 transport 之類）用
- * （`packages/subprocess/subprocess/src/index.ts:58-60`）；我們沒有那個服務，兩個使用者都只能走這條。放在 core，
+ * （`harness/packages/subprocess/subprocess/src/index.ts:58-60`）；我們沒有那個服務，兩個使用者都只能走這條。放在 core，
  * 是因為兩個 plugin 都已相依它，而 plugin 之間今天沒有互相相依。
  *
  * ## 代理那一層（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）

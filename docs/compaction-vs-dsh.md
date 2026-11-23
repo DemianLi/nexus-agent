@@ -1,6 +1,6 @@
 # 壓縮與摘要：nexus 與 dsh 的對照
 
-對照對象：nexus 的 `packages/nexus-core/src/summarization.ts`，dsh 的 `packages/compaction/compaction-basic`，另外引到 dsh 的 `compaction`、`command-compact`、`llm/llm`、`llm/token-meter` 幾個套件。dsh 的出處都用 `git show 8bd0733:<path>` 讀過，行號以 8bd0733 為準。nexus 這邊的做法與理由以 `summarization.ts` 現行的程式碼與註解為準，出處寫符號名（函式、常數、註解小節），不寫行號；程式碼讀不出理由的，寫「理由見 #NNN」或「沒查到」。文中的「舊註解（4edd74ab）」指 base 4edd74ab 那一版 `summarization.ts` 的註解，現行碼已改掉或刪掉；它指過的 SHA（`5badb15`、`5badb150`、`687f282e`、`46a7f68`、`5719020`）與行號跟 8bd0733 不同的，逐條寫成「舊註解（4edd74ab）指 …，8bd0733 上是 …」。
+對照對象：nexus 的 `harness/packages/nexus-core/src/summarization.ts`，dsh 的 `packages/compaction/compaction-basic`，另外引到 dsh 的 `compaction`、`command-compact`、`llm/llm`、`llm/token-meter` 幾個套件。dsh 的出處都用 `git show 8bd0733:<path>` 讀過，行號以 8bd0733 為準。nexus 這邊的做法與理由以 `summarization.ts` 現行的程式碼與註解為準，出處寫符號名（函式、常數、註解小節），不寫行號；程式碼讀不出理由的，寫「理由見 #NNN」或「沒查到」。文中的「舊註解（4edd74ab）」指 base 4edd74ab 那一版 `summarization.ts` 的註解，現行碼已改掉或刪掉；它指過的 SHA（`5badb15`、`5badb150`、`687f282e`、`46a7f68`、`5719020`）與行號跟 8bd0733 不同的，逐條寫成「舊註解（4edd74ab）指 …，8bd0733 上是 …」。
 
 每個主題先判定「照 dsh」或「偏離」。照 dsh 的只寫一行出處；偏離的附比較表和一句結論，表的列用 AGENTS.md〈技術實現標準〉那一組標準：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求、現有基座做不做得到，沒有內容的格寫「—」。每條 dsh 事實後面標【核了】或【沒核到】。
 
@@ -20,7 +20,7 @@
 | 失敗與恢復 | headroom 扣完還不夠時拋 `TargetPressureConfigError`（`:181-190`）。pressure 路徑上由 pre-step 那層對同一個 target warn 一次後跳過（見 §6）；換模型那條路上同一個錯變成 `MODEL_SWITCH_COMPACTION_FAILED`，直接拒絕換模型（`index.ts:183-203`，見 §5）【核了】。 | 不會拋，至少回 1。 |
 | 效能（摘要頻率） | 預設 headroom 在小窗口上門檻很低。131,007 的窗口、保留 16,384 時，門檻是 49,087（算式核過）。dsh 的解法是逐模型調 headroom。 | `effectiveTrigger` 的〈怎麼夾〉：49,087「比我們量過安全的 100,000 低一半，無謂地多摘要」。 |
 | 維護成本 | 多一個參數，小窗口的模型要逐顆調。 | 少一個參數。 |
-| nexus 產品需求 | — | `effectiveTrigger` 把 65,536 說成「為百萬級窗口定的 headroom」（這是 nexus 的判斷，dsh 原始碼沒寫）。兩件事要分開：#165 量過的模型裡最小的是 131,007（`DEFAULT_SUMMARIZATION` 的〈`trigger`〉表）；出廠型錄裡最小的窗口是 90b（`meta/llama-3.2-90b-vision-instruct`）的 32,768、輸出上限 4,096（`apps/harness/cordis.yml` 的型錄）。90b 上門檻被 `windowThreshold` 夾到 `floor(min(26,214.4, 28,672))` ＝ 26,214。 |
+| nexus 產品需求 | — | `effectiveTrigger` 把 65,536 說成「為百萬級窗口定的 headroom」（這是 nexus 的判斷，dsh 原始碼沒寫）。兩件事要分開：#165 量過的模型裡最小的是 131,007（`DEFAULT_SUMMARIZATION` 的〈`trigger`〉表）；出廠型錄裡最小的窗口是 90b（`meta/llama-3.2-90b-vision-instruct`）的 32,768、輸出上限 4,096（`harness/apps/harness/cordis.yml` 的型錄）。90b 上門檻被 `windowThreshold` 夾到 `floor(min(26,214.4, 28,672))` ＝ 26,214。 |
 | 基座做不做得到 | — | 做得到，是純計算。 |
 
 結論：nexus 在 131k 級的窗口上不會過早摘要；90b 這種 32k 窗口由 `windowThreshold` 夾到 26,214。代價是摘要呼叫自己的輸出空間沒有另外預留。nexus 的摘要輸出上限設多少，這份對照沒有查。
@@ -88,7 +88,7 @@
 
 **偏離**（`RETAIN_THRESHOLD_CAP_RATIO`、`retainTokensFor`）。dsh 在 `resolveCompactSpec` 裡檢查 `retainTokens >= thresholdTokens`，成立就拋 `TargetPressureConfigError`（`config.ts:198-204`）【核了】。這個檢查**不是載入期驗證**：`resolveCompactSpec` 在每次 `compactPressure` 都會被呼叫（`index.ts:337-341`）。pressure 路徑上不過時由 pre-step 那層 warn 一次、跳過壓縮（`index.ts:166-171`）；換模型那條路上變成 `MODEL_SWITCH_COMPACTION_FAILED`、拒絕換模型（`index.ts:183-203`）【核了】。載入期只驗比例對比例（`validateRatioRetention`，`config.ts:80`、`:91`，見 §9）。
 
-照比例算出的值超過 100,000：出廠預設那顆（`apps/harness/cordis.yml` 型錄的 784,369／16,384）是 `floor((784,369 − 16,384) × 0.16)` ＝ 122,877（`RETAIN_THRESHOLD_CAP_RATIO` 的說明用的也是這個數）；`summarizer-retention.test.ts` 用的例子 700,045／16,384 算出 109,385。兩個都超過 100,000，結論相同。
+照比例算出的值超過 100,000：出廠預設那顆（`harness/apps/harness/cordis.yml` 型錄的 784,369／16,384）是 `floor((784,369 − 16,384) × 0.16)` ＝ 122,877（`RETAIN_THRESHOLD_CAP_RATIO` 的說明用的也是這個數）；`summarizer-retention.test.ts` 用的例子 700,045／16,384 算出 109,385。兩個都超過 100,000，結論相同。
 
 | 標準 | dsh | nexus |
 | --- | --- | --- |
@@ -250,7 +250,7 @@ nexus 分兩條路（§20），結論不同：
 
 ### 21a. 重播那條
 
-**照 dsh**：`README.md:129`「The selected adapter must resolve image references in the replayed messages or explicitly reject them」@8bd0733【核了】。nexus 的 `replayedSummaryCall` 從日誌推原訊息，經同一個 `invoke` 送出（`summarizer-engine.ts` 的 `createSummary`：`model.invoke(call.input, call.options)`），不經 `withAttachmentText` 的投影；附件由送出端依模型能力投影（`withAttachmentText` 的說明；對話那條路的模型是 `apps/harness/src/attachment-chat-openai.ts` 的 `AttachmentChatOpenAI`，檔頭寫它在 `invoke` 平常走的 `_generate` 與兩條串流路上都投影）。摘要那次打到的模型是否一定是這個子類（`summaryModelOf` 挑的那顆）沒逐一追。
+**照 dsh**：`README.md:129`「The selected adapter must resolve image references in the replayed messages or explicitly reject them」@8bd0733【核了】。nexus 的 `replayedSummaryCall` 從日誌推原訊息，經同一個 `invoke` 送出（`summarizer-engine.ts` 的 `createSummary`：`model.invoke(call.input, call.options)`），不經 `withAttachmentText` 的投影；附件由送出端依模型能力投影（`withAttachmentText` 的說明；對話那條路的模型是 `harness/apps/harness/src/attachment-chat-openai.ts` 的 `AttachmentChatOpenAI`，檔頭寫它在 `invoke` 平常走的 `_generate` 與兩條串流路上都投影）。摘要那次打到的模型是否一定是這個子類（`summaryModelOf` 挑的那顆）沒逐一追。
 
 ### 21b. 模板那條
 

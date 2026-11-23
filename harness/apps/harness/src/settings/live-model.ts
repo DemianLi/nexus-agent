@@ -9,7 +9,7 @@
  *
  * dsh 的 adapter `@deepseek-ai/dsh-llm-deepseek` 的 `Config`（`packages/llm/llm-deepseek/src/config.ts`，
  * `ddefc45`）有 `baseURL`（`:83`）、`maxTokens`（`:86`）、`streamIdleTimeoutMs`（`:89`）、
- * `retryPolicy`（`:100`，形狀在 `packages/llm/llm/src/retry-policy.ts:100`），模型則從設定與型錄選。
+ * `retryPolicy`（`:100`，形狀在 `harness/packages/llm/llm/src/retry-policy.ts:100`），模型則從設定與型錄選。
  * 所以**可設定本身沒有偏離，寫死才是**——跟 `tool-text` 那一列同一句話。
  *
  * 「調它會壞」的顧慮（`live-model.ts` 各常數的檔頭記著那些數字是怎麼量出來的），dsh 的答法
@@ -19,7 +19,7 @@
  * ## 偏離一：逐次請求解析，退到起動期解一次
  *
  * dsh 那一列的註解是「No key or endpoint is inlined: both resolve per request」
- * （`packages/bundle/base/cordis.patch.yml:507-510`）。**`@langchain/openai` 1.5.10 的 `ChatOpenAI`
+ * （`harness/packages/bundle/base/cordis.patch.yml:507-510`）。**`@langchain/openai` 1.5.10 的 `ChatOpenAI`
  * 表達不出來**：client 懶建一次就快取在實例上（`dist/chat_models/base.cjs:309-319`），端點與逾時
  * 凍在那顆 client 裡；模型 id 寫死 `model: this.model`（`dist/chat_models/completions.cjs:29`），
  * 不看 per-call options。逐次換只能每次重建實例。
@@ -107,7 +107,7 @@
  *
  * dsh 由型錄裡「模型自己的上限」蓋過設定值（`packages/llm/llm-deepseek/src/config.ts:36` 的註解：「a model's own
  * cap and explicit request values win」）；`llm-pi-ai` 則把型錄寫成設定：每條路由帶 `models` 清單，**整份取代**那條
- * 路由的型錄，不逐筆合併（`packages/llm/llm-pi-ai/README.md:99`）。我們照 `llm-pi-ai` 的形狀寫成這一列的 `models`
+ * 路由的型錄，不逐筆合併（`harness/packages/llm/llm-pi-ai/README.md:99`）。我們照 `llm-pi-ai` 的形狀寫成這一列的 `models`
  * 欄位，形狀與逐欄的差異在 `model-catalog.ts` 的檔頭。
  *
  * - **`modelId` 必須在 `models` 裡**，不在就是載入期失敗，訊息指名 id（那一列的名字由 `startupSetting` 加上）。
@@ -155,7 +155,7 @@
  * 兩半各有 dsh 出處：
  *
  * - **「怎麼關推理」放在型錄條目**（`off` 那一級加 `compat.chatTemplateKwargs`）：照 `llm-pi-ai` 的形狀
- *   （`packages/llm/llm-pi-ai/src/catalog.ts:389-396`、`:600-607`）。寫法跟模型 id 一起換，所以住在同一筆。
+ *   （`harness/packages/llm/llm-pi-ai/src/catalog.ts:389-396`、`:600-607`）。寫法跟模型 id 一起換，所以住在同一筆。
  * - **「標題要關推理」依用途在程式裡決定**：結果等價於 dsh 標題程式選最低一級推理強度
  *   （僅限條目宣告了 `off` 的：沒宣告的 dsh 取 `efforts[0]`，nexus 紀錄和送出都不做，理由 1，見 `model-catalog.ts` 檔頭；`session-title-first-prompt-llm/src/index.ts:74-76`、`session-title-llm/src/index.ts:252-258`，1517a4db；`477b4f4` 時機制是
  *   `llm-deepseek/src/serialize.ts:146` 依 `purpose` 關思考，1517a4db 起搬到 provider 端讀 `options.reasoningEffort`，`serialize.ts:147`，#1573）。
@@ -425,7 +425,7 @@ export const liveModelConfigSchema = z
         .default(DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS),
       /**
        * 模型請求失敗的重試政策（#1427），**首事件之前與之後共用這一份預算**，見檔頭「偏離二」。形狀與驗證逐條照 dsh 的
-       * `retryPolicy`（`packages/llm/llm/src/retry-policy.ts` 的 `resolveRetryPolicy`／`resolveBackoff`）。整個不寫就是
+       * `retryPolicy`（`harness/packages/llm/llm/src/retry-policy.ts` 的 `resolveRetryPolicy`／`resolveBackoff`）。整個不寫就是
        * normal 的預設值；**寫了就必填 `mode`**。`maxRetries: 0` 就是不重打，回到只打一次。
        */
       retryPolicy: retryPolicySchema.default(defaultRetryPolicy),

@@ -1,7 +1,7 @@
 /**
  * token 總帳與會話統計的 `custom` frame 怎麼折（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）。
  *
- * 兩條路產出同一種 frame 的那一半在 `apps/harness/src/session-totals-wire.test.ts`；這裡只管折疊器：整顆換掉、
+ * 兩條路產出同一種 frame 的那一半在 `harness/apps/harness/src/session-totals-wire.test.ts`；這裡只管折疊器：整顆換掉、
  * 形狀不對整顆不收、往前翻頁不動它。
  */
 

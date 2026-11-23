@@ -3,10 +3,10 @@
  *
  * 規則照 dsh 的兩個套件（`references/deepseek-harness`，SHA `c291e79`）：
  *
- * - 評分：`packages/feedback/message-feedback/src/index.ts`——樂觀鎖（新建要 `ifVersion: null`、
+ * - 評分：`harness/packages/feedback/message-feedback/src/index.ts`——樂觀鎖（新建要 `ifVersion: null`、
  *   修改要帶目前的版本）、內容一樣就不記也不換版本、收回不存在的成功但不記、備註不能全是空白
  *   而且有位元組上限、先驗備註再驗目標再驗版本。
- * - 評語：`packages/feedback/command-feedback/src/index.ts`——`/feedback <文字>` 記一顆
+ * - 評語：`harness/packages/feedback/command-feedback/src/index.ts`——`/feedback <文字>` 記一顆
  *   `feedback/record`，空字串回用法說明，`recordInput: false`。
  *
  * 評分的目標是一則回覆的訊息 id，同 dsh；格式 10 以前以輪記的怎麼讀、其他偏離見 `@nexus/core` 的
@@ -55,7 +55,7 @@
  * - **消費一個接縫**：`commands`，經 `inject` 宣告（`^1.0.0`），登記是 effect，這一列卸載時登記處自己撤掉。
  * - 服務的方法**一律不碰 `this.ctx`**（設定在建構時進閉包、日誌由呼叫端傳進來），所以列卸載之後宿主手上那份快照仍能呼叫。
  *
- * 舊的 `NexusPlugin` 外殼（`feedbackPlugin`、`createFeedbackPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的
+ * 舊的 `NexusPlugin` 外殼（`feedbackPlugin`、`createFeedbackPlugin`）不在這裡：它是測試夾具，住在 `harness/apps/harness` 的
  * `feedback.fixture.ts`。
  *
  * @module
@@ -117,7 +117,7 @@ export type FeedbackConfig = z.infer<typeof feedbackConfigSchema>;
  * {@link createFeedbackService} 收的東西。
  *
  * **服務那一支自己留著執行期檢查**：它是一支獨立的 API，走得到的路不只有 plugin 這一條
- * （`apps/harness` 有測試直接叫它），而 schema 只守 plugin 那條路。
+ * （`harness/apps/harness` 有測試直接叫它），而 schema 只守 plugin 那條路。
  */
 export type FeedbackPluginOptions = z.input<typeof feedbackConfigSchema>;
 

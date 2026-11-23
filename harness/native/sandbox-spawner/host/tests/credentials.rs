@@ -1,4 +1,4 @@
-//! 受管憑證檔：跑 TS 也在跑的 `credentials-vectors.json`（`apps/harness/src/credentials-vectors.test.ts`），再測 [`Store`] 的重讀與續用上一份。
+//! 受管憑證檔：跑 TS 也在跑的 `credentials-vectors.json`（`harness/apps/harness/src/credentials-vectors.test.ts`），再測 [`Store`] 的重讀與續用上一份。
 //! 只用暫存檔，不讀真的 home 或 `.env`。
 
 #![cfg(unix)]
@@ -336,7 +336,7 @@ fn 位置跟_ts_一字不差() {
 
 /// 沒寫鍵的 `:` 後面同一行接區塊集合：TS 的 `yaml` 自己報語法錯（`BLOCK_AS_IMPLICIT_KEY`、`UNEXPECTED_TOKEN`），
 /// `saphyr-parser` 照收成「空鍵加值」，這裡走到空鍵（或顯式鍵）那一步。共用樣本只釘 `reason`，錯誤碼各自釘在這裡與
-/// `apps/harness/src/credentials.test.ts`；已知差異，見 `docs/credentials-file.md`〈拒絕〉。
+/// `harness/apps/harness/src/credentials.test.ts`；已知差異，見 `docs/credentials-file.md`〈拒絕〉。
 #[test]
 fn 沒寫鍵的冒號後面接區塊集合_錯誤碼跟_ts_不同() {
     for (text, why) in [

@@ -1,7 +1,7 @@
 /**
  * feedback 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1456](https://github.com/DemianLi/nexus-agent/issues/1456)）。
  *
- * feedback 本身已經是樹上的函式插件（`packages/nexus-plugin-feedback`，沒有一行 `@nexus/core`）。手搭 `PluginEntry` 清單、直接
+ * feedback 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-feedback`，沒有一行 `@nexus/core`）。手搭 `PluginEntry` 清單、直接
  * `createNexusAgent` 的測試要一顆「提供評分服務、登記 `/feedback`」的 `NexusPlugin`，就走這個外殼——**規則、設定的形狀、命令的
  * 名字與用法說明都取自同一份**（`createFeedbackService`、`feedbackConfigSchema`），所以行為只有一個出處。同 `skills.fixture.ts`、
  * `echo.fixture.ts` 的前例。

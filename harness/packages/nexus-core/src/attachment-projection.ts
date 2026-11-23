@@ -3,19 +3,19 @@
  *
  * 存在圖與日誌裡的是參照（`nexus-file`／`nexus-image` 區塊，見 `attachment-ref.ts`）；送給模型之前才換：檔案換成一行字，
  * 圖換成 `image_url`（有圖的位元組才讀進記憶體）或一行佔位字。**照 dsh 的位置**——組請求那一步，不是寫進日誌的那一刻
- * （`packages/llm/llm/src/index.ts:1058-1070` 的 `projectFilesToText`／`projectImagesForTextModel`，`5badb150`）。
+ * （`harness/packages/llm/llm/src/index.ts:1058-1070` 的 `projectFilesToText`／`projectImagesForTextModel`，`5badb150`）。
  *
- * 這一支只放與儲存無關的部分：走訪訊息、換區塊的骨架，和幾句固定的佔位字。讀位元組的是 `apps/harness`。
+ * 這一支只放與儲存無關的部分：走訪訊息、換區塊的骨架，和幾句固定的佔位字。讀位元組的是 `harness/apps/harness`。
  *
  * **送出的每張圖前面有一行把手**（{@link requestImageHandleText}，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）：照 dsh 的
- * pi-ai 轉接（`packages/llm/llm-pi-ai/src/context.ts:79-89`，`687f282e`），每個 `image` 區塊先推一段文字、再推圖，模型才叫得出
+ * pi-ai 轉接（`harness/packages/llm/llm-pi-ai/src/context.ts:79-89`，`687f282e`），每個 `image` 區塊先推一段文字、再推圖，模型才叫得出
  * 「哪一張」。只有真的送圖的那一支有；佔位字本身就是文字，不另加。把手是整句，包括 `It may be resized or re-encoded…` 那半句。
  * 兩件事跟著儲存走：
  *
- * 1. **把手不帶路徑。** 圖不建檔名的硬連結、不在模型讀附件的路由底下（`apps/harness/src/attachment-store.ts` 的 `saveImages`），
+ * 1. **把手不帶路徑。** 圖不建檔名的硬連結、不在模型讀附件的路由底下（`harness/apps/harness/src/attachment-store.ts` 的 `saveImages`），
  *    模型的檔案工具讀不到它，沒有路徑可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。企業內部聊天機器人不拿工具
  *    改使用者的圖；要給模型讀圖的路徑，另開卡。
- * 2. **寬高是送出那一份的。** 送模型的是照預算另做的一份（`apps/harness/src/request-image.ts`），寬高可能跟參照記的不同（縮過，或舊圖轉正後寬高對調）；
+ * 2. **寬高是送出那一份的。** 送模型的是照預算另做的一份（`harness/apps/harness/src/request-image.ts`），寬高可能跟參照記的不同（縮過，或舊圖轉正後寬高對調）；
  *    沒傳那一份的地方（token 估算）用參照記的。
  *
  * @module
@@ -92,7 +92,7 @@ export function summaryImageText(ref: ImageAttachmentRef): string {
 
 /**
  * 圖因為請求的圖片額度而被省略時的佔位字（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）。照 dsh `offloadedImageText`
- * （`packages/llm/llm/src/content.ts:108`）沒有本機路徑的那一支：我們不替模型準備圖的唯讀副本，所以只說「請使用者重新附上」。
+ * （`harness/packages/llm/llm/src/content.ts:108`）沒有本機路徑的那一支：我們不替模型準備圖的唯讀副本，所以只說「請使用者重新附上」。
  */
 export function offloadedImageText(ref: ImageAttachmentRef): string {
   const digest = ref.attachmentId.slice('sha256:'.length, 'sha256:'.length + 8);

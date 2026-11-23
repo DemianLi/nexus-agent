@@ -2,7 +2,7 @@
  * `@` 引用的列檔（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）上線的形狀。
  *
  * 照 dsh 的 `fileReferences.list(agent, query, signal) → FileReferenceCandidate[]`
- * （`packages/context/file-reference/src/{index,types}.ts`、`packages/api/session-controller/src/file-references.ts`，
+ * （`harness/packages/context/file-reference/src/{index,types}.ts`、`harness/packages/api/session-controller/src/file-references.ts`，
  * `477b4f4`）。**只給路徑，不給內容**：選中的候選在輸入框裡是普通的 `@path` 文字，伺服器不展開，模型要自己用
  * 檔案工具讀（系統提示那一句交代它）。
  *

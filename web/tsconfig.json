@@ -9,13 +9,13 @@
       "@/*": ["./src/*"],
       "cn": ["./src/lib/utils.ts"],
       // BEGIN generated package aliases — pnpm run gen-tsconfig-paths
-      "@nexus/brand": ["../../packages/nexus-brand/src/index.ts"],
+      "@nexus/brand": ["../harness/packages/nexus-brand/src/index.ts"],
       "@nexus/plugin-workspace-changes/types": [
-        "../../packages/nexus-plugin-workspace-changes/src/types.ts"
+        "../harness/packages/nexus-plugin-workspace-changes/src/types.ts"
       ],
-      "@nexus/sdk": ["../../packages/nexus-sdk/src/index.ts"],
-      "@nexus/tools": ["../../packages/nexus-tools/src/index.ts"],
-      "@nexus/wire": ["../../packages/nexus-wire/src/index.ts"]
+      "@nexus/sdk": ["../harness/packages/nexus-sdk/src/index.ts"],
+      "@nexus/tools": ["../harness/packages/nexus-tools/src/index.ts"],
+      "@nexus/wire": ["../harness/packages/nexus-wire/src/index.ts"]
       // END generated package aliases
     }
   },

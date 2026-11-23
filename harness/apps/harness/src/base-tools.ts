@@ -3,8 +3,8 @@
  *
  * 這是 `foldRegistry` 的 `baseToolNames` 輸入——**設定驗證用的名字宇宙**，不是「這一次
  * 會出現哪些工具」。形狀照 dsh 的 `ToolProviderResult.knownNames`
- * （`packages/core/system-prompt/src/index.ts`）：宇宙由提供者貢獻，而基座是這幾個名字
- * 唯一的提供者。所有權留在這裡，因為 `apps/harness` 是唯一呼叫 `createDeepAgent` 的
+ * （`harness/packages/core/system-prompt/src/index.ts`）：宇宙由提供者貢獻，而基座是這幾個名字
+ * 唯一的提供者。所有權留在這裡，因為 `harness/apps/harness` 是唯一呼叫 `createDeepAgent` 的
  * 地方，只有它知道自己開了哪些東西。
  *
  * 名單不能從 `deepagents` import——`FILESYSTEM_TOOL_NAMES` 與 `ASYNC_TASK_TOOL_NAMES`
@@ -57,7 +57,7 @@ const ASYNC_TASK_TOOL_NAMES = [
  * `registry.subagents.register()` 收的是 `SubAgent`，型別上就進不來——所以在目前的組裝
  * 裡那五個名字**永遠不會有對應的工具**。把它們放進宇宙的下場是 `toolOrder` 列了一個
  * 排不到任何東西的名字而不報錯。哪天真的支援 async subagent，這裡跟著補——**而且子代理的沙箱
- * 快照要重判**：它靠 ALS 包住 `task` 那一次呼叫（`packages/nexus-plugin-sandbox-policy/src/index.ts`，[#326](https://github.com/DemianLi/nexus-agent/issues/326)），
+ * 快照要重判**：它靠 ALS 包住 `task` 那一次呼叫（`harness/packages/nexus-plugin-sandbox-policy/src/index.ts`，[#326](https://github.com/DemianLi/nexus-agent/issues/326)），
  * async 那組立刻回傳、子代理跑在那次呼叫之外，快照帶不過去。
  *
  * （這份宇宙過去還餵給核准的名字檢查，那條隨機制一起走了——見

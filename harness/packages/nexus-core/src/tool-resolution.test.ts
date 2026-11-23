@@ -1,6 +1,6 @@
 /**
  * `tool-resolution.ts` 的三種決定：放行拿掉不放行的名字，覆寫換上定義，加的接在尾端；認不出名字的那一筆都原樣留著。
- * 掛進 middleware 之後模型實際收到什麼，在各顆自己的測試與 `apps/harness/src/tool-catalog.test.ts`。
+ * 掛進 middleware 之後模型實際收到什麼，在各顆自己的測試與 `harness/apps/harness/src/tool-catalog.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

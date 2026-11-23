@@ -1,7 +1,7 @@
 /**
  * submit-record 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1466](https://github.com/DemianLi/nexus-agent/issues/1466)）。
  *
- * submit-record 本身已經是樹上的函式插件（`packages/nexus-plugin-submit-record`，`src/index.ts` 沒有一行 `@nexus/core`）。手搭
+ * submit-record 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-submit-record`，`src/index.ts` 沒有一行 `@nexus/core`）。手搭
  * `PluginEntry` 清單、直接 `createNexusAgent` 的測試要一顆「登記 `submit_record` 與它的核准閘門」的 `NexusPlugin`，就走這個外殼
  * ——**工具本體與閘門 listener 取自同一份**（`createSubmitRecordTool`、`submitRecordGate`），所以行為只有一個出處。同
  * `todo.fixture.ts`、`feedback.fixture.ts`、`ask-user.fixture.ts` 的前例。

@@ -308,7 +308,7 @@ describe('產品裡掛 `ask` 的工具在前景子代理裡停下來等人', () 
  * middleware 也掛到子代理上，而子代理的 session 從沒進過計劃模式。所以 root 開著計劃模式時，子代理拿不到指引；叫
  * `exit_plan_mode` 在工具本體的第一道檢查（`forCall` 認得出是子代理、不是 root）就被擋、回「不在計劃模式」——
  * 走不到那一題計劃審核，同 dsh 的先後
- * （`packages/plan/plan-mode/src/index.ts:292-294` 在問人之前）。
+ * （`harness/packages/plan/plan-mode/src/index.ts:292-294` 在問人之前）。
  *
  * **翻面寫的**：#324 時這一格釘的是「閘門先拒、沒有人被問到」，那時這層到不了子代理。
  *

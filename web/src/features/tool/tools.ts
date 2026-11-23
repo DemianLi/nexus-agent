@@ -1,6 +1,6 @@
 /**
  * 「工具名 → 用哪種畫法、專屬標題、專屬摘要」那一張表。形狀照 dsh
- * `packages/client/ui-tool/src/client/tool/models/tool-call-model.ts`（本機 clone `ddefc45`，MIT）——
+ * `harness/packages/client/ui-tool/src/client/tool/models/tool-call-model.ts`（本機 clone `ddefc45`，MIT）——
  * 七類 variant、一張「工具名 → variant」的表、查不到就是 `others`。
  * **表的內容照 nexus 實際的工具名**（deepagents 基座＋各 plugin 匯出的 `*_TOOL_NAME`），不是 dsh 的。
  *

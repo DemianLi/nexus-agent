@@ -1,5 +1,5 @@
 /**
- * 只給 `native/sandbox-spawner/host/tests/pair_leaf.rs` 起的葉子：用 {@link PairClient} 連真的組合行程那一端，把看到的事一行一筆
+ * 只給 `harness/native/sandbox-spawner/host/tests/pair_leaf.rs` 起的葉子：用 {@link PairClient} 連真的組合行程那一端，把看到的事一行一筆
  * JSON 印到 stdout。不從 `index.ts` 匯出、不進 `lib/`（`pair-client.test.ts` 釘住）。
  *
  * 用法：`node --import tsx src/pair-leaf-probe.ts <socket> <method> [second]`。

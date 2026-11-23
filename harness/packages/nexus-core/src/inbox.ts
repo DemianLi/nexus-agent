@@ -20,7 +20,7 @@
  *
  * **id 在兩條清單之間唯一**，同 dsh 的折疊：一件只會在其中一條。
  *
- * 寫的人只有 web 的 pump（`apps/harness/src/thread-pump.ts`）：CLI 的 REPL 一行一輪，沒有排隊也沒有插話。
+ * 寫的人只有 web 的 pump（`harness/apps/harness/src/thread-pump.ts`）：CLI 的 REPL 一行一輪，沒有排隊也沒有插話。
  *
  * @module
  */
@@ -49,7 +49,7 @@ export type InboxTarget = 'next-turn' | 'next-step';
 /**
  * 一件排著的輸入是誰送的。dsh 分人（`{kind:'user'}`）與目標續行（`{kind:'goal', …}`）；**這一版有人、背景子代理的結算通知與目標續行**（#638）。開跑時 `turn/start` 的 `kind` 由它決定。
  *
- * 加成員要在 pump 的 `pumpInputOf`（`apps/harness/src/thread-pump.ts`）補一支，不補就編不過。goal 成員要帶 `goalId`、
+ * 加成員要在 pump 的 `pumpInputOf`（`harness/apps/harness/src/thread-pump.ts`）補一支，不補就編不過。goal 成員要帶 `goalId`、
  * `revision`、`round`，因為 `turn/start` 的 goal 那幾格全部必填。
  */
 export type QueuedInputSource =

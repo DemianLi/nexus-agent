@@ -2,7 +2,7 @@
  * **每一輪的 token 用量進會話日誌**——[#153](https://github.com/DemianLi/nexus-agent/issues/153)
  * 的驗收，量的是真的跑一場對話之後日誌裡有什麼。
  *
- * 規則（哪些數字收、寫不進去會怎樣）在 `packages/nexus-core/src/model-usage.test.ts`。
+ * 規則（哪些數字收、寫不進去會怎樣）在 `harness/packages/nexus-core/src/model-usage.test.ts`。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，用量由腳本給。
  */

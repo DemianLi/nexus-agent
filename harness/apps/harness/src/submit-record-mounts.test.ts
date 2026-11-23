@@ -1,7 +1,7 @@
 /**
  * **`submit_record` 與 `present` 拿到的 backend，要是工具實際讀寫的那一個**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。
  *
- * `apps/harness/src/cli.ts` 把 backend 建成一個 const，一份給 `createNexusAgent`、一份給
+ * `harness/apps/harness/src/cli.ts` 把 backend 建成一個 const，一份給 `createNexusAgent`、一份給
  * `createSubmitRecordPlugin`。但那兩份**不是同一層**：`fold.ts` 交給 `createDeepAgent`
  * 的是**折後**的那一個，`agent-factory.ts` 在 fold 之前已經包了兩層路由
  * （`/conversation_history/` 與 `/large_tool_results/`，各送到一顆 `TextOnlyStateBackend`），

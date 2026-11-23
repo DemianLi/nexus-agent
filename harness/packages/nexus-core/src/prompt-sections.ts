@@ -34,7 +34,7 @@ import type { SystemPromptCell, SystemPromptPiece } from './system-prompt-step.j
 
 /**
  * 中段的排序值。照各段在洋蔥裡的先後：宿主依值把段交給它那一格接，值一換順序就跟著換，送出的位元組也跟著變
- * （`apps/harness/src/middle-section-orders.test.ts` 釘住每一個值）。全部落在 `@nexus/system-prompt` 的前綴（0）與後綴（10200）之間。
+ * （`harness/apps/harness/src/middle-section-orders.test.ts` 釘住每一個值）。全部落在 `@nexus/system-prompt` 的前綴（0）與後綴（10200）之間。
  */
 export const MIDDLE_SECTION_ORDERS = {
   /** 計劃模式的指引。 */

@@ -10,8 +10,8 @@
  * `HumanMessage`，鏈會被悄悄清零，而且沒有測試會紅。
  *
  * 照 dsh：每則訊息帶 `source`，每個生產者在自己的模組宣告自己的 kind；提醒器只看 `source.kind === 'user'`
- * （`packages/guard/repeat-tool-reminder/src/index.ts:236-238`，`477b4f4`）。續行訊息帶
- * `{ kind: 'goal', goalId, revision, round }`（`packages/goal/goal-round-driver/src/index.ts:176-179`）。
+ * （`harness/packages/guard/repeat-tool-reminder/src/index.ts:236-238`，`477b4f4`）。續行訊息帶
+ * `{ kind: 'goal', goalId, revision, round }`（`harness/packages/goal/goal-round-driver/src/index.ts:176-179`）。
  * 讀的一端沒有白名單，新的生產者不必改提醒器。
  *
  * ## 載體
@@ -98,7 +98,7 @@ export function turnStartSource(data: SessionEventMap['turn/start']): MessageSou
  * 逐位元組相同），有附件就是**附件區塊照選取順序在前、文字在後**（dsh 前端一律送 `[...附件, 文字]`，
  * `ui-conversation/src/client/service.ts:261-267`）；只有附件、沒有字時不放文字區塊。
  *
- * 存進圖與日誌的是**參照**（{@link attachmentBlock}）；變成模型看得到的字或圖是組請求時的事（`apps/harness` 的
+ * 存進圖與日誌的是**參照**（{@link attachmentBlock}）；變成模型看得到的字或圖是組請求時的事（`harness/apps/harness` 的
  * `attachment-projection.ts`）。
  *
  * **點名**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）不是參照，是一個固定的文字區塊，接在文字之後（`subagent-mention.ts`）；

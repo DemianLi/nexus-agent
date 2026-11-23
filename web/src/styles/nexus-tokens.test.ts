@@ -41,8 +41,8 @@ function customProperties(...files: readonly string[]): Set<string> {
 describe('token 只留允許清單上的', () => {
   test('四個檔定義的、SG 沒有的自訂屬性，等於允許清單', () => {
     const sg = customProperties(
-      'vendor/solid-glass/solid-glass.css',
-      'vendor/solid-glass/shadcn/tailwind.css',
+      'harness/vendor/solid-glass/solid-glass.css',
+      'harness/vendor/solid-glass/shadcn/tailwind.css',
     );
     const ours = customProperties(
       'styles/tokens.generated.css',

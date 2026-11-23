@@ -31,7 +31,7 @@
  *
  * **這個檔案提到 `tools/post-execute` 是為了說「不是這裡」。** 真正佔住那個時刻的是
  * `@nexus/core` 的 `output-schema.ts`（`wrapToolCall` 的 `await handler()`
- * 之後那一段）；索引見 `apps/harness/src/interception-index.test.ts`。grep 這個名字
+ * 之後那一段）；索引見 `harness/apps/harness/src/interception-index.test.ts`。grep 這個名字
  * 會先落到這裡，所以這一行是給那個人看的。
  *
  * dsh 在 `tools/post-execute` 上計數，然後把提醒交給迴圈——由**迴圈**緩衝它，在該步驟
@@ -177,7 +177,7 @@ function canonicalize(argumentsValue: unknown): string {
 /**
  * 「同一個呼叫」的身分鍵：工具名加規範化後的參數。鏈只在兩次呼叫的鍵相等時才接得上。
  *
- * **匯出是為了只有一份判法**：離線掃描（`apps/harness/src/eval/session-scan.ts`，
+ * **匯出是為了只有一份判法**：離線掃描（`harness/apps/harness/src/eval/session-scan.ts`，
  * [#268](https://github.com/DemianLi/nexus-agent/issues/268)）拿它從日誌的 `tool/call` 重算鏈，
  * 各寫一份的話，兩邊哪天對「同一個」的看法分岔，掃描標出來的打轉就不是提醒器看到的那一個。
  *

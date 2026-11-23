@@ -78,14 +78,14 @@ describe('formatSandboxStatus', () => {
 });
 
 describe('findSpawnerBinary', () => {
-  it('從模組往上找產物裡的 native/ 目錄', () => {
+  it('從模組往上找產物裡的 harness/native/ 目錄', () => {
     const root = mkdtempSync(join(tmpdir(), 'nexus-find-spawner-'));
     try {
-      expect(findSpawnerBinary(join(root, 'apps/harness/dist/a.js'))).toBeUndefined();
+      expect(findSpawnerBinary(join(root, 'harness/apps/harness/dist/a.js'))).toBeUndefined();
       mkdirSync(join(root, 'native'));
-      writeFileSync(join(root, 'native/nexus-sandbox-spawner'), '');
-      expect(findSpawnerBinary(join(root, 'apps/harness/dist/a.js'))).toBe(
-        join(root, 'native/nexus-sandbox-spawner'),
+      writeFileSync(join(root, 'harness/native/nexus-sandbox-spawner'), '');
+      expect(findSpawnerBinary(join(root, 'harness/apps/harness/dist/a.js'))).toBe(
+        join(root, 'harness/native/nexus-sandbox-spawner'),
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

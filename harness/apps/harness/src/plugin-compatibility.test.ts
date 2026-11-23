@@ -340,7 +340,7 @@ describe('家族名單', () => {
     for (const name of VENDORED_PACKAGE_NAMES) expect(isRuntimeFamily(name)).toBe(false);
   });
 
-  it('vendor 名單等於 vendor/ 底下每一份 package.json 的 name（多一個少一個都會紅）', () => {
+  it('vendor 名單等於 harness/vendor/ 底下每一份 package.json 的 name（多一個少一個都會紅）', () => {
     const vendorRoot = fileURLToPath(new URL('../../../vendor/', import.meta.url));
     const names = readdirSync(vendorRoot, { withFileTypes: true })
       .filter(

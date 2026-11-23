@@ -2,7 +2,7 @@
  * 核准被拒之後，**線上**留下什麼。
  *
  * **基座一顆 `tools` frame 都不發**（2026-09-09 量的，[#239](https://github.com/DemianLi/nexus-agent/issues/239)
- * 收尾時順帶）：產品路徑的 tools node 有跑，但 `packages/nexus-core/src/approval.ts` 的 `wrapToolCall`
+ * 收尾時順帶）：產品路徑的 tools node 有跑，但 `harness/packages/nexus-core/src/approval.ts` 的 `wrapToolCall`
  * 在 `handler(request)` **之前**就 `interrupt()`／回 `denial()`，工具本體從沒被呼叫，基座發生命週期事件
  * 的那一段就沒進去。這跟 `hitl-wire.test.ts` 那條基座機制（`interruptOn`、tools node 從沒跑）結論相同、
  * 成因不同；跟 `ask_user_question` 的中斷也不同——那顆的 `interrupt()` 在工具本體裡，`tool-started`

@@ -1,6 +1,6 @@
 /**
- * nexus 層（#1683）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/reasoning.tsx`），外觀照 SG（#1468 Q8）。
- * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 69 條）：
+ * nexus 層（#1683）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/reasoning.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 69 條）：
  *
  * - 預設的字換成中文（§8）：vendor 是 "Thought process"／"Thinking…"，這裡是「思考過程」「思考中」。只補預設值、不必複製上游
  *   標記，所以走包裝層（同第 26、60 條）；呼叫端給了就照用。

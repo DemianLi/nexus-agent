@@ -431,14 +431,14 @@ describe('接在註冊表上', () => {
       return { headers, persistence };
     }
 
-    const given = headersFor({ buildMetadata: metadata, rootModelEntryId: 'vendor/model-a' });
+    const given = headersFor({ buildMetadata: metadata, rootModelEntryId: 'harness/vendor/model-a' });
     expect(given.headers.map((header) => header.id)).toEqual(['root-b', 'root-b/r1']);
     for (const header of given.headers) {
       expect(header.build).toEqual(metadata.build);
       expect(header.plugins).toEqual(metadata.plugins);
       expect(header.configHash).toBe(metadata.configHash);
     }
-    expect(given.headers[0]?.modelEntryId).toBe('vendor/model-a');
+    expect(given.headers[0]?.modelEntryId).toBe('harness/vendor/model-a');
     expect('modelEntryId' in given.headers[1]!).toBe(false);
     await given.persistence.dispose();
 
@@ -461,7 +461,7 @@ describe('接在註冊表上', () => {
 describe('批次窗口一路轉發', () => {
   /**
    * **這是 {@link attachSessionPersistence} 自己的契約，不是呼叫端的。**
-   * `apps/harness` 那兩個消費點有自己的驗收（`settings/startup.test.ts`），但工廠「收了就要
+   * `harness/apps/harness` 那兩個消費點有自己的驗收（`settings/startup.test.ts`），但工廠「收了就要
    * 轉發給每一份協調器」這件事該在這裡紅——突變驗過：拿掉轉發那一行，這一條就是紅的。
    *
    * **兩臂，不是只驗慢的那一臂**：只看「設大了就不寫」的話，一個根本沒在寫的工廠也會綠。
@@ -572,7 +572,7 @@ describe('續接：只寫還沒存的後綴', () => {
       workspaceRoot: '/今天的根',
       // #1025：這一次的建置與模型同樣碰不到 root 那一份。
       buildMetadata: { build: { commit: 'b'.repeat(40), dirty: true }, plugins: [] },
-      rootModelEntryId: 'vendor/today',
+      rootModelEntryId: 'harness/vendor/today',
     });
     // root 一份 header 都沒建——這一次的根碰不到那一份已存的日誌。
     expect(headers).toEqual([]);

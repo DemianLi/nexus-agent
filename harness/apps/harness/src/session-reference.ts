@@ -2,7 +2,7 @@
  * 引用別的會話的準備那一半（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：把人在句子裡 `@` 的會話，
  * 凍成一則附在那句話後面的 user-role 快照。候選那一半在 `session-reference-candidates.ts`。
  *
- * 照 dsh 的 `SessionReferenceResolver`（`packages/context/session-reference/src/{index,projection,spill,serialization}.ts`，
+ * 照 dsh 的 `SessionReferenceResolver`（`harness/packages/context/session-reference/src/{index,projection,spill,serialization}.ts`，
  * `477b4f4`）：
  *
  * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 `maxReferences` 條不同的會話（預設 3，
@@ -35,7 +35,7 @@
  * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（理由 1，基座表達不出來；#1573 N0862）：dsh 取的是這一步
  *    組裝完的路由（`22ddee37` 是 `agent/pre-step` 帶的 `modelSelection`，`index.ts:133`、`:321`；`1517a4db`／`687f282e` 是
  *    `system-prompt/assemble` 記下的 `assembledRoutes`，`index.ts:97`、`:122-128`）。
- *    我們領走發生在 step-inbox 的 `beforeModel`，它在 middleware 順序裡是**第一顆**（`packages/nexus-core/src/fold.ts:671` 的註解），而這一步的路由由後面的
+ *    我們領走發生在 step-inbox 的 `beforeModel`，它在 middleware 順序裡是**第一顆**（`harness/packages/nexus-core/src/fold.ts:671` 的註解），而這一步的路由由後面的
  *    重複提醒／換模型通知那顆 `beforeModel` 的 `assembleStep()` 才定，所以領走的當下**這一步的路由還沒定**。表達不出來的是「領走晚於
  *    定路由」。退到最接近的：領走時問選擇控制器的 `next()`（使用者最後選的 → 最近一次請求走的 → 部署預設，純讀日誌），整批共用
  *    一次。**不叫 `assembleStep()`／`takeStepRoute()`**：前者會寫快照，`beforeModel` 被跳過的下一步會吃到舊路由。差別只在「領走之後、

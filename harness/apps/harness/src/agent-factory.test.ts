@@ -60,7 +60,7 @@ describe('createNexusAgent', () => {
     const result = await agent.invoke(toAgentInvocation('兩個工具都跑一次。'));
     const all = texts(result.messages).join('\n');
 
-    // 兩個工具的回傳值都在對話裡：一個來自 packages/nexus-plugin-echo（真的
+    // 兩個工具的回傳值都在對話裡：一個來自 harness/packages/nexus-plugin-echo（真的
     // workspace package），一個來自本套件的 fixture。
     expect(all).toContain('回聲：嗨');
     expect(all).toContain('已記下：兩個 plugin 都接上了');

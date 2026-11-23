@@ -261,7 +261,7 @@ export interface SummarizationThreshold {
 
 /**
  * 一顆模型自己的上限（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）：窗口，與這顆每次請求送出去的輸出上限。
- * 來自型錄（`apps/harness/src/model-catalog.ts`）。
+ * 來自型錄（`harness/apps/harness/src/model-catalog.ts`）。
  */
 export interface ModelContextLimits {
   readonly contextWindow: number;
@@ -517,7 +517,7 @@ export interface SummarizationSettings {
  * ## `trigger`：兩道並聯，都是絕對值
  *
  * **`tokens: 100_000` 的依據是量到的窗口，最大最小差五倍以上**（2026-09-04，
- * [#165](https://github.com/DemianLi/nexus-agent/issues/165)，做法見 `apps/harness/src/live-model.ts` 的
+ * [#165](https://github.com/DemianLi/nexus-agent/issues/165)，做法見 `harness/apps/harness/src/live-model.ts` 的
  * `DEFAULT_LIVE_MODEL_ID` 檔頭；`gpt-oss` 在整個 `node_modules/.pnpm/` 零命中，真實窗口在這棵樹裡取不到）：
  *
  * | 模型 | 量到的窗口 | `100_000` 佔它 |
@@ -967,7 +967,7 @@ const NEVER_UNDER_PRESSURE = (): boolean => false;
  * （[#1567](https://github.com/DemianLi/nexus-agent/issues/1567) N0780）。
  *
  * 剪刀與參數截斷都包在摘要器上（{@link createSummarizer}），摘要那一列關掉時兩層跟著不在。續接灌回 graph state 的是原文
- * （`apps/harness/src/conversation-restore.ts`），記過的 `compaction/prune` 與 `compaction/truncate-args` 沒人換上去，模型就拿到
+ * （`harness/apps/harness/src/conversation-restore.ts`），記過的 `compaction/prune` 與 `compaction/truncate-args` 沒人換上去，模型就拿到
  * 原文，日誌上卻記著它看到的是剪過的。這一顆只做「換上去」：順序同正常那條（剪刀在外、截斷在內）。
  *
  * 摘要的切點不歸這裡：續接灌回去的本來就是「摘要＋之後的」，切點表是空的（`summary-cutoffs.ts`）。這一顆沒有 `stateSchema`，
@@ -1100,7 +1100,7 @@ const SUMMARY_CALL_TAG = 'nostream';
  *
  * 進基座之前，把訊息裡的檔案區塊換成**組請求時同一行字**（{@link assumedFileLine}，假設讀得到），圖換成
  * {@link summaryImageText}。基座再把請求交下去時（留下的那幾則給主模型），**換回原本那幾則**：留下的訊息裡有圖，
- * 主模型還要看，那一步是 `ChatOpenAI` 子類（`apps/harness`）依模型能力投影，不是這裡。
+ * 主模型還要看，那一步是 `ChatOpenAI` 子類（`harness/apps/harness`）依模型能力投影，不是這裡。
  *
  * ## 圖為什麼是文字
  *

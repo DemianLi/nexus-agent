@@ -119,7 +119,7 @@ export async function loadPlugins(
 
   for (const { plugin, origin, disabled, config } of entries) {
     // **停用＝`apply` 一次都不跑**，不是「跑了再撤」。照 dsh 的載入路徑：`refresh()`
-    // 開頭就是 `if (this.disabled) return`（`vendor/loader/src/config/entry.ts` 的
+    // 開頭就是 `if (this.disabled) return`（`harness/vendor/loader/src/config/entry.ts` 的
     // `Entry.refresh`），從來不 `init()`。dsh 那條「跑了再撤」只存在於 `update()`
     // ——即時重載的路徑，而我們**沒有** `update()`，設定只在組裝時讀一次。
     if (disabled) {

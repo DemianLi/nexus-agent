@@ -6,7 +6,7 @@
  * `vX.Y.Z` 只拿來核對兩者相同（`release-version.ts`）。
  *
  * **偏離 dsh，理由 2（產品需求超出 dsh 的射程）——不跑 `pnpm install --lockfile-only`、不自己 commit。** dsh 的 bump 兩件都做
- * （`scripts/release/bump.ts` 寫版號後 `install --lockfile-only`，再 `git add`／`git commit`）。這裡：
+ * （`harness/scripts/release/bump.ts` 寫版號後 `install --lockfile-only`，再 `git add`／`git commit`）。這裡：
  * (1) lockfile：本 repo 的 `pnpm-lock.yaml` 不記 workspace 套件自己的版號（workspace 相依是 `link:`），實測 `release:bump patch`
  * 改了 40 份 manifest 之後 `pnpm install --lockfile-only --offline` 的 lockfile 與改之前逐位元相同，所以沒有東西要跟；
  * (2) commit：`develop` 禁止直接 push、一律走 PR，squash 後的 commit 標題是 PR 標題（`AGENTS.md`「標題格式」），本地 commit

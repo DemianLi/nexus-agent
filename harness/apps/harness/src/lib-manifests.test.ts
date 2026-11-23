@@ -8,7 +8,7 @@ import type { Manifest, WorkspacePackage } from '../../../scripts/workspace-pack
  * 再用手造的 manifest 證明每一條會紅——規則在真 repo 上全綠，不代表它擋得住退回 `src/` 的那一刻。
  */
 
-/** 借 `packages/nexus-deque` 的目錄：它有 `src/index.ts`，沒有 `src/missing.ts`。 */
+/** 借 `harness/packages/nexus-deque` 的目錄：它有 `src/index.ts`，沒有 `src/missing.ts`。 */
 function sample(manifest: Partial<Manifest>): WorkspacePackage {
   const full: Manifest = {
     name: '@nexus/deque',
@@ -19,7 +19,7 @@ function sample(manifest: Partial<Manifest>): WorkspacePackage {
   };
   return {
     name: full.name,
-    dir: 'packages/nexus-deque',
+    dir: 'harness/packages/nexus-deque',
     vendor: false,
     manifest: full,
     entries: {},

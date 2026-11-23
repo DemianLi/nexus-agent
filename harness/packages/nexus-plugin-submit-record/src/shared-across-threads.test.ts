@@ -6,7 +6,7 @@
  *
  * **這一檔量的是插件本身**：它不保存任何逐條 thread 的狀態，每次呼叫都問 fs 查找（`apply` 抓進閉包的那一份）、被問到的把手的
  * `backend()` 也在那一次才讀。**行程裡活著哪幾條 thread 的挑法**不在這裡——那是宿主的、與相容層共用的 `pickBoundForCall`，在
- * `apps/harness/src/submit-record-on-tree.test.ts` 量。這裡的查找只依 `thread_id` 查表，不重寫那一份挑法。
+ * `harness/apps/harness/src/submit-record-on-tree.test.ts` 量。這裡的查找只依 `thread_id` 查表，不重寫那一份挑法。
  */
 
 import type { StructuredToolInterface } from '@langchain/core/tools';

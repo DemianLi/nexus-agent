@@ -3,7 +3,7 @@
  * `write_file`、`edit_file` 改了什麼。
  *
  * 照 dsh `diffCardModel`＋`DiffBlock`（`packages/client/ui-tool/src/client/tool/models/diff-card-model.ts:100-112`、
- * `packages/client/ui-primitives/src/DiffBlock.tsx`，master `477b4f4`）：
+ * `harness/packages/client/ui-primitives/src/DiffBlock.tsx`，master `477b4f4`）：
  *
  * - **執行中從參數算**：write 是 `content` 整檔新增，edit 是 `old_string` → `new_string`。
  * - **成功之後讀結果的 `meta.diffs`**（harness 在 #619 補上，形狀同 dsh `FsDiffMeta`）：那是實際套用的改動，

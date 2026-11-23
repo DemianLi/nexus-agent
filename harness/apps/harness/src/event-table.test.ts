@@ -162,7 +162,7 @@ describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件或生產者',
           .sort(),
       ).toEqual(['probe/escaped', 'probe/plain']);
       expect(Object.fromEntries(scanEventProducersTree(root))).toEqual({
-        'probe/escaped': ['packages/probe/src/producer.ts'],
+        'probe/escaped': ['harness/packages/probe/src/producer.ts'],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

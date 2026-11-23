@@ -582,7 +582,7 @@ export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
  * 實測 80,014 個字元換成 166 個，模型接著 `read_file` 拿到 `ENOENT`。
  *
  * dsh 明文保證相反：`dsh-spill-policy` 的三個不變式之一是「spill 失敗保留原始內聯結果，
- * 絕不把成功的呼叫變成錯誤」（`packages/spill/spill-policy/README.zh.md`，SHA `4e84901`）。
+ * 絕不把成功的呼叫變成錯誤」（`harness/packages/spill/spill-policy/README.zh.md`，SHA `4e84901`）。
  *
  * ## 為什麼修在 backend 這一層，而不是包一層 middleware
  *
@@ -679,7 +679,7 @@ export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
  * ## 去向：graph state，與 {@link withToolResultStash} 同一個理由
  *
  * dsh 不把被壓掉的原文寫進任何檔案系統：原文留在會話日誌，模型只看到一則
- * `<compacted-summary>`（`packages/compaction/compaction-basic/README.zh.md`，SHA `0d1f500`）。
+ * `<compacted-summary>`（`harness/packages/compaction/compaction-basic/README.zh.md`，SHA `0d1f500`）。
  * 我們的日誌從 [#305](https://github.com/DemianLi/nexus-agent/issues/305) 起也記著對話
  * （`assistant/message`、`tool/result`），所以耐久的那一份已經在日誌裡；backend 上這一份只是
  * **這個行程內**讓模型照摘要那句話去 `read_file` 的便利，只有原文讀不回來的呼叫（沒接會話日誌）才寫。放 state 不必碰磁碟（`read-only` 也
@@ -1191,7 +1191,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        *
        * **一份會話一個協調器，而且新開的那些自動有。** 這是 dsh 的形狀——它的 live
        * capture「subscribes to the session firehose」並且「sweeps already-live sessions」
-       * （`packages/session/session-telemetry/src/coordinator.ts` 檔頭），per-session 的
+       * （`harness/packages/session/session-telemetry/src/coordinator.ts` 檔頭），per-session 的
        * 狀態掛在以 session 為鍵的 `WeakMap` 上。subagent 的日誌因此不必有人記得重接。
        *
        * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
@@ -1256,7 +1256,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        *
        * **每一份會話各一個 runner**，同 dsh 的配套入口（`for (const session of
        * ctx.sessions.list()) seedSession(session)` 加 `ctx.on('session/created', …)`，
-       * `packages/core/session/src/invariant.ts:218-220`）。subagent 的日誌因此不會變成
+       * `harness/packages/core/session/src/invariant.ts:218-220`）。subagent 的日誌因此不會變成
        * 一個沒有檢查的角落。
        *
        * @param sessions - 這次組裝的會話註冊表。
@@ -1454,7 +1454,7 @@ export const DISABLED_FEEDBACK_WARNING = '遙測：策略是關閉，這則回�
 
 /**
  * 共享策略裡跟回饋有關的兩格，照 dsh 的 OTel 後端
- * （`packages/session/session-telemetry-otel/src/index.ts:160-164,236-248`，`c291e79`）：
+ * （`harness/packages/session/session-telemetry-otel/src/index.ts:160-164,236-248`，`c291e79`）：
  *
  * - `feedback-only`：每收到一顆回饋（{@link isFeedbackEvent}），就把日誌從上次交到的地方補送到
  *   現在。第一次是整份——前面的輪、續接帶進來的歷史都在內，照 dsh 的 `includeHistory: true`。

@@ -32,7 +32,7 @@ export type PresetTable = Readonly<Record<string, PresetSpec>>;
 
 /**
  * 出廠的兩組：`read-only` 與 `workspace-write`，名字與值照 dsh base 出廠的前兩組
- * （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）。名字刻意和沙箱模式同名：web 的「全開」確認認的就是
+ * （`harness/packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）。名字刻意和沙箱模式同名：web 的「全開」確認認的就是
  * `danger-full-access`，部署方加回那一組時照樣作用。
  *
  * **與 dsh 的偏離：出廠不含 `danger-full-access`（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）。**
@@ -67,7 +67,7 @@ const presetSpecSchema = z.strictObject({
 /**
  * 這個 plugin 的設定。
  *
- * **`presets` 是整份替換，不是深層合併**（patch 的規矩，見 `apps/harness/cordis.yml` 檔頭）：部署的人要刪掉某一組，就把表
+ * **`presets` 是整份替換，不是深層合併**（patch 的規矩，見 `harness/apps/harness/cordis.yml` 檔頭）：部署的人要刪掉某一組，就把表
  * 重寫一份、只留要的。**`defaultPreset` 選填**：省略時由起始的沙箱模式推出（見 {@link PermissionPresetsPlugin}）。
  */
 export const permissionPresetsConfigSchema = z.strictObject({

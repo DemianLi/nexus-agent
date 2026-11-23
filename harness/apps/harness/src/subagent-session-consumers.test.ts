@@ -8,7 +8,7 @@
  * 的絆索。
  *
  * **它們不是三個政策決定。** dsh 那側沒有「要不要接」這個問題：消費者訂的是 session
- * 註冊表，不是一份 session（`packages/core/session/src/invariant.ts:218-220` 的
+ * 註冊表，不是一份 session（`harness/packages/core/session/src/invariant.ts:218-220` 的
  * `for (const session of ctx.sessions.list())` 加 `ctx.on('session/created', …)`；遙測的
  * coordinator 檔頭寫的是 “subscribes to the session firehose”）。我們把那個結構補起來，
  * 三題就一起消失了。

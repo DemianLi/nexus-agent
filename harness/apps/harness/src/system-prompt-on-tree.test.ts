@@ -4,7 +4,7 @@
  * 量的是產品路徑——真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的相容層 `assembly.create`（serve 每條 thread
  * 一次）、真的 `createNexusAgent`；不手搭 `ctx.plugin`。
  *
- * 驗收 A（SDK lint、一致性套件、套一次服務兩條 thread）在 `packages/nexus-plugin-system-prompt` 與 `migrated-plugin-gate.test.ts`；
+ * 驗收 A（SDK lint、一致性套件、套一次服務兩條 thread）在 `harness/packages/nexus-plugin-system-prompt` 與 `migrated-plugin-gate.test.ts`；
  * 驗收 C（golden）是一次性錄製，做法與數字寫在 PR 內文；驗收 D（寫壞的變數在 CLI／serve 起動與 thread 組裝的失敗）在
  * `startup-audit.test.ts` 與 `serve-plugin-failed-record.test.ts`；既有的產品路徑測試（出貨值、後綴最後一段、子代理也帶、patch 改前後綴）
  * 是 `system-prompt-persona.test.ts`，斷言一個字沒動。`system-prompt-middleware.test.ts` 量宿主建的 middleware 本身。

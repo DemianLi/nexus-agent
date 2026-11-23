@@ -2,7 +2,7 @@
  * MCP 那一列的核准宣告（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）在插件這一層的驗收：設定的形狀、閘門對哪些
  * 工具回 `ask`、閘門跟工具同進同退。
  *
- * 「核准前 server 收不到 `tools/call`」量在 harness 那一側（`apps/harness/src/mcp-approval-wire.test.ts`）：那裡才有核准中介層、
+ * 「核准前 server 收不到 `tools/call`」量在 harness 那一側（`harness/apps/harness/src/mcp-approval-wire.test.ts`）：那裡才有核准中介層、
  * 政策與管道。這裡只量閘門自己的決定，走一台**真的 stdio 子行程**，名字對照才是 `tools/list` 真的公告出來的那一份。
  */
 

@@ -688,7 +688,7 @@ function listenerCount<K extends LayeredToolEvent>(
  * 某位自己 `await` 之後才叫 `next` 的，內側就晚到那之後（外層的耐久檢查點先排空才往內交）。沙箱政策的 `tools/execute` 監聽者
  * 拍委派快照靠這一點：外側的監聽者叫 `next()`、回來之前快照已經拍好（`@nexus/plugin-sandbox-policy`）。
  *
- * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：`apps/harness/src/event-table-scan.ts` 的 `scanEventProducers` 只認事件名是字串字面量的呼叫；沒有插件監聽者時傳 `undefined`。
+ * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：`harness/apps/harness/src/event-table-scan.ts` 的 `scanEventProducers` 只認事件名是字串字面量的呼叫；沒有插件監聽者時傳 `undefined`。
  */
 function dispatchLayered<K extends LayeredToolEvent>(
   name: K,

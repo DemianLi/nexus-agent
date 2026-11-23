@@ -4,7 +4,7 @@
  * [#111](https://github.com/DemianLi/nexus-agent/issues/111) 把機制從宣告式的
  * `interrupts.require(toolName, ...)` 換成 `wrapToolCall` 上的 pre-execute waterfall，
  * 所以這一份也跟著換了主體。純函式那一半（waterfall 語義、四個拒絕理由）在
- * `packages/nexus-core/src/approval.test.ts`；**這裡只放需要 checkpointer 與模型才問得出來的**。
+ * `harness/packages/nexus-core/src/approval.test.ts`；**這裡只放需要 checkpointer 與模型才問得出來的**。
  *
  * 每一條都用**間諜工具**判定：跑沒跑的答案在它有沒有被呼叫，不在回傳訊息的措辭上。
  * 而每一條「沒跑」都配一條「跑得起來」的對照——`ran === []` 同樣被「模型根本沒呼叫
@@ -236,7 +236,7 @@ describe('一批裡混著核准與拒絕', () => {
     // 在裸值底下怎麼做，那正是我們不再送裸值的理由。
     //
     // **一個決定蓋住兩顆，不是因為介面「全有全無」**：閘門是逐次呼叫的，每顆中斷的
-    // `actionRequests` 恆長度 1，`packages/nexus-wire` 的 `uniformDecisions` 從來沒送滿過
+    // `actionRequests` 恆長度 1，`harness/packages/nexus-wire` 的 `uniformDecisions` 從來沒送滿過
     // 兩筆；兩顆都被套到，是因為每次呼叫**各自**去讀同一個 resume 物件的 `decisions[0]`
     // （`approval.ts` 的 `answer?.decisions?.[0]`）。這一條釘住的是「顆數」與「一次
     // resume 收兩顆」，拒絕側的反面是下面那條。

@@ -58,12 +58,12 @@ import {
 import type { PlanModeConfig, PlanModePluginOptions } from './index.js';
 
 /**
- * 測試用的計劃指引。**套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `apps/harness/cordis.yml`；
+ * 測試用的計劃指引。**套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `harness/apps/harness/cordis.yml`；
  * 這個套件的測試不依賴那一句，只要有一句可以認得。
  */
 const GUIDANCE = '你現在在計劃模式。先探索與設計，不要動手改東西。';
 
-/** 載入一份清單。`exit_plan_mode` 是 `NexusTool`，註冊時要組裝點交的轉接器（產品路徑上是 `apps/harness` 的 `agent-factory.ts`）。 */
+/** 載入一份清單。`exit_plan_mode` 是 `NexusTool`，註冊時要組裝點交的轉接器（產品路徑上是 `harness/apps/harness` 的 `agent-factory.ts`）。 */
 function load(entries: readonly PluginEntry[]): ReturnType<typeof loadPlugins> {
   return loadPlugins(entries, createRegistry({ adaptTool: toLangChainTool }));
 }
@@ -101,7 +101,7 @@ function planPlugin(options: Partial<PlanModePluginOptions> = {}): PluginEntry {
 }
 
 // `exit_plan_mode` 在本體裡呼叫 `interrupt()`，圖外呼叫會拋。這個檔只有「待關」那一組會走到它，
-// 用替身直接回人的答案；真的中斷與 resume 在 `apps/harness` 的 `plan-mode.test.ts` 與 `plan-review-wire.test.ts`。
+// 用替身直接回人的答案；真的中斷與 resume 在 `harness/apps/harness` 的 `plan-mode.test.ts` 與 `plan-review-wire.test.ts`。
 vi.mock('@langchain/langgraph', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@langchain/langgraph')>()),
   interrupt: vi.fn(),
@@ -113,7 +113,7 @@ vi.mock('@langchain/langgraph', async (importOriginal) => ({
  */
 const firstLogOf = new WeakMap<object, SessionLog>();
 
-/** 直接跑 `/plan` 的 handler。REPL 那一層歸 `apps/harness` 的測試。 */
+/** 直接跑 `/plan` 的 handler。REPL 那一層歸 `harness/apps/harness` 的測試。 */
 async function runPlan(
   commands: Pick<CommandRegistrationPoint, 'find'>,
   rawInput: string,
@@ -218,7 +218,7 @@ function earlierEvents(active: boolean): readonly SessionEvent[] {
  * **`exit_plan_mode` 工具本體那兩條沒生效的出口**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
  *
  * root 上模式外的那條也是本體擋的（#1276 以前有一層排在核准閘門之前的拒絕，拿掉了），驗收在
- * `apps/harness/src/plan-mode.test.ts`。頭兩條在真的組裝裡不容易單獨量到，所以這裡直接叫本體。
+ * `harness/apps/harness/src/plan-mode.test.ts`。頭兩條在真的組裝裡不容易單獨量到，所以這裡直接叫本體。
  * 後兩條（#652）在問人之前就擋，所以不用真的圖也量得到。
  */
 describe('exit_plan_mode 沒有生效時', () => {
@@ -316,7 +316,7 @@ describe('exit_plan_mode 沒有生效時', () => {
 /**
  * 薄測試：斷言 `apply` 往那幾個註冊點放了東西，而且只聽 `agent/pre-step` 一個事件、沒有 middleware。
  *
- * 計劃模式**真的有沒有作用**的驗收在組裝點（`apps/harness` 的 `plan-mode.test.ts`）
+ * 計劃模式**真的有沒有作用**的驗收在組裝點（`harness/apps/harness` 的 `plan-mode.test.ts`）
  * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容、`/plan` 的提示與交出的待關。
  */
 describe('計劃模式的組裝', () => {
@@ -367,7 +367,7 @@ function verdictOf(result: unknown): Record<string, unknown> {
 /**
  * **同意之後模式在下一個模型步驟之前才關**（#652，照 dsh 的 `pendingIntents`）。
  *
- * 真的圖上「工具結果之後、下一次回覆之前」那條順序在 `apps/harness` 的 `plan-mode.test.ts` 量；這裡量真的圖
+ * 真的圖上「工具結果之後、下一次回覆之前」那條順序在 `harness/apps/harness` 的 `plan-mode.test.ts` 量；這裡量真的圖
  * 很難排出來的兩格：子代理的模型呼叫交不出 root 的待關，以及同意之後、下一步之前人打的 `/plan` 把待關丟掉
  * （產品路徑上是「同意之後那一輪被停掉」）。
  */

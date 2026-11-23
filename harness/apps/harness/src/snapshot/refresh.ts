@@ -3,7 +3,7 @@
  * 把夾具寫成這一版產品落盤的樣子（`harness.ts` 的 `refreshScenario`）。不帶 `--live`、不讀金鑰。不進測試，手動跑：
  *
  * ```
- * cd apps/harness
+ * cd harness/apps/harness
  * node_modules/.bin/tsx --tsconfig ../../tsconfig.runtime.json src/snapshot/refresh.ts [場景名…]
  * ```
  *

@@ -1,6 +1,6 @@
 /**
  * `ModifiedOrderCompositeBackend`（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0345）：`glob` 的結果照 `modified_at` 排，
- * 不是基座 `CompositeBackend` 重排出來的路徑序。經 `createNexusAgent` 的產品路徑在 `apps/harness/src/tool-fs.test.ts`。
+ * 不是基座 `CompositeBackend` 重排出來的路徑序。經 `createNexusAgent` 的產品路徑在 `harness/apps/harness/src/tool-fs.test.ts`。
  */
 
 import { CompositeBackend } from 'deepagents';

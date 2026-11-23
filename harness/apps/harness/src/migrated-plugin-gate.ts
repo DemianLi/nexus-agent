@@ -37,12 +37,12 @@ import ts from 'typescript';
 
 import { isFunctionPluginModule } from './plugin-tree.js';
 
-/** 插件套件的目錄前綴：`packages/nexus-plugin-*`。 */
+/** 插件套件的目錄前綴：`harness/packages/nexus-plugin-*`。 */
 const PLUGIN_DIR_PREFIX = 'nexus-plugin-';
 
 /** 一顆插件套件。路徑一律是 repo 相對的 POSIX 路徑。 */
 export interface PluginPackage {
-  /** repo 相對的套件目錄，例如 `packages/nexus-plugin-echo`。 */
+  /** repo 相對的套件目錄，例如 `harness/packages/nexus-plugin-echo`。 */
   readonly dir: string;
   /** `package.json` 的 `name`。 */
   readonly name: string;
@@ -85,7 +85,7 @@ function entryOf(manifest: RawPackageJson): string | undefined {
 
 /**
  * manifest 的入口指 `lib/<路徑>.js`（#1502，出貨的是編好的 JS），而這個 gate 掃的是原始碼樹、可能還沒建過：
- * `lib/<路徑>.js` 對回 `src/<路徑>.ts`（跟 `scripts/workspace-packages.ts` 推入口是同一條對應），對不到才照 manifest 寫的。
+ * `lib/<路徑>.js` 對回 `src/<路徑>.ts`（跟 `harness/scripts/workspace-packages.ts` 推入口是同一條對應），對不到才照 manifest 寫的。
  */
 function sourceEntry(packageDir: string, entry: string): string {
   const match = /^\.?\/?lib\/(.+)\.js$/.exec(entry);
@@ -97,7 +97,7 @@ function sourceEntry(packageDir: string, entry: string): string {
 }
 
 /**
- * 掃出 `packages/nexus-plugin-*` 每一顆。
+ * 掃出 `harness/packages/nexus-plugin-*` 每一顆。
  *
  * **找不到入口就拋，不回退**：入口是判別「遷出與否」的唯一依據，沒有它就沒辦法說這顆管不管，靜靜跳過的 gate
  * 比沒有 gate 更糟。
@@ -116,7 +116,7 @@ export function pluginPackages(root: string): PluginPackage[] {
       const manifestPath = join(packagesRoot, directory, 'package.json');
       if (!existsSync(manifestPath)) return [];
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as RawPackageJson;
-      const dir = `packages/${directory}`;
+      const dir = `harness/packages/${directory}`;
       if (typeof manifest.name !== 'string') throw new Error(`${dir}/package.json 沒有 name`);
       const entry = entryOf(manifest);
       if (entry === undefined) {

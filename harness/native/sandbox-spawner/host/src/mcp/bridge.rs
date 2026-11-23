@@ -3,7 +3,7 @@
 //! - 宿主那一側送 [`Command`]（無界通道，送了就回，不會卡住宿主迴圈）；橋把結果 [`Outcome`] 排進收件匣、寫一個位元組叫醒宿主
 //!   （[`crate::wake`]），宿主醒來 [`Bridge::take`] 取走。
 //! - 一次綁定（[`Command::Open`]）向池取一份連線，記成 `open` 編號；放掉（[`Command::Release`]）只是忘掉編號，池裡的連線照留（池的規則）。
-//! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `packages/nexus-plugin-mcp/src/index.ts`）；
+//! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `harness/packages/nexus-plugin-mcp/src/index.ts`）；
 //!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連。rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，所以另外認一種：帶著 session id 的請求收到 404（[`session_expired`]，
 //!   #2690）也讓那一代判掉線。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
 //! - stdio 的請求逾時或被取消之後探一次活（[`probe`]）：探活也沒回應才判那一代卡死，收掉子行程、重連。

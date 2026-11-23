@@ -20,7 +20,7 @@
  * - **沒有設定**：`Config` 是空的 `strictObject`。過去這一列寫了 `config` 只會在啟動時被當成「寫了沒作用」警告；現在寫了
  *   未知欄位會讓這一列在 `config` 那一步掉了（登記的偏離，理由同 `echo`：未知欄位讓載入失敗）。
  *
- * 舊的 `NexusPlugin` 外殼（`createTokenMeterPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的
+ * 舊的 `NexusPlugin` 外殼（`createTokenMeterPlugin`）不在這裡：它是測試夾具，住在 `harness/apps/harness` 的
  * `token-meter.fixture.ts`，包同一個 {@link tokenMeterUnit}，讓單元只有一個出處。
  *
  * @module

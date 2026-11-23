@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # #1386 驗收 ① 的對照數字：上游原樣與我們 vendor 的版本，在「原始碼模式」與「宣告檔模式」下各報幾個錯。
 #
-# 用法：baseline.sh <上游 cordis clone>（要在 c261dd2c；clone 見 vendor/README.md 的「同步」）
+# 用法：baseline.sh <上游 cordis clone>（要在 c261dd2c；clone 見 harness/vendor/README.md 的「同步」）
 #
 # 在 mktemp 的目錄裡複製一份 vendor、自己接 node_modules，不碰工作樹。
 # 原始碼模式＝不建 lib/types：exports 的 types 條件找不到檔，tsc 落到 default 的 src/index.ts。
@@ -55,7 +55,7 @@ build() {
   measure "  建 loader 宣告檔" "$T/loader" tsconfig.json
 }
 
-echo "== 上游原樣（packages/core/src 不改）"
+echo "== 上游原樣（harness/packages/core/src 不改）"
 rm -rf "$T/cordis/src" && cp -R "$UPSTREAM/packages/core/src" "$T/cordis/src"
 rm -rf "$T/cordis/lib" "$T/loader/lib"
 measure "原始碼模式、NodeNext 消費者" "$T/consumer" tsconfig.src.json

@@ -2,7 +2,7 @@
  * 收尾順序的一致性測試（[#1636](https://github.com/DemianLi/nexus-agent/issues/1636)，Q3 (a)）：插件規範〈收尾順序〉靠的是
  * vendor Cordis 的這兩種行為，上游哪天改了，這裡先紅。
  *
- * - **同一個 effect 裡**收集的多個 disposer：倒序、前一個收完才跑下一個（`vendor/cordis/src/fiber.ts` 的 `effect`，
+ * - **同一個 effect 裡**收集的多個 disposer：倒序、前一個收完才跑下一個（`harness/vendor/cordis/src/fiber.ts` 的 `effect`，
  *   `task.then(dispose)` 串起來）。有順序要求的收尾就放這裡。
  * - **兄弟 effect**：同時開跑（`_unload` 的 `Promise.all`；上游同一件事的斷言在 `tests/service-dispose.spec.ts`）。
  *   誰先開始不釘，只釘「兩個都開始了，才有一個結束」。

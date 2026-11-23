@@ -2,7 +2,7 @@
  * 插件規範的 lint 設定（`@nexus/sdk/lint`，[#1420](https://github.com/DemianLi/nexus-agent/issues/1420)）。
  *
  * 決議 §3-4 第 12 條四層強制的第二層：禁用 API、`internal/*`、`ctx.root`、`ctx.registry`。**遷出的插件**（模組有
- * `manifest` 匯出）在自己的 `eslint.config.js` 套用它，由 `apps/harness` 的 gate 保證每顆都套、每顆都有一條跑
+ * `manifest` 匯出）在自己的 `eslint.config.js` 套用它，由 `harness/apps/harness` 的 gate 保證每顆都套、每顆都有一條跑
  * `checkConformance` 的測試（`migrated-plugin-gate.ts`）。
  *
  * ## 形狀

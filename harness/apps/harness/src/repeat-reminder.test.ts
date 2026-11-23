@@ -1,7 +1,7 @@
 /**
  * 重複工具呼叫的提醒，**在正式路徑上**。
  *
- * `packages/nexus-core/src/repeat-reminder.test.ts` 直接呼叫 `beforeModel`，量的是偵測
+ * `harness/packages/nexus-core/src/repeat-reminder.test.ts` 直接呼叫 `beforeModel`，量的是偵測
  * 規則；這個檔量的是另一件事——**那份 middleware 真的被組進了 `createDeepAgent` 的
  * stack，而且提醒真的進了模型下一輪的 prompt**。兩者會為不同的理由壞掉：規則對但沒
  * 接上線、或接上了線但規則錯。
@@ -354,7 +354,7 @@ describe('提醒在 CLI 的逐字稿上印得出來', () => {
  * 設定從部署設定的條目來（[#456](https://github.com/DemianLi/nexus-agent/issues/456)），
  * **在正式路徑上**。
  *
- * `packages/nexus-core/src/fold.test.ts` 那一組量的是四態各自掛不掛、root 與 subagent
+ * `harness/packages/nexus-core/src/fold.test.ts` 那一組量的是四態各自掛不掛、root 與 subagent
  * 兩個 stack 都問；這裡量的是它問不到的那一件：**條目的 `config` 真的走到了 middleware
  * 的行為裡**。判別式是門檻——條目給 `[2]`，第一條提醒就該比預設的 `[3, 5, 8]` 早一輪。
  * 少了這一條，「服務讀成 `undefined` 之後安靜地退回內建預設」會全綠，因為出貨檔那一列的

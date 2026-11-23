@@ -116,8 +116,8 @@
  *
  * - 知道 id、要直接碰檔的煙霧測試、`checkpoint-depth-cold.fixture.ts` 與量測（`measure/thread-list-cli.ts`，寫方）用
  *   {@link sessionPathsIn}，手寫舊兩檔的用 {@link legacyTwoFilePathsIn}；
- * - 發版驗證（`scripts/release/verify-packed-install.ts`）只 import `@nexus/core` 的檔名葉模組：發版腳本不拉整支 store 進來；
- * - 夾具產生器（`scripts/session-format-fixtures/run-directory.ts`）要凍原樣位元組與寫入器記的版號，接縫會把 header 的
+ * - 發版驗證（`harness/scripts/release/verify-packed-install.ts`）只 import `@nexus/core` 的檔名葉模組：發版腳本不拉整支 store 進來；
+ * - 夾具產生器（`harness/scripts/session-format-fixtures/run-directory.ts`）要凍原樣位元組與寫入器記的版號，接縫會把 header 的
  *   `version` 轉譯成這一版（#1856），不是它要的。
  *
  * 別的地方寫這兩個副檔名或 import {@link parseHeader}，`session-files-single-owner.test.ts` 會紅。
@@ -2747,7 +2747,7 @@ async function verifyMigratedTemp(
 
 /**
  * 一個專案目錄在會話根底下的目錄名——照 dsh 的 `projectKey`
- * （`packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
+ * （`harness/packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
  *
  * 分隔符（`/`、`\\`、`:`）變成 `-`，連續的只留一個；不安全的 UTF-16 碼元寫成 `~XXXX`；
  * 前後包 `--`，長度封頂。**它是有損的**（分隔符與截短），dsh 明說這是刻意的：換來的是人

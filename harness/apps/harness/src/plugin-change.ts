@@ -9,8 +9,8 @@
  *
  * | 操作 | dsh | 被更高層（`--patch`）蓋掉時 |
  * |---|---|---|
- * | 停用／啟用 | `writePluginEnabled`（`packages/boot/plugin-manager/src/patch.ts:14-43`） | **照寫、回報 `overridden`**（`plugin-manager/src/index.ts:460-466`） |
- * | 改設定／恢復 | `configEditor.edit`（`packages/boot/config-editor/src/index.ts:136-150`） | **寫入前就拒絕**（`:140-143`）；寫入後協調失敗寫回舊文件（`:145-150`，我們沒有協調這一步，見下） |
+ * | 停用／啟用 | `writePluginEnabled`（`harness/packages/boot/plugin-manager/src/patch.ts:14-43`） | **照寫、回報 `overridden`**（`plugin-manager/src/index.ts:460-466`） |
+ * | 改設定／恢復 | `configEditor.edit`（`harness/packages/boot/config-editor/src/index.ts:136-150`） | **寫入前就拒絕**（`:140-143`）；寫入後協調失敗寫回舊文件（`:145-150`，我們沒有協調這一步，見下） |
  *
  * 新值**等於繼承值**時照 dsh 拿掉那一列的覆蓋（`:119-125`），不抄一份：紀錄裡記成恢復、帶 `requested: 'config-set'`
  * （PM 2026-10-13）。

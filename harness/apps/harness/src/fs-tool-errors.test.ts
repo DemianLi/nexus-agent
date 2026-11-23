@@ -3,7 +3,7 @@
  * 的驗收，量的是真的組裝、真的 fence 跑完之後會話日誌記下什麼、模型拿到什麼。
  *
  * 那一層自己的邏輯在 `@nexus/core` 的 `fs-tool-errors.test.ts`；這一份量的是掛進真的組裝之後：
- * 基座的檔案工具真的經過包過的 backend、fence 真的從 `apps/harness` 回報拒絕、碼真的跨過一整條
+ * 基座的檔案工具真的經過包過的 backend、fence 真的從 `harness/apps/harness` 回報拒絕、碼真的跨過一整條
  * middleware 鏈讓圍堵記得到。
  *
  * 每一條都配一個反例（成功照舊是成功），否則一個把所有結果都標成錯誤的實作也全綠。

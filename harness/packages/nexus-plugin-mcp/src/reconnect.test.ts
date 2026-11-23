@@ -97,7 +97,7 @@ function definitions(registry: PluginRegistry): string {
 
 /**
  * 對這些行程各送一次 SIGKILL。pid 不是大於 1 的整數就丟錯、不送：`process.kill(0, …)` 殺整個行程群組（含 vitest 主行程與外層 shell），
- * 而 `Number('')` 就是 0（#1712；`apps/harness/src/test-pids.fixture.ts` 是同一份）。
+ * 而 `Number('')` 就是 0（#1712；`harness/apps/harness/src/test-pids.fixture.ts` 是同一份）。
  */
 const killAll = (pids: number[]) => {
   for (const pid of pids) {

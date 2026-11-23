@@ -95,7 +95,7 @@ const COMPANIONS: readonly (readonly [() => PluginEntry, string, string])[] = [
 ];
 
 describe('表格對得上磁碟', () => {
-  it('每一個 `packages/*` 的 owner 都在 COMPANIONS 裡，一個都不漏', () => {
+  it('每一個 `harness/packages/*` 的 owner 都在 COMPANIONS 裡，一個都不漏', () => {
     const owners = packageInvariantOwners().map((owner) => owner.packageName);
 
     // 先釘「真的掃到東西」：掃空的話下面那條會變成空陣列對空陣列，而 COMPANIONS 漏人

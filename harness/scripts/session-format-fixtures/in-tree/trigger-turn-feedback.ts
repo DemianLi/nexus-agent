@@ -5,7 +5,7 @@
  * 走法照那時候的 serve：續接（store 的 `resume`，帶 seed 開日誌會寫一顆 `session/end-seed`）、交評分服務寫、
  * 協調器落盤。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-turn-feedback.ts <run 目錄>
  */
 

@@ -3,7 +3,7 @@ import { CUSTOM_PRESET } from '@nexus/wire';
 
 /**
  * 權限座背後的純邏輯（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）：目前是哪一組、座位上寫什麼、
- * 切換送哪一行。契約見 `packages/nexus-wire/src/permission-presets.ts`。
+ * 切換送哪一行。契約見 `harness/packages/nexus-wire/src/permission-presets.ts`。
  *
  * @module
  */

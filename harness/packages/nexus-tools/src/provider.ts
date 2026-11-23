@@ -8,7 +8,7 @@
  * ## 行程級、一列
  *
  * 一棵樹只掛一列提供者，登記處是行程級的：每顆消費者經 `ctx.tools.register(tool)` 登記，登記是 effect，消費者那一列
- * 卸載時登記處自己撤掉。**宿主**（`apps/harness`）經 {@link ToolsProviderHandle.entries} 讀每一筆登記連同登記者那一列的
+ * 卸載時登記處自己撤掉。**宿主**（`harness/apps/harness`）經 {@link ToolsProviderHandle.entries} 讀每一筆登記連同登記者那一列的
  * id，把工具折進每條 thread 的組裝；那一面不在 {@link ToolRegistry} 的契約裡，消費者看不到。
  *
  * @module

@@ -1,4 +1,4 @@
-//! MCP 連線池：**一份設定一份連線**，同一個池共用。規則照 `packages/nexus-plugin-mcp/src/pool.ts`：
+//! MCP 連線池：**一份設定一份連線**，同一個池共用。規則照 `harness/packages/nexus-plugin-mcp/src/pool.ts`：
 //!
 //! - 鍵是整份設定加實際的 elicitation 旗標（[`Server::pool_key`]）。
 //! - 舊的一份留到池關：不數使用者、不回收。

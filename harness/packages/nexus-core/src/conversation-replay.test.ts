@@ -3,7 +3,7 @@
  *
  * 日誌照生產者真的寫的順序手排：寫的一側各自的測試證它們寫得出這些事件，這裡只問推的規則。
  * 「推出來的串跟 graph state 一則對一則」這件事對真的組裝量過（併發工具、壓縮），量的結果就是下面
- * 那幾條的前提；接到產品路徑上的驗收在 `apps/harness` 的 `conversation-restore.test.ts`。
+ * 那幾條的前提；接到產品路徑上的驗收在 `harness/apps/harness` 的 `conversation-restore.test.ts`。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';

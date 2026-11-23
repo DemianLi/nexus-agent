@@ -14,7 +14,7 @@
  * | 前兩輪的正常摘要 | 提交：原文從日誌讀回，不寫歷史檔 |
  *
  * shrink 檢查（#1396）自己的案例（被取代的不是只有舊摘要、新摘要卻不比它小；剛好等於不提交、多一個 token 提交）與端點超窗那條路
- * 在 `packages/nexus-core/src/summary-failure.test.ts`。
+ * 在 `harness/packages/nexus-core/src/summary-failure.test.ts`。
  *
  * 零憑證、零外部連線。
  */

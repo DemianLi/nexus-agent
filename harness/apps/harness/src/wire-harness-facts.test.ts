@@ -46,7 +46,7 @@ const read = (path: string): string => readFileSync(join(root, path), 'utf8');
 
 describe('wire 的 harness 事實：字', () => {
   it('核准閘門的預設理由與被拒的樣板（core 的 approval.ts）', () => {
-    const approval = read('packages/nexus-core/src/approval.ts');
+    const approval = read('harness/packages/nexus-core/src/approval.ts');
     const fill = (template: string | undefined) => template?.replace('${exec.name}', '{name}');
     expect(fill(/decision\.reason \?\? `([^`]*)`/u.exec(approval)?.[1])).toBe(
       APPROVAL_DEFAULT_REASON_TEMPLATE,
@@ -63,13 +63,13 @@ describe('wire 的 harness 事實：字', () => {
 
   it('子代理撞上限的字與組法（core 的 max-tokens.ts、tool-events.ts）', () => {
     expect(SUBAGENT_MAX_TOKENS_REASON).toBe(CORE_MAX_TOKENS_REASON);
-    const core = read('packages/nexus-core/src/max-tokens.ts');
+    const core = read('harness/packages/nexus-core/src/max-tokens.ts');
     expect(/PARTIAL_OUTPUT_HEADING = '([^']*)'/u.exec(core)?.[1]).toBe(PARTIAL_OUTPUT_HEADING);
     expect(core).toContain(
       "partial.trim() === '' ? '' : `\\n${PARTIAL_OUTPUT_HEADING}\\n${partial}`",
     );
     expect(core).toContain('toolRefusal(SUBAGENT_MAX_TOKENS_REASON + text');
-    const events = read('packages/nexus-core/src/tool-events.ts');
+    const events = read('harness/packages/nexus-core/src/tool-events.ts');
     expect(events).toContain("TOOL_ERROR_PREFIX = 'Error: '");
     expect(events).toContain('return errorResult(TOOL_ERROR_PREFIX + reason, options);');
   });

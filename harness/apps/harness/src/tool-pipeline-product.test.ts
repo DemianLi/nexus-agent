@@ -1,7 +1,7 @@
 /**
  * **工具事件掛進真的組裝之後**（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)，S1a 的驗收）。
  *
- * 單元層（`packages/nexus-core/src/tool-pipeline.test.ts`）量生產者自己的規則；這一份量的是掛進 `createNexusAgent`
+ * 單元層（`harness/packages/nexus-core/src/tool-pipeline.test.ts`）量生產者自己的規則；這一份量的是掛進 `createNexusAgent`
  * 之後還成不成立，而且**每一種結果從它真正的生產者冒出來**（基座的 ToolNode、超時、輸出校驗、核准閘門），不是手搭的假 handler：
  *
  * 1. **有人聽、但只是放行 ＝ 沒人聽**：同一場對話跑兩遍，一遍沒有監聽者、一遍四個事件都掛了純放行的監聽者，

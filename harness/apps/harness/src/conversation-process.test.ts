@@ -1,6 +1,6 @@
 /**
  * 對話行程整支跑起來（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：子行程起 `conversation-process.ts`，模型換成腳本
- * （`scripted-serve.ts` 那份 patch），控制面在 stdin／stdout，wire 經 Unix socket 打。情境同 `apps/web/e2e/conversation.e2e.ts`
+ * （`scripted-serve.ts` 那份 patch），控制面在 stdin／stdout，wire 經 Unix socket 打。情境同 `web/e2e/conversation.e2e.ts`
  * （#1602）：一般回覆串完、核准中斷按核准後這一輪結束；另外量控制面的框、stdout 只有框、分叉回 `not_supported`、EOF 回 0。
  *
  * 跑的是原始碼（`node --import tsx`），同 `entry-main.test.ts`。子行程的環境只有 `PATH`、暫存的 home 與 {@link SOURCE_PATHS}，讀不到 `.env`。

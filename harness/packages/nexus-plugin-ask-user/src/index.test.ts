@@ -2,7 +2,7 @@
  * `ask_user_question` 的單元面：**送出去的酬載**與**四條出口**，加上樹上這一列的接線（#1458）。
  *
  * `interrupt()` 在這裡是替身，因為這一層要驗的是「我們交給它什麼、拿回來怎麼解」，
- * 不是 LangGraph 的暫停機制——那條走真的線的在 `apps/harness/src/ask-user-wire.test.ts`。
+ * 不是 LangGraph 的暫停機制——那條走真的線的在 `harness/apps/harness/src/ask-user-wire.test.ts`。
  *
  * **工具是從真的 Loader 掛上來的**：行程級的工具登記處與答題管道各一列（真的提供者），`ask-user` 是函式插件模組本身。
  * 這裡自己塞一個替身服務的話，`inject` 與 `apply` 當下抓管道那一段就沒有人走過。

@@ -1,7 +1,7 @@
 /**
  * `--dump-config-schema`（[#741](https://github.com/DemianLi/nexus-agent/issues/741)）：收集、文件、旗標。
  *
- * 轉換程式自己的單元測試在 `packages/nexus-core/src/config-schema.test.ts`；這一檔問的是只有 harness 這一層看得到的：
+ * 轉換程式自己的單元測試在 `harness/packages/nexus-core/src/config-schema.test.ts`；這一檔問的是只有 harness 這一層看得到的：
  * 出貨的清單疊完之後，每一列都收得到、標得對，輸出的文件真的能驗東西，以及模組載入的副作用進不了標準輸出。
  */
 

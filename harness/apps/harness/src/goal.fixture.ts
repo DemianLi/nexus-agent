@@ -1,7 +1,7 @@
 /**
  * goal 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1486](https://github.com/DemianLi/nexus-agent/issues/1486)）。
  *
- * goal 本身已經是樹上的函式插件（`packages/nexus-plugin-goal`，`src/` 除了從 lint 排除的 `invariant.ts` 都不 import `@nexus/core`）。
+ * goal 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-goal`，`src/` 除了從 lint 排除的 `invariant.ts` 都不 import `@nexus/core`）。
  * 手搭 `PluginEntry` 清單、直接 `createNexusAgent` 的測試要一顆「掛三顆工具、`/goal` 與 `goals` 服務」的 `NexusPlugin`，就走這個外殼——
  * **lazy 核心（`createGoalCore`）、三顆工具與命令 handler 取自同一份**（`mountGoal`），所以行為只有一個出處，**這裡沒有重建舊的
  * `sessions.join` 行為**。同 `todo.fixture.ts`、`feedback.fixture.ts` 的前例。

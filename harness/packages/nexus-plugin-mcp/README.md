@@ -25,7 +25,7 @@
 
 `apply` 只登記一個逐條 thread 的工具來源（`tools.threadSource`，要 `@nexus/tools` `^2.6.0`）；工具、閘門、隱藏規則與 hub 都在組每一條
 thread 時由 `mountServer` 建，每條 thread 各一份；連線在 CLI 是每條 thread 自己開，serve 向連線池取用、同一份設定整台共用一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
-在宿主的授權表上（`apps/harness/src/thread-service-grants.ts`）。
+在宿主的授權表上（`harness/apps/harness/src/thread-service-grants.ts`）。
 
 套件自己的測試經 `src/load-with-adapter.ts` 的 `mcpEntry` 組裝：樹上的 `apply(ctx)` 加宿主用的同一份 `runThreadSources`
 （`@nexus/tool-adapter`），授權表全給。同一條 thread 上兩列撞 `serverName` 時，訊息指名後掛的那一列。
@@ -232,7 +232,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   設定 `elicitation`（預設 `true`）加上這次組裝的 `channel.kind === 'human'`（同 `ask_user_question`）才開；沒有人在的入口
   （`--print`、沒有 channel 的測試組裝）維持關閉，這種呼叫落成帶 `Error: ` 前綴的工具失敗。**超出 dsh**：dsh 的 client 宣告
   `capabilities: {}`（`connection.ts:261`）。舊協定的 server 要問得靠握手時宣告的 `elicitation` 能力；`src/connection.ts` 開 client 時不帶 capabilities（SDK 預設 `{}`），所以不會宣告。
-  中斷發出去之後怎麼問人、怎麼回，在 `apps/harness` 的 `mcp-elicitation.ts`：`form` 變成問答卡（帶 `origin`），
+  中斷發出去之後怎麼問人、怎麼回，在 `harness/apps/harness` 的 `mcp-elicitation.ts`：`form` 變成問答卡（帶 `origin`），
   `url` 與子代理（前景、背景）一律由系統回絕並記 `interrupt/system-answered`。「關著」這條有人守（#1095）：新協議（`2026-07-28`）
   的測試 server 起了 stdio 與 HTTP 兩台，server 端量到沒有 channel 時 client 沒宣告 elicitation；
   把任一行改成恆為 `true` 都有測試紅。
@@ -252,7 +252,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 `packages/mcp/mcp-client` 為標準（見 [AGENTS.md](../../AGENTS.md)）。這裡同 dsh 直接接
 SDK client（`@modelcontextprotocol/client`），每顆工具是一份 `NexusTool`（#2353）：原樣的 `inputSchema` 當參數上線
 （dsh `packages/mcp/mcp-client/src/tools.ts:260`），`taskSupport: 'required'` 當場拒絕（`:137`、`:280`）。結果的轉換與 elicitation
-跟 `@langchain/mcp-adapters` 2.0.0 同形，由 `apps/harness/src/mcp-migration.test.ts` 的對照組釘住。重連是自己包的 supervisor（指數退避與穩定期重置照 dsh）。
+跟 `@langchain/mcp-adapters` 2.0.0 同形，由 `harness/apps/harness/src/mcp-migration.test.ts` 的對照組釘住。重連是自己包的 supervisor（指數退避與穩定期重置照 dsh）。
 
 **核准宣告是 dsh 沒有的**（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)，偏離規則的理由 2：產品需求超出 dsh 的射程）。
 dsh 的 mcp-client 沒有核准設定，MCP 工具沒有人回 `ask`、預設一律放行。我們的產品是企業內部的業務輔助機器人，內部系統的寫入全走 MCP，

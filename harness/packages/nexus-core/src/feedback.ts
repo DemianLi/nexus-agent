@@ -2,8 +2,8 @@
  * 人對這個會話的回饋：評分（綁在**一則回覆**上）與 `/feedback` 的一則評語。
  *
  * 形狀照 dsh 的兩個套件（`references/deepseek-harness`，SHA `c291e79`）：評分是
- * `packages/feedback/message-feedback/src/types.ts`，評語與分類是
- * `packages/feedback/command-feedback/src/types.ts`。規則（樂觀鎖、內容一樣就不記、備註上限）
+ * `harness/packages/feedback/message-feedback/src/types.ts`，評語與分類是
+ * `harness/packages/feedback/command-feedback/src/types.ts`。規則（樂觀鎖、內容一樣就不記、備註上限）
  * 住在 `@nexus/plugin-feedback`，這裡只放兩邊都要讀的詞彙。決議見
  * [#267](https://github.com/DemianLi/nexus-agent/issues/267)，落地是
  * [#278](https://github.com/DemianLi/nexus-agent/issues/278)。
@@ -15,7 +15,7 @@
  * `ddefc45`）。即時畫面那一側拿得到同一個值：串流 `message-start` 的 `id` 就是日誌記下的那個——
  * 供應商給了 id 就是它，沒給的話串流層補 `run-<runId>` 並寫回訊息，而且補在日誌記下之前
  * （[#382](https://github.com/DemianLi/nexus-agent/issues/382) 的量測；絆索在
- * `apps/harness/src/feedback-wire.test.ts`）。
+ * `harness/apps/harness/src/feedback-wire.test.ts`）。
  *
  * **只有記了 id 的回覆評得到。** 沒記 id 的不是目標，畫面上也不長按鈕：被停下來的那半段（pump 新建的一則），
  * 以及不走 v3 串流、供應商又沒給 id 的那幾則（CLI 跑假模型時就是這樣；CLI 接真的供應商實測有

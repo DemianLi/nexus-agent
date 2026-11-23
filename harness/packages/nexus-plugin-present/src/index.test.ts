@@ -3,9 +3,9 @@
  *
  * 這一檔走樹的這一層（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469) 起 present 掛在 Cordis 樹上）：tools 提供者、
  * 會話查找與 fs 查找三位提供者加 `present` 那一列，backend 是真的磁碟（基座的 `FilesystemBackend`，虛擬路徑模式，同
- * `apps/harness` 的圍堵 backend）。`tool/call`、`tools/result` 的派發與 `tool/result` 由測試自己照圍堵的順序做
+ * `harness/apps/harness` 的圍堵 backend）。`tool/call`、`tools/result` 的派發與 `tool/result` 由測試自己照圍堵的順序做
  * （`tool/call` → 本體 → 派發 `tools/result` → 同步記 `tool/result`，見 {@link settle}）；派發給的是提供者登記簿裡**每一位**
- * `tools/result` 觀察者，就是宿主折進 thread 的那一批。圍堵、真的圖與 pump 那一半在 `apps/harness/src/present-tool.test.ts`。
+ * `tools/result` 觀察者，就是宿主折進 thread 的那一批。圍堵、真的圖與 pump 那一半在 `harness/apps/harness/src/present-tool.test.ts`。
  *
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core`；`src/index.ts` 不行。
  */
@@ -528,10 +528,10 @@ describe('拒絕', () => {
   });
 
   /**
-   * **這兩條同時是 `apps/harness` 那條交付讀檔路由的正確性前提**
+   * **這兩條同時是 `harness/apps/harness` 那條交付讀檔路由的正確性前提**
    * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）：那條路由「日誌 header 記著
    * 工作區根 ⟹ 線以下每一顆交付都錨在它」的推理，靠的就是「沒有工作區的那一段生不出交付」。
-   * 這裡改成「沒有工作區就錨在 cwd」的那天，那條路由會開始靜默錯檔，而 `apps/harness` 不會有
+   * 這裡改成「沒有工作區就錨在 cwd」的那天，那條路由會開始靜默錯檔，而 `harness/apps/harness` 不會有
    * 任何東西紅——所以要從這裡紅。
    */
   it('沒有人宣告工作區就拒絕——即使 backend 在（沒有工作區時組裝點照樣墊一顆 StateBackend）', async () => {

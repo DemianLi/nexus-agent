@@ -59,7 +59,7 @@ export interface LockContended {
   readonly contended: true;
 }
 
-/** `--flock` 的結束碼，同 `native/sandbox-spawner/src/main.rs`。 */
+/** `--flock` 的結束碼，同 `harness/native/sandbox-spawner/src/main.rs`。 */
 const FLOCK_CONTENDED = 10;
 const FLOCK_FAILED = 11;
 

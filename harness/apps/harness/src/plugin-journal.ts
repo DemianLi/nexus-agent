@@ -336,9 +336,9 @@ function nameAssertionMatches(patch: Record<string, unknown>, name: string): boo
 /**
  * 把紀錄折成 patch 清單，**一列一條覆蓋項**（照 dsh）：
  *
- * - 開關：改**最後一條**相符的覆蓋項的 `disabled`，沒有就追加（`packages/boot/plugin-manager/src/patch.ts:14-43`，相符＝同 id、
+ * - 開關：改**最後一條**相符的覆蓋項的 `disabled`，沒有就追加（`harness/packages/boot/plugin-manager/src/patch.ts:14-43`，相符＝同 id、
  *   不是 `insert`、`name` 沒寫或等於這一列的；{@link nameAssertionMatches}）。
- * - 設定：改同一條的 `config`，沒有就追加 `{ id, name, config }`（`packages/boot/config-editor/src/index.ts:119-135`）。
+ * - 設定：改同一條的 `config`，沒有就追加 `{ id, name, config }`（`harness/packages/boot/config-editor/src/index.ts:119-135`）。
  * - 恢復成繼承值：拿掉**那一列所有**覆蓋項的 `config`，只剩 `id`／`name` 的整條拿掉（`:120-129`）。**不是把出貨值抄一份。**
  * - 遷移來的 `patch` 原樣接上，保留它在清單裡的位置（`insert` 之後的 patch 才指得到插進來的列）。
  *

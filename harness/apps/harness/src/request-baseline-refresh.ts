@@ -11,7 +11,7 @@
  * 手動跑，不進測試：
  *
  * ```
- * cd apps/harness
+ * cd harness/apps/harness
  * node_modules/.bin/tsx --tsconfig ../../tsconfig.runtime.json src/request-baseline-refresh.ts
  * ```
  *

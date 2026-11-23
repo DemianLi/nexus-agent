@@ -15,8 +15,8 @@
  * **抓不到一律拋，不回預設值。** 一個「找不到就退回寫死的值」的解析器會把自己要守的東西吃掉：
  * 文件改壞了它照樣餵出舊值，測試照樣綠。這一條有反向突變在守（見 `documented-fixture.test.ts`）。
  *
- * 同型的做法在 web 那側已經有兩處：`apps/web/src/lib/question-view.test.ts` 讀
- * `packages/nexus-core/src/turn-cancel.ts` 的原始碼比字串，`apps/web/src/hooks/use-mobile.test.tsx`
+ * 同型的做法在 web 那側已經有兩處：`web/src/lib/question-view.test.ts` 讀
+ * `harness/packages/nexus-core/src/turn-cancel.ts` 的原始碼比字串，`web/src/hooks/use-mobile.test.tsx`
  * 讀 `sidebar.tsx`。都是釘「兩個沒有相依關係的東西要保持一致」。
  *
  * @see [#490](https://github.com/DemianLi/nexus-agent/issues/490)
@@ -25,7 +25,7 @@
 
 import { readFileSync } from 'node:fs';
 
-/** 被讀的那份文件，寫進錯誤訊息用。`apps/harness/src/` 往上三層就是 repo 根。 */
+/** 被讀的那份文件，寫進錯誤訊息用。`harness/apps/harness/src/` 往上三層就是 repo 根。 */
 export const OPERATIONS_DOC = 'docs/operations.md';
 
 /** 解析不出來時拋這個。訊息要指名是哪份文件的哪一段該修。 */

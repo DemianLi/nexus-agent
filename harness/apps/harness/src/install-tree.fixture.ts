@@ -1,7 +1,7 @@
 /**
- * 安裝樹（`apps/harness`）上「有沒有多出檔」的量具（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）。
+ * 安裝樹（`harness/apps/harness`）上「有沒有多出檔」的量具（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）。
  *
- * Loader 的 `createResolve` 上游會在 `baseUrl` 所屬專案根建 `.cordis/{.gitignore,resolve.mjs}`；`vendor/loader`
+ * Loader 的 `createResolve` 上游會在 `baseUrl` 所屬專案根建 `.cordis/{.gitignore,resolve.mjs}`；`harness/vendor/loader`
  * 本地修改第 9 條讓宿主給解析函式、不再建。這裡量頂層的檔名（不含 `node_modules`）與 `.cordis/` 底下的檔，
  * 前後一比就知道動作有沒有往安裝樹寫東西。
  */
@@ -10,7 +10,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** `apps/harness`：這個檔在 `src/` 底下。 */
+/** `harness/apps/harness`：這個檔在 `src/` 底下。 */
 export const INSTALL_TREE = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** 排序過的清單：頂層檔名（不含 `node_modules`）加 `.cordis/` 底下的檔。 */

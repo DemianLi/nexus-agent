@@ -1,6 +1,6 @@
 /**
  * `langgraph` 下的 `agent/pre-step` 轉接格：只看這一顆自己派了什麼、怎麼交回；掛不掛（只在 `langgraph`、有監聽者、只折進 root）
- * 由 `fold-pre-step.test.ts` 在 fold 上驗，計劃模式交待關的時點由 `apps/harness/src/plan-mode-pre-step.test.ts` 在真的圖上驗。
+ * 由 `fold-pre-step.test.ts` 在 fold 上驗，計劃模式交待關的時點由 `harness/apps/harness/src/plan-mode-pre-step.test.ts` 在真的圖上驗。
  */
 
 import { describe, expect, it } from 'vitest';

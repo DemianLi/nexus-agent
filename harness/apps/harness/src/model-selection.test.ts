@@ -1,6 +1,6 @@
 /**
  * **每會話模型選擇走完產品路徑**——[#723](https://github.com/DemianLi/nexus-agent/issues/723) 的驗收。機制本身的規則在
- * `packages/nexus-core/src/model-selection.test.ts`。
+ * `harness/packages/nexus-core/src/model-selection.test.ts`。
  *
  * 組裝走 `createCliAgent({ live: true })` 與出貨清單，模型是真的 `ChatOpenAI`，對手方是本機的假 Chat Completions 端點，
  * 所以量到的是**真的會送上線的請求本體**：換了模型 `model` 欄位是哪一個、通知在不在、沒選過的會話送出去的東西有沒有變。

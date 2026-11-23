@@ -14,7 +14,7 @@
  * private／protected 成員（TS4094）、程式拉進 `include` 以外的檔（TS6307，例如 import 了沒宣告的 workspace 套件）、
  * references 繞成圈（TS6202）。沒人引用的套件只開 incremental，不擋這幾類。
  *
- * `apps/web` 不在這裡，`typecheck.sh` 對它單獨 `tsc --noEmit`。`packages/*`、`apps/*` 底下其餘有 `package.json` 的目錄
+ * `web` 不在這裡，`typecheck.sh` 對它單獨 `tsc --noEmit`。`harness/packages/*`、`apps/*` 底下其餘有 `package.json` 的目錄
  * 都要有一份，漏了就丟錯：少查一個套件，CI 不會紅。
  *
  * 內容沒變不重寫：設定檔比 buildinfo 新，`tsc -b` 會判成過期。
@@ -34,7 +34,7 @@ export const CACHE_DIR = 'node_modules/.cache/nexus-typecheck';
  * 單獨檢查、不進 project references 的套件。沒有套件 import web 的原始碼（harness 只在執行期讀它的 `dist`），放進
  * references 也省不到重查；單獨跑能跟單執行緒的 `tsc -b` 同時用到另一顆核心。`typecheck.sh` 寫死同一份清單，harness 的測試核對兩邊一致。
  */
-export const STANDALONE = ['apps/web'] as const;
+export const STANDALONE = ['web'] as const;
 
 const DEPENDENCY_FIELDS = [
   'dependencies',
@@ -44,7 +44,7 @@ const DEPENDENCY_FIELDS = [
 ] as const;
 
 export interface TypecheckProject {
-  /** 相對 repo 根，例：`packages/nexus-core`。 */
+  /** 相對 repo 根，例：`harness/packages/nexus-core`。 */
   readonly dir: string;
   /** 被別的套件引用，要輸出宣告檔。 */
   readonly composite: boolean;
@@ -77,7 +77,7 @@ export function typecheckProjects(): TypecheckProject[] {
   }));
 }
 
-/** `packages/*`、`apps/*` 底下有 `package.json`、卻沒有產生設定也不是 {@link STANDALONE} 的目錄。 */
+/** `harness/packages/*`、`apps/*` 底下有 `package.json`、卻沒有產生設定也不是 {@link STANDALONE} 的目錄。 */
 export function uncoveredDirs(projects: readonly TypecheckProject[]): string[] {
   const covered = new Set<string>([...projects.map((project) => project.dir), ...STANDALONE]);
   return ['packages', 'apps']

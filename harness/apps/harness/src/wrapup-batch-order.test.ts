@@ -11,7 +11,7 @@
  *
  * ## 危險本身
  *
- * `packages/nexus-plugin-goal/src/tools.ts` 的 `wrapupCommand` 回的 `Command` 帶著兩則
+ * `harness/packages/nexus-plugin-goal/src/tools.ts` 的 `wrapupCommand` 回的 `Command` 帶著兩則
  * 訊息：自己那顆 `ToolMessage`，**後面當場接一則 `HumanMessage`**。模型那一輪若同時叫了
  * 第二顆工具，這則 `HumanMessage` 就**插進兩顆工具結果中間**。
  *
@@ -171,7 +171,7 @@ function wrapupBatch(state: ScriptedModelState): string[] {
       '模型讀到的每一份 prompt 裡都沒有帶 `GOAL_WRAPUP_MARKER` 的訊息。\n' +
         '這不是順序變了，是**收尾指示根本沒到模型手上**：`wrapupCommand` 回的 `Command` ' +
         '要穿過 tool node 與 middleware 才進得了 `state.messages`，中間有人吃掉了它。\n' +
-        '先去看 `packages/nexus-plugin-goal/src/tools.ts` 的 `wrapupCommand`，' +
+        '先去看 `harness/packages/nexus-plugin-goal/src/tools.ts` 的 `wrapupCommand`，' +
         '以及那句 `authority.kind !== "goal-round"` 的閘門——續行輪沒排成的話這條路也不會走到。',
     );
   }

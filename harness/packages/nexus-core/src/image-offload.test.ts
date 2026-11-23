@@ -1,7 +1,7 @@
 /**
  * 圖片額度與 `image/offload`（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）的純函式與 middleware 規則。
  *
- * 掛進真的組裝之後（pump 蓋記號、日誌落盤、續接）的行為在 `apps/harness/src/image-offload-pump.test.ts`。
+ * 掛進真的組裝之後（pump 蓋記號、日誌落盤、續接）的行為在 `harness/apps/harness/src/image-offload-pump.test.ts`。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';

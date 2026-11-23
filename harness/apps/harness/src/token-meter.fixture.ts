@@ -1,7 +1,7 @@
 /**
  * token-meter 的**舊外殼**：`NexusPlugin` 形狀，給還在相容層底下的測試用（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）。
  *
- * token-meter 本身已經是樹上的函式插件（`packages/nexus-plugin-token-meter`，沒有一行 `@nexus/core`）。手搭 `PluginEntry`
+ * token-meter 本身已經是樹上的函式插件（`harness/packages/nexus-plugin-token-meter`，沒有一行 `@nexus/core`）。手搭 `PluginEntry`
  * 清單、直接 `createNexusAgent` 的測試要一顆「登記用量投影」的 `NexusPlugin`，就走這個外殼——**包的是同一個
  * `tokenMeterUnit`**，所以單元只有一個出處。同 `echo.fixture.ts` 的前例。
  *

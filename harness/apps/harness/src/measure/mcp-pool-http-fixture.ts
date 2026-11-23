@@ -1,6 +1,6 @@
 /**
  * MCP 連線池前後測（#2570）的 HTTP server：起在驅動行程裡（`127.0.0.1`），無狀態的舊協議（單包 SDK 1.x），
- * 工具同 {@link ./mcp-pool-stdio-server.ts} 的 `lookup`。做法照 `packages/nexus-plugin-mcp/src/http-fixtures.ts` 的 `startLegacyHttp`。
+ * 工具同 {@link ./mcp-pool-stdio-server.ts} 的 `lookup`。做法照 `harness/packages/nexus-plugin-mcp/src/http-fixtures.ts` 的 `startLegacyHttp`。
  *
  * 池的指標量在 server 這一側：每種 JSON-RPC 方法收到幾次、`initialize` 與 `tools/call` 的時間、開著的 TCP 連線數與峰值。
  * 這台代表部署方的外部服務，它的 CPU 不算進被量的行程樹。

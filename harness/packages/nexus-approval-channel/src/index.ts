@@ -21,7 +21,7 @@
  *
  * **`ChannelForThread`（逐條 thread 的管道，#1418）今天沒有提供者，也沒有查詢它的消費者。** 型別與服務名（
  * {@link CHANNEL_FOR_THREAD_SERVICE}）留在這裡，是因為 #1418 的接縫（`@nexus/core` 的 `NexusServices.channelForThread`、`createHostServicesPlugin` 的選項）
- * 已經存在；但**全樹今天沒有任何地方提供它**，只有測試夾具（`apps/harness/src/ask-user.fixture.ts`，舊外殼）還在查。樹上的
+ * 已經存在；但**全樹今天沒有任何地方提供它**，只有測試夾具（`harness/apps/harness/src/ask-user.fixture.ts`，舊外殼）還在查。樹上的
  * `ask-user` 不查它。等出現真的會逐條不同的答題者時，再加提供者與查詢，一起加回來。
  * 這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離：答題者不是逐條 thread 提供（見上）。
  *
@@ -35,7 +35,7 @@
  * - **一條通道加一個判別式**（#231 登記過，不在這張新增）：LangGraph 只給一顆 `interrupt()`，沒有兩條獨立的事件通道，所以提問的中斷酬載明著帶 `kind`，判別式是
  *   {@link QUESTION_INTERRUPT_KIND}。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

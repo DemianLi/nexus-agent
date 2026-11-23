@@ -141,7 +141,7 @@ export type WireQueuedInputSource =
   | {
       /**
        * 折疊器不認得的來源種類（比如新版 harness 加了一種、這一側還沒跟上）。**照 dsh 的做法收下**：dsh 的 client 不驗佇列件的
-       * 來源種類，`MessageSource` 是可合併擴充的聯集、「consumers fall through unknown kinds」（`packages/llm/llm/src/message.ts`），
+       * 來源種類，`MessageSource` 是可合併擴充的聯集、「consumers fall through unknown kinds」（`harness/packages/llm/llm/src/message.ts`），
        * `ui-chat` 的 inbox 節點只比對 `=== 'user'`。所以這一件**照列、當成非人的件**，不丟那一件、不丟整份。
        * 畫面用通用標籤，不給插話鈕（它不是人說的話，也不知道能不能轉成插話）。
        */

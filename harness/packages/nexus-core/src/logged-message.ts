@@ -5,9 +5,9 @@
  * ## 為什麼是這個形狀，不是 dsh 的 `Message`
  *
  * dsh 在 `assistant/message`、`tool/result`、`user/message` 裡帶的是它自己的 `Message`
- * （`packages/llm/llm/src/message.ts`，`c291e79`）：`{ id, role, content: ContentBlock[], source }`，
+ * （`harness/packages/llm/llm/src/message.ts`，`c291e79`）：`{ id, role, content: ContentBlock[], source }`，
  * 供應商要的私有重播資料放在 `source.replayState`。它的紀律是**重播無損**——從日誌推回來的
- * 訊息就是當時送給模型的那一則（`packages/core/session/src/surface.ts` 的 `deriveEventMessage`
+ * 訊息就是當時送給模型的那一則（`harness/packages/core/session/src/surface.ts` 的 `deriveEventMessage`
  * 直接回事件裡那一顆）。
  *
  * **我們模型看到的訊息是 LangChain 的 `BaseMessage`，不是 dsh 的 `Message`。** 換成 dsh 的形狀
@@ -29,7 +29,7 @@
  *
  * 所以寫出去這一半自己取欄位（{@link storedMessageOf}），讀回那一半照舊走基座的 `mapStoredMessagesToChatMessages`
  * （建構子把 `data` 原樣收下，自有鍵實測留得住）。**與 dsh 的偏離（理由 1）**：dsh 的日誌快照寫物件屬性一律
- * `Object.defineProperty`（`packages/util/values/src/index.ts`，`687f282e`），`"__proto__"` 照樣是自有鍵；
+ * `Object.defineProperty`（`harness/packages/util/values/src/index.ts`，`687f282e`），`"__proto__"` 照樣是自有鍵；
  * 我們記的是 LangChain 的 `BaseMessage`，基座表達不出這件事，退到自己取欄位。
  *
  * ## 為什麼還要再壓一次 JSON

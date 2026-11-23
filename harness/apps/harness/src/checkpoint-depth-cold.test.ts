@@ -140,7 +140,7 @@ describe('同台寫入：新行程裡模型回極深的工具參數，日誌那�
    * （`bounded-event-queue.ts` 偏離 D），下行不斷，一路收到 root 的 `lifecycle failed`。
    *
    * 斷言**客戶端這一側**：下行走完（`finished`）、折疊出來的狀態是 `failed`、`error` 文字是日誌那一關的訊息。**碼不在下行上**——
-   * `lifecycle failed` 只帶文字（實測，`packages/nexus-wire/src/conversation.ts` 的 failed 路徑只收 `data.error` 字串），
+   * `lifecycle failed` 只帶文字（實測，`harness/packages/nexus-wire/src/conversation.ts` 的 failed 路徑只收 `data.error` 字串），
    * `NESTING_TOO_DEEP` 在日誌的 `turn/failed` 與歷史裡；下行帶碼另開 #1844。日誌那一關不看平台，整份日誌沒有 `RangeError`。
    *
    * 拿掉截斷：Linux 上下行 `broken`；macOS 上下行不會爆，但客戶端收不到截斷佔位，`sawTruncation` 那條斷言照樣紅。

@@ -33,7 +33,7 @@ import { ManifestError, validateManifest } from './manifest.js';
 import type { Manifest } from './manifest.js';
 
 /**
- * 上游 `FiberState` 的值（vendor/cordis/src/fiber.ts）。它是 `const enum`，nexus 開了 `verbatimModuleSyntax`，
+ * 上游 `FiberState` 的值（harness/vendor/cordis/src/fiber.ts）。它是 `const enum`，nexus 開了 `verbatimModuleSyntax`，
  * 從宣告檔讀它會 TS2748，所以照值抄一份（`measure/cordis-1386/tree.ts` 同一個理由）。
  */
 export const FIBER_STATE = {

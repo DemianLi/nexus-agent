@@ -11,7 +11,7 @@
  * - `header`：Node http 驗 header 值的規則（`validateHeaderValue`），允許 tab、0x20–0x7E、0x80–0xFF。
  *   要在這裡先擋，是因為 MCP 的 HTTP transport 走 `fetch`，undici 的 `Headers` 遇到 CR、LF、NUL 拋的錯會原樣帶出整個值。
  *
- * 拒絕訊息只講名字與來源層，不含值的任何片段。Rust 宿主照同一條規則（`native/sandbox-spawner/host/src/mcp/redact.rs` 的 `check_value`），
+ * 拒絕訊息只講名字與來源層，不含值的任何片段。Rust 宿主照同一條規則（`harness/native/sandbox-spawner/host/src/mcp/redact.rs` 的 `check_value`），
  * 兩邊跑同一份樣本 `credentials-vectors.json` 的 `mcpValue`。
  *
  * @module

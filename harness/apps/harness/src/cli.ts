@@ -685,7 +685,7 @@ export async function driveGoalRounds(
  * **為什麼 `/help` 不註冊成一個真的命令**：一份清單該長什麼樣，是**發派面自己的問題**。
  * 這條 REPL 的答案必須含 `/exit`（不然清單漏掉一個真的打得出去的東西）；dsh 那種 composer
  * 選單的答案則**不該含 `/help`**（選單自己就是 help）。同一個註冊上去的 handler 生不出
- * 這兩份。而出貨的那份清單（`apps/harness/cordis.yml`）正是 `cli.ts` 與
+ * 這兩份。而出貨的那份清單（`harness/apps/harness/cordis.yml`）正是 `cli.ts` 與
  * [`serve-run.ts`](./serve-run.ts) 共用的那一份——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側，這也正是 dsh
  * 的切法（見 {@link formatCommandHelp}）。
  *
@@ -712,7 +712,7 @@ const HELP_LINE_PATTERN = /^\/help(?:\s.*)?$/u;
  * （`references/deepseek-harness/packages/client/ui-commands/src/client/service.ts:142`，
  * 對讀版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`），資料來源是同一個
  * `commands.list()`；而 dsh 自己的 CLI（`apps/cli/`）**一個命令發派面都沒有**——
- * commands 那包的 README（`packages/interaction/commands/README.zh.md:28`）明說：無 UI 的
+ * commands 那包的 README（`harness/packages/interaction/commands/README.zh.md:28`）明說：無 UI 的
  * 演示主幹與 ACP 自動化不提供命令適配器，也不需要它。
  *
  * **所以這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離**——deepagents 與 LangChain

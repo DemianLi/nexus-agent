@@ -2,7 +2,7 @@
  * 工具卡的結果文字（[#2174](https://github.com/DemianLi/nexus-agent/issues/2174)）。
  *
  * 起一台真的 MCP server（stdio），走完整條線到 wire，比同一張卡即時收到的 `tool-finished` 與重新載入讀到的歷史。
- * 抽字規則的逐項形狀在 `tool-result-text.test.ts`，前綴的形狀在 `packages/nexus-plugin-mcp/src/untrusted-mark.test.ts`。
+ * 抽字規則的逐項形狀在 `tool-result-text.test.ts`，前綴的形狀在 `harness/packages/nexus-plugin-mcp/src/untrusted-mark.test.ts`。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';

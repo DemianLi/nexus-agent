@@ -8,7 +8,7 @@ import type {
 
 /**
  * 模型座背後的純邏輯（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）：現在選的是哪一顆、`/model`
- * 那一行怎麼解、座位上寫什麼字。契約見 `packages/nexus-wire/src/model-selection.ts`。
+ * 那一行怎麼解、座位上寫什麼字。契約見 `harness/packages/nexus-wire/src/model-selection.ts`。
  *
  * @module
  */

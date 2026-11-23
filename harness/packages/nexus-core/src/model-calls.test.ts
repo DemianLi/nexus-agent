@@ -1,7 +1,7 @@
 /**
  * **模型呼叫的起訖**——[#266](https://github.com/DemianLi/nexus-agent/issues/266) 在 core 這一側
  * 的規則：什麼時候記、記不進去會怎樣。真的跑一場之後日誌裡有什麼，在
- * `apps/harness/src/session-stats.test.ts`。
+ * `harness/apps/harness/src/session-stats.test.ts`。
  */
 
 import { AIMessage } from '@langchain/core/messages';

@@ -2,7 +2,7 @@
  * 從原始碼抽持久化型別圖（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1）。
  *
  * 照 dsh `scripts/persistence-schema.spec.ts`（`687f282e`）：在暫存目錄搭一棵照 nexus 佈局的小 repo
- * （`tsconfig.base.json`、`packages/nexus-core/src` 的 `SessionEventMap` 與 `StoredSessionHeader`、一個放酬載的套件），
+ * （`tsconfig.base.json`、`harness/packages/nexus-core/src` 的 `SessionEventMap` 與 `StoredSessionHeader`、一個放酬載的套件），
  * 改原始碼、重抽、比指紋。沒搬的：surface 與 `JsonlHeaderLine` 那一格（nexus 沒有 surface 那一軸，事件根一律
  * `surface: false`；也沒有 `JsonlHeaderLine` 這個根）、訊息來源政策那一組（過渡，見 `persistence-schema.ts` 檔頭）、用 `classifyPersistenceChange`／`parsePersistenceSnapshot` 斷言的地方
  * （驗證器，⓪b-2；這裡改成比指紋）。
@@ -30,14 +30,14 @@ import {
   type PersistenceSchemaInventory,
 } from './persistence-schema-model.js';
 
-const ROOTS = ['packages', 'apps/harness/src'];
+const ROOTS = ['packages', 'harness/apps/harness/src'];
 
 /** 每次抽取都建一個 program；夾具測試一格最多抽三次。 */
 const EXTRACT_TIMEOUT = 60_000;
 
-const PAYLOAD = 'packages/fixture-payload/src/types.ts';
-const SESSION_LOG = 'packages/nexus-core/src/session-log.ts';
-const SESSION_STORE = 'packages/nexus-core/src/session-store.ts';
+const PAYLOAD = 'harness/packages/fixture-payload/src/types.ts';
+const SESSION_LOG = 'harness/packages/nexus-core/src/session-log.ts';
+const SESSION_STORE = 'harness/packages/nexus-core/src/session-store.ts';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -73,16 +73,16 @@ function fixture(payload: string, options: { event?: string } = {}): string {
       },
     }),
   );
-  mkdirSync(join(root, 'apps/harness/src'), { recursive: true });
+  mkdirSync(join(root, 'harness/apps/harness/src'), { recursive: true });
   put(
     root,
-    'apps/harness/src/jsonl-session-store.ts',
+    'harness/apps/harness/src/jsonl-session-store.ts',
     "import type { StoredSessionHeader } from '@nexus/core';\nexport interface JsonlHeaderLine extends StoredSessionHeader { readonly type: 'session' }\n",
   );
   put(root, PAYLOAD, payload);
   put(
     root,
-    'packages/nexus-core/src/index.ts',
+    'harness/packages/nexus-core/src/index.ts',
     [
       "export type { SessionEvent, SessionEventMap } from './session-log.js';",
       "export type { StoredSessionHeader } from './session-store.js';",
@@ -314,7 +314,7 @@ describe('從原始碼抽持久化型別', { timeout: EXTRACT_TIMEOUT }, () => {
     const before = extractPersistenceSchema(root);
     put(
       root,
-      'packages/fixture-extension/src/index.ts',
+      'harness/packages/fixture-extension/src/index.ts',
       "import '@fixture/payload'; declare module '@fixture/payload' {interface NestedMap {second: {value: number}}}",
     );
     const after = extractPersistenceSchema(root);
@@ -327,7 +327,7 @@ describe('從原始碼抽持久化型別', { timeout: EXTRACT_TIMEOUT }, () => {
     const before = extractPersistenceSchema(root);
     put(
       root,
-      'packages/fixture-extension/src/index.ts',
+      'harness/packages/fixture-extension/src/index.ts',
       `import '@nexus/core'; declare module '@nexus/core' {
 interface SessionEventMap {
 /** A plugin event. */
@@ -345,7 +345,7 @@ interface SessionEventMap {
     const root = fixture('export interface Payload {id: string}');
     put(
       root,
-      'apps/harness/src/extension.ts',
+      'harness/apps/harness/src/extension.ts',
       `import '@nexus/core'; declare module '@nexus/core' {
 interface SessionEventMap {
 /** A harness event. */
@@ -362,7 +362,7 @@ interface SessionEventMap {
     const root = fixture('export interface Payload {id: string}');
     put(
       root,
-      'packages/fixture-extension/src/index.tsx',
+      'harness/packages/fixture-extension/src/index.tsx',
       `import '@nexus/core'; declare module '@nexus/core' {
 interface SessionEventMap {
 /** A JSX-module event. */
@@ -375,7 +375,7 @@ interface SessionEventMap {
     );
     put(
       root,
-      'packages/fixture-extension/src/index.tsx',
+      'harness/packages/fixture-extension/src/index.tsx',
       `import '@nexus/core';
 interface Extra { 'plugin/inherited': {value: number} }
 declare module '@nexus/core' { interface SessionEventMap extends Extra {} }
@@ -390,7 +390,7 @@ declare module '@nexus/core' { interface SessionEventMap extends Extra {} }
     );
     put(
       root,
-      'vendor/events.ts',
+      'harness/vendor/events.ts',
       `import '@nexus/core'; declare module '@nexus/core' {
 interface SessionEventMap {
 /** A contribution outside the package source corpus. */
@@ -474,7 +474,7 @@ interface SessionEventMap {
     const root = fixture("export type { Payload } from './declared.js'");
     put(
       root,
-      'packages/fixture-payload/src/declared.d.ts',
+      'harness/packages/fixture-payload/src/declared.d.ts',
       'type Bad = ReturnType<42>; export interface Payload {value: Bad}',
     );
     expect(() => extractPersistenceSchema(root)).toThrow('TS2344');
@@ -484,7 +484,7 @@ interface SessionEventMap {
     const root = fixture("export type { Payload } from './declared.js'");
     put(
       root,
-      'packages/fixture-payload/src/declared.d.ts',
+      'harness/packages/fixture-payload/src/declared.d.ts',
       'type Declared = any; export interface Payload {value: Declared}; type Unrelated = ReturnType<42>',
     );
     const model = extractPersistenceSchema(root);
@@ -501,14 +501,14 @@ interface SessionEventMap {
     );
     put(
       root,
-      'packages/fixture-payload/src/detail.ts',
+      'harness/packages/fixture-payload/src/detail.ts',
       '/** Detailed payload. */\nexport interface Detail { code: string; done: true }\n',
     );
     const model = extractPersistenceSchema(root);
     const detail = model.types.find((item) =>
-      item.names.includes('packages/fixture-payload/src/detail.ts#Detail'),
+      item.names.includes('harness/packages/fixture-payload/src/detail.ts#Detail'),
     );
-    expect(detail?.sources).toEqual(['packages/fixture-payload/src/detail.ts:2']);
+    expect(detail?.sources).toEqual(['harness/packages/fixture-payload/src/detail.ts:2']);
   });
 
   it('生成物的 sources 只記檔；宣告上方多一行註解，生成物不變，抽取結果的行號照留', () => {

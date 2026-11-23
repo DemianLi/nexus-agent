@@ -5,7 +5,7 @@
  * ## 為什麼從日誌抽
  *
  * dsh 的工具卡，結果文字只從會話日誌導出，就是 `tool/result` 那一則的內容，`isError` 是另一個旗標——
- * **成功的結果文字照樣帶**（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:51-68`，
+ * **成功的結果文字照樣帶**（`harness/packages/client/ui-chat/src/client/conversation-nodes/tool.ts:51-68`，
  * `ddefc45`；`5badb15009a` 的 `rootResult` 仍是這樣，只是行號位移。開卡的時機則已提前到參數串流中，見
  * `thread-pump.ts` 檔頭）。提問卡解析的就是這段字（`ui-tool/.../toolviews/ask-question-row.tsx`）。
  *
@@ -23,8 +23,8 @@
  * ## 文字放上線不截（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）
  *
  * 照 dsh：上限在**模型面**，日誌到畫面這一段不再截。dsh 的 `spill-policy` 掛在 `tools/post-execute`，超過預算就把全文
- * 存成 spill 檔、內容換成頭尾預覽加一行帶路徑的通知（`packages/spill/spill-policy/src/index.ts:133-150`），日誌記的就是
- * 換過的那則（`packages/core/agent-loop/src/tool-calls.ts:152-156`）；工具卡直接拿 `tool/result` 的內容
+ * 存成 spill 檔、內容換成頭尾預覽加一行帶路徑的通知（`harness/packages/spill/spill-policy/src/index.ts:133-150`），日誌記的就是
+ * 換過的那則（`harness/packages/core/agent-loop/src/tool-calls.ts:152-156`）；工具卡直接拿 `tool/result` 的內容
  * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:64-74`）。以上對 dsh `c1b47e4`，卡上引的 `477b4f4` 同內容。
  *
  * 我們的外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)，`@nexus/core` 的 `spill-policy.ts`）做的是

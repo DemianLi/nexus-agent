@@ -5,7 +5,7 @@
  * 那一版的 CLI 換不了摘要門檻（只有整份換掉的 `--plugins`），假模型那一輪碰不到摘要，所以由這支補寫。事件放在任何
  * `tool/result` 與 `turn/end` 之前：今天的推法逐顆判，排在前面的那一種先回，放後面就被別的理由蓋掉。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-summary-missing.ts <run 目錄>
  */
 

@@ -1,7 +1,7 @@
 /**
  * **每會話模型選擇的機制**——[#723](https://github.com/DemianLi/nexus-agent/issues/723) 在 core 這一側的規則：
  * 下一步用哪條路由、什麼時候附換模型通知、換模型的 middleware 換什麼。
- * 走完產品路徑之後線上看得到什麼，在 `apps/harness/src/model-selection.test.ts`。
+ * 走完產品路徑之後線上看得到什麼，在 `harness/apps/harness/src/model-selection.test.ts`。
  */
 
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';

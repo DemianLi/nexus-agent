@@ -5,7 +5,7 @@
  * 那個答案在「一條 thread 一次組裝」時沒有人走到；現在要靠 `configurable.thread_id` 挑出擁有這次呼叫的那一張，
  * 挑不出來才仍然是 `ambiguous`（寧可明說也不猜：猜錯的下場是一條 thread 的工具寫進另一條 thread 的日誌）。
  *
- * `thread_id` 到得了工具與 middleware，由 `apps/harness/src/thread-id-reaches-handlers.test.ts` 在真組裝上實測過
+ * `thread_id` 到得了工具與 middleware，由 `harness/apps/harness/src/thread-id-reaches-handlers.test.ts` 在真組裝上實測過
  * （根 agent、同步子代理、背景子代理）；這一檔用同樣形狀的設定直接餵 `forCall`。
  */
 

@@ -152,7 +152,7 @@ export type QuestionAnswer = AnswerEntry['answers'][number];
  *
  * **一定要真的 `JSON.parse`**：文字超過上限（`#settings/tool-text` 那一列的 `maxBytes`，預設 50000，
  * [#541](https://github.com/DemianLi/nexus-agent/issues/541)）時 harness 取頭尾各半、中間放一行說明
- * （`apps/harness/src/tool-result-text.ts`），截過的那一份**開頭 `{"answers":[`、結尾 `]}` 都還在**，
+ * （`harness/apps/harness/src/tool-result-text.ts`），截過的那一份**開頭 `{"answers":[`、結尾 `]}` 都還在**，
  * 用頭尾字元判斷會把它當成完整的 JSON。
  */
 export function answersOfText(text: string | undefined): readonly QuestionAnswer[] | undefined {

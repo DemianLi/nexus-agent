@@ -12,7 +12,7 @@
  *    `optionalDependencies` 走完整張圖，每個非 optional 的相依都要裝在。
  *
  * **vendor 的 `src/` 放行**（`vendor/cordis`、`include`、`loader`）：dsh 的 vendor `files` 也帶 `src`
- * （`scripts/verify-lib-manifests.ts` 同一條豁免，PR #1641），這裡沿用同一份名單，不另立一份。
+ * （`harness/scripts/verify-lib-manifests.ts` 同一條豁免，PR #1641），這裡沿用同一份名單，不另立一份。
  *
  * @module
  */
@@ -49,7 +49,7 @@ export interface PayloadOptions {
    * `npm_config_arch`，它會去找別的架構的套件、找不到就讓 grep 不可用（啟動日誌那一行會說「不可用」）；打包這一側不看那個變數。`undefined` 代表不查（單元測試用）。
    */
   readonly nativeSuffix?: string;
-  /** 允許帶 `src/` 的 vendor 套件名；省略即從 repo 的 `vendor/*` 讀。 */
+  /** 允許帶 `src/` 的 vendor 套件名；省略即從 repo 的 `harness/vendor/*` 讀。 */
   readonly vendorNames?: readonly string[];
   /** web 的 `dist` 一定要在；`false` 代表不查（#1653 之前的過渡，與單元測試用）。預設 `true`。 */
   readonly requireWebDist?: boolean;
@@ -62,8 +62,8 @@ const DEV_TOOLS = /^(tsx|vitest|eslint|typescript|tsdown|vite|prettier|playwrigh
 export const SBOM_FILE = 'sbom.cdx.json';
 
 /**
- * 產物 manifest（產物根的 `package.json`，即 `apps/harness/package.json`）的 `license` 該是什麼，照 dsh
- * `scripts/build-python-release.py:256-259`（`687f282e`）驗 `License-Expression == "MIT"`。
+ * 產物 manifest（產物根的 `package.json`，即 `harness/apps/harness/package.json`）的 `license` 該是什麼，照 dsh
+ * `harness/scripts/build-python-release.py:256-259`（`687f282e`）驗 `License-Expression == "MIT"`。
  */
 const PRODUCT_LICENSE = 'MIT';
 
@@ -190,7 +190,7 @@ function isLinkPath(path: string): boolean {
   }
 }
 
-/** 從 repo 的 `vendor/*` 讀出它們的套件名。 */
+/** 從 repo 的 `harness/vendor/*` 讀出它們的套件名。 */
 export function vendorPackageNames(root: string = ROOT): string[] {
   const base = join(root, 'vendor');
   if (!existsSync(base)) {
@@ -256,7 +256,7 @@ export function collectPayloadViolations(
       violations.push({
         path: 'node_modules/@nexus/web/dist/index.html',
         message:
-          '網頁 dist 不在產物裡：開網址會是空白頁或 404（先 build，且 apps/web 的 files 要收 dist）',
+          '網頁 dist 不在產物裡：開網址會是空白頁或 404（先 build，且 web 的 files 要收 dist）',
       });
     }
     for (const file of WEB_FONT_LICENSES) {
@@ -366,9 +366,9 @@ export function collectPayloadViolations(
   return violations;
 }
 
-/** `yaml` 是 apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解。 */
+/** `yaml` 是 harness/apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解。 */
 const parseYaml = (
-  createRequire(join(ROOT, 'apps/harness/package.json'))('yaml') as {
+  createRequire(join(ROOT, 'harness/apps/harness/package.json'))('yaml') as {
     parse: (text: string) => unknown;
   }
 ).parse;
@@ -478,7 +478,7 @@ interface InstalledManifest {
 /**
  * 沿 `from` 的祖先 `node_modules` 找一個套件的目錄。只看祖先：`resolve.paths` 還會接上全域路徑（`NODE_PATH`、
  * 家目錄與 Node 安裝前綴底下的），而 pnpm 的 `tsx` 執行檔會把 repo 的 `node_modules/.pnpm/node_modules` 加進
- * `NODE_PATH`，於是從產物外面補到產物裡沒有的套件，例如 harness 的選用 peer `vue` 會解析到 apps/web 那一顆（#2366）。
+ * `NODE_PATH`，於是從產物外面補到產物裡沒有的套件，例如 harness 的選用 peer `vue` 會解析到 web 那一顆（#2366）。
  * 產物在主機上用純 `node` 跑，不能靠建置機的這些路徑。
  */
 export function installedPackage(from: string, name: string): string | undefined {

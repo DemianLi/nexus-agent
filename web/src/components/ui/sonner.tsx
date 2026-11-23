@@ -1,7 +1,7 @@
 /**
- * nexus 層（#1680 PR A）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/sonner.tsx`），外觀照 SG（#1468 Q8），
+ * nexus 層（#1680 PR A）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/sonner.tsx`），外觀照 SG（#1468 Q8），
  * 圓角跟著 SG 的 `--radius`、toast 帶 `cn-toast`。
- * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」：
+ * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」：
  *
  * - 主題由呼叫端給，不靠 `next-themes`（規格 §6，Q19 保留）：vendor 檔 import `useTheme` 拿不掉，所以改 vendor 檔
  *   （第 49 條，`patches/0010-sonner-theme-prop.patch`）。

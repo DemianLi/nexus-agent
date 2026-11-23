@@ -1,5 +1,5 @@
 /**
- * 沙箱 spawner（`native/sandbox-spawner/`，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）在產物裡的樣子。
+ * 沙箱 spawner（`harness/native/sandbox-spawner/`，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）在產物裡的樣子。
  *
  * 產物裡的 spawner 只由 `.github/actions/sandbox-spawner` 編（ci.yml 與 release.yml 共用），目標是靜態連結 musl 的
  * `<arch>-unknown-linux-musl`。編好的執行檔與連進去的程式碼（crate、標準函式庫、musl、LLVM libunwind）的授權全文打成一份
@@ -26,7 +26,7 @@ export const SPAWNER_LICENSES_DIR = 'licenses/sandbox-spawner';
 export const RUST_STD_COPYRIGHT = `${SPAWNER_LICENSES_DIR}/rust-std/COPYRIGHT-library.html`;
 
 /** `Cargo.lock` 的位置。 */
-export const SPAWNER_LOCK = 'native/sandbox-spawner/Cargo.lock';
+export const SPAWNER_LOCK = 'harness/native/sandbox-spawner/Cargo.lock';
 
 /** 一個 crate：`runtime` 為真的連進執行檔，假的只在編譯期跑（proc-macro 與它的相依）。 */
 export interface SpawnerCrate {
@@ -129,7 +129,7 @@ export const SPAWNER_NATIVE_LIBS: readonly SpawnerNativeLib[] = [
 ];
 
 /** {@link SPAWNER_NATIVE_LIBS} 授權原文在 repo 裡的位置，`bundle.sh` 從這裡複製。 */
-export const NATIVE_LICENSES_SOURCE = 'native/sandbox-spawner/licenses';
+export const NATIVE_LICENSES_SOURCE = 'harness/native/sandbox-spawner/licenses';
 
 /** {@link SPAWNER_NATIVE_LIBS} 的授權目錄名（`<名>-<版本>`）。 */
 export function nativeLicenseDirs(): string[] {
@@ -253,11 +253,11 @@ export function bundledCrates(root: string): { name: string; version: string }[]
  * @throws 讀不出 channel。
  */
 export function rustChannel(
-  text: string = readFileSync(join(ROOT, 'native/sandbox-spawner/rust-toolchain.toml'), 'utf8'),
+  text: string = readFileSync(join(ROOT, 'harness/native/sandbox-spawner/rust-toolchain.toml'), 'utf8'),
 ): string {
   const channel = /^channel = "([^"]+)"$/mu.exec(text)?.[1];
   if (channel === undefined)
-    throw new Error('native/sandbox-spawner/rust-toolchain.toml 讀不出 channel');
+    throw new Error('harness/native/sandbox-spawner/rust-toolchain.toml 讀不出 channel');
   return channel;
 }
 

@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as feedback from './index.js';
 import { createFeedbackService, currentFeedbackItems, FEEDBACK_USAGE } from './index.js';
 
-/** 每一次落盤確認拿到的那一份日誌。這一檔不碰磁碟：確認本身的行為在 `apps/harness` 走真的 store 驗（#1606 驗收 A–D）。 */
+/** 每一次落盤確認拿到的那一份日誌。這一檔不碰磁碟：確認本身的行為在 `harness/apps/harness` 走真的 store 驗（#1606 驗收 A–D）。 */
 const checkpoints: SessionLog[] = [];
 /** 下一次落盤確認要拋的錯；`undefined` 就放行。 */
 let refuse: Error | undefined;
@@ -487,7 +487,7 @@ describe('重放驗證（#1606）', () => {
 });
 
 describe('設定', () => {
-  // **服務那一支自己留著執行期檢查**：它是一支獨立的 API（`apps/harness` 有測試直接叫它），
+  // **服務那一支自己留著執行期檢查**：它是一支獨立的 API（`harness/apps/harness` 有測試直接叫它），
   // 而 schema 只守 plugin 那條路。兩條路都要擋得住。
   it('maxNoteBytes 不是正的安全整數就拒絕（服務那一支）', async () => {
     for (const maxNoteBytes of [0, -1, 1.5, Number.NaN]) {

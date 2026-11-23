@@ -7,7 +7,7 @@
  * ## 行程級、一列；只收路徑，不掃描
  *
  * 一棵樹只掛一列提供者。每顆消費者經 `ctx.skillSources.addSource(path)` 登記，登記是 effect，消費者那一列卸載時登記處自己撤掉。
- * **宿主**（`apps/harness`）經 {@link SkillSourcesProviderHandle.entries} 讀每一條路徑連同登記它的那一列的 id，把來源是那一列的
+ * **宿主**（`harness/apps/harness`）經 {@link SkillSourcesProviderHandle.entries} 讀每一條路徑連同登記它的那一列的 id，把來源是那一列的
  * 路徑折進每條 thread 的 `registry.skills.addSource`（照那一列登記的順序，`sources` 依序即優先序）；那一面不在
  * {@link SkillSourceRegistry} 的契約裡，消費者看不到。
  *

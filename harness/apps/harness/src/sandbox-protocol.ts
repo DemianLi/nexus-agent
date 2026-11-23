@@ -1,13 +1,13 @@
 /**
  * 沙箱 spawner 控制通道的編解碼（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）：**純函式、不依賴任何套件**，
- * 樹外的 `scripts/release/spawner-probe.ts` 也直接 import 這一份。格式的定義在
- * `native/sandbox-spawner/src/protocol.rs` 的檔頭；兩邊對同一份向量檔（`native/sandbox-spawner/protocol-vectors.json`）測。
+ * 樹外的 `harness/scripts/release/spawner-probe.ts` 也直接 import 這一份。格式的定義在
+ * `harness/native/sandbox-spawner/src/protocol.rs` 的檔頭；兩邊對同一份向量檔（`harness/native/sandbox-spawner/protocol-vectors.json`）測。
  *
  * @module
  */
 
 /** 沙箱 spawner 的執行檔在產物裡的位置。 */
-export const SPAWNER_PATH = 'native/nexus-sandbox-spawner';
+export const SPAWNER_PATH = 'harness/native/nexus-sandbox-spawner';
 
 /** 一框最多多大，同 spawner 的 `MAX_FRAME`。 */
 export const MAX_FRAME = 1 << 20;

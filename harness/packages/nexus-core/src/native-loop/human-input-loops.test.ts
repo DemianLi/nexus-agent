@@ -2,7 +2,7 @@
  * 兩個 loop 在停下來問人時要一樣的三件事（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：
  *
  * - **併發名額**：一顆在問人時讓出名額，排在上限後面的呼叫照樣起跑。`langgraph` 是那顆中斷了就收掉；`native` 是 `ask` 期間把名額還回去。
- *   上限 1 時 LangGraph 會把第一顆之後的呼叫丟掉（`apps/harness/src/settings/agent-loop.ts` 檔頭偏離 0），所以量上限 2、一批三顆。
+ *   上限 1 時 LangGraph 會把第一顆之後的呼叫丟掉（`harness/apps/harness/src/settings/agent-loop.ts` 檔頭偏離 0），所以量上限 2、一批三顆。
  * - **工具逾時**：等人的時間不算進工具自己宣告的時限。`langgraph` 接回時從頭重跑、時限重給；`native` 等人時停表、接回後給剩下的。
  *   逾時那一句的「等了多久」兩邊都只算跑的時間。
  * - **中斷 id**：同一顆呼叫問好幾次，id 不變；同一批兩顆各自不同。

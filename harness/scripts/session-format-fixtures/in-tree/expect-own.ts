@@ -4,7 +4,7 @@
  *
  * 事件直接從日誌逐行 `JSON.parse`，不經任何一版的 store：要比的是「那一版的推法」，不是「那一版的讀檔」。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 rev 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那個 rev 的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-expect-own.ts <夾具目錄> <會話 id>...
  */
 

@@ -1,7 +1,7 @@
 /**
  * 監督行程控制面的編解碼（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §五）：
  * 監督行程與對話行程（或一對裡的組合行程）、與前台之間的訊息。**純函式、不依賴任何套件**。格式的定義在
- * `native/sandbox-spawner/src/supervisor_protocol.rs` 的檔頭；兩邊對同一份向量檔（`native/sandbox-spawner/supervisor-vectors.json`）測。
+ * `harness/native/sandbox-spawner/src/supervisor_protocol.rs` 的檔頭；兩邊對同一份向量檔（`harness/native/sandbox-spawner/supervisor-vectors.json`）測。
  *
  * 框（長度前綴）與 spawner 的控制通道同一個格式，用 {@link frame}、{@link takeFrames}。四個方向各一對編解碼，種類 byte 在四個方向之間不重複：
  * 這兩條通道之間框送錯方向時，解碼器丟「不認得的種類」。跟 spawner 控制通道的種類 byte 有重疊（`R`、`E`），那條通道的框不在保證內。

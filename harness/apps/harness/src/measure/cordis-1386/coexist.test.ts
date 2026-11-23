@@ -65,7 +65,7 @@ describe('新舊版並存加排水（#1386 ③，tsx 子行程）', () => {
     );
 
     // 負對照：不開 isolate，第二版 provide 同名服務撞名、起不來（FAILED）；它開的子行程照樣收掉。
-    // 撤掉之後同一顆 fiber 要收斂到 DISPOSED：上游 #127，由 vendor/patches/0001（上游 #185）修好，
+    // 撤掉之後同一顆 fiber 要收斂到 DISPOSED：上游 #127，由 harness/vendor/patches/0001（上游 #185）修好，
     // 拿掉那份修補就停在 FAILED。（#1386 探針當時只讀了撤掉之前那一次，又把 3 誤當成 UNLOADING。）
     expect(negative).toMatchObject({
       v2State: STATE.FAILED,

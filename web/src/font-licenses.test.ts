@@ -49,7 +49,7 @@ describe('字型授權全文跟著字型進產物（#1713，照 dsh brandFontLic
   });
 });
 
-describe('build 最後一步的量具（scripts/check-font-licenses.mjs）', () => {
+describe('build 最後一步的量具（harness/scripts/check-font-licenses.mjs）', () => {
   let dist: string | undefined;
   afterEach(() => {
     if (dist !== undefined) rmSync(dist, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 /**
  * 把協定 frame 折成一份可以直接畫出來的對話。
  *
- * **它住在 `@nexus/wire` 而不是 `apps/web`，理由不是「共用」，是測法。** 放在 web 裡
+ * **它住在 `@nexus/wire` 而不是 `web`，理由不是「共用」，是測法。** 放在 web 裡
  * 它只驗得到手寫的 fixture，而手寫 fixture 會靜靜地與基座漂移——那正是
  * `stream-parity.test.ts` 當初存在的理由。放在這裡，`@nexus/harness` 的測試就能
  * **拿真的 agent 跑過真的線再折進來，跟 `invoke` 的結果對照**。這一層因此不得碰
@@ -292,7 +292,7 @@ export interface ToolEntry {
   /**
    * 失敗的**錯誤碼**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：判斷「這張卡是怎麼失敗的」讀這一格，
    * 不讀 {@link ToolEntry.error} 的字。照 dsh，碼跨線、畫面比碼（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76`
-   * 把 `data.error` 原樣交給 client，`packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289` 比
+   * 把 `data.error` 原樣交給 client，`harness/packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289` 比
    * `error?.code`）。
    *
    * - 日誌 `tool/result.error.code` 的那個碼，由 harness 放在失敗的 `tool-finished` 上（例如停在核准點或提問時按了
@@ -343,7 +343,7 @@ export interface ToolEntry {
  *
  * **這一則只有本地記得：下行不回聲決定。** 被拒的那顆呼叫在下行上有卡——pump 從會話日誌的
  * `tool/call` 開、`tool/result` 收，畫成失敗、紅字是拒絕理由
- * （[#297](https://github.com/DemianLi/nexus-agent/issues/297)，`apps/harness/src/rejection-wire.test.ts`）
+ * （[#297](https://github.com/DemianLi/nexus-agent/issues/297)，`harness/apps/harness/src/rejection-wire.test.ts`）
  * ——但卡說的是「這顆沒執行、模型看到了什麼」，**不說人按了什麼**：同一張失敗的卡也可能來自
  * 規則直接擋、或沒有核准管道。我們沒有 dsh 的 `approval/asked`／`approval/decided`
  * （[#220](https://github.com/DemianLi/nexus-agent/issues/220) 認帳不做），所以決定要跟
@@ -2394,7 +2394,7 @@ export const UNFINISHED_TOOL_TEXT = '這一輪已經結束，這次呼叫沒有�
 /**
  * 一輪收掉時還沒有結果的那次呼叫，卡上的錯誤碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
  * 值照 dsh 替沒結果的卡合成的那個（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），
- * 畫面比它判 stopped（`packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289`）。
+ * 畫面比它判 stopped（`harness/packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289`）。
  */
 export const UNFINISHED_TOOL_CODE = 'interrupted';
 
@@ -2402,7 +2402,7 @@ export const UNFINISHED_TOOL_CODE = 'interrupted';
  * 這一輪關了（停止、失敗、或不是停在等人的收尾），還在執行中或掛著的工具卡收成失敗。
  *
  * 照 dsh：一輪或一步關閉時沒有 `tool/result` 的呼叫，畫成一則 `Interrupted` 的錯誤結果
- * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts` 的 `projectBlock` 與
+ * （`harness/packages/client/ui-chat/src/client/conversation-nodes/tool.ts` 的 `projectBlock` 與
  * `interruption`，`c291e79`）——關閉的原因不分。有結果的那些 pump 已經照日誌收了；產品路徑上會走到
  * 這裡的是停在核准點時按了停止、等核准的在子代理裡（pump 只替 root 懸著的那幾顆寫結果）。正常收尾
  * 的那一支今天沒有生產者：圍堵記了 `tool/call` 之後，`tool/result` 只有日誌寫不進去時才會缺。
@@ -2563,7 +2563,7 @@ interface InputRequestedData {
  *
  * `@nexus/wire` 不相依 `@nexus/core`（它要在瀏覽器裡跑），所以 `APPROVAL_INTERRUPT_KIND`
  * 與 `QUESTION_INTERRUPT_KIND` 這兩個常數在兩邊各有一份。**兩份對不上是這個設計唯一的
- * 失效模式**，所以 `apps/harness`（唯一同時相依兩邊的地方）有一條測試逐字比對它們。
+ * 失效模式**，所以 `harness/apps/harness`（唯一同時相依兩邊的地方）有一條測試逐字比對它們。
  */
 function reduceInputRequested(
   state: ConversationState,
@@ -2633,7 +2633,7 @@ function reduceInputRequested(
  * 中斷上一筆是 `["approve","reject"]`、另一筆是 `["approve"]`）。這一批共用一個決定，
  * 所以只有每一筆都允許的那些才按得下去。
  *
- * 經由我們的組裝這種分歧到不了 —— `packages/nexus-core` 的 fold 對每個 gated tool
+ * 經由我們的組裝這種分歧到不了 —— `harness/packages/nexus-core` 的 fold 對每個 gated tool
  * 固定發 `["approve","reject"]`。**那正是這裡要交集而不是讀 `[0]` 的理由**：那是一個
  * 別處維持著的不變量，這一層不該把它當前提。
  */

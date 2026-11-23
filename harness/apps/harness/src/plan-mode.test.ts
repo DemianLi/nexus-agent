@@ -11,7 +11,7 @@
  *
  *  * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
  *
- * `packages/nexus-plugin-plan-mode` 那邊的薄測試看的是 registry 的內容；這裡看的是
+ * `harness/packages/nexus-plugin-plan-mode` 那邊的薄測試看的是 registry 的內容；這裡看的是
  * **模型收到的 prompt** 與**跑完之後的日誌**——一個 middleware 有沒有作用，只有在
  * 真的組出一個 agent、真的跑一輪之後才看得見。模式住在會話日誌上
  * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀），所以要看模式的
@@ -224,7 +224,7 @@ describe('計劃指引進不進 system prompt', () => {
 
   /**
    * **這一條是「未激活不增加 token」那句話的執行版**（dsh
-   * `packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
+   * `harness/packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
    * 但 prompt 裡一個字都沒有多——不然「掛了這個 plugin」就變成一筆每輪都在付的稅。
    *
    * 這一條走**出貨的 `plan-mode` 那一列、不加任何 config**：出貨預設是關的才算數。
@@ -409,7 +409,7 @@ function exitVerdicts(events: readonly SessionEvent[]): unknown[] {
 
 /**
  * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），照 dsh
- * `packages/plan/plan-mode/src/index.ts:278-350`。
+ * `harness/packages/plan/plan-mode/src/index.ts:278-350`。
  *
  * **以前這一組叫「三條路」**，走的是核准：plan-mode 掛一位閘門對 `exit_plan_mode` 回 `ask`，計劃變成
  * 核准卡上的工具參數。dsh 明文否決那條路（核准的詞彙封閉，拒絕帶不回意見）。現在的結局有五種：
@@ -879,7 +879,7 @@ describe('工具目錄不隨模式變動', () => {
  * `/plan` 走完整條線：**真的執行器 → 真的 REPL → 真的 agent 迴圈**。
  *
  * 為什麼要走 `runRepl` 而不是直接呼叫 handler：這一條要證明的不是 handler 回了什麼
- * 字串（那歸 `packages/nexus-plugin-plan-mode` 的單元測試），而是**人打的那一行真的
+ * 字串（那歸 `harness/packages/nexus-plugin-plan-mode` 的單元測試），而是**人打的那一行真的
  * 讓下一輪的 prompt 變得不一樣**。中間隔著 `parseCommand` 的 lookahead、執行器的
  * 配對日誌、會話日誌上那顆 `plan/mode` 與 plugin 對它的折疊——少了任何一段，指引都到不了
  * 模型，而每一段都只有在真的接起來的時候才驗得到。

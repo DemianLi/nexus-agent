@@ -6,7 +6,7 @@
  * 寫完之後用**那一版自己的** `replayConversation` 推回每一則人話的內容，寫進 run 目錄的 `mention.own-human.json`：那就是 55 送給
  * 模型的位元組，今天的讀方重放出來要跟它相同。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那一版的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那一版的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-mention.ts <run 目錄>
  */
 

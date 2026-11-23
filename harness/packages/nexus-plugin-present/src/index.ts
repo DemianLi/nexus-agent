@@ -56,7 +56,7 @@
  *
  * 照 dsh 的所有權規則：「交付歸調用方 Session 所有；父 Session 如需聲明交付子 Agent 創建的文件，必須
  * 自行調用 `present`」。所以它**不是 `rootOnly`**，子代理的交付留在子代理那一份。web 只收 root 那一份
- * （即時與重新整理同一條規則，見 `apps/harness` 的 pump 與 `conversation-history.ts`）。
+ * （即時與重新整理同一條規則，見 `harness/apps/harness` 的 pump 與 `conversation-history.ts`）。
  *
  * ## 與 dsh 的偏離
  *
@@ -81,7 +81,7 @@
  *    驗過才開；那個檔案系統是真的磁碟，沒有只存在於 Session 裡的路由，所以「檢查看得到」與「讀端找得到」
  *    從沒分開過。**為什麼表達不出來**：我們的檢查走基座的虛擬 backend，它在磁碟之上疊了組裝點的路由，
  *    兩端不再是同一個東西。檢查走折後的 backend（偏離 1），
- *    而讀端（`apps/harness` 的 `deliverable-files.ts`）只對工作區磁碟做 `realpath`；組裝點包的會話歷史與工具
+ *    而讀端（`harness/apps/harness` 的 `deliverable-files.ts`）只對工作區磁碟做 `realpath`；組裝點包的會話歷史與工具
  *    結果暫存兩條路由、plugin 用 `backend.mount()` 掛的路由，檢查端看得到、讀端永遠讀不到，於是 `present`
  *    記下一筆沒人下載得了的交付。**退到什麼**：路徑落在這些路由的前綴底下就拒，回話叫模型先 `write_file`
  *    到工作區再交付（{@link presentOffWorkspaceMessage}，沒有 dsh 對應，句型接 `Cannot present <path>: …`）。
@@ -127,7 +127,7 @@ import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 
-/** 註冊出來的工具名，照 dsh。web 的工具卡照這個名字認（`apps/web/src/lib/present-view.ts`）。 */
+/** 註冊出來的工具名，照 dsh。web 的工具卡照這個名字認（`web/src/lib/present-view.ts`）。 */
 export const PRESENT_TOOL_NAME = 'present';
 
 /** 一次最多幾個檔。照 dsh `Config.maxFiles` 的預設。 */
@@ -321,7 +321,7 @@ const presentToolSchema = z.object({
 /**
  * 造 `present` 的工具與它的 `tools/result` 觀察者。**兩者共用同一張等結果的表**（閉包裡，每次呼叫一張，不在模組層級）。
  *
- * 樹上的 `apply` 與相容層的舊外殼（`apps/harness/src/present.fixture.ts`，給還沒上樹的測試用）都走這裡，所以行為只有一個出處。
+ * 樹上的 `apply` 與相容層的舊外殼（`harness/apps/harness/src/present.fixture.ts`，給還沒上樹的測試用）都走這裡，所以行為只有一個出處。
  *
  * @param maxFiles - 一次最多幾個檔。
  * @param lookups - 會話與 fs 的查找（呼叫當下才問）。

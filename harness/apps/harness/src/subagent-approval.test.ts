@@ -3,7 +3,7 @@
  * 的「子代理一律 `policy-never`」，僅限前景：前景時主對話本來就停著等；背景子代理背後沒有人，維持回絕，#737）。
  *
  * 產品路徑：真的 `createNexusAgent`＋真的 `ThreadPump`，量線上看得到什麼——下行收到幾顆 `input.requested`、帶誰的 namespace、
- * root 日誌記了幾筆、人按了什麼之後工具跑沒跑。核准閘門本身的規則（四個拒絕理由、waterfall）在 `packages/nexus-core/src/approval.test.ts`，
+ * root 日誌記了幾筆、人按了什麼之後工具跑沒跑。核准閘門本身的規則（四個拒絕理由、waterfall）在 `harness/packages/nexus-core/src/approval.test.ts`，
  * 單次 `agent.invoke` 的中斷／續行在 `interrupt.test.ts`。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。

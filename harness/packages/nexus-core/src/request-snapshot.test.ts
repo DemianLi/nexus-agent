@@ -1,7 +1,7 @@
 /**
  * 請求快照的**純邏輯**：怎麼從 `handleChatModelStart` 收到的東西抽出要記的，以及「變了才記」的基準怎麼走。
  * 接進模型呼叫那一格（middleware 包出來的 callback、與端點實際收到的 body 逐項對）在
- * `apps/harness/src/request-snapshot.test.ts`。
+ * `harness/apps/harness/src/request-snapshot.test.ts`。
  *
  * @see [#1020](https://github.com/DemianLi/nexus-agent/issues/1020)
  */

@@ -2,7 +2,7 @@
  * 軌跡投影（[#1027](https://github.com/DemianLi/nexus-agent/issues/1027)）在線上的形狀：`@nexus/plugin-trajectory`
  * 折出來、由 {@link ./projection.ts | `projection` frame} 整份送到 web 的兩個值。
  *
- * 型別住在這裡而不是插件裡，因為讀它的是 `apps/web`，而 web 只依賴 `@nexus/wire`——插件是 harness 側的套件，
+ * 型別住在這裡而不是插件裡，因為讀它的是 `web`，而 web 只依賴 `@nexus/wire`——插件是 harness 側的套件，
  * web 不該為了一個型別多一條相依。插件依賴 wire（單向、wire 是葉子）。
  *
  * ## 這份 view 刻意不帶內文

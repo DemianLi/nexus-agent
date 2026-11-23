@@ -33,7 +33,7 @@
  * ## 子代理照委派那一刻的那一格
  *
  * [#326](https://github.com/DemianLi/nexus-agent/issues/326)，照 dsh `captureDelegatedPolicyOverrides`
- * （`packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）：委派那一刻拍下 root 那一格，root 之後
+ * （`harness/packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）：委派那一刻拍下 root 那一格，root 之後
  * 再切是 root 的未來，不是這個子代理的；一次性 grant 一律不給子代理。
  *
  * **拍的是 {@link SandboxModeController.current}，不分「明確設過」與部署預設。** dsh 分得出來，但它的
@@ -74,7 +74,7 @@
  *
  * serve 那一半在 `serve-session-log.test.ts` 的「重開 server 之後接得回同一條 thread」：上一次
  * 切成 `read-only`，重開之後 `/permission` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
- * 擋下，同 CLI。web 那端把 thread id 記在瀏覽器裡，所以重新整理之後接的是同一條（`apps/web/src/lib/remembered-thread.ts`）。
+ * 擋下，同 CLI。web 那端把 thread id 記在瀏覽器裡，所以重新整理之後接的是同一條（`web/src/lib/remembered-thread.ts`）。
  *
  * @module
  */

@@ -554,7 +554,7 @@ function throwAggregate(failures: readonly Error[], what: string): void {
  * schema 上，載入期就失敗。
  *
  * 同 `@nexus/plugin-telemetry-otel` 對 `shutdownTimeoutMillis` 的檢查，也同 dsh
- * （`packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`，`ddefc45`）。
+ * （`harness/packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`，`ddefc45`）。
  */
 export const MAX_PERSISTENCE_WINDOW_MS = MAX_TIMER_DELAY_MS;
 
@@ -603,22 +603,22 @@ export type SessionPersistenceConfig = z.infer<typeof sessionPersistenceConfigSc
  * 是**整台伺服器一份**；註冊表在 serve 上是**一條 thread 一份**。拿 per-thread 的服務去供
  * per-process 的資源，第二條 thread 進來那天就對不上了。
  *
- * 所以值由 `apps/harness` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
+ * 所以值由 `harness/apps/harness` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
  * 「值從一個地方來」，機制上不是服務。那條退讓登記在 #529 上，射程是 `startupSetting`
  * 的呼叫者。
  *
  * ## 與 dsh 的關係
  *
  * **dsh 對這個值沒有意見。** 它的 `@deepseek-ai/dsh-session-persistence-jsonl` 只收兩格
- * （`root`、`compression`，`packages/session/session-persistence-jsonl/src/index.ts:236-239`，
+ * （`root`、`compression`，`harness/packages/session/session-persistence-jsonl/src/index.ts:236-239`，
  * `ddefc45`），沒有批次窗口——因為 dsh 的批次是**呼叫端傳一整批**
- * （`packages/session/session-persistence/src/handle.ts:86-94`：「Append a contiguous batch」），
+ * （`harness/packages/session/session-persistence/src/handle.ts:86-94`：「Append a contiguous batch」），
  * 不是我們這種計時器攢批。所以這一列的形狀抄的是同一份清單上 core 那幾列，不是抄 dsh 的
  * 某一列；這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
  *
  * ## 這一列關不掉
  *
- * `disabled: true` 在載入期當場拋（`apps/harness` 的 `PROTECTED_ENTRY_REASONS`）。理由同
+ * `disabled: true` 在載入期當場拋（`harness/apps/harness` 的 `PROTECTED_ENTRY_REASONS`）。理由同
  * 起動期那幾列：`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值
  * ——落盤照樣批次、照樣是 10 毫秒，只有讀設定的人以為自己關掉了什麼。
  */

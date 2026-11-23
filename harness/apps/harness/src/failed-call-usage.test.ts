@@ -3,7 +3,7 @@
  * 真的 `createLiveModel`（串流、疊著 SSE 用量嗅探）接本機的假端點，經 `ThreadPump` 跑一輪，再讀 root 日誌、
  * 即時 frame 與歷史頁。
  *
- * 規則（什麼時候記、記不進去會怎樣）在 `packages/nexus-core/src/model-usage.test.ts`。這裡量三件事：
+ * 規則（什麼時候記、記不進去會怎樣）在 `harness/packages/nexus-core/src/model-usage.test.ts`。這裡量三件事：
  *
  * 1. 供應商在串流裡報了用量、之後斷線：記一筆帶 `outcome` 的 `model/usage`，數字原樣，總帳加上它。
  * 2. 供應商沒報：**沒有** `model/usage`——不是 0；`model/end.outcome` 表態那次呼叫沒有正常回來。「未知」與 0 分得開。

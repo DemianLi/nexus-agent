@@ -2,7 +2,7 @@
  * **按了停止的那則，重新整理之後推理還在**——[#561](https://github.com/DemianLi/nexus-agent/issues/561)。
  *
  * 照 dsh：中止時把已送出的正文與推理一起收成那則 `assistant/message {interrupted: true}`，逐塊判、只有空白
- * 的那塊不留（`packages/llm/llm/src/assembler.ts:169`，`ddefc45`）。推理占串流的大半（#527 量過），所以
+ * 的那塊不留（`harness/packages/llm/llm/src/assembler.ts:169`，`ddefc45`）。推理占串流的大半（#527 量過），所以
  * **停在推理階段**才是常見的那一種，而那時正文一個字都還沒有。
  *
  * 真的 `ChatOpenAI` 對著本機的假端點，端點照 vLLM 系的拼法在 `delta` 送 `reasoning_content`，每 40ms 一顆，

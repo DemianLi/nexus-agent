@@ -26,7 +26,7 @@
  * ## 一頁多大：照 dsh（[#602](https://github.com/DemianLi/nexus-agent/issues/602)）
  *
  * dsh 的 `read` 一頁最多 2000 行，`limit` 預設就是上限、超過就拋；選到的行累計超過 50 KiB 就停在
- * 前一行，結尾寫 `Output capped`（`packages/fs/tool-fs/src/read.ts:55-61`、`read-render.ts:111` 的
+ * 前一行，結尾寫 `Output capped`（`harness/packages/fs/tool-fs/src/read.ts:55-61`、`read-render.ts:111` 的
  * `buildWindow`，`477b4f4`）。基座一頁預設 100 行、沒有上限、格式化後 80,000 字元才截。2026-09-25
  * 在 nexus 自己的程式碼上量過（587 個檔，o200k）：100 行時 66.8% 的檔要翻頁；照 dsh 時 1.9%，
  * 第一次讀的中位數 1,410 → 2,187 token，最大 16,930。demian 同日拍板照 dsh。三件事都在這一顆：
@@ -118,7 +118,7 @@ export const READ_MAX_BYTES = 50 * 1024;
 
 /**
  * 一行最多幾個字元，超過截斷並接 {@link READ_LINE_TRUNCATION_SUFFIX}。同 dsh 的 `READ_MAX_LINE_LENGTH`
- * （`packages/fs/tool-fs/src/read-render.ts:11`）。
+ * （`harness/packages/fs/tool-fs/src/read-render.ts:11`）。
  */
 export const READ_MAX_LINE_LENGTH = 2000;
 
@@ -145,7 +145,7 @@ export interface ReadWindowRequest {
 
 /**
  * 讀檔的上限，`tool-fs` 設定列的四格（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)，名字與意義照 dsh `tool-fs`
- * 的 Config，`packages/fs/tool-fs/src/index.ts:20-98`）。**每一格缺席就用上面的常數**，所以不給任何一格的 middleware
+ * 的 Config，`harness/packages/fs/tool-fs/src/index.ts:20-98`）。**每一格缺席就用上面的常數**，所以不給任何一格的 middleware
  * 與以前逐位元組相同。
  */
 export interface ReadLimits {
@@ -480,7 +480,7 @@ function modelFacingReadTool(
 
 /**
  * 呼叫要交給工具的參數：`limit` 沒給就填 {@link READ_LIMIT}，超過就拋 dsh 的原句
- * （`packages/fs/tool-fs/src/read.ts:59`）。拋出去的由圍堵轉成工具錯誤。
+ * （`harness/packages/fs/tool-fs/src/read.ts:59`）。拋出去的由圍堵轉成工具錯誤。
  *
  * `null` 當成沒給：基座的 schema 是 `z.coerce.number()`，放過去會變成 0 行。
  */

@@ -478,7 +478,7 @@ const MODERN_STDIO_SERVER = fileURLToPath(
   new URL('../../../packages/nexus-plugin-mcp/src/modern-stdio-server.ts', import.meta.url),
 );
 
-/** 命令列含記號的行程；不經 shell（同 `packages/nexus-plugin-mcp/src/reconnect.test.ts`）。 */
+/** 命令列含記號的行程；不經 shell（同 `harness/packages/nexus-plugin-mcp/src/reconnect.test.ts`）。 */
 function pidsOf(marker: string): number[] {
   try {
     return execFileSync('pgrep', ['-f', '--', marker])

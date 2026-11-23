@@ -400,7 +400,7 @@ describe('只有自己停用才有事件（驗收 H）', () => {
 });
 
 describe('拆卸與重建不誤認成自我停用（驗收 E）', () => {
-  /** 兩份出貨清單，echo 一列：切換路徑讓 Include 走 restart（`config.path` 變了，`vendor/include/src/index.ts` 的 `internal/update`）。 */
+  /** 兩份出貨清單，echo 一列：切換路徑讓 Include 走 restart（`config.path` 變了，`harness/vendor/include/src/index.ts` 的 `internal/update`）。 */
   it('切換出貨路徑（Include restart，uid 保留、狀態 UNLOADING）：正常掛著的列沒有事件、不寫紀錄、仍然 ACTIVE', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nexus-self-disable-switch-'));
     temporary.push(dir);

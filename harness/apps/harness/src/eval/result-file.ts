@@ -206,7 +206,7 @@ export function redactMessage(message: string): string {
 
 // ───────────────────────── 寫檔 ─────────────────────────
 
-/** 預設的結果目錄：`apps/harness/eval-results/`。不依 cwd，而且在 `.gitignore` 裡。 */
+/** 預設的結果目錄：`harness/apps/harness/eval-results/`。不依 cwd，而且在 `.gitignore` 裡。 */
 export function defaultResultDir(): string {
   return fileURLToPath(new URL('../../eval-results/', import.meta.url));
 }

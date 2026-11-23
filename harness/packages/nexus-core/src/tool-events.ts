@@ -9,7 +9,7 @@
  *
  * 字串逐字對過 `references/deepseek-harness`（SHA `c291e7961a515f6d7af9304e7fd1d257929aef26`）。
  * **一般拋錯沒有碼**：dsh 的 `errorInfo` 只替帶碼的 `HarnessError` 填這一格
- * （`packages/core/tools/src/index.ts:635-641`），其餘的錯誤結果不帶 `error`。所以「沒碼」是
+ * （`harness/packages/core/tools/src/index.ts:635-641`），其餘的錯誤結果不帶 `error`。所以「沒碼」是
  * 照抄，不是漏分類。**核准被拒不在這句裡**：dsh 的核准拒絕也沒碼，我們自 #1029 起多給四個，理由見 {@link ./tool-error-codes.ts | APPROVAL_REJECTED_BY_USER}。
  * **拋出 {@link ./tool-error-codes.ts | HarnessError} 的有碼**，同 dsh：`{ name, code }` 原樣進
  * `tool/result`（`477b4f4` 的 `index.ts:661-668`；[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。`NexusTool` 回 `ok: false` 時碼在結果的 `error` 上，轉接器照同一個形狀掛上（`@nexus/tool-adapter`）。
@@ -102,7 +102,7 @@ export function toolCallIdOf(config: unknown): string | undefined {
 
 /**
  * 「這次呼叫沒有生效」的文字前綴。dsh `toolErrorResult` 的 `Error: `
- * （`packages/core/tools/src/index.ts:1860-1867`）。
+ * （`harness/packages/core/tools/src/index.ts:1860-1867`）。
  *
  * **只有 {@link toolRefusal} 加它**，別的地方不自己拼：前綴的主人只有一個，才不會有一句帶兩次。
  * 匯出是給測試與 web 拼出模型看到的那一句用的。

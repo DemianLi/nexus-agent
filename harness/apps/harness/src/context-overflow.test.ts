@@ -209,7 +209,7 @@ describe('供應商回上下文溢出', () => {
 
   /**
    * **會話統計的偏離，釘成一個決定**（[#266](https://github.com/DemianLi/nexus-agent/issues/266)，
-   * 見 `packages/nexus-core/src/model-calls.ts` 的「偏離」一節）：起訖紀錄器在摘要器裡面，
+   * 見 `harness/packages/nexus-core/src/model-calls.ts` 的「偏離」一節）：起訖紀錄器在摘要器裡面，
    * 所以溢出的那一次與重試的那一次各落一對起訖——四次模型節點，**五步**。摘要那次呼叫不經過
    * 內層，不算。哪天有人把它「修」成四步或六步，這一條會紅，逼他回去改那一節。
    */
@@ -334,7 +334,7 @@ describe('尾巴蓋住全部', () => {
 
 /**
  * **生摘要那次呼叫壞掉時，整場怎麼走**（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)，單元級的釘在
- * `packages/nexus-core/src/summary-failure.test.ts`；這裡走整棵樹，確認走到的是同一個處理）。
+ * `harness/packages/nexus-core/src/summary-failure.test.ts`；這裡走整棵樹，確認走到的是同一個處理）。
  *
  * 照 dsh `compaction-basic`：我們自己的門檻觸發 ＝ pressure（warn、照原請求送出）；端點真的回超窗 ＝ overflow
  * （warn、保留原本的請求錯誤）。

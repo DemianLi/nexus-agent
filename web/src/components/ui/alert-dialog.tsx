@@ -1,6 +1,6 @@
 /**
- * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/alert-dialog.tsx`，Base UI），外觀照 SG（#1468 Q8）。
- * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 24 條）：
+ * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/alert-dialog.tsx`，Base UI），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 24 條）：
  *
  * - `AlertDialogAction` 按了就關框：vendor 的 Action 只是一顆 `Button`（vendor `:142-153`），Base UI 的 alert-dialog 也沒有
  *   Action 部件，按了框不會關。這裡用 `AlertDialogPrimitive.Close` 的 `render` 接 vendor 那顆按鈕：外觀、`data-slot` 照 vendor，

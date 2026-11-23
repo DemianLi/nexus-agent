@@ -10,7 +10,7 @@
  * - `resumed-new-turn`：死在工具跑到一半，被同一版續接，接著跑了新的一輪——新的 `turn/start` 落在還開著的那一輪後面。
  * - `paused-resumed`：停在核准點（`tool/call` → `interrupt/raised` → `turn/end`，呼叫沒配到結果、輪已收），被同一版續接過一次。
  *
- * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
+ * 由 `harness/scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `harness/apps/harness/src/` 再跑，**不在今天的樹裡編**。
  * 用法：tsx __session-format-trigger-carried-turn.ts <run 目錄>
  */
 

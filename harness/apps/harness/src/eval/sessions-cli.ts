@@ -27,7 +27,7 @@ const USAGE = `用法：eval:sessions <scan|draft> <目錄...>
                    疑似打轉——命中幾種多的排前面，逐輪印成 dataset.ts 的 BenchmarkCase 殼：
                    prompt 填好、expected 留給人填，底下附那一輪實際的工具呼叫當參考。只讀，不寫檔。
 
-例（目錄是 cli 或 serve 啟動時「會話日誌：」那一行印的；pnpm --filter 會切進 apps/harness，
+例（目錄是 cli 或 serve 啟動時「會話日誌：」那一行印的；pnpm --filter 會切進 harness/apps/harness，
     所以相對路徑以那裡為準，同 cli 與 serve）：
   pnpm --filter @nexus/harness eval:sessions scan <會話根>
   pnpm --filter @nexus/harness eval:sessions draft <會話根>`;

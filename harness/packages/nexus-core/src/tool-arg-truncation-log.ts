@@ -13,7 +13,7 @@
  * ## 換出來的訊息只改參數，不學基座整則重建
  *
  * 基座縮短時整則重建：`new AIMessage({ content, tool_calls, additional_kwargs })`，丟掉 `id`、`name`、`response_metadata`、`usage_metadata`
- * （`apps/harness/src/live-model.ts` 那段 `[]` 註解提到的那件事——`response_metadata.output_version` 沒了，`@langchain/openai` 走另一條轉換，
+ * （`harness/apps/harness/src/live-model.ts` 那段 `[]` 註解提到的那件事——`response_metadata.output_version` 沒了，`@langchain/openai` 走另一條轉換，
  * 沒有文字的推理＋工具呼叫那則送成 `[]`）。**這裡不學**：保留原訊息的其他欄位、只換 `tool_calls[i].args`（v1 訊息裡同 id 的 `tool_call` content block 一併換，
  * 不然同一則訊息裡有兩份對不上的參數），所以這張卡不讓那個丟失惡化，
  * 而且換過的訊息之後基座看到參數已經短了，不會再因為共用的 `modified` 旗標把後面的鄰居也整則重建。
