@@ -120,6 +120,19 @@ class LightShapesTest(unittest.TestCase):
         self.assertIn('web', after['tests'])
         self.assertTrue(before['tests'] and before['lint'])
 
+    def test_both_spellings_of_one_file_are_scanned_once_on_either_tree(self) -> None:
+        pairs = [
+            ('apps/harness/src/e.ts', 'harness/apps/harness/src/e.ts', 'apps/harness', 'harness/apps/harness'),
+            ('apps/web/src/main.tsx', 'web/src/main.tsx', 'apps/web', 'web'),
+        ]
+        for old, new, old_dir, new_dir in pairs:
+            for order in ((old, new), (new, old)):
+                for on_disk, directory, dirs in ((old, old_dir, None), (new, new_dir, DIRS_MOVED)):
+                    scope = self.scope(list(order), {on_disk}, dirs)
+                    self.assertEqual(scope['format'], [on_disk], (order, on_disk))
+                    rest = on_disk[len(directory) + 1:]
+                    self.assertEqual(scope['lint'], {directory: [rest]}, (order, on_disk))
+
     def test_typecheck_all_filters_match_both_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as out:
             plan_ci.write_light({'typecheck': 'all', 'format': [], 'lint': {}, 'tests': {}}, Path(out))

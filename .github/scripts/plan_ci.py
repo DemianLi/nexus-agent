@@ -181,17 +181,19 @@ def light(
     `dirs` 把舊形狀的專案目錄對到磁碟上的真目錄，format 的檔與 lint、測試的目錄輸出真路徑。
     """
     dirs = dirs or {d: d for d in names}
-    real = changed
+    present: list[str] = []
+    seen: set[str] = set()
+    for path in changed:
+        if exists(path) and canonical(path) not in seen:
+            seen.add(canonical(path))
+            present.append(path)
     changed = [canonical(p) for p in changed]
-    on_disk = dict(zip(changed, real))
     def is_present(path: str) -> bool:
         return exists(actual(path, exists))
 
     def project(path: str) -> str | None:
         match = PROJECT_RE.match(path)
         return match.group(1) if match and match.group(1) in names else None
-
-    present = [on_disk[p] for p in changed if exists(on_disk[p])]
 
     if any(TYPECHECK_ALL_RE.search(p) for p in changed):
         typecheck: str | list[str] = 'all'
