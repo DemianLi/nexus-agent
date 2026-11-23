@@ -111,3 +111,33 @@ interface NexusChatElement extends HTMLElement {
 interface HTMLElementTagNameMap {
   'nexus-chat': NexusChatElement;
 }
+
+/** 模擬模式（#3175，`embed-mock.js`）的劇本一步：一段回覆，或叫一支宿主頁工具（`approval` 預設 `true`，先出核准卡）。 */
+type NexusChatMockStep =
+  | { readonly say: string }
+  | {
+      readonly tool: string;
+      readonly args?: Readonly<Record<string, unknown>>;
+      readonly approval?: boolean;
+    };
+
+/** {@link NexusChatMock.reply} 收到的：這一句話與送出當下的情境、宣告的工具名。 */
+interface NexusChatMockTurnInput {
+  readonly text: string;
+  readonly context: string | undefined;
+  readonly hostTools: readonly string[];
+}
+
+/**
+ * 模擬模式的劇本，放在 `globalThis.nexusChatMock`；每送出一句話讀一次。有 `reply` 就用它，否則第 n 句用 `turns[n]`，用完回一句說明。
+ * 只有 `embed-mock.js` 讀它，正式的 `embed.js` 不理。
+ */
+interface NexusChatMock {
+  readonly turns?: readonly (readonly NexusChatMockStep[])[];
+  readonly reply?: (
+    input: NexusChatMockTurnInput,
+  ) => readonly NexusChatMockStep[] | Promise<readonly NexusChatMockStep[]>;
+}
+
+// eslint-disable-next-line no-var -- 全域變數的宣告只能用 var。
+declare var nexusChatMock: NexusChatMock | undefined;
