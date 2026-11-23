@@ -218,6 +218,12 @@ describe('格式 52 的日誌沒有停止原因（#1847）', () => {
   });
 });
 
+describe('夾具目錄', () => {
+  it('掃到的夾具不是 0 個', () => {
+    expect(names.length).toBeGreaterThan(0);
+  });
+});
+
 describe.each(names)('夾具 %s', (name) => {
   const expected = expectedOf(name);
   const ids = Object.keys(expected.sessions).sort();

@@ -443,3 +443,38 @@ class CommandLineTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class OwnersShapesTest(unittest.TestCase):
+    CASES = [
+        ('apps/harness/src/a.ts', 'harness/apps/harness/src/a.ts', 'apps/harness', 'harness/apps/harness', '@nexus/harness'),
+        ('packages/nexus-core/src/a.ts', 'harness/packages/nexus-core/src/a.ts', 'packages/nexus-core', 'harness/packages/nexus-core', '@nexus/core'),
+        ('apps/web/src/a.tsx', 'web/src/a.tsx', 'apps/web', 'web', '@nexus/web'),
+    ]
+
+    def test_both_shapes_give_the_same_owners(self) -> None:
+        for old_path, new_path, old_dir, new_dir, name in self.CASES:
+            repo = Repo(self)
+            head = repo.commit({f'{old_dir}/package.json': '{"name": "%s"}' % name, f'{new_dir}/package.json': '{"name": "%s"}' % name})
+            old = mod.owners_of(old_path, head)
+            new = mod.owners_of(new_path, head)
+            self.assertEqual(old, [old_path, old_dir, name])
+            self.assertEqual(new, [new_path, new_dir, name])
+
+    def test_files_outside_a_package_only_have_their_path(self) -> None:
+        repo = Repo(self)
+        head = repo.commit({'README.md': 'x\n'})
+        for path in ('docs/a.md', 'harness/scripts/a.ts', 'scripts/a.ts', 'harness/apps/harness', 'package.json'):
+            self.assertEqual(mod.owners_of(path, head), [path])
+
+    def test_vendor_and_docs_are_ignored_in_both_shapes(self) -> None:
+        for path in ('vendor/cordis/src/a.ts', 'harness/vendor/cordis/src/a.ts', 'apps/web/src/vendor/z/a.ts', 'web/src/vendor/z/a.ts', 'docs/a.ts'):
+            self.assertEqual(mod.classify(path), 'ignored', path)
+        for path in ('apps/harness/src/a.ts', 'harness/apps/harness/src/a.ts', 'web/src/a.tsx'):
+            self.assertEqual(mod.classify(path), 'code', path)
+
+    def test_search_skips_vendor_in_both_shapes(self) -> None:
+        for path in ('vendor/x/a.ts', 'harness/vendor/x/a.ts', 'web/src/vendor/x/a.ts'):
+            repo = Repo(self)
+            head = repo.commit({path: '// needle\n', 'src/b.ts': '// needle\n'})
+            self.assertEqual([hit[0] for hit in mod.grep_lines('needle', head)], ['src/b.ts'], path)

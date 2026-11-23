@@ -290,8 +290,10 @@ describe('全樹掃描', () => {
 
   it('擁有者以外，沒有自己寫會話檔名、也沒有自己解 header 的位置', () => {
     const found: string[] = [];
+    let scanned = 0;
     for (const root of SOURCE_ROOTS) {
       for (const file of sourceFiles(join(REPO_ROOT, root))) {
+        scanned += 1;
         const path = relative(REPO_ROOT, file);
         if (isOwner(path)) continue;
         for (const v of findViolations(path, readFileSync(file, 'utf8'))) {
@@ -299,6 +301,7 @@ describe('全樹掃描', () => {
         }
       }
     }
+    expect(scanned).toBeGreaterThan(100);
     expect(found).toEqual([]);
   });
 });

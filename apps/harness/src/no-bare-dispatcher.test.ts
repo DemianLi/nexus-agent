@@ -146,8 +146,10 @@ const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;
 describe('全樹掃描', () => {
   it('代理模組以外，沒有任何匯入 undici 或指定 dispatcher 的位置', () => {
     const found: string[] = [];
+    let scanned = 0;
     for (const root of SOURCE_ROOTS) {
       for (const file of sourceFiles(join(REPO_ROOT, root))) {
+        scanned += 1;
         const path = relative(REPO_ROOT, file);
         if (path.startsWith(DISPATCHER_OWNER)) continue;
         for (const v of findViolations(path, readFileSync(file, 'utf8'))) {
@@ -155,6 +157,7 @@ describe('全樹掃描', () => {
         }
       }
     }
+    expect(scanned).toBeGreaterThan(100);
     expect(found).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import check_boundary
-from check_boundary import check, main, string_literals
+from check_boundary import check, empty_scans, main, string_literals
 
 
 def tree(root: Path, files: dict[str, str]) -> None:
@@ -27,6 +27,28 @@ def run(files: dict[str, str], exemptions: tuple = ()) -> list[str]:
             return check(Path(d))
     finally:
         check_boundary.EXEMPTIONS = original
+
+
+class EmptyScanTest(unittest.TestCase):
+    def scans(self, files: dict[str, str]) -> list[str]:
+        with tempfile.TemporaryDirectory() as d:
+            tree(Path(d), files)
+            return empty_scans(Path(d))
+
+    def test_both_directories_with_code_pass(self) -> None:
+        self.assertEqual(self.scans({'apps/web/src/a.ts': '', 'apps/harness/src/a.ts': ''}), [])
+
+    def test_a_moved_directory_is_red_instead_of_unscanned(self) -> None:
+        errors = self.scans({'web/src/a.ts': '', 'harness/apps/harness/src/a.ts': ''})
+        self.assertEqual(len(errors), 2)
+
+    def test_one_empty_side_is_red(self) -> None:
+        errors = self.scans({'apps/web/src/a.ts': ''})
+        self.assertEqual(len(errors), 1)
+        self.assertIn('apps/harness', errors[0])
+
+    def test_this_repo_scans_something_on_both_sides(self) -> None:
+        self.assertEqual(empty_scans(check_boundary.ROOT), [])
 
 
 class StringLiteralsTest(unittest.TestCase):

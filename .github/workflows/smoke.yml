@@ -57,4 +57,4 @@ jobs:
       - name: 冒煙（真 NVIDIA 端點，最多 20 個請求）
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-        run: pnpm --filter @nexus/harness run smoke
+        run: pnpm --filter @nexus/harness --fail-if-no-match run smoke
