@@ -2,9 +2,9 @@
 # engineer 開、收 worktree 與 verifier 收 worktree 的入口。
 #
 # 用法：
-#   worktree.sh new <分支> <卡號> [eng|ver]
+#   worktree.sh new <分支> <卡號>
 #     從本機的 origin/develop 開 `--no-track` 的分支，位置固定在主 checkout 同層的
-#     `worktrees/<角色>-<卡號>`（角色預設 eng；卡號可帶一段小寫尾碼，例如 3180-b），
+#     `worktrees/eng-<卡號>`（卡號可帶一段小寫尾碼，例如 3180-b），
 #     接著 `pnpm install --offline` 與 `pnpm run build:lib`。不 fetch：開分支前的
 #     `git fetch origin develop` 由呼叫的人先做一次。
 #   worktree.sh done [--open-ok] <路徑>
@@ -38,9 +38,8 @@ list_leftovers() {
 }
 
 cmd_new() {
-	[ $# -ge 2 ] && [ $# -le 3 ] || { usage >&2; exit 2; }
-	local branch="$1" card="$2" role="${3:-eng}"
-	case "${role}" in eng|ver) ;; *) die "角色只能是 eng 或 ver：${role}" ;; esac
+	[ $# -eq 2 ] || { usage >&2; exit 2; }
+	local branch="$1" card="$2"
 	[[ "${card}" =~ ^[0-9]+(-[a-z0-9]+)?$ ]] || die "卡號要是數字，可帶一段小寫尾碼：${card}"
 	git check-ref-format --branch "${branch}" >/dev/null 2>&1 || die "分支名不合法：${branch}"
 	git rev-parse --verify --quiet refs/remotes/origin/develop >/dev/null || die "本機沒有 origin/develop：先跑一次 git fetch origin develop"
@@ -48,7 +47,7 @@ cmd_new() {
 	main=$(main_checkout)
 	[ -n "${main}" ] || die "不在 git repo 裡"
 	root="$(dirname "$main")/worktrees"
-	path="$root/$role-$card"
+	path="$root/eng-$card"
 	[ ! -e "${path}" ] || die "已經有 ${path}：先處理它，不覆蓋"
 	mkdir -p "$root"
 	git worktree add --no-track -b "${branch}" "${path}" origin/develop || die "git worktree add 失敗"

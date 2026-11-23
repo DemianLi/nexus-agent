@@ -393,7 +393,7 @@ class GuardTest(unittest.TestCase):
             'git worktree add /nope/fake', 'git worktree add --no-track -b feat/x /nope/fake origin/develop', 'git worktree add .claude/worktrees/eng-1 origin/develop',
             'git worktree add /nope/.claude/worktrees/eng-1', 'git worktree add worktrees/eng-1', 'git worktree add ../elsewhere/eng-1', 'git worktree add /nope/worktrees/fake',
             'git worktree add -b x ../worktrees/eng-1/sub', 'cd x && git worktree add /nope/fake', 'bash -c "git worktree add /nope/fake"', 'git -C /nope/repo worktree add ../fake',
-            'git worktree add /x/elsewhere/eng-1', 'git worktree add -fb ../worktrees/eng-1 /nope/x', 'git worktree add -fbchore/x /nope/x', 'git worktree add -qB x /nope/x',
+            'git worktree add /x/elsewhere/eng-1', 'git worktree add -fb ../worktrees/eng-1 /nope/x', 'git worktree add -fbchore/x /nope/x', 'git worktree add -fbchore /nope/x ../worktrees/eng-1', 'git worktree add -qB x /nope/x',
         ):
             with self.subTest(command=command):
                 reason = guarded(command)
