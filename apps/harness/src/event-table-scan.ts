@@ -159,6 +159,9 @@ function productFiles(root: string): string[] {
   } catch {
     // 沒有 harness 的樹（測試用的假 repo）不掃。
   }
+  if (files.length === 0) {
+    throw new Error(`productFiles 在 ${root} 底下掃到 0 個檔：目錄搬了，掃描的路徑沒跟著搬`);
+  }
   return files;
 }
 

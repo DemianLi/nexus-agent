@@ -47,6 +47,10 @@ describe('重放不讀金鑰、不建真模型', () => {
     );
   });
 
+  it('場景目錄不是空的', () => {
+    expect(scenarios.length).toBeGreaterThan(0);
+  });
+
   it.each(scenarios)(
     '%s',
     async (name) => {

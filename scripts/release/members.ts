@@ -39,6 +39,9 @@ export function releaseMembers(root: string = ROOT): ReleaseMember[] {
       if (entry.isDirectory() && existsSync(join(root, path))) paths.push(path);
     }
   }
+  if (paths.length < 2) {
+    throw new Error(`releaseMembers 在 ${root} 底下只掃到根：apps、packages 底下掃到 0 個成員，目錄搬了，路徑沒跟著搬`);
+  }
   return paths.sort().map((manifestPath) => {
     const manifest = JSON.parse(readFileSync(join(root, manifestPath), 'utf8')) as {
       name?: string;

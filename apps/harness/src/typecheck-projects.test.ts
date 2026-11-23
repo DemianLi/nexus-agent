@@ -45,6 +45,8 @@ describe('對著真的 repo', () => {
   const projects = typecheckProjects();
 
   it('packages/* 與 apps/* 除了 web 都有一份', () => {
+    expect(projects.length).toBeGreaterThan(0);
+    expect(projects.map((project) => project.dir)).toContain('packages/nexus-core');
     expect(projects.map((project) => project.dir).sort()).toEqual(
       [...manifests().keys()].filter((dir) => dir !== 'apps/web').sort(),
     );

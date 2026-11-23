@@ -16,6 +16,11 @@ import {
 } from './package-invariants.js';
 
 const root = repositoryRoot();
+const owners = packageInvariantOwners(root);
+if (owners.length === 0) {
+  console.error('verify-package-invariants：掃到 0 個配套入口，packages 搬了，路徑沒跟著搬');
+  process.exit(1);
+}
 const violations = collectPackageInvariantViolations(root);
 
 if (violations.length > 0) {
@@ -27,5 +32,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `verify-package-invariants：${packageInvariantOwners(root).length} 個配套入口全部合格。`,
+  `verify-package-invariants：${owners.length} 個配套入口全部合格。`,
 );
