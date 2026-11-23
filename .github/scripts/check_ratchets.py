@@ -8,6 +8,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from project_paths import canonical  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_DIR = '.github/ratchets'
 LEGACY_BASELINE = '.github/ratchets.json'
@@ -33,13 +36,14 @@ class BaselineError(Exception):
 
 
 def directory(path: str) -> str:
-    parts = path.split('/')
+    parts = canonical(path).split('/')
     if parts[0] in ('apps', 'packages') and len(parts) > 2:
         return '/'.join(parts[:2])
     return parts[0] if len(parts) > 1 else '.'
 
 
 def scanned(path: str) -> bool:
+    path = canonical(path)
     if not path.endswith(EXTENSIONS) or path in EXEMPT:
         return False
     if path.startswith(EXCLUDED_PREFIXES):

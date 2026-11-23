@@ -193,7 +193,9 @@ function isLinkPath(path: string): boolean {
 /** 從 repo 的 `vendor/*` 讀出它們的套件名。 */
 export function vendorPackageNames(root: string = ROOT): string[] {
   const base = join(root, 'vendor');
-  if (!existsSync(base)) return [];
+  if (!existsSync(base)) {
+    throw new Error(`${base} 不存在：vendor 搬了，路徑沒跟著搬，不能當成沒有 vendor 套件`);
+  }
   return readdirSync(base, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && existsSync(join(base, entry.name, 'package.json')))
     .map(

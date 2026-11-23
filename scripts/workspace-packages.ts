@@ -153,5 +153,10 @@ export function workspacePackages(): WorkspacePackage[] {
     if (manifest === undefined || !existsSync(join(ROOT, dir, 'src'))) continue;
     found.push(describePackage(dir, manifest));
   }
+  if (!found.some((pkg) => pkg.name === '@nexus/harness')) {
+    throw new Error(
+      `workspacePackages 沒掃到 @nexus/harness（掃描位置：${GROUPS.join('、')}）：目錄搬了，GROUPS 沒跟著搬`,
+    );
+  }
   return found;
 }

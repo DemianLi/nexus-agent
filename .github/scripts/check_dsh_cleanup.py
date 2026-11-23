@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_ratchets import EXCLUDED_PREFIXES, ROOT, reference_lines  # noqa: E402
+from project_paths import canonical  # noqa: E402
 
 SLASH = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.css')
 HASH = ('.py', '.sh', '.yml', '.yaml', '.toml')
@@ -278,7 +279,7 @@ def ext_of(path: str) -> str:
 def classify(path: str) -> str:
     if path.endswith('.md'):
         return 'doc'
-    if path.startswith(IGNORED_PREFIXES):
+    if canonical(path).startswith(IGNORED_PREFIXES):
         return 'ignored'
     return 'code' if ext_of(path) in LANGS else 'other'
 
@@ -304,10 +305,15 @@ def owners_of(path: str, head: str) -> list[str]:
     """指到這個檔的寫法：路徑本身，加上所屬套件的名字與目錄。"""
     out = [path]
     parts = path.split('/')
-    if parts[0] in ('apps', 'packages') and len(parts) > 2:
-        out.append('/'.join(parts[:2]))
+    if parts[0] == 'web':
+        project = 'web'
+    else:
+        lead = 1 if parts[0] == 'harness' else 0
+        project = '/'.join(parts[: lead + 2]) if parts[lead:lead + 1] in (['apps'], ['packages']) and len(parts) > lead + 2 else ''
+    if project:
+        out.append(project)
         try:
-            name = json.loads(show(head, '/'.join(parts[:2]) + '/package.json')).get('name')
+            name = json.loads(show(head, project + '/package.json')).get('name')
         except ValueError:
             name = None
         if isinstance(name, str) and name:
@@ -319,7 +325,7 @@ def grep_lines(term: str, head: str) -> list[tuple[str, int, str]]:
     out = []
     for ln in git('grep', '-n', '-I', '-F', '-e', term, head, '--', check=False).split('\n'):
         m = re.match(rf'^{re.escape(head)}:(.+?):(\d+):(.*)$', ln)
-        if m and not m.group(1).startswith(SEARCH_EXCLUDED) and m.group(1).rsplit('/', 1)[-1] not in SEARCH_EXCLUDED_NAMES and not HEADING_LINE.match(m.group(3)):
+        if m and not canonical(m.group(1)).startswith(SEARCH_EXCLUDED) and m.group(1).rsplit('/', 1)[-1] not in SEARCH_EXCLUDED_NAMES and not HEADING_LINE.match(m.group(3)):
             out.append((m.group(1), int(m.group(2)), m.group(3)))
     return out
 

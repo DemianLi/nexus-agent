@@ -375,11 +375,19 @@ def check(root: Path) -> list[str]:
     return errors
 
 
+def empty_scans(root: Path) -> list[str]:
+    return [
+        f'`{base}` 底下掃到 0 個程式檔：目錄搬了，WEB 與 HARNESS 的路徑要一起搬，不能少掃了還說通過。'
+        for base in (WEB, HARNESS)
+        if not files_under(root, base)
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='web 與 harness 的邊界檢查：web 只能相依 wire；harness 不掃、不 import web。')
     parser.add_argument('--root', type=Path, default=ROOT)
     args = parser.parse_args(argv)
-    errors = check(args.root)
+    errors = [*empty_scans(args.root), *check(args.root)]
     for error in errors:
         print(f'::error::{error}')
     if errors:

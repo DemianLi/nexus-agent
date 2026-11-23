@@ -298,7 +298,7 @@ jobs:
           run() { local name="$1"; shift; "$@" > "$RUNNER_TEMP/$name.log" 2>&1; echo $? > "$RUNNER_TEMP/$name.rc"; }
           run format pnpm run format:check &
           run lint pnpm -r run lint &
-          run build pnpm --filter @nexus/web run build &
+          run build pnpm --filter @nexus/web --fail-if-no-match run build &
           wait
           rc=0
           for name in format lint build; do
@@ -311,7 +311,7 @@ jobs:
       # 掛在 static 而不是另開 job：產物已經在這裡，不多付一次安裝，gate 也不用改。上一步紅了這一步不跑，job 照樣是紅的。
       # ubuntu-latest 自帶 Chrome，playwright-core 用 channel 'chrome' 開它，不另外下載瀏覽器。
       - name: 瀏覽器護欄
-        run: pnpm --filter @nexus/web run test:guard
+        run: pnpm --filter @nexus/web --fail-if-no-match run test:guard
 
   # 產物驗證（#1502）：每次全跑都跑 pack 與安裝驗證，不只在發版時。
   # `pnpm deploy --prod` 打成 tar.gz → 在 repo 外解開 → 純 node 驗 sha256、靜態檢查、`--version`、flock、會話 header 的戳記、
@@ -397,7 +397,7 @@ jobs:
       - name: 插件 lint 設定的載入
         run: |
           pnpm run build:lib
-          pnpm --filter @nexus/plugin-echo run lint
+          pnpm --filter @nexus/plugin-echo --fail-if-no-match run lint
 
   # 從零查全部套件，不讀快取：全跑是對照組。合併後那一輪查完把 buildinfo 與宣告檔存成快取，key 是這個 develop commit，
   # 輕的模式用 PR 的分歧點去取（develop 是 strict，合併前最後一輪的分歧點就是最新的 develop）。
@@ -414,7 +414,7 @@ jobs:
         with:
           save-cache: ${{ inputs.full }}
       - name: Typecheck
-        run: .github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'
+        run: .github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'
       - name: 存型別檢查快取
         if: inputs.full
         uses: actions/cache/save@v6
@@ -435,7 +435,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Test
-        run: pnpm '--filter=./packages/*' '--filter=./vendor/*' run test
+        run: pnpm '--filter=./**/packages/*' '--filter=./**/vendor/*' --fail-if-no-match run test
 
   test-web:
     name: test-web
@@ -447,7 +447,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Test
-        run: pnpm --filter @nexus/web run test
+        run: pnpm --filter @nexus/web --fail-if-no-match run test
 
   # harness 是關鍵路徑，切四片平行跑（#2498）；web 一片就比 harness 的一片短，不分。
   # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到幾份就取幾份，跑完由合併後那一輪各片存回自己這一份。
@@ -492,7 +492,7 @@ jobs:
       - name: Test
         env:
           NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.harness-durations
-        run: pnpm --filter @nexus/harness exec vitest run --shard="${{ matrix.shard }}/4"
+        run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run --shard="${{ matrix.shard }}/4"
       # vitest 跑完把這一片每個檔的耗時寫進自己的結果快取；CI 的 node_modules 是新裝的，裡面只有這一片的檔。測試紅了也存。
       - name: 收這一片的耗時
         if: inputs.full && !cancelled()
@@ -539,22 +539,26 @@ jobs:
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
       - name: 真的 spawner 跑整合測試
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
+        shell: bash
+        run: |
+          pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration | tee "$RUNNER_TEMP/spawner-integration.txt"
+          grep -Eq 'Tests +([0-9]+ failed \| )?[1-9][0-9]* passed' "$RUNNER_TEMP/spawner-integration.txt"
         env:
+          NO_COLOR: '1'
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
           NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
       # 「批次窗口裡那一句搜得到」用 per-thread 再跑一次（#2689）：靠前台搜之前請對話行程排空。只跑這一支，同檔其餘測的是前台搜尋本身，與行程模型無關。
       # 沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘；`-t` 篩不到任何一支時 vitest 照樣 exit 0，test_ci_workflow.py 釘住這個名字還在。
       - name: per-thread 跑內容搜尋
-        run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'
+        run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
       # 刪除碰到分叉用 per-thread 再跑一次（#2957）：刪除前前台要請對話行程放手寫入方，single 走不到那一段；祖先被刪之後讀外溢檔的
       # 祖先鏈是對話行程組裝時算的。env 要釘，理由同上一步。
       - name: per-thread 跑刪除碰到分叉
-        run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted
+        run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
@@ -588,8 +592,12 @@ jobs:
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
       - name: 真的 spawner 跑整合測試
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
+        shell: bash
+        run: |
+          pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration | tee "$RUNNER_TEMP/spawner-integration.txt"
+          grep -Eq 'Tests +([0-9]+ failed \| )?[1-9][0-9]* passed' "$RUNNER_TEMP/spawner-integration.txt"
         env:
+          NO_COLOR: '1'
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
           NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
@@ -610,9 +618,9 @@ jobs:
       - name: 建置 lib 與 web
         run: |
           pnpm run build:lib
-          pnpm --filter @nexus/web run build
+          pnpm --filter @nexus/web --fail-if-no-match run build
       - name: 真瀏覽器 e2e
-        run: pnpm --filter @nexus/web run test:e2e
+        run: pnpm --filter @nexus/web --fail-if-no-match run test:e2e
 
   # 真瀏覽器 e2e 換成 per-thread 行程模型（#2341）：serve 由監督行程起前台與每條 thread 的對話行程，瀏覽器從前台的 port 打。
   # 跟 e2e-single 同一套測試、同樣的前置建置、同樣只在合併後完整一輪跑；另開 job、不接在 e2e-single 後面，兩輪才同時跑。
@@ -633,9 +641,9 @@ jobs:
       - name: 建置 lib 與 web
         run: |
           pnpm run build:lib
-          pnpm --filter @nexus/web run build
+          pnpm --filter @nexus/web --fail-if-no-match run build
       - name: 真瀏覽器 e2e（per-thread）
-        run: pnpm --filter @nexus/web run test:e2e
+        run: pnpm --filter @nexus/web --fail-if-no-match run test:e2e
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
@@ -656,9 +664,9 @@ jobs:
       - name: 建置 lib 與 web
         run: |
           pnpm run build:lib
-          pnpm --filter @nexus/web run build
+          pnpm --filter @nexus/web --fail-if-no-match run build
       - name: 真瀏覽器 e2e（native）
-        run: pnpm --filter @nexus/web run test:e2e
+        run: pnpm --filter @nexus/web --fail-if-no-match run test:e2e
         env:
           NEXUS_E2E_AGENT_LOOP: native
           NEXUS_E2E_SHOTS: ${{ runner.temp }}/e2e-shots

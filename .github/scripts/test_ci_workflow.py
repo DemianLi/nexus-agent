@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+import check_rust_paths
 import plan_ci
 from node_compat import read_list
 
@@ -41,6 +42,8 @@ JOB_LIMIT = 20
 LIGHT_IF = "steps.plan.outputs.mode == 'light'"
 TYPECHECK_CACHE = 'node_modules/.cache/nexus-typecheck'
 COMPAT_NODES = {'22.19', '26'}
+SPAWNER_CRATE = str(check_rust_paths.check_action(ROOT)[0])
+SPAWNER_RELEASE = '${{ github.workspace }}/' + SPAWNER_CRATE + '/target/${{ env.SPAWNER_TARGET }}/release/'
 
 
 def load(path: Path) -> dict:
@@ -248,7 +251,7 @@ class HostMcpConformance(unittest.TestCase):
                 names = [s.get('name') for s in steps]
                 step = steps[names.index('宿主的 MCP 符合性測試')]
                 self.assertEqual(step['shell'], 'bash')
-                self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
+                self.assertEqual(step['working-directory'], SPAWNER_CRATE)
                 self.assertIn('--test mcp_conformance -- --ignored --nocapture', step['run'])
                 self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
                 uses = [s.get('uses') for s in steps]
@@ -267,7 +270,7 @@ class PairLeafInterop(unittest.TestCase):
                 names = [s.get('name') for s in steps]
                 step = steps[names.index('橋對 TS 葉子的對接測試')]
                 self.assertEqual(step['shell'], 'bash')
-                self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
+                self.assertEqual(step['working-directory'], SPAWNER_CRATE)
                 self.assertEqual(step['run'].splitlines(), [
                     'cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET"'
                     ' --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"',
@@ -288,11 +291,11 @@ class E2ePerThread(unittest.TestCase):
 
     def test_runs_e2e_against_the_built_supervisor(self) -> None:
         step = self.steps['真瀏覽器 e2e（per-thread）']
-        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
             step['env']['NEXUS_SUPERVISOR_BIN'],
-            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+            SPAWNER_RELEASE + 'nexus-supervisor',
         )
         uses = [s.get('uses') for s in self.job['steps']]
         self.assertLess(uses.index('./.github/actions/sandbox-spawner'), list(self.steps).index('真瀏覽器 e2e（per-thread）'))
@@ -324,7 +327,7 @@ class E2eNative(unittest.TestCase):
 
     def test_runs_e2e_on_the_native_loop(self) -> None:
         step = self.steps[self.STEP]
-        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         self.assertEqual(step['env']['NEXUS_E2E_AGENT_LOOP'], 'native')
         # 不跟 per-thread 交叉：帶了它，single 下的 native 就沒人測。
         self.assertNotIn('NEXUS_E2E_PROCESS_MODEL', step['env'])
@@ -602,8 +605,8 @@ class SandboxSpawner(unittest.TestCase):
         return plan_ci.plan(changed, event, base, force_full=full)['rust']
 
     def test_builds_only_when_the_spawner_or_ci_changes(self) -> None:
-        self.assertEqual(self.rust(['native/sandbox-spawner/src/main.rs']), 'true')
-        self.assertEqual(self.rust(['native/sandbox-spawner/Cargo.lock']), 'true')
+        self.assertEqual(self.rust([f'{SPAWNER_CRATE}/src/main.rs']), 'true')
+        self.assertEqual(self.rust([f'{SPAWNER_CRATE}/Cargo.lock']), 'true')
         self.assertEqual(self.rust(['.github/workflows/ci.yml']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
         self.assertEqual(self.rust(['apps/harness/src/sandbox-protocol.ts']), 'true')
@@ -632,12 +635,12 @@ class SandboxSpawner(unittest.TestCase):
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
         self.assertEqual(
             step['run'],
-            "pnpm --filter @nexus/harness exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'",
+            "pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'",
         )
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
             step['env']['NEXUS_SUPERVISOR_BIN'],
-            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+            SPAWNER_RELEASE + 'nexus-supervisor',
         )
 
     def test_runs_fork_deletion_under_per_thread(self) -> None:
@@ -645,12 +648,12 @@ class SandboxSpawner(unittest.TestCase):
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑刪除碰到分叉')
         self.assertEqual(
             step['run'],
-            'pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted',
+            'pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted',
         )
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
             step['env']['NEXUS_SUPERVISOR_BIN'],
-            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+            SPAWNER_RELEASE + 'nexus-supervisor',
         )
 
     def test_per_thread_thread_search_filter_matches_one_test(self) -> None:
@@ -767,7 +770,7 @@ class SandboxSpawner(unittest.TestCase):
 
     def test_integration_runs_against_the_built_binaries(self) -> None:
         """兩種架構都拿編好的 spawner 與監督行程跑整合測試；env 沒設時測試整支跳過，CI 照樣綠，所以 env 與清單都要釘（#2341）。"""
-        release = '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/'
+        release = SPAWNER_RELEASE
         for job in ('sandbox-spawner', 'sandbox-spawner-arm64'):
             step = next(s for s in self.ci['jobs'][job]['steps'] if s.get('name') == '真的 spawner 跑整合測試')
             for suite in ('sandbox-spawner', 'git-sandbox', 'mcp-sandbox', 'kernel-file-lock', 'per-thread'):
@@ -777,7 +780,7 @@ class SandboxSpawner(unittest.TestCase):
             self.assertEqual(step['env']['NEXUS_COMPOSITION_BIN'], release + 'nexus-composition', job)
 
     def test_light_mode_still_builds(self) -> None:
-        result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
+        result = plan_ci.plan([f'{SPAWNER_CRATE}/src/main.rs'], 'pull_request', 'develop')
         self.assertEqual((result['mode'], result['rust']), ('light', 'true'))
 
     def test_runs_on_the_plan_flag_not_the_mode(self) -> None:
@@ -931,11 +934,11 @@ class WebE2e(unittest.TestCase):
         self.assertEqual(self.job['if'], 'inputs.full')
         self.assertEqual(self.job['needs'], 'plan')
         e2e = self.job['steps'][self.names.index('真瀏覽器 e2e')]
-        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         # 這裡帶了 NEXUS_E2E_PROCESS_MODEL，兩個 job 都跑 per-thread，single 沒人測也照樣綠。
         self.assertNotIn('env', e2e)
         build = self.job['steps'][self.names.index('建置 lib 與 web')]['run'].split('\n')
-        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
+        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web --fail-if-no-match run build'))
         self.assertLess(self.names.index('建置 lib 與 web'), self.names.index('真瀏覽器 e2e'))
 
     def test_not_serialized_in_static(self) -> None:
@@ -986,13 +989,13 @@ class TypecheckCache(unittest.TestCase):
         uses = [str(s.get('uses', '')) for s in self.typecheck['steps']]
         self.assertFalse(any(u.startswith(('actions/cache/restore@', 'actions/cache@')) for u in uses))
         run = next(s['run'] for s in self.typecheck['steps'] if s.get('name') == 'Typecheck')
-        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'")
+        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'")
 
     def test_root_script_matches_full_layer(self) -> None:
         # 開發時的 `pnpm typecheck` 跟全跑同一支、同一組篩選：宣告檔輸出才有的錯，本機與 CI 一起紅。
         manifest = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
         self.assertEqual(
-            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'"
+            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'"
         )
 
 
