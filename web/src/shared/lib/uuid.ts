@@ -7,7 +7,7 @@
  * [#1335](https://github.com/DemianLi/nexus-agent/issues/1335) 的請求編號搬過來）。`web/eslint.config.js` 的
  * `no-restricted-properties` 擋 `crypto.randomUUID`，把人導到這裡。
  *
- * **放在 `apps/web` 而不是照 dsh 開一個共用套件**：今天要它的只有網頁（harness 跑在 Node 上，`crypto.randomUUID` 一定有）。
+ * **放在 `web` 而不是照 dsh 開一個共用套件**：今天要它的只有網頁（harness 跑在 Node 上，`crypto.randomUUID` 一定有）。
  * 哪天 `@nexus/wire` 也要產 UUID，再照 dsh 搬進共用套件。
  *
  * @module

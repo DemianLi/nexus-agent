@@ -16,7 +16,7 @@
  * 套件的 license 與 repository 讀安裝好的 store，所以要先 `pnpm install`。`--check` 只比對、不寫檔。
  *
  * 跟 dsh 不同、但不是偏離的地方（nexus 沒有那些東西）：沒有 Python、沒有 Claude SDK 與 LibreOffice 的授權例外（字型的 OFL 例外照 LibreOffice 那一條的形狀，見 `OFL_FONT_PACKAGES`）、沒有
- * `patchedDependencies`。dsh 的「web 不是 private 才收」換成「網頁 dist 會進 tarball」：nexus 的 `apps/web` 是 private，
+ * `patchedDependencies`。dsh 的「web 不是 private 才收」換成「網頁 dist 會進 tarball」：nexus 的 `web` 是 private，
  * 但它的 `dist` 由 `harness/scripts/release/payload.ts` 確認一定在產物裡。dsh `:420-421` 把 `tsx` 硬標成執行期（它的根腳本經 tsx 的
  * ESM hook 跑）；nexus 的產物不帶 tsx（`harness/scripts/release/payload.ts` 的 `DEV_TOOLS` 把它當開發工具擋），所以不抄。dsh `:44-50`
  * 的 `FIRST_PARTY`（`:404` 過濾掉）列的是 dsh 自己發布的原生套件；nexus 自己的套件全在 workspace 裡，`names` 已經排除，沒有要另列的。
@@ -444,7 +444,7 @@ interface ViteApi {
   build(config: Record<string, unknown>): Promise<unknown>;
 }
 
-/** 網頁 build 直接打包的第三方套件：用 `apps/web` 自己的 vite 設定真的 build 一次，不寫檔（dsh `:127-161`）。 */
+/** 網頁 build 直接打包的第三方套件：用 `web` 自己的 vite 設定真的 build 一次，不寫檔（dsh `:127-161`）。 */
 export async function browserBundledExternals(): Promise<Set<string>> {
   // vite 經原生 realpath 解析 HTML，root 先 realpath，路徑比對才一致（dsh `:169-170`）。
   const dir = realpathSync.native(join(ROOT, 'web'));
