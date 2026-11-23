@@ -52,6 +52,9 @@ TMP_WRITERS = frozenset({'cp', 'mv', 'tee', 'rm', 'rmdir', 'mkdir', 'touch'})
 TMP_TARGET_OPTIONS = ('-t', '--target-directory')
 NPX_LAUNCHERS = frozenset({'npx', 'pnpx', 'bunx'})
 NPX_ADVICE = '不設放行路：已安裝的用 `pnpm exec <指令>`，沒裝的把套件與用途寫在卡上，需要時由 operator 在終端跑'
+WORKTREE_NAME = re.compile(r'(eng|ver)-\d+(-[a-z0-9]+)?')
+WORKTREE_VALUE_OPTIONS = frozenset({'-b', '-B', '--reason'})
+WORKTREE_ADVICE = '用 `worktree.sh new <分支> <卡號>`，它開在主 checkout 同層的 `worktrees/<eng|ver>-<卡號>`（docs/agents/collab-mode.md〈worktree 與上下文〉）'
 FORCE_ADVICE = '不加 `--force`／`-f`；拆不掉就把原因寫在卡上、停下，要強制移除由 operator 在終端自己跑'
 TMP_ADVICE = '暫存的寫入、覆寫、刪除只在自己 session 的 scratchpad（系統提示裡列的那個絕對路徑）'
 
@@ -481,10 +484,41 @@ def _forced(args: list[str]) -> bool:
     return False
 
 
+def _worktree_add_path(args: list[str]) -> str | None:
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '--':
+            return args[i + 1] if i + 1 < len(args) else None
+        if a in WORKTREE_VALUE_OPTIONS:
+            i += 2
+        elif a.startswith('-'):
+            i += 1
+        else:
+            return a
+    return None
+
+
+def _worktree_location_ok(path: str) -> bool:
+    if PLACEHOLDER in path or '$' in path or '`' in path:
+        return True
+    norm = posixpath.normpath(path)
+    parent, name = posixpath.split(norm)
+    if not WORKTREE_NAME.fullmatch(name) or posixpath.basename(parent) != 'worktrees':
+        return False
+    if norm.startswith(('/', '~')):
+        return posixpath.basename(posixpath.dirname(parent)) != '.claude'
+    return parent == '../worktrees'
+
+
 def _check_git(args: list[str]) -> Block | None:
     sub, rest, before = _subcommand(args, GIT_VALUE_OPTIONS)
     if sub == 'worktree' and rest[:1] == ['remove'] and _forced(rest[1:]):
         return Block('force', f'`git worktree remove --force`／`-f` 會連未提交的內容一起丟掉：{FORCE_ADVICE}')
+    if sub == 'worktree' and rest[:1] == ['add']:
+        path = _worktree_add_path(rest[1:])
+        if path is not None and not _worktree_location_ok(path):
+            return Block('worktree', f'`git worktree add` 的路徑 `{path}` 不在固定位置：{WORKTREE_ADVICE}')
     if sub == 'pull':
         return Block('download', '`git pull` 會下載：改成開分支前一次 `git fetch origin develop`，其他情況先申請核可')
     if sub == 'fetch':

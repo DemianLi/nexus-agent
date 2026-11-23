@@ -383,8 +383,26 @@ class GuardTest(unittest.TestCase):
                 reason = guarded(command)
                 self.assertIsNotNone(reason)
                 self.assertIn('operator', reason)
-        for command in ('git worktree remove /nope/fake', 'git worktree add -f /nope/fake', 'git worktree list', 'git worktree prune', 'git worktree remove -- -f',
+        for command in ('git worktree remove /nope/fake', 'git worktree add -f /nope/worktrees/eng-1', 'git worktree list', 'git worktree prune', 'git worktree remove -- -f',
                         'git commit -m "git worktree remove --force"'):
+            with self.subTest(command=command):
+                self.assertIsNone(guarded(command))
+
+    def test_worktree_add_outside_the_fixed_location_is_blocked(self) -> None:
+        for command in (
+            'git worktree add /nope/fake', 'git worktree add --no-track -b feat/x /nope/fake origin/develop', 'git worktree add .claude/worktrees/eng-1 origin/develop',
+            'git worktree add /nope/.claude/worktrees/eng-1', 'git worktree add worktrees/eng-1', 'git worktree add ../elsewhere/eng-1', 'git worktree add /nope/worktrees/fake',
+            'git worktree add -b x ../worktrees/eng-1/sub', 'cd x && git worktree add /nope/fake', 'bash -c "git worktree add /nope/fake"', 'git -C /nope/repo worktree add ../fake',
+        ):
+            with self.subTest(command=command):
+                reason = guarded(command)
+                self.assertIsNotNone(reason)
+                self.assertIn('worktree.sh new', reason)
+        for command in (
+            'git worktree add --no-track -b chore/x ../worktrees/eng-3151 origin/develop', 'git worktree add -B x /nope/worktrees/ver-3180-b', 'git worktree add --detach ~/p/worktrees/ver-12 HEAD',
+            'git worktree add -b x "$WT" origin/develop', 'git worktree add "$(pwd)/../worktrees/eng-1"', 'git worktree list', 'git worktree remove /nope/fake',
+            'git commit -m "git worktree add /nope/fake"',
+        ):
             with self.subTest(command=command):
                 self.assertIsNone(guarded(command))
 
