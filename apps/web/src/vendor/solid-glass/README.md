@@ -79,7 +79,7 @@
 |---|---|---|---|---|
 | 14 | `resolve-alias.ts`（`vite.config.ts`、`vitest.config.ts`、`guard/vite.config.ts` 共用）＋`tsconfig.json` 的 `paths` | `components/ui/*.tsx` 的 `import { cn } from "cn"` | 裸的 `cn` 精確解析到 `src/lib/utils.ts`（`cn/config` 不動，`utils.ts` 自己從它取）：npm 的 `cn` 不認得 `text-ui`、`rounded-row`，會把 #1141 帶回來（Q19 放行的執行方式，PM 定）。Vite 用正規式 `/^cn$/`，字串鍵會連 `cn/config` 一起改寫。別名是全域的，但打包進來的相依套件沒有一個 import 裸的 `cn`（#1523 用 build 時的 `resolveId` 探針確認），實際只作用在 vendor 的元件 | `lib/cn-alias.test.tsx`（渲染 vendor 原樣的 Button）、`vite-config.test.ts`（build、guard、tsconfig 三份解析） |
 
-**元件層**（#1523 起）：vendor 的元件檔不動，改在覆寫檔或 `components/ui/<x>.tsx` 這一層。選層順序：覆寫檔 → 包裝層 → 改 vendor 檔（③-1 不准第 3 層，③-2 起照下面「改 vendor 檔」）。**判準補一句**（#1583 PM 定）：包裝層**要複製上游的標記**才做得到的，改走 patch——patch 的漂移看得見（上游一動同步就失敗），複製的標記會靜靜漂移。分不出該放哪一層的，回報 PM。
+**元件層**（#1523 起）：vendor 的元件檔不動，改在覆寫檔或 `components/ui/<x>.tsx` 這一層。選層順序：覆寫檔 → 包裝層 → 改 vendor 檔（③-1 不准第 3 層，③-2 起照下面「改 vendor 檔」）。**判準補一句**（#1583 PM 定）：包裝層**要複製上游的標記**才做得到的，改走 patch——patch 的漂移看得見（上游一動同步就失敗），複製的標記會靜靜漂移。分不出該放哪一層的，寫在卡上、結束回合。
 
 | # | 在哪 | 蓋掉 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
 |---|---|---|---|---|

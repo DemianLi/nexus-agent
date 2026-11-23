@@ -41,7 +41,7 @@ engineer 由 PM 開，一張卡一個 session、一個 worktree：
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md 與 docs/agents/collab-mode.md。
 你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
-不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA。不讀不寫 app 給的共用 notes 目錄。
+不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行接在 `AGENTS.md` 的前綴之後帶 PR 號碼與完整 head SHA（code-ready 時 `不可封存：PR #<號碼> code-ready <SHA>`；合併、合併後那一輪綠了、Shipping 第 5 步的回報寫在卡上之後才寫 `可封存：PR #<號碼> 已合 <SHA>`）。不讀不寫 app 給的共用 notes 目錄。
 下載只有開分支前一次 `git fetch origin develop`；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
 暫存的寫入、覆寫、刪除只在你自己的 scratchpad，不寫 `/tmp`；`git worktree remove` 不加 `--force`／`-f`；不 npx，用 `pnpm exec` 跑已安裝的。
 開子代理時，把上面暫存、`--force`、下載、npx 這幾條原文寫進它的 prompt。
@@ -53,7 +53,7 @@ verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md（〈Nexus roles〉的 Verifier）與 docs/agents/collab-mode.md。
 你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
-不傳訊息給 PM：判定貼在 PR 上，收尾第一行帶判定與 PR 號碼。不讀不寫 app 給的共用 notes 目錄。
+不傳訊息給 PM：判定貼在 PR 上，收尾第一行接在 `AGENTS.md` 的前綴之後帶判定與 PR 號碼（`可封存：PR #<號碼> PASS`）。不讀不寫 app 給的共用 notes 目錄。
 下載只有開分支前一次 `git fetch origin develop`（verifier 不 fetch）；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
 暫存的寫入、覆寫、刪除只在你自己的 scratchpad，不寫 `/tmp`；`git worktree remove` 不加 `--force`／`-f`；不 npx，用 `pnpm exec` 跑已安裝的。
 開子代理時，把上面暫存、`--force`、下載、npx 這幾條原文寫進它的 prompt。
@@ -75,7 +75,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 - **備案是事前做的。** operator 用 Remote Control 時，PM 在 operator 說話的回合就預開待命的 session：數量夠一張卡走完（含一次重判）並加上下一張，之後用訊息叫醒。待命的不算同時進行的 engineer，前一張收掉才叫醒下一位。備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
 - 自動模式回「no verdict」且附了 hook 產生的輸入時：照那份輸入單獨重送一次；再被擋就停、回報原文，不改用別的做法繞過。
 - engineer 與 verifier 都開成 session，不開成 subagent。app 自己建 worktree 會取分支名、加前綴，跟 `<type>/<kebab-case>` 不合，所以子 session 不用 app 的 worktree，自己照 worker.md 開，之後只在那個 worktree 裡改。
-- engineer 推出 code-ready 的 head 之後，把結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA，然後結束這一輪，不自己合併，也不傳訊息給 PM。PM 被叫醒後核對 PR 與 SHA 再開 verifier；PM 仍用訊息把 verifier 的判定轉給 engineer，engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。修完 `FAIL`、解衝突要重判時，同樣只寫在 PR 或卡上、收尾帶 SHA。
+- engineer 推出 code-ready 的 head 之後，把結果寫在 PR 或卡上，收尾第一行接在 `AGENTS.md` 的前綴之後帶 PR 號碼與完整 head SHA，然後結束這一輪，不自己合併，也不傳訊息給 PM。PM 被叫醒後核對 PR 與 SHA 再開 verifier；PM 仍用訊息把 verifier 的判定轉給 engineer，engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。修完 `FAIL`、解衝突要重判時，同樣只寫在 PR 或卡上、收尾帶 SHA。
 - engineer 帶著背景工作（例如盯 CI）停下也會叫醒 PM。PM 先核對 PR 與 SHA：沒到 code-ready 或還沒判定，就只記錄，不當成做完。
 - verifier 開背景子代理（例如 code-review 兩軸）之後，先做完自己的部分（重跑 Evidence、突變護欄、核行號）才結束回合，少停幾次；判定貼上之前，自己移除它開的 worktree。
 
