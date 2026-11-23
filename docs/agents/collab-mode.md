@@ -41,7 +41,7 @@ engineer 由 PM 開，一張卡一個 session、一個 worktree：
 Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before anything else.
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md 與 docs/agents/collab-mode.md。
 你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
-不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行接在 `AGENTS.md` 的前綴之後帶 PR 號碼與完整 head SHA（`不可封存：PR #<號碼> code-ready <SHA>`；合併後 `可封存：PR #<號碼> 已合 <SHA>`）。不讀不寫 app 給的共用 notes 目錄。
+不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行接在 `AGENTS.md` 的前綴之後帶 PR 號碼與完整 head SHA（code-ready 時 `不可封存：PR #<號碼> code-ready <SHA>`；合併、合併後那一輪綠了、Shipping 第 5 步的回報寫在卡上之後才寫 `可封存：PR #<號碼> 已合 <SHA>`）。不讀不寫 app 給的共用 notes 目錄。
 下載只有開分支前一次 `git fetch origin develop`；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
 暫存的寫入、覆寫、刪除只在你自己的 scratchpad，不寫 `/tmp`；`git worktree remove` 不加 `--force`／`-f`；不 npx，用 `pnpm exec` 跑已安裝的。
 開子代理時，把上面暫存、`--force`、下載、npx 這幾條原文寫進它的 prompt。
