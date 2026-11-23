@@ -145,7 +145,7 @@ describe('審核結果', () => {
   });
 });
 
-describe('抄來的字跟 wire 對得上（wire 的值跟 plugin、core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住，改了那邊這裡要紅）', () => {
+describe('抄來的字跟 wire 對得上（wire 的值跟 plugin、core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住；plugin、core 改字先紅的是那一格，這一格紅的是 web 的抄本跟 wire 不一致）', () => {
   it('工具名、關掉審核那一句（#1607 之前是舊字、之後是新字，兩種都認；換成第三種要紅）', () => {
     expect(EXIT_PLAN_MODE_TOOL_NAME).toBe('exit_plan_mode');
     expect([LEGACY_PLAN_REVIEW_DISMISSED_TEXT, PLAN_REVIEW_DISMISSED_TEXT]).toContain(

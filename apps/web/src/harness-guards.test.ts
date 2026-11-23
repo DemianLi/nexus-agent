@@ -60,14 +60,14 @@ function codeLinesMatching(text: string, pattern: RegExp): string[] {
   return found;
 }
 
-export function saverConstructions(text: string): string[] {
+function saverConstructions(text: string): string[] {
   return text
     .split('\n')
     .filter((line) => /new\s+\w*Saver\s*\(/u.test(line))
     .map((line) => line.trim());
 }
 
-export function errorPrefixViolations(text: string): string[] {
+function errorPrefixViolations(text: string): string[] {
   return [
     ...codeLinesMatching(text, /status:\s*['"]error['"]/u),
     ...codeLinesMatching(text, /['"`]Error: /u),
@@ -75,7 +75,7 @@ export function errorPrefixViolations(text: string): string[] {
   ];
 }
 
-export function dispatcherViolations(text: string): string[] {
+function dispatcherViolations(text: string): string[] {
   if (!/undici|dispatcher/u.test(text)) return [];
   const file = sourceOf(text);
   const found: string[] = [];
@@ -121,7 +121,7 @@ const STORE_ONLY = new Set(['parseHeader', 'sessionLogPathOf']);
 const isStore = (specifier: string): boolean =>
   /(^|\/)jsonl-session-store(\.[cm]?[jt]s)?$/u.test(specifier);
 
-export function sessionFileViolations(text: string): string[] {
+function sessionFileViolations(text: string): string[] {
   if (!/jsonl|header\\?\.json|parseHeader|sessionLogPathOf/u.test(text)) return [];
   const file = sourceOf(text);
   const found: string[] = [];
@@ -175,11 +175,11 @@ export function sessionFileViolations(text: string): string[] {
   return found;
 }
 
-export function beforeAgentViolations(text: string): string[] {
+function beforeAgentViolations(text: string): string[] {
   return /\bbeforeAgent\s*:/u.test(text) ? ['beforeAgent:'] : [];
 }
 
-export function eventMapViolations(text: string): string[] {
+function eventMapViolations(text: string): string[] {
   if (!/SessionEventMap|declare\s+module/u.test(text)) return [];
   const file = sourceOf(text);
   const found: string[] = [];
@@ -315,7 +315,7 @@ describe('全樹掃描：這些事只有 harness 那一側做，web 一個都沒
     ).toEqual([]);
   });
 
-  it('沒有自己寫的會話檔名、沒有自己解的 header（產品碼；測試不掃，同原本的範圍）', () => {
+  it('沒有自己寫的會話檔名、沒有自己解的 header（產品碼，測試檔不掃）', () => {
     expect(
       scan(
         ALL_FILES.filter((file) => !isTest(file.path)),

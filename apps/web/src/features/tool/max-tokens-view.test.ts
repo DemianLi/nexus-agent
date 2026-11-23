@@ -28,7 +28,7 @@ function task(patch: Partial<ToolEntry>): ToolEntry {
 }
 
 describe('子代理撞到輸出上限的 task', () => {
-  it('抄來的字跟 wire 對得上（wire 的值與組法跟 core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住，改了那邊這裡要紅）', () => {
+  it('抄來的字跟 wire 對得上（wire 的值與組法跟 core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住；core 改字先紅的是那一格，這一格紅的是 web 的抄本跟 wire 不一致）', () => {
     expect(WIRE_SUBAGENT_MAX_TOKENS_REASON).toBe(SUBAGENT_MAX_TOKENS_REASON);
     expect(WIRE_PARTIAL_OUTPUT_HEADING).toBe(PARTIAL_OUTPUT_HEADING);
   });

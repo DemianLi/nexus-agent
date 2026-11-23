@@ -132,6 +132,39 @@ class HarnessTest(unittest.TestCase):
     def test_comments_are_not_checked(self) -> None:
         self.assertEqual(run({'apps/harness/src/a.ts': "/** 掃 `apps/web/src` */\n// '../web'\n"}), [])
 
+    def test_scanning_the_whole_apps_layer_fails(self) -> None:
+        for line in (
+            "for (const group of ['packages', 'apps']) { readdirSync(join(root, group)); }",
+            "walk(join(root, 'apps'), files);",
+            "const files = glob('apps/*/src/**/*.ts');",
+            "const dir = join(ROOT, 'apps', name);",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(len(run({'apps/harness/src/a.ts': line + '\n'})), 1)
+
+    def test_apps_followed_by_own_directory_is_fine(self) -> None:
+        self.assertEqual(run({'apps/harness/src/a.ts': "const d = join(repo, 'apps', 'harness', 'src');\n"}), [])
+
+    def test_base_event_table_scan_is_caught(self) -> None:
+        base = (
+            "function productFiles(root: string): string[] {\n"
+            "  const files: string[] = [];\n"
+            "  for (const group of ['packages', 'apps']) {\n"
+            "    for (const pkg of readdirSync(join(root, group), { withFileTypes: true })) {\n"
+            "      walk(join(root, group, pkg.name, 'src'), files);\n"
+            "    }\n"
+            "  }\n"
+            "  return files;\n"
+            "}\n"
+        )
+        errors = run({'apps/harness/src/event-table-scan.ts': base})
+        self.assertEqual(len(errors), 1)
+        self.assertIn('event-table-scan.ts:3', errors[0])
+        self.assertIn('整層 `apps`', errors[0])
+
+    def test_web_scanning_the_whole_apps_layer_fails(self) -> None:
+        self.assertEqual(len(run({'apps/web/src/a.test.ts': "readdirSync(join(root, 'apps'));\n"})), 1)
+
 
 class ExemptionTest(unittest.TestCase):
     ITEM = check_boundary.Exemption('apps/web/e2e/*', 'web-path', '測試要對著真 harness 跑')
