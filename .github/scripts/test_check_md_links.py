@@ -153,6 +153,7 @@ class Floors(unittest.TestCase):
     OLD = {
         'README.md': '', 'docs/a.md': '', 'packages/p/README.md': '', 'apps/harness/README.md': '', 'vendor/README.md': '',
         'apps/web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',
+        'AGENTS.md': '', '.agents/skills/s/SKILL.md': '',
     }
 
     def build(self, files: dict[str, str]) -> Path:
@@ -166,6 +167,7 @@ class Floors(unittest.TestCase):
     NEW = {
         'README.md': '', 'docs/a.md': '', 'harness/packages/p/README.md': '', 'harness/apps/harness/README.md': '',
         'harness/vendor/README.md': '', 'web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',
+        'AGENTS.md': '', '.agents/skills/s/SKILL.md': '',
     }
 
     def test_complete_tree_in_either_layout_has_no_empty_group(self) -> None:
@@ -185,10 +187,16 @@ class Floors(unittest.TestCase):
         required = [name for name, _, floor in GROUPS if floor]
         self.assertEqual(len(errors), len(required))
 
-    def test_groups_that_leave_the_project_may_be_empty(self) -> None:
-        files = {k: v for k, v in self.OLD.items()}
-        self.assertEqual(empty_groups(self.build(files)), [])
-        self.assertTrue(all(floor == 0 for name, _, floor in GROUPS if name in ('AGENTS', '.docs', '.agents')))
+    def test_only_the_docs_dot_group_may_be_empty(self) -> None:
+        self.assertEqual([name for name, _, floor in GROUPS if floor == 0], ['.docs'])
+        self.assertEqual(empty_groups(self.build(self.OLD)), [])
+
+    def test_agents_or_skills_group_scanning_nothing_is_red(self) -> None:
+        for missing, name in (('AGENTS.md', 'AGENTS'), ('.agents/skills/s/SKILL.md', '.agents')):
+            files = {k: v for k, v in self.OLD.items() if k != missing}
+            errors = empty_groups(self.build(files))
+            self.assertEqual(len(errors), 1, missing)
+            self.assertIn(f'「{name}」', errors[0])
 
     def test_command_line_takes_a_root_and_a_file_scope(self) -> None:
         root = self.build({**self.OLD, 'docs/b.md': '[x](missing.md)\n'})

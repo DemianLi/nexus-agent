@@ -40,9 +40,9 @@ GROUPS: list[tuple[str, list[str], int]] = [
     ('web-vendor', ['apps/web/src/vendor/solid-glass/README.md', 'web/src/vendor/solid-glass/README.md'], 1),
     ('GLOSSARY-MAP', ['GLOSSARY-MAP.md'], 1),
     ('.github', ['.github/**/*.md'], 1),
-    ('AGENTS', ['AGENTS.md'], 0),
+    ('AGENTS', ['AGENTS.md'], 1),
     ('.docs', ['.docs/**/*.md'], 0),
-    ('.agents', ['.agents/skills/**/*.md'], 0),
+    ('.agents', ['.agents/skills/**/*.md'], 1),
 ]
 PATTERNS = [pattern for _, patterns, _ in GROUPS for pattern in patterns]
 # 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。
