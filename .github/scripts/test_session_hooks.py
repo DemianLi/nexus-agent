@@ -27,10 +27,11 @@ def run(argv: list[str], event: object) -> tuple[int, str]:
 
 
 FAKE_PREFIX = 'fake'
-FAKE_PROGRAMS = ('git', 'pnpm')
+FAKE_PROGRAMS = ('git', 'pnpm', 'npx', 'rm', 'cp', 'mv', 'tee')
 SHELLS_UNDER_TEST = tuple(argv for argv in (('/bin/bash', '--noprofile', '--norc', '-c'), ('/bin/zsh', '-f', '-c')) if os.path.exists(argv[0]))
 
-BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。下載只有開分支前一次 git fetch origin develop，其餘寫在卡上等 operator 核可。'}
+GUARD_RULES = '暫存只寫你自己的 scratchpad。git worktree remove 不加 --force。不 npx。開子代理時把這些規則原文寫進它的 prompt。'
+BASE = {'use_worktree': False, 'prompt': '開場。不讀不寫 app 給的共用 notes 目錄。下載只有開分支前一次 git fetch origin develop，其餘寫在卡上等 operator 核可。' + GUARD_RULES}
 
 
 def ok_input(name: str, model: str, effort: str, **more: object) -> dict:
@@ -112,7 +113,7 @@ class StartSessionTest(unittest.TestCase):
 
     def test_prompt_must_state_download_rule(self) -> None:
         ok = ok_input('eng-1', 'sonnet', 'medium')
-        notes_only = '開場。不讀不寫 app 給的共用 notes 目錄。'
+        notes_only = '開場。不讀不寫 app 給的共用 notes 目錄。' + GUARD_RULES
         reason = check_start_session({**ok, 'prompt': notes_only})
         self.assertIsNotNone(reason)
         self.assertIn('下載', reason)
@@ -127,6 +128,17 @@ class StartSessionTest(unittest.TestCase):
         for wrong in ('下載先寫在卡上等 operator 核可。', '下載只有開分支前一次 git fetch origin develop，其餘不用 operator 核可。', '下載不需要核可，照常 git fetch origin develop。'):
             with self.subTest(wrong=wrong):
                 self.assertIsNotNone(check_start_session({**ok, 'prompt': notes_only + wrong}))
+
+    def test_prompt_must_carry_each_guard_rule(self) -> None:
+        ok = ok_input('eng-1', 'sonnet', 'medium')
+        head = '開場。不讀不寫 app 給的共用 notes 目錄。下載只有開分支前一次 git fetch origin develop，其餘寫在卡上等 operator 核可。'
+        rules = ('暫存只寫你自己的 scratchpad。', 'git worktree remove 不加 --force。', '不 npx。', '開子代理時把這些規則原文寫進它的 prompt。')
+        self.assertIsNone(check_start_session({**ok, 'prompt': head + ''.join(rules)}))
+        for i, rule in enumerate(rules):
+            with self.subTest(rule=rule):
+                reason = check_start_session({**ok, 'prompt': head + ''.join(r for j, r in enumerate(rules) if j != i)})
+                self.assertIsNotNone(reason)
+                self.assertIn('開場要補上', reason)
 
     def test_hook_exit_codes(self) -> None:
         self.assertEqual(run(['pre-start-session'], {'tool_input': {'name': 'ver-1'}})[0], 2)
@@ -336,6 +348,105 @@ class DownloadTest(unittest.TestCase):
         code, err = run(['pre-download'], {'tool_input': {'command': "git pull 'oops"}})
         self.assertEqual(code, 0)
         self.assertIn('放行', err)
+
+
+SCRATCH = '/private/tmp/claude-501/fake-project/fake-session/scratchpad'
+OTHER_SCRATCH = '/private/tmp/claude-501/fake-project/other-session/scratchpad'
+
+
+def guarded(command: str, session_id: str | None = 'fake-session') -> str | None:
+    return check_download({'command': command}, session_id)
+
+
+class GuardTest(unittest.TestCase):
+    def test_npx_and_equivalents_are_blocked_with_no_way_out(self) -> None:
+        for command in (
+            'npx vitest', 'npx -y vitest run', 'pnpm dlx vitest', 'pnpm -C a dlx vitest', 'npm exec vitest', 'npm x vitest', 'yarn dlx vitest', 'pnpx vitest', 'bunx vitest',
+            'FOO=1 npx vitest', 'env npx vitest', 'timeout 5 npx vitest', 'cd x && npx vitest', 'bash -c "npx vitest"', 'echo $(npx vitest)', '/usr/bin/npx vitest',
+            'rtk npx vitest', 'corepack npx vitest',
+        ):
+            with self.subTest(command=command):
+                reason = guarded(command)
+                self.assertIsNotNone(reason)
+                self.assertIn('pnpm exec', reason)
+                self.assertNotIn('核可後', reason)
+        for command in ('pnpm exec vitest run', 'pnpm run test', 'npm run test', 'echo "npx vitest"', 'git commit -m "不 npx"', 'ls npx'):
+            with self.subTest(command=command):
+                self.assertIsNone(guarded(command))
+
+    def test_forced_worktree_removal_is_blocked(self) -> None:
+        for command in (
+            'git worktree remove --force /nope/fake', 'git worktree remove -f /nope/fake', 'git worktree remove -ff /nope/fake', 'git worktree remove /nope/fake --force',
+            'git -C /nope/fake worktree remove -f /nope/fake', 'cd x && git worktree remove --force y', 'bash -c "git worktree remove -f y"', 'sudo git worktree remove -f y',
+        ):
+            with self.subTest(command=command):
+                reason = guarded(command)
+                self.assertIsNotNone(reason)
+                self.assertIn('operator', reason)
+        for command in ('git worktree remove /nope/fake', 'git worktree add -f /nope/fake', 'git worktree list', 'git worktree prune', 'git worktree remove -- -f',
+                        'git commit -m "git worktree remove --force"'):
+            with self.subTest(command=command):
+                self.assertIsNone(guarded(command))
+
+    def test_writes_to_shared_temp_are_blocked(self) -> None:
+        for command in (
+            'echo x > /tmp/fake-a', 'echo x >> /tmp/fake-a', 'echo x >/tmp/fake-a', 'echo x &>/tmp/fake-a', 'echo x >| /tmp/fake-a', 'echo x 2> /tmp/fake-a', 'echo x > "/tmp/fake-a"',
+            'echo x > /private/tmp/fake-a', 'echo x > /var/folders/ab/cd/T/fake-a', 'echo x > /var/tmp/fake-a', 'echo x > /tmp/../tmp/fake-a',
+            'cp a /tmp/fake-a', 'cp -r a b /tmp/fake-dir', 'cp -t /tmp/fake-dir a', 'cp --target-directory=/tmp/fake-dir a', 'mv a /tmp/fake-a', 'mv /tmp/fake-a b', 'mv -f /tmp/fake-a b',
+            'tee /tmp/fake-a', 'echo x | tee -a /tmp/fake-a', 'rm /tmp/fake-a', 'rm -rf /tmp/fake-dir', 'rm -rf -- /tmp/fake-dir', 'rmdir /tmp/fake-dir', 'mkdir -p /tmp/fake-dir', 'touch /tmp/fake-a',
+            'rm /private/tmp/claude-501/fake-project/other-session/scratchpad/fake-a', f'echo x > {OTHER_SCRATCH}/fake-a', f'rm {SCRATCH}/../../fake-a',
+            'bash -c "rm /tmp/fake-a"', 'cd x && echo y > /tmp/fake-a', 'echo $(rm /tmp/fake-a)', 'cat <<EOF | bash\nrm /tmp/fake-a\nEOF', 'FOO=1 rm /tmp/fake-a', '/bin/rm /tmp/fake-a',
+        ):
+            with self.subTest(command=command):
+                reason = guarded(command)
+                self.assertIsNotNone(reason)
+                self.assertIn('scratchpad', reason)
+
+    def test_own_scratchpad_and_other_paths_pass(self) -> None:
+        for command in (
+            f'echo x > {SCRATCH}/fake-a', f'echo x >> {SCRATCH}/a/b', f'cp a {SCRATCH}/fake-a', f'cp -t {SCRATCH} a', f'mv {SCRATCH}/a {SCRATCH}/b', f'rm -rf {SCRATCH}/fake-dir',
+            f'echo x | tee {SCRATCH}/fake-a', f'mkdir -p {SCRATCH}/x', 'echo x > /tmp/claude-501/fake-project/fake-session/scratchpad/fake-a',
+            'echo x > out.txt', 'echo x > ./out.txt', 'cp a b', 'cp /tmp/fake-a b', 'cat /tmp/fake-a > out.txt', 'rm -rf node_modules', 'echo x > /dev/null 2>&1', 'echo x > /Users/x/fake-a',
+            'echo x > $SOMEWHERE/fake-a', 'echo x > "$(mktemp)"', 'ls /tmp', 'echo "x > /tmp/fake-a"', "echo 'rm /tmp/fake-a'", 'git commit -m "rm /tmp/fake-a"', 'grep x /tmp/fake-a',
+            'echo x > /tmpfoo/fake-a', 'echo x > /private/tmpfoo/fake-a',
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(guarded(command))
+
+    def test_scratchpad_exception_needs_the_matching_session(self) -> None:
+        self.assertIsNone(guarded(f'echo x > {SCRATCH}/fake-a', 'fake-session'))
+        self.assertIsNotNone(guarded(f'echo x > {SCRATCH}/fake-a', 'another-session'))
+        self.assertIsNone(guarded(f'echo x > {SCRATCH}/fake-a', None))
+
+    def test_the_five_incidents_replayed_as_strings(self) -> None:
+        for command in (
+            'pnpm install', 'git worktree remove --force /nope/fake', 'npx vitest run', 'cp a /tmp/fake-shared.txt', 'echo x > /tmp/fake-shared.txt',
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(guarded(command))
+
+    def test_hook_exit_code_and_message_for_guard_rules(self) -> None:
+        code, err = run(['pre-download'], {'session_id': 'fake-session', 'tool_input': {'command': 'npx vitest'}})
+        self.assertEqual(code, 2)
+        self.assertIn('pnpm exec', err)
+        self.assertEqual(run(['pre-download'], {'session_id': 'fake-session', 'tool_input': {'command': f'echo x > {SCRATCH}/fake-a'}})[0], 0)
+        self.assertEqual(run(['pre-download'], {'session_id': 'other', 'tool_input': {'command': f'echo x > {SCRATCH}/fake-a'}})[0], 2)
+
+    @unittest.skipUnless(os.path.exists('/bin/bash'), 'needs /bin/bash')
+    def test_verdict_matches_what_real_bash_would_run_for_fake_programs(self) -> None:
+        cores = (
+            'npx vitest', 'rm /tmp/fake-a', 'cp a /tmp/fake-a', 'mv a /tmp/fake-a', 'echo x | tee /tmp/fake-a', 'rm fake-local', 'cp a b',
+            'git worktree remove --force /nope/fake', 'git worktree remove /nope/fake',
+        )
+        shapes = (
+            '{c}', 'echo hi; {c}', '( {c} )', '$( {c} )', 'x=`{c}`', 'bash -c "{c}"', 'eval "{c}"', 'echo "{c}"', "echo '{c}'", 'cat <<EOF\n{c}\nEOF',
+            "cat <<'EOF'\n{c}\nEOF", 'cat <<EOF | bash\n{c}\nEOF', 'if true; then {c}; fi', 'f() {{ {c}; }}; f', 'echo "$({c})"',
+        )
+        with fake_programs() as ran_under_fakes:
+            for core, shape in itertools.product(cores, shapes):
+                command = shape.replace('{{', '{').replace('}}', '}').replace('{c}', core)
+                with self.subTest(command=command):
+                    self.assertEqual(guarded(command) is not None, any(guarded(line) is not None for line in ran_under_fakes(command)))
 
 
 def settings_entry() -> dict:
