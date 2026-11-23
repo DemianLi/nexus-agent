@@ -1,9 +1,9 @@
 # 待拍板 12 題與拍板結果（2026-09-19）
 
 **來源**：這 12 題來自三處：
-- 七層盤點（[`seven-layer-inventory-2026-09-19.md`](seven-layer-inventory-2026-09-19.md)）列出、還沒判過的 9 題；
+- 七層盤點（[`seven-layer-inventory-2026-09-19.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-09-19.md)）列出、還沒判過的 9 題；
 - #180 的前提重核，以及 `document`；
-- 單一職責盤點（[`srp-audit-2026-09-19.md`](srp-audit-2026-09-19.md)）帶出來的第 12 題。
+- 單一職責盤點（[`srp-audit-2026-09-19.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/srp-audit-2026-09-19.md)）帶出來的第 12 題。
 
 對照版本是 dsh `ddefc45` 與 develop `8fb2e51`。拍板後開的卡，開出去之前照 develop `2c87265` 重核過出處；七層盤點寫於 develop `c1857a8`。三個版本之間，`apps/harness` 與 `packages/` 只多了 #423 加的註解，沒有程式碼改動；引用的行號可能因此差幾行。
 

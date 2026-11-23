@@ -2,7 +2,7 @@
  * serve 把「掛不上的列」與「插件自己停用了自己」記進變更紀錄的那一支
  * （[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)、[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)，Part of #1385）。
  *
- * 決議 `.docs/decisions-2026-10-11.md` §3-4 第 13 條（Q27 (b)）：插拔出錯時，結構化錯誤要進稽核紀錄。紀錄多一種只記不折
+ * 決議 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md §3-4 第 13 條（Q27 (b)）：插拔出錯時，結構化錯誤要進稽核紀錄。紀錄多一種只記不折
  * 的 `failed`（`plugin-journal.ts`），這裡是它的寫入者：serve 在三個地方發現某一列掛不上（啟動試組、每條 thread 組裝、
  * 讀清單時新掉的），把整份掉了的列交進來，由這裡決定記不記。
  *

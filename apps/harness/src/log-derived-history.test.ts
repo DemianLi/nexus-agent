@@ -17,7 +17,7 @@
  * - 重放時把系統訊息改一個字：所有場景（系統訊息相符的斷言）。
  * - SR2 比的是「重啟 vs 不重啟」，不經過比對器，上面四個突變碰不到它；它另有自己的前提斷言與突變（讓重啟那邊拿錯一次呼叫去比）。
  *
- * **SR2 有循環性**（同 `.docs/log-derived-history-vs-wire-2026-10-08.md` §二 對 SR1、SR3 的說明）：續接是從日誌推出歷史再灌回
+ * **SR2 有循環性**（同 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/log-derived-history-vs-wire-2026-10-08.md §二 對 SR1、SR3 的說明）：續接是從日誌推出歷史再灌回
  * LangGraph 狀態，之後每次請求剪刀與截斷照舊在請求端再套一次，所以它證明的是「今天重啟不改變請求」，不是「歷史可由日誌單獨推出」。
  * 不要把它當成推導的證據。
  */
@@ -285,7 +285,7 @@ describe('對照場景：預期逐位元組相同', () => {
 });
 
 /**
- * 判準出自 `.docs/wrapmodelcall-bridge-gaps-2026-10-11.md` §三 G2：第一份之後的每一份主請求帶出去的助手歷史，每一則日誌上都有一則 `assistant/message` 對得上（文字與工具呼叫的 id）。
+ * 判準出自 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/wrapmodelcall-bridge-gaps-2026-10-11.md §三 G2：第一份之後的每一份主請求帶出去的助手歷史，每一則日誌上都有一則 `assistant/message` 對得上（文字與工具呼叫的 id）。
  */
 function expectAssistantHistoryOnLog(run: Run): void {
   const textOf = (content: unknown): string =>

@@ -14,7 +14,7 @@
  *
  * 三條狀態軌道，**寫入者不同**。給 todo 加一個 `/todo` 命令等於讓人去改模型的草稿，
  * 而那份草稿下一次呼叫就被整份覆蓋掉了。調研與三個決定見
- * [`.docs/todo-design-survey.md`](../../../.docs/todo-design-survey.md)。
+ * [`todo-design-survey.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/todo-design-survey.md)。
  *
  * ## 為什麼是會話事件，不是 middleware 的 `stateSchema`
  *

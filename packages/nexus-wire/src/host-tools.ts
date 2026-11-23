@@ -1,5 +1,5 @@
 /**
- * 宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 `.docs/host-page-tools-2374-design-2026-11-03.md`）：嵌入
+ * 宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md）：嵌入
  * `<nexus-chat>` 的宿主頁在 `run.start` 宣告自己的工具，模型呼叫時 serve 停下這一輪、發一顆 `input.requested`（{@link HOST_TOOL_INTERRUPT_KIND}），
  * 宿主頁執行後用 `input.respond` 把 {@link HostToolResponse} 交回。
  *

@@ -1,5 +1,5 @@
 /*
- * 助理回覆的 markdown 排版（`shared/markdown/text.tsx`，#405）。規則見 `.docs/web-ui-spec.md` §5：
+ * 助理回覆的 markdown 排版（`shared/markdown/text.tsx`，#405）。規則見 `docs/web-ui.md` §5：
  * 連結用 `--brand`；程式碼區塊是內層 stage、圓角 2xl（16px）；字重只用 400／500。
  * 放在 components layer：元件自己寫的 utility 蓋得過它。`.md-code` 不限在 `.markdown` 裡：工具卡的參數也用它。
  */

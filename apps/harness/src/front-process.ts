@@ -1,5 +1,5 @@
 /**
- * per-thread 前台的入口（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§四）：
+ * per-thread 前台的入口（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §3-2、§四）：
  * 監督行程起一個，`node front-process.js [serve 的旗標…]`，由 `process-launcher.ts` 組好參數。
  *
  * - 跟一般的 serve 一樣聽 port 或 `--unix-socket`、帶登入、網頁與營運端點，拿 home 鎖；指名 thread 的 wire 請求轉給對話行程（`front-wire.ts`）。

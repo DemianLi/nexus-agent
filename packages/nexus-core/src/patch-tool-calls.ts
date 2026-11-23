@@ -3,7 +3,7 @@
  *
  * ## 為什麼要有這個檔
  *
- * 研究文件 [`.docs/rust-and-langchain-removal-2026-10-06.md`](../../../.docs/rust-and-langchain-removal-2026-10-06.md)
+ * 研究文件 [`rust-and-langchain-removal-2026-10-06.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/rust-and-langchain-removal-2026-10-06.md)
  * §七的接縫 6：拿掉 `deepagents` 的第一批。這顆 middleware 只有 190 行、不碰後端、不進模型看得到的
  * 工具清單，所以最先換。**只換載體，不改行為**：
  *

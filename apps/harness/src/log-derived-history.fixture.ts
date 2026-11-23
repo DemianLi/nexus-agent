@@ -20,7 +20,7 @@
  * - `kinds`：差在哪一類（{@link DifferenceKind}），用**內容**判，不只看序號——同一個序號換了一種差異要看得出來。
  * - `systemMatches`：線上系統訊息的文字（區塊串起來）是否等於日誌 `request/system`。探針當年沒比這一格。
  *
- * ## 兩處決議（#1342，見 `.docs/log-derived-history-vs-wire-2026-10-08.md` 最後一則補記）
+ * ## 兩處決議（#1342，見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/log-derived-history-vs-wire-2026-10-08.md 最後一則補記）
  *
  * - **助手訊息不送 `name`**（#1392）：LangChain 的 `AgentNode` 在非串流路徑把 `name: "model"` 掛在助手訊息上，
  *   日誌不記、推導不產生，產品的 `fetch` 層（`live-model.ts` 的 `withoutAssistantName`）送出前去掉它。夾具**不**

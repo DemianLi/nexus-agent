@@ -1,6 +1,6 @@
 /**
  * 宿主頁工具量測的進入點 —— `pnpm --filter @nexus/harness eval:host-tools`。
- * [#2398](https://github.com/DemianLi/nexus-agent/issues/2398)，設計 `.docs/host-page-tools-2374-design-2026-11-03.md` Q8。
+ * [#2398](https://github.com/DemianLi/nexus-agent/issues/2398)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md Q8。
  *
  * 量嵌入的對話框宣告宿主頁工具之後，模型叫錯工具或叫錯對象的比例。題目在 [`fixture.ts`](./fixture.ts)，判準在 [`rubric.ts`](./rubric.ts)。
  * 每題開一條新的 thread，經 `/embed` 前綴的 wire 送 `run.start` 帶 `context` 與 `hostTools`，這支扮宿主頁：收到宿主頁工具的

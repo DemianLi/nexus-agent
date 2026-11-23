@@ -1,6 +1,6 @@
 /**
  * 插件投影的 `custom` frame（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見
- * `.docs/session-projections-design.md`）。
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-projections-design.md）。
  *
  * 跟 `todos`、`plan`、`title` 那幾格不同：那些每一種一個名字、一個折疊分支、`ConversationState` 上一個欄位；這一格是
  * **泛用的槽**——所有插件註冊的投影共用同一種 frame、同一個折疊分支、`ConversationState.projections` 上的一格，

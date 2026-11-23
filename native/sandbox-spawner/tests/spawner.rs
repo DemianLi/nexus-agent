@@ -34,7 +34,7 @@ fn probe() -> PathBuf {
     .clone()
 }
 
-/// S5 的窄讀清單（`.docs/nexus-cordis-rust-feasibility-2026-10-22.md` 的 S5），加上探針所在的目錄。
+/// S5 的窄讀清單（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/nexus-cordis-rust-feasibility-2026-10-22.md 的 S5），加上探針所在的目錄。
 fn readable() -> Vec<Vec<u8>> {
     let mut roots: Vec<Vec<u8>> = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc"]
         .iter()

@@ -1,6 +1,6 @@
 # apps/web 新增元件規則
 
-給「要在 `apps/web` 加元件、改樣式」的人。詞（基礎元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。什麼算一條規則、元件分哪三層、哪些改動要 demian 核可，見規格 §13。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`.docs/web-design-style.md`](../../.docs/web-design-style.md)。
+給「要在 `apps/web` 加元件、改樣式」的人。詞（基礎元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`docs/web-ui.md`](../../docs/web-ui.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。什麼算一條規則、元件分哪三層、哪些改動要 demian 核可，見規格 §13。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`web-design-style.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/web-design-style.md)。
 
 ## 放哪一層
 
@@ -32,15 +32,15 @@
 - **焦點外框**：不寫 `focus-visible:ring-*`，`ui/` 的 nexus 層也一樣；只有 vendor 上游原樣的檔留著它自己的。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - **陰影**：用具名的階（`shadow-sm`、`shadow-md`…）或引用 token 的畫法，不寫自己調的 `shadow-[0_2px_8px_#0003]`。
-- **層級**：只用 `z-0`、`z-10`、`z-20`、`z-50`（各層的用途在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫別的數字、負值與 `z-[60]`。
-- **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
+- **層級**：只用 `z-0`、`z-10`、`z-20`、`z-50`（各層的用途在 [`docs/web-ui.md`](../../docs/web-ui.md) §13.4）。不寫別的數字、負值與 `z-[60]`。
+- **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`docs/web-ui.md`](../../docs/web-ui.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
 真的要例外：列進該測試的 `ALLOWED`，附理由。**例外只會變少**：列了卻不再命中的條目會報錯。
 
 ## 外觀原則
 
-三條，來自 beautiful-ui 的比對（[`.docs/beautiful-ui-comparison.md`](../../.docs/beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。都是我們已經在做的事，寫下來讓新元件照做。
+三條，來自 beautiful-ui 的比對（[`beautiful-ui-comparison.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。都是我們已經在做的事，寫下來讓新元件照做。
 
 - **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、destructive、SG 的 `status-*`），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
 - **次要靠顏色，不靠字重；次要色本身要過 4.5:1**。說明、附註、時間一律 `text-muted-foreground`，不要把字變細（細字在中文與小字級下先糊掉）。`font-thin`／`font-extralight`／`font-light` 會被 `design-system.test.ts` 擋下。次要色的對比度由 `tokens-contrast.test.ts` 守著——次要色看不清楚，就等於沒寫。

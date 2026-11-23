@@ -4,7 +4,7 @@ import { activeElementOf } from '@/shared/lib/active-element';
 
 /**
  * 讀取用的鈕收掉之後焦點的交接（[#2009](https://github.com/DemianLi/nexus-agent/issues/2009)）。往前翻與觀測分頁的
- * 「載入這一輪的細節」共用這一份，判斷寫在這裡（`.docs/web-ui-spec.md` §8「焦點搬動的判斷寫在換手那一層」）；觀測分頁另有一步：
+ * 「載入這一輪的細節」共用這一份，判斷寫在這裡（`docs/web-ui.md` §8「焦點搬動的判斷寫在換手那一層」）；觀測分頁另有一步：
  * 交接前先展開到那一組（`trace/panel.tsx`）。
  *
  * - **焦點在鈕上才記**（`arm`）：鈕被聚焦時呼叫（鍵盤按下去之前一定先聚焦；Safari 用滑鼠點不聚焦，就不記）。判準只有焦點，

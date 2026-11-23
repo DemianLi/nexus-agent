@@ -41,7 +41,7 @@
  * ## 缺口帳：四筆，其中兩筆是同一個缺件
  *
  * 前三筆已經散在三個檔頭裡，沒有被漏掉，只是沒有被索引；第 4 筆的家是下面第 4 列自己與
- * `.docs/plugin-architecture-gap-survey.md` §五第 7 條。**這一份只負責認帳，不決定要不要
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md §五第 7 條。**這一份只負責認帳，不決定要不要
  * 補**——「圖裡發生的事有沒有一條進日誌的路」是 #190 的候選 5，射程在那裡。
  *
  * 1. ~~**第 7 格位置點不到**~~——**2026-09-13 由

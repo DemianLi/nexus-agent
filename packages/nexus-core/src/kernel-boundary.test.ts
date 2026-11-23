@@ -4,7 +4,7 @@
  * `@nexus/core` 一個包同時扮三個角色：**容器**（誰持有 plugin、誰做載入與回滾）、
  * **領域**（會話日誌、摘要、工具註冊表）、**打底**（`fold` 決定預設掛什麼）。
  * 三合一是刻意的選擇，理由與取捨見
- * [`.docs/kernel-split-tradeoff.md`](../../../.docs/kernel-split-tradeoff.md)。
+ * [`kernel-split-tradeoff.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/kernel-split-tradeoff.md)。
  *
  * 那份筆記的前提是「容器層今天沒有碰過任何 agent 概念」，而那件事**今天成立純屬紀律**
  * ——沒有包邊界擋著誰在 `load.ts` 裡 import `summarization.ts`。這個檔案把那條紀律變成

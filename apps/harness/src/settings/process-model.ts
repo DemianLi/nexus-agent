@@ -1,5 +1,5 @@
 /**
- * serve 的行程模型的**設定條目**（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §八）。
+ * serve 的行程模型的**設定條目**（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §八）。
  *
  * 形狀與載體同 [`./thread-title.ts`](./thread-title.ts) 的檔頭。這一顆自己的四件事：
  *

@@ -1,7 +1,7 @@
 /**
  * 清單上每一列「改了之後什麼時候生效」的分類（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）。
  *
- * 依據 `.docs/plugin-reload-classification-2026-10-08.md`，**以 develop 今天的程式碼為準**：那份文件寫在 #669 把幾顆
+ * 依據 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-reload-classification-2026-10-08.md，**以 develop 今天的程式碼為準**：那份文件寫在 #669 把幾顆
  * 組裝點自己建的插件搬進清單之前，A 表的「出貨」欄與 R2／R3 那一段已經過期，已在同一張 PR 更正。
  *
  * ## 三個類別

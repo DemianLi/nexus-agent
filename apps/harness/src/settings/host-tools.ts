@@ -1,5 +1,5 @@
 /**
- * 宿主頁工具的**設定條目**：免核准名單與逾時（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 `.docs/host-page-tools-2374-design-2026-11-03.md` Q5）。
+ * 宿主頁工具的**設定條目**：免核准名單與逾時（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md Q5）。
  *
  * 形狀與載體同 [`./thread-title.ts`](./thread-title.ts) 的檔頭。這一顆自己的三件事：
  *

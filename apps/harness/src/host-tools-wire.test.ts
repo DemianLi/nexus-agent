@@ -1,5 +1,5 @@
 /**
- * 宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 `.docs/host-page-tools-2374-design-2026-11-03.md`），走產品的線：真的
+ * 宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md），走產品的線：真的
  * `runServe`、模型換成腳本，wire 客戶端扮嵌入的對話框與宿主頁，打 `/embed/threads/…`。
  *
  * 每種收法（回應、逾時、停止、重新整理補送、重啟）與每道擋（不是嵌入版、宣告不合、回應不合、名單）各一條，拿掉就紅。上限的每個邊界值在

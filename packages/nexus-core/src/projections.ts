@@ -1,6 +1,6 @@
 /**
  * 會話投影：**插件宣告一個命名的、從日誌折出來的狀態，由 pump 送到 web**
- * （[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見 `.docs/session-projections-design.md`）。
+ * （[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-projections-design.md）。
  *
  * 照 dsh 的 `sessionProjections`（`packages/session/session-projection/src/index.ts`，`5badb15`）：一個單元是
  * `key`／`stateVersion`／`init`／`apply`／`view` 五件，`apply` 純同步、對不相干的事件回**同一個參照**，狀態是純 JSON；

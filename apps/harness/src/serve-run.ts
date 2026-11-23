@@ -623,7 +623,7 @@ export interface FrontProcessMode {
 }
 
 /**
- * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§九 C1）：同一套組裝，
+ * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §3-2、§九 C1）：同一套組裝，
  * 但一個行程只放一條 thread，前台經 Unix socket 轉送。跟 serve 不同的只有這幾處：
  *
  * - 不拿 home 鎖：同一個 home 底下有前台與許多對話行程。整台只做一次的事（清工具結果暫存、寫 `plugin-snapshot.json`）也不做，歸前台。

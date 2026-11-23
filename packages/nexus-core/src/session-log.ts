@@ -7,7 +7,7 @@
  * append-only 序列可以鏡像——checkpointer 是 `MemorySaver`，只存狀態不存事件。
  *
  * **`seq` 出自 `this.#events.length`，不出自任何傳輸層。** 這不是風格選擇，是調研
- * 六個專案之後唯一的共同做法（見 `.docs/session-event-log-survey.md`）：dsh
+ * 六個專案之後唯一的共同做法（見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-event-log-survey.md）：dsh
  * `seq: this.log.length`、SWE-agent `n_step = len(self.trajectory) + 1`、
  * Codex CLI 由 recorder 自己持有 `ordinal`、Gemini CLI 每次寫入回讀磁碟重算。
  * **沒有一個拿 UI／傳輸層的計數器當耐久序號。**

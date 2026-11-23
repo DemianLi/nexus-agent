@@ -24,7 +24,7 @@
  *   文字、其餘原樣。只有文字的結果照舊不碰。
  * - **超出 dsh：結果含 resource link 時，結尾多一塊引用提示**（{@link CITE_RESOURCE_LINKS}）。dsh 只對
  *   `web_search`／`web_fetch` 要求引用（`packages/web/tool-web/src/search.ts:105` 的結果結尾，`05b1cae8`
- *   `Cite the relevant URLs above as markdown links in your answer.`），MCP 沒有。我們的 web 搜尋判過不做（`.docs/seven-layer-inventory-2026-09-26.md`），
+ *   `Cite the relevant URLs above as markdown links in your answer.`），MCP 沒有。我們的 web 搜尋判過不做（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-09-26.md），
  *   內部資料全走 MCP，而產品定位（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）需要讓使用者知道答案出自
  *   哪裡，所以把 dsh 的同一個做法移到 MCP：觸發條件與措辭比照 `search.ts`，差別有兩個——只有**真的帶了連結**的結果才加
  *   （沒有連結的呼叫不加，免得每次 MCP 呼叫都多一句雜訊）；措辭是「resource links」而不是「URLs」，因為 MCP 的 URI 不一定是

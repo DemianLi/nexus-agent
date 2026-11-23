@@ -1,5 +1,5 @@
 //! 監督行程的控制面（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，設計
-//! `.docs/supervisor-1947-design-2026-11-03.md` §五）：監督行程與它起的三種子行程（每條對話一個的對話行程、一個前台、一個宿主
+//! https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §五）：監督行程與它起的三種子行程（每條對話一個的對話行程、一個前台、一個宿主
 //! [#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）之間的訊息。
 //! 這裡只定每則訊息的格式與意思（含哪一則回答哪一則）；什麼時候送、收到後怎麼處置，屬於監督行程（#2340）與各個子行程
 //! （對話行程 #2338、前台 #2341、宿主 #2569）。

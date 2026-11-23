@@ -13,7 +13,7 @@ import {
 import { readCascade } from './css-cascade';
 
 /**
- * 元件只能用系統裡的值（#1141 第 2 刀；`.docs/web-ui-spec.md` §5、§11 第 12 條）：顏色、字級、圓角各有一份階梯，
+ * 元件只能用系統裡的值（#1141 第 2 刀；`docs/web-ui.md` §5、§11 第 12 條）：顏色、字級、圓角各有一份階梯，
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
@@ -38,7 +38,7 @@ import { readCascade } from './css-cascade';
  *     不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137` 與 `animation-duration-*`。這條連 `ui/` 一起管。
  * 13. **不用細字重**（#1307；`COMPONENTS.md`「次要靠顏色不靠字重」）：`font-thin`／`font-extralight`／`font-light` 擋下。
  *     次要的字靠 `text-muted-foreground`，不靠把字變細——細字在中文與小字級下先糊掉。今天 0 次，是絆索。連 `ui/` 一起管。
- * 14. **間距只用 {@link SPACING_STEP} 列的級距**（#2763；`.docs/web-ui-spec.md` §13.4）：內距、外距、間隙、定位偏移不寫 `p-[9px]`
+ * 14. **間距只用 {@link SPACING_STEP} 列的級距**（#2763；`docs/web-ui.md` §13.4）：內距、外距、間隙、定位偏移不寫 `p-[9px]`
  *     這種任意值，也不寫級距外的數字（`p-13`）。引用 token 的算式（`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
  *     這條**連 vendor 上游原樣的檔一起掃**：vendor 現有的任意值逐條釘在 {@link VENDOR_PINNED}，多一條、少一條都報錯。
  * 15. **停用的透明度只有 50**（#2761；規格 §5「互動狀態」）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下的

@@ -1,6 +1,6 @@
 /**
  * **讀 LangGraph state 的地方只許白名單**（[#2348](https://github.com/DemianLi/nexus-agent/issues/2348)，
- * #2336 的 K0，設計 `.docs/agent-loop-off-langchain-design-2026-11-03.md` §四 W6）。
+ * #2336 的 K0，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/agent-loop-off-langchain-design-2026-11-03.md §四 W6）。
  *
  * #2336 把 agent loop 搬出 LangGraph 之後就沒有 state，模型看到的那一串從日誌推出來；今天讀 state 的每一處
  * 都要在 #2355、#2357、#2360 改讀推導或 `tool/call.arguments`。這條把清單釘成數得出來的：照下面三種寫法

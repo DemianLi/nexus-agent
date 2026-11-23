@@ -1,13 +1,13 @@
 /**
  * `<nexus-chat>` 讓宿主頁覆寫的設計 token（#2366，地圖 #2365 第 11 點）：只有主色、字型、圓角、底色四個，宿主頁在元素上寫
- * CSS 自訂屬性（`--nexus-primary` 之類，見 {@link THEME_TOKENS}）。顏色覆寫之後跟它上面那一層字的對比度不到 4.5（`.docs/web-ui-spec.md`
+ * CSS 自訂屬性（`--nexus-primary` 之類，見 {@link THEME_TOKENS}）。顏色覆寫之後跟它上面那一層字的對比度不到 4.5（`docs/web-ui.md`
  * §5 文字的門檻）就不套，退回預設，並在 console 講是哪一個。
  *
  * @module
  */
 import Color from 'colorjs.io';
 
-/** 文字的對比度門檻（`.docs/web-ui-spec.md` §5）。 */
+/** 文字的對比度門檻（`docs/web-ui.md` §5）。 */
 export const TEXT_CONTRAST_MIN = 4.5;
 
 /**

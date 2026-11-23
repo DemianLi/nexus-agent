@@ -1,5 +1,5 @@
 /**
- * `<nexus-chat>` 的宿主頁工具（#2374，設計 `.docs/host-page-tools-2374-design-2026-11-03.md`）：宿主頁設 `hostTools` 宣告工具，每一句送出時
+ * `<nexus-chat>` 的宿主頁工具（#2374，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md）：宿主頁設 `hostTools` 宣告工具，每一句送出時
  * 放進 `run.start` 的 `host_tools`；模型叫了其中一支，元件在元素上發 {@link HOST_TOOL_EVENT}，宿主頁執行後呼叫 `respond` 或 `fail` 交回。
  * 上限與形狀照 wire 的 `hostToolsProblem`，結果的大小由 server 驗。
  *

@@ -1,4 +1,4 @@
-//! 插件樹內核（`kernel`）的語意，一條測試釘一條。對照的語意清單見 `.docs/rust-kernel-2569-2026-11-09.md`。
+//! 插件樹內核（`kernel`）的語意，一條測試釘一條。對照的語意清單見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/rust-kernel-2569-2026-11-09.md。
 
 use std::cell::RefCell;
 use std::time::{Duration, Instant};

@@ -1,5 +1,5 @@
 /**
- * 對話行程回報閒置（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §7-2）：**真的 wire handler＋真的最小 agent**（`idle-eviction.fixture.ts`，
+ * 對話行程回報閒置（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §7-2）：**真的 wire handler＋真的最小 agent**（`idle-eviction.fixture.ts`，
  * 與 #1484 的逐出測試同一個測試台），接上真的控制面，監督行程那一側讀 stdout 的框。handler 不開逐出（對話行程不傳 `idleEvictMs`），
  * 什麼時候收由監督行程決定。
  *

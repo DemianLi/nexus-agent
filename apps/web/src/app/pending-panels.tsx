@@ -18,7 +18,7 @@ import type { Conversation, ConversationPending } from '@/shared/connection/use-
 type PendingPanelConversation = ConversationPending &
   Pick<Conversation, 'state' | 'connected' | 'cancel'>;
 
-/** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（`.docs/web-ui-spec.md` §4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
+/** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（`docs/web-ui.md` §4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
 export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
 
 /**
@@ -72,7 +72,7 @@ export function renderPendingPanel(conversation: PendingPanelConversation, pendi
 /**
  * 面板名稱列右邊的動作（`PendingSwap` 的 `renderActions`）。
  *
- * 提問的 ❌ 停止這一輪，不讓模型在沒回答的情況下接著猜（`.docs/web-ui-spec.md` §4.3）。停下來之後那張提問工具卡展開、
+ * 提問的 ❌ 停止這一輪，不讓模型在沒回答的情況下接著猜（`docs/web-ui.md` §4.3）。停下來之後那張提問工具卡展開、
  * 列出題目，輸入框提示字同一句。計劃審核面板沒有 ❌：「要求修改」才是它的出口（#654）。
  */
 export function renderPendingActions(

@@ -15,7 +15,7 @@
  * ## 與 dsh 的偏離：只殺直接子行程
  *
  * dsh 殺的是整個受管範圍（Linux scope、Windows job、process group），子行程底下的孫行程也收得到。我們沒有 subprocess 服務
- * （決策 3 延後，`.docs/plugin-architecture-gap-survey.md:39`），`spawn` 不加 `detached` 時沒有範圍可殺；改用 `detached` 會讓子行程
+ * （決策 3 延後，https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md#L39），`spawn` 不加 `detached` 時沒有範圍可殺；改用 `detached` 會讓子行程
  * 離開 serve 的行程群組，終端機的 Ctrl-C 與對整個群組送的訊號都收不到它。所以退到只殺登記的那一個（理由 1：基座表達不出來）。
  *
  * 只有 `'exit'` 發得出來的結束管得到：SIGKILL、OOM killer、沒有 handler 的訊號都不經過 JS，dsh 一樣管不到。

@@ -19,7 +19,7 @@
  *
  * 兩個取捨：(1) 我們客戶端沒有折疊器，表達不出「客戶端自己折事件頁」，所以同一個 `apply` 重放整份日誌，目標邏輯輪釘住不裁。
  * (2) 最新一輪的細節也要帶：多留一個實體輪，因為按需拉不是即時的。
- * 通道本身的設計記在 `.docs/session-projections-design.md`。
+ * 通道本身的設計記在 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-projections-design.md。
  *
  * ## 範圍
  *

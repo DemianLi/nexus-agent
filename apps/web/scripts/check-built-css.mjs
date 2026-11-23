@@ -3,7 +3,7 @@
  * 量**建置出來的 CSS**（`dist/assets/*.css`），不是原始碼：Tailwind 只產出用得到的東西、基礎元件的 class
  * 少了套件就一筆都不產出也不報錯，原始碼看起來對不代表產物對。`pnpm build` 的最後一步，失敗就讓建置失敗。
  *
- * 對應 `.docs/web-ui-spec.md` §11：
+ * 對應 `docs/web-ui.md` §11：
  * - 第 3 條：reduced-motion 下 `--animate-in`／`--animate-out` 換成只有透明度的版本。
  * - 第 4 條：`@keyframes` 名稱都在允許清單上。
  * - 第 5 條：每個 `infinite` 動畫在 reduced-motion 下都有一條蓋得過它的 `animation: none`。

@@ -46,7 +46,7 @@
  *
  * **重試只有 `@nexus/core` 的 `retryModelCall` 這一層**：SDK 的 `AsyncCaller` `maxRetries` 恆為 0（`live-model.ts`
  * 的 `onFailedAttempt` 只做分類與回報）。以前兩層各算各的（SDK 6 次＋串流中段 2 次），同一個情境最壞 (1+6)×(1+2) 次請求、
- * 第 4 次起 `llm/retry` 還被吞掉（`.docs/wrapmodelcall-bridge-gaps-2026-10-11.md` G4）。現在首事件之前與之後共用這一份預算，
+ * 第 4 次起 `llm/retry` 還被吞掉（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/wrapmodelcall-bridge-gaps-2026-10-11.md G4）。現在首事件之前與之後共用這一份預算，
  * 打到端點的請求數就是 `maxRetries + 1`，`llm/retry` 的顆數就是實際重打的次數。標題、摘要器生摘要、eval、spike 也吃同一份
  * （`retryModelCall` 直接呼叫，沒有日誌就不寫 `llm/retry`）。
  *

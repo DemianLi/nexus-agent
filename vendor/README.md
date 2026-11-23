@@ -2,7 +2,7 @@
 
 上游原始碼直接複製進 monorepo，不經 npm 相依。格式照 dsh 的 `vendor/README.md`：清單記上游 commit，本地修改逐條登記，每個套件目錄保留上游的 MIT `LICENSE`。
 
-為什麼 vendor、為什麼是上游 main，見 [`.docs/decisions-2026-10-11.md`](../.docs/decisions-2026-10-11.md) §3-1。探針 [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 量過可行；[#1401](https://github.com/DemianLi/nexus-agent/issues/1401) 起是正式 vendor（demian 2026-10-11）。
+為什麼 vendor、為什麼是上游 main，見 [`ADR 0002`](../docs/adr/0002-vendor-cordis-and-plugin-contract.md)；原文 [§3-1](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md) 逐題紀錄在 tag。探針 [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 量過可行；[#1401](https://github.com/DemianLi/nexus-agent/issues/1401) 起是正式 vendor（demian 2026-10-11）。
 
 ## 清單
 

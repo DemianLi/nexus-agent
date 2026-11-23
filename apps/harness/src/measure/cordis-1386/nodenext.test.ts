@@ -6,7 +6,7 @@
  * 標記變成未使用（TS2578），tsc 會紅。第二條測試把標記拿掉，確認那四行真的各報一個錯。
  *
  * 前提是 vendor 的宣告檔已經由 `prepare`（`pnpm install` 時）建好；量測數字與上游原樣的對照見
- * `.docs/cordis-probe-measurement-2026-10-11.md` 的 ①。
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/cordis-probe-measurement-2026-10-11.md 的 ①。
  */
 
 import { execFile } from 'node:child_process';

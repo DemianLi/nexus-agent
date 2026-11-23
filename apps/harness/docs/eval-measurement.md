@@ -9,9 +9,9 @@
 
 來源：地圖 [#994](https://github.com/DemianLi/nexus-agent/issues/994) 與它的對談票
 [#997](https://github.com/DemianLi/nexus-agent/issues/997)。證據是兩份對照表：
-[`.docs/nexus-measurement-baseline-2026-10-04.md`](../../../.docs/nexus-measurement-baseline-2026-10-04.md)
+[`nexus-measurement-baseline-2026-10-04.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/nexus-measurement-baseline-2026-10-04.md)
 （nexus 現況）與
-[`.docs/dsh-measurement-practice-2026-10-04.md`](../../../.docs/dsh-measurement-practice-2026-10-04.md)
+[`dsh-measurement-practice-2026-10-04.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/dsh-measurement-practice-2026-10-04.md)
 （dsh 做法）。規則收在下面〈四、量測紀律七條〉；八個節點的決策卡（`T7-02` 這類編號）在 tag
 [`archive/docs-2026-11` 的 `blueprint.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/chat-agent-research/blueprint.md)。
 
@@ -43,7 +43,7 @@
 中間沒有切開：
 
 - **預設模型**是在這七題上決選出來的（2026-09-04，七題 × 3 次，見
-  [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)）；`live-model.test.ts` 還要求預設的 id
+  [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)）；`live-model.test.ts` 還要求預設的 id
   必須出自量過的清單。
 - **迴圈上限 40 與時鐘 300 秒**（`EVAL_RECURSION_LIMIT`、`EVAL_DEADLINE_MS`，在 `compare.ts`）是照這七題
   實測的分佈挑的，註解裡記著挑在哪兩個觀測之間。
@@ -100,7 +100,7 @@
 
 ## 四、量測紀律七條
 
-這七條原在對話 agent 研究藍圖（`chat-agent-research/blueprint.md`）的第 3 節，量任何分數之前先守。下面每條的「怎麼落實」裡的 `T1-01`、`T7-08` 這類編號，指藍圖八個節點的決策卡，全文在 tag `archive/docs-2026-11` 的 `.docs/chat-agent-research/blueprint.md`（連結見上方〈來源〉）。
+這七條原在對話 agent 研究藍圖（`chat-agent-research/blueprint.md`）的第 3 節，量任何分數之前先守。下面每條的「怎麼落實」裡的 `T1-01`、`T7-08` 這類編號，指藍圖八個節點的決策卡，全文在 tag `archive/docs-2026-11` 的 [`blueprint.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/chat-agent-research/blueprint.md)（連結見上方〈來源〉）。
 
 ### 規則 1　每個分數旁邊並列一個不需要模型的平凡基準
 

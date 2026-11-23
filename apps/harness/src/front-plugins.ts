@@ -1,5 +1,5 @@
 /**
- * per-thread 前台的 plugin 對照快照（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3）：
+ * per-thread 前台的 plugin 對照快照（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §4-3）：
  * thread 在對話行程裡組裝、綁上它掛上的列，`plugin-snapshot.json` 由前台寫，所以前台去問那幾列（`internalThreadPath(id, 'plugins')`）、綁進自己那張表。
  *
  * - **什麼時候問**：監督行程送 `up` 時，與之後每一次轉送拿到回應時，直到問到一份不是空的。磁碟上已有的 thread 在對話行程綁上時

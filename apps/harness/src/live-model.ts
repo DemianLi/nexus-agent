@@ -109,7 +109,7 @@ export const DEFAULT_LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
  * ## 邊界
  *
  * **候選集合綁在帳號上，也綁在時間上**：`GET /models` 列得出來不代表叫得動，同一把 key 幾輪盤點成員就換過。
- * 盤點方法與 2026-09-04 的完整結果見 [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)。
+ * 盤點方法與 2026-09-04 的完整結果見 [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)。
  *
  * 這是**預設**的 id：`cli:live` / `serve:live` 走 `live-model` 那一列（出貨值與它相同），
  * `spike:live` 直接吃 schema 預設，eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。
@@ -1412,7 +1412,7 @@ function rewriteChatMessages(
 
 /**
  * 去掉助手訊息的 `name`（[#1392](https://github.com/DemianLi/nexus-agent/issues/1392)，決議見
- * `.docs/log-derived-history-vs-wire-2026-10-08.md` 最後一則補記）。
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/log-derived-history-vs-wire-2026-10-08.md 最後一則補記）。
  *
  * 欄位的來源不是我們的碼：LangChain 的 `AgentNode`（`langchain@1.5.10` 的 `dist/agents/nodes/AgentNode.js:97-98`）
  * 把回來的 `AIMessage` 的 `name` 設成 `options.name ?? "model"`。非串流回的是完整訊息所以帶，串流路徑不帶

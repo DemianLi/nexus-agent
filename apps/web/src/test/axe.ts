@@ -1,7 +1,7 @@
 import axe from 'axe-core';
 
 /**
- * `.docs/web-ui-spec.md` §11 第 6 條的掃描 helper：對一塊畫好的 DOM 跑 axe-core，回傳違規清單（空＝通過）。
+ * `docs/web-ui.md` §11 第 6 條的掃描 helper：對一塊畫好的 DOM 跑 axe-core，回傳違規清單（空＝通過）。
  *
  * **jsdom 沒有版面**，所以 `color-contrast` 關掉：對比度由 `src/styles/tokens-contrast.test.ts` 對 token 重算，
  * 真的像素由 `guard/` 在真瀏覽器裡量，axe 也在那裡不關規則再跑一次（`guard/harness.ts` 的 `collectAxe`，#2765）。

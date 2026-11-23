@@ -1,5 +1,5 @@
 /**
- * serve 的啟動器（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§八）：
+ * serve 的啟動器（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §3-2、§八）：
  * `per-thread` 時把這個行程 `process.execve` 換成監督行程 `nexus-supervisor`，由它起前台（`front-process.ts`）與每條 thread 的
  * 對話行程（`conversation-process.ts`）。`single` 時什麼都不做，`serve-run.ts` 照單行程起 server。
  *

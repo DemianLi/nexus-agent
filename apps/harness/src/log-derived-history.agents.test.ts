@@ -2,7 +2,7 @@
  * 「從日誌推回的歷史」對「實際送給模型的請求」的比對，**子代理、核准、中止、插話、重啟**這幾類場景
  * （[#1343](https://github.com/DemianLi/nexus-agent/issues/1343)，地圖 [#1339](https://github.com/DemianLi/nexus-agent/issues/1339) 的 Fog）。
  *
- * 量法與判定見 `log-derived-history.fixture.ts` 檔頭；對照文件是 `.docs/log-derived-history-vs-wire-2026-10-08.md` §二「第二輪」，
+ * 量法與判定見 `log-derived-history.fixture.ts` 檔頭；對照文件是 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/log-derived-history-vs-wire-2026-10-08.md §二「第二輪」，
  * 這裡把那一輪的場景（SA、SS、ST、SR、SC 系列）從一次性探針搬進版控。**沒有已知差異清單**：#1190、#1207 修完之後這幾類都應該逐位元組相同，
  * 哪一格不同就是退步（或新發現），要開卡，不是往清單裡加。
  *
@@ -11,7 +11,7 @@
  *
  * ## 這份測試不證明什麼
  *
- * - 假端點：真供應商的串流分塊與行為沒量（見 `.docs/` 的真模型一節）。
+ * - 假端點：真供應商的串流分塊與行為沒量（見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/log-derived-history-vs-wire-2026-10-08.md 的〈真供應商的串流分塊〉）。
  * - SR 系列（重啟）有**循環性**：續接是從日誌推出歷史再灌回狀態，所以「重啟與不重啟相同」證明的是今天重啟不改變請求，不是推導本身正確。
  *   推導本身的檢驗是每個場景對整份日誌逐呼叫比的那一步（`expectAllSame`）。
  */

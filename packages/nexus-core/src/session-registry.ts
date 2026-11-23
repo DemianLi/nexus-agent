@@ -27,7 +27,7 @@
  *
  * **所以「第二份日誌要不要接上那三個消費者」在標準那側不是一個問題**，它是這個註冊表
  * 不存在造出來的問題。這個模組把它取消掉，而不是回答它。調研見
- * `.docs/subagent-session-log-survey.md`。
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/subagent-session-log-survey.md。
  *
  * ## 與 dsh 的偏離，兩條
  *

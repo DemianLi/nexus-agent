@@ -1,6 +1,6 @@
 /* global console, URL */
 /**
- * 設計 token 產生器（設計期工具，不進產品 bundle）。現行規則見 `.docs/web-ui-spec.md` §5。
+ * 設計 token 產生器（設計期工具，不進產品 bundle）。現行規則見 `docs/web-ui.md` §5。
  *
  * 用法：`pnpm --filter @nexus/web tokens:gen`。改色就改這裡（或 `sg-input.mjs`）的輸入，重跑，把兩個產物一起 commit；
  * 建置不跑這支，CI 由 `src/styles/tokens-contrast.test.ts` 與 `src/styles/tokens-generated.test.ts` 重算。
