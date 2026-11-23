@@ -99,7 +99,11 @@ export const ROOTS_FILE = 'harness/scripts/__persistence_schema_roots__.ts';
 const PHYSICAL_HEADER_FILE = 'harness/apps/harness/src/jsonl-session-store.ts';
 
 /** 型別圖要追蹤宣告位置、收語意診斷、找 `@persistenceReserved` 的原始碼範圍（相對於 repo 根）。 */
-const TRACKED_PREFIXES = ['harness/packages/', 'harness/vendor/', 'harness/apps/harness/src/'] as const;
+const TRACKED_PREFIXES = [
+  'harness/packages/',
+  'harness/vendor/',
+  'harness/apps/harness/src/',
+] as const;
 
 interface DeclarationMetadata {
   readonly names: Set<string>;
@@ -284,7 +288,9 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
 /** program 的檔案：`harness/packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（對應 dsh 的 `hostSourceFiles`）。 */
 function programSourceFiles(root: string): string[] {
   return [
-    ...productFilesUnder(root, 'harness/packages').filter((file) => /^harness\/packages\/[^/]+\/src\//u.test(file)),
+    ...productFilesUnder(root, 'harness/packages').filter((file) =>
+      /^harness\/packages\/[^/]+\/src\//u.test(file),
+    ),
     ...productFilesUnder(root, 'harness/apps/harness/src'),
   ].map((file) => resolve(root, file));
 }

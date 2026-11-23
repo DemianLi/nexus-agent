@@ -635,7 +635,11 @@ export async function assertLaunchPathsOutsideWorkspace(check: LaunchPathsCheck)
       mustExist: true,
     },
     // 安裝樹沒有「程式碼資料夾根目錄」，這一格不列（#1671）：否則 `/opt/.env` 這種不相干的檔會被當成舊檔去比對工作區。
-    ...legacyEnvFiles.map((path) => ({ label: '程式碼資料夾根目錄的舊 .env', path, mustExist: true })),
+    ...legacyEnvFiles.map((path) => ({
+      label: '程式碼資料夾根目錄的舊 .env',
+      path,
+      mustExist: true,
+    })),
   ];
   const seen = new Set<string>();
   const overlaps: string[] = [];

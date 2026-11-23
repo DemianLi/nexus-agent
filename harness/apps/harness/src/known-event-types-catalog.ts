@@ -186,7 +186,10 @@ export function collectSessionEventTypes(repoRoot: string, roots: readonly strin
 }
 
 /** 預設要掃的目錄（相對於 repo 根）。 */
-export const EVENT_CATALOG_ROOTS: readonly string[] = ['harness/packages', 'harness/apps/harness/src'];
+export const EVENT_CATALOG_ROOTS: readonly string[] = [
+  'harness/packages',
+  'harness/apps/harness/src',
+];
 
 /** 生成檔的位置，相對於 repo 根。 */
 export const KNOWN_EVENT_TYPES_PATH = 'harness/packages/nexus-core/src/known-event-types.ts';

@@ -431,7 +431,10 @@ describe('接在註冊表上', () => {
       return { headers, persistence };
     }
 
-    const given = headersFor({ buildMetadata: metadata, rootModelEntryId: 'harness/vendor/model-a' });
+    const given = headersFor({
+      buildMetadata: metadata,
+      rootModelEntryId: 'harness/vendor/model-a',
+    });
     expect(given.headers.map((header) => header.id)).toEqual(['root-b', 'root-b/r1']);
     for (const header of given.headers) {
       expect(header.build).toEqual(metadata.build);

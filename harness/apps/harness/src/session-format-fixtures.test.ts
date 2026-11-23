@@ -769,7 +769,10 @@ describe('錨點登記整行，不比行號，而且要在程式碼裡', () => {
   });
 
   it('32→33 的錨點靠縮排區分同文字的另外兩行', () => {
-    const text = readFileSync(join(REPO, 'harness/apps/harness/src/conversation-history.ts'), 'utf8');
+    const text = readFileSync(
+      join(REPO, 'harness/apps/harness/src/conversation-history.ts'),
+      'utf8',
+    );
     const turnClose = "if (turnOpen || suspended) close(event.time, { event: 'completed' });";
     expect(anchorProblem(text, turnClose)).toBe('錨點出現在 3 行');
     expect(anchorProblem(text, `          ${turnClose}`)).toBeUndefined();

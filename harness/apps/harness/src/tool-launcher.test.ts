@@ -111,7 +111,9 @@ describe('findSpawnerBinary', () => {
     it('只在舊位置放一支：拋錯，指名舊路徑與新位置，不回傳它', () => {
       inRepo((root) => {
         place(root, 'native', 'nexus-sandbox-spawner');
-        expect(() => findSpawnerBinary(from(root))).toThrow(join(root, 'native/nexus-sandbox-spawner'));
+        expect(() => findSpawnerBinary(from(root))).toThrow(
+          join(root, 'native/nexus-sandbox-spawner'),
+        );
         expect(() => findSpawnerBinary(from(root))).toThrow(
           join(root, 'harness/native/nexus-sandbox-spawner'),
         );
@@ -122,7 +124,9 @@ describe('findSpawnerBinary', () => {
       inRepo((root) => {
         place(root, 'native', 'nexus-sandbox-spawner');
         place(root, 'harness', 'native', 'nexus-sandbox-spawner');
-        expect(findSpawnerBinary(from(root))).toBe(join(root, 'harness/native/nexus-sandbox-spawner'));
+        expect(findSpawnerBinary(from(root))).toBe(
+          join(root, 'harness/native/nexus-sandbox-spawner'),
+        );
       });
     });
 
