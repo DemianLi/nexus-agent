@@ -15,8 +15,10 @@
  * installer 現在會被 `apps/harness/src/package-invariants.ts` 擋下來。
  *
  * **dsh 已於 `f028f25667d`（2026-09-30）把整套運行時不變量移除**；剩下的八個配套入口是
- * **暫時保留、觀察中**，不是「基礎建設表達不出來」的偏離，第二刀還沒決定。事實、選項與
- * 重審條件見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/invariant-companions-decision-2026-10-03.md 第七節。
+ * **暫時保留、觀察中**，不是「基礎建設表達不出來」的偏離，第二刀還沒決定。選項見
+ * `docs/adr/0003-invariant-companions-first-cut.md`；當時的事實與重審條件見
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/invariant-companions-decision-2026-10-03.md
+ * 第二節與第七節。
  *
  * @see [#101](https://github.com/DemianLi/nexus-agent/issues/101)
  * @module
