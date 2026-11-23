@@ -21,6 +21,7 @@ from check_ratchets import (
     directory,
     key_of,
     measure,
+    scanned,
     read_baseline,
     write_baseline,
 )
@@ -87,6 +88,61 @@ class MeasureTest(unittest.TestCase):
         self.assertEqual(directory('packages/nexus-core/a.ts'), 'packages/nexus-core')
         self.assertEqual(directory('.github/workflows/ci.yml'), '.github')
         self.assertEqual(directory('vitest.config.ts'), '.')
+
+
+class MovedLayoutTest(unittest.TestCase):
+    """搬目錄之後（`harness/<p>`、`web/<p>`）計數的鍵與排除規則沿用舊路徑，基準檔不用動。"""
+
+    PAIRS = {
+        'apps/harness/src/a.ts': 'harness/apps/harness/src/a.ts',
+        'packages/nexus-core/src/b.ts': 'harness/packages/nexus-core/src/b.ts',
+        'apps/web/src/c.ts': 'web/src/c.ts',
+        'scripts/d.sh': 'harness/scripts/d.sh',
+        'native/sandbox-spawner/src/e.rs': 'harness/native/sandbox-spawner/src/e.rs',
+        '.github/workflows/ci.yml': '.github/workflows/ci.yml',
+        'eslint.config.js': 'eslint.config.js',
+    }
+    EXCLUDED = ['vendor/y/a.ts', 'apps/web/src/vendor/z/a.ts', 'docs/a.ts', 'apps/harness/src/fixtures/a.ts', 'apps/harness/src/__snapshots__/a.ts']
+
+    def test_same_files_in_both_layouts_give_the_same_counts(self) -> None:
+        results = []
+        for layout in (self.PAIRS.keys(), self.PAIRS.values()):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                files = write(root, {path: '// dsh\n// 這張卡\n' for path in layout})
+                results.append(measure(root, files))
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(sorted(results[0]['dsh']), ['.', '.github', 'apps/harness', 'apps/web', 'native', 'packages/nexus-core', 'scripts'])
+        self.assertEqual(results[0]['narrative'], results[0]['dsh'])
+
+    def test_excluded_paths_stay_excluded_in_the_new_layout(self) -> None:
+        for path in self.EXCLUDED:
+            self.assertFalse(scanned(path), path)
+            self.assertFalse(scanned(canonical_new(path)), canonical_new(path))
+        self.assertTrue(scanned('harness/apps/harness/src/a.ts'))
+        self.assertTrue(scanned('web/src/a.ts'))
+
+    def test_directory_key_is_the_old_one(self) -> None:
+        self.assertEqual(directory('harness/apps/harness/src/a.ts'), 'apps/harness')
+        self.assertEqual(directory('harness/packages/nexus-core/a.ts'), 'packages/nexus-core')
+        self.assertEqual(directory('web/src/a.tsx'), 'apps/web')
+        self.assertEqual(directory('harness/native/x/a.rs'), 'native')
+        self.assertEqual(baseline_path(directory('web/src/a.tsx')), '.github/ratchets/apps__web.json')
+
+    def test_an_extra_reference_in_the_new_layout_is_still_caught(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            files = write(root, {'web/src/a.ts': '// dsh\n// dsh\n'})
+            errors = compare(measure(root, files), {'dsh': {'apps/web': 1}, 'narrative': {}}, None)
+            self.assertEqual(len(errors), 1)
+            self.assertIn('新增的要拿掉', errors[0])
+
+
+def canonical_new(path: str) -> str:
+    if path.startswith('apps/web/'):
+        return 'web/' + path[len('apps/web/'):]
+    head = path.split('/', 1)[0]
+    return 'harness/' + path if head in ('apps', 'packages', 'native', 'vendor', 'scripts') else path
 
 
 class CompareTest(unittest.TestCase):

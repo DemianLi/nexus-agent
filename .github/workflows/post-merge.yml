@@ -106,7 +106,7 @@ jobs:
       - name: Test
         env:
           NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.native-durations
-        run: pnpm --filter @nexus/harness exec vitest run --config vitest.native.config.ts --shard="${{ matrix.shard }}/4"
+        run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run --config vitest.native.config.ts --shard="${{ matrix.shard }}/4"
       # 同 ci.yml 的 test-harness：vitest 把這一片每個檔的耗時寫進結果快取，存成這一片自己那一份。測試紅了也存。
       - name: 收這一片的耗時
         if: ${{ !cancelled() }}
@@ -143,8 +143,8 @@ jobs:
       - uses: ./.github/actions/setup
       - name: 這個 commit 的畫面
         run: |
-          pnpm --filter @nexus/web run build
-          pnpm --filter @nexus/web exec vite build --config guard/vite.config.ts
+          pnpm --filter @nexus/web --fail-if-no-match run build
+          pnpm --filter @nexus/web --fail-if-no-match exec vite build --config guard/vite.config.ts
           node apps/web/visual/shoot.ts apps/web "$RUNNER_TEMP/visual/head"
       # 拍照用的是這個 commit 的腳本，伺服器與子頁清單讀上一個 commit 自己的。
       - name: 上一個 commit 的畫面
@@ -152,8 +152,8 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/prev" HEAD^
           cd "$RUNNER_TEMP/prev"
           pnpm install --frozen-lockfile
-          pnpm --filter @nexus/web run build
-          pnpm --filter @nexus/web exec vite build --config guard/vite.config.ts
+          pnpm --filter @nexus/web --fail-if-no-match run build
+          pnpm --filter @nexus/web --fail-if-no-match exec vite build --config guard/vite.config.ts
           node "$GITHUB_WORKSPACE/apps/web/visual/shoot.ts" apps/web "$RUNNER_TEMP/visual/base"
       - name: 比對
         env:

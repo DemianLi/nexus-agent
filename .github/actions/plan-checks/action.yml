@@ -96,6 +96,10 @@ runs:
       shell: bash
       run: python3 .github/scripts/check_adrs.py
 
+    - name: 檢查 pnpm 篩選帶 --fail-if-no-match
+      shell: bash
+      run: python3 .github/scripts/check_pnpm_filters.py
+
     - name: 檢查 web 與 harness 的邊界
       shell: bash
       run: python3 .github/scripts/check_boundary.py

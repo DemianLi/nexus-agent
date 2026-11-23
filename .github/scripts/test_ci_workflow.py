@@ -288,7 +288,7 @@ class E2ePerThread(unittest.TestCase):
 
     def test_runs_e2e_against_the_built_supervisor(self) -> None:
         step = self.steps['真瀏覽器 e2e（per-thread）']
-        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
             step['env']['NEXUS_SUPERVISOR_BIN'],
@@ -324,7 +324,7 @@ class E2eNative(unittest.TestCase):
 
     def test_runs_e2e_on_the_native_loop(self) -> None:
         step = self.steps[self.STEP]
-        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         self.assertEqual(step['env']['NEXUS_E2E_AGENT_LOOP'], 'native')
         # 不跟 per-thread 交叉：帶了它，single 下的 native 就沒人測。
         self.assertNotIn('NEXUS_E2E_PROCESS_MODEL', step['env'])
@@ -632,7 +632,7 @@ class SandboxSpawner(unittest.TestCase):
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
         self.assertEqual(
             step['run'],
-            "pnpm --filter @nexus/harness exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'",
+            "pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'",
         )
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
@@ -645,7 +645,7 @@ class SandboxSpawner(unittest.TestCase):
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑刪除碰到分叉')
         self.assertEqual(
             step['run'],
-            'pnpm --filter @nexus/harness exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted',
+            'pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted',
         )
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
@@ -931,11 +931,11 @@ class WebE2e(unittest.TestCase):
         self.assertEqual(self.job['if'], 'inputs.full')
         self.assertEqual(self.job['needs'], 'plan')
         e2e = self.job['steps'][self.names.index('真瀏覽器 e2e')]
-        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         # 這裡帶了 NEXUS_E2E_PROCESS_MODEL，兩個 job 都跑 per-thread，single 沒人測也照樣綠。
         self.assertNotIn('env', e2e)
         build = self.job['steps'][self.names.index('建置 lib 與 web')]['run'].split('\n')
-        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
+        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web --fail-if-no-match run build'))
         self.assertLess(self.names.index('建置 lib 與 web'), self.names.index('真瀏覽器 e2e'))
 
     def test_not_serialized_in_static(self) -> None:
@@ -986,13 +986,13 @@ class TypecheckCache(unittest.TestCase):
         uses = [str(s.get('uses', '')) for s in self.typecheck['steps']]
         self.assertFalse(any(u.startswith(('actions/cache/restore@', 'actions/cache@')) for u in uses))
         run = next(s['run'] for s in self.typecheck['steps'] if s.get('name') == 'Typecheck')
-        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'")
+        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'")
 
     def test_root_script_matches_full_layer(self) -> None:
         # 開發時的 `pnpm typecheck` 跟全跑同一支、同一組篩選：宣告檔輸出才有的錯，本機與 CI 一起紅。
         manifest = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
         self.assertEqual(
-            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'"
+            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'"
         )
 
 

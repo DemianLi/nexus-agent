@@ -17,7 +17,7 @@ t=$(now)
 node_modules/.bin/tsx scripts/gen-typecheck-projects.ts
 lap gen-typecheck-projects "$t"
 t=$(now)
-dirs=$(pnpm "$@" --silent exec pwd)
+dirs=$(pnpm "$@" --fail-if-no-match --silent exec pwd)
 lap 'pnpm exec pwd' "$t"
 # 設了 TYPECHECK_COUNT_FILE 就把套件數寫進去，給 CI 的摘要用，省得呼叫端為了數套件再起一次 pnpm。
 if [ -n "${TYPECHECK_COUNT_FILE:-}" ]; then
