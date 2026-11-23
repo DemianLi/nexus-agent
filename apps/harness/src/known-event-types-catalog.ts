@@ -109,8 +109,7 @@ function eventMapDeclarations(
  * 掃 `roots` 底下的每個產品原始碼檔，收集 `SessionEventMap` 宣告的每一種事件。
  *
  * @param repoRoot - repo 根的絕對路徑；回報的位置都相對於它。
- * @param roots - 要掃的目錄（相對於 `repoRoot`），例如 `packages`、`apps/harness/src`、`apps/web/src`。**web 也在內**：
- *   它本來就不該宣告事件，列進來才擋得住有人在那裡補。
+ * @param roots - 要掃的目錄（相對於 `repoRoot`），例如 `packages`、`apps/harness/src`。
  */
 export function collectSessionEventTypes(repoRoot: string, roots: readonly string[]): CatalogScan {
   const events: CatalogEvent[] = [];
@@ -186,12 +185,8 @@ export function collectSessionEventTypes(repoRoot: string, roots: readonly strin
   return { events, violations };
 }
 
-/** 預設要掃的目錄（相對於 repo 根）。web 也在內：它不該宣告事件，列進來才擋得住有人在那裡補。 */
-export const EVENT_CATALOG_ROOTS: readonly string[] = [
-  'packages',
-  'apps/harness/src',
-  'apps/web/src',
-];
+/** 預設要掃的目錄（相對於 repo 根）。 */
+export const EVENT_CATALOG_ROOTS: readonly string[] = ['packages', 'apps/harness/src'];
 
 /** 生成檔的位置，相對於 repo 根。 */
 export const KNOWN_EVENT_TYPES_PATH = 'packages/nexus-core/src/known-event-types.ts';

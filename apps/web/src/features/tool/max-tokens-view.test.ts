@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs';
-
+import {
+  PARTIAL_OUTPUT_HEADING as WIRE_PARTIAL_OUTPUT_HEADING,
+  SUBAGENT_MAX_TOKENS_REASON as WIRE_SUBAGENT_MAX_TOKENS_REASON,
+} from '@nexus/wire';
 import type { ToolEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
@@ -8,8 +10,6 @@ import {
   SUBAGENT_MAX_TOKENS_REASON,
   subagentMaxTokensOf,
 } from '@/features/tool/max-tokens-view';
-
-const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 const HEADLINE = `Error: ${SUBAGENT_MAX_TOKENS_REASON}`;
 
@@ -28,20 +28,9 @@ function task(patch: Partial<ToolEntry>): ToolEntry {
 }
 
 describe('子代理撞到輸出上限的 task', () => {
-  it('抄來的字跟 `@nexus/core` 對得上（web 的產品碼不從 core 取值，改了那邊這裡要紅）', () => {
-    const core = read('../../../../../packages/nexus-core/src/max-tokens.ts');
-    expect(/SUBAGENT_MAX_TOKENS_REASON = '([^']*)'/.exec(core)?.[1]).toBe(
-      SUBAGENT_MAX_TOKENS_REASON,
-    );
-    expect(/PARTIAL_OUTPUT_HEADING = '([^']*)'/.exec(core)?.[1]).toBe(PARTIAL_OUTPUT_HEADING);
-    // 組法：理由後面換行接標頭、再換行接寫到一半的那段；沒寫出字就不接。前綴由 toolRefusal 加。
-    expect(core).toContain(
-      "partial.trim() === '' ? '' : `\\n${PARTIAL_OUTPUT_HEADING}\\n${partial}`",
-    );
-    expect(core).toContain('toolRefusal(SUBAGENT_MAX_TOKENS_REASON + text');
-    const events = read('../../../../../packages/nexus-core/src/tool-events.ts');
-    expect(events).toContain("TOOL_ERROR_PREFIX = 'Error: '");
-    expect(events).toContain('return errorResult(TOOL_ERROR_PREFIX + reason, options);');
+  it('抄來的字跟 wire 對得上（wire 的值與組法跟 core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住，改了那邊這裡要紅）', () => {
+    expect(WIRE_SUBAGENT_MAX_TOKENS_REASON).toBe(SUBAGENT_MAX_TOKENS_REASON);
+    expect(WIRE_PARTIAL_OUTPUT_HEADING).toBe(PARTIAL_OUTPUT_HEADING);
   });
 
   it('寫了一半：帶出那一段，多行照原樣', () => {

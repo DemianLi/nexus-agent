@@ -19,8 +19,8 @@ import {
 } from '@/features/tool/view';
 
 /**
- * 那張表涵蓋 nexus 每一個實際工具名（#406 驗收）。工具名**從 `docs/tool-catalog.md` 讀**（模型實際收到的那一份，
- * 含基座與 plugin；由 harness 產生、CI 驗新鮮度，#442／#666）：新增一個出廠的工具而沒在 `features/tool/tools.ts` 那張表上加一列，這裡紅。
+ * 那張表涵蓋 nexus 每一個實際工具名（#406 驗收）。工具名**取自 wire 的 `MODEL_TOOL_NAMES`**（模型實際收到的那一份，
+ * 含基座與 plugin；與 `docs/tool-catalog.md` 一致由 harness 的 `wire-harness-facts.test.ts` 釘住，#442／#666）：新增一個出廠的工具而沒在 `features/tool/tools.ts` 那張表上加一列，這裡紅。
  *
  * 目錄涵蓋 CLI 與 serve 兩條出廠組裝（含 serve 出廠的背景續行子代理四顆，以及選配的 `list_subagent_models`，#1133），
  * 只有 `execute` 不在裡面，所以手列：今天產品路徑上沒有 shell，基座不綁它；web 先分類好，絆索在 harness 的

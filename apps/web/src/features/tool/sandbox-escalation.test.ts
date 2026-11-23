@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
-import { catalogToolSection } from '@/test/tool-catalog';
+import { catalogToolText } from '@/test/tool-catalog';
 
 import { SANDBOX_ESCALATION_TOOL, escalationReason } from '@/features/tool/sandbox-escalation';
 
@@ -9,9 +9,9 @@ import { SANDBOX_ESCALATION_TOOL, escalationReason } from '@/features/tool/sandb
 
 describe('跟 plugin 對得上', () => {
   it('目錄裡有這顆工具，`sandbox_permissions` 的 enum 有 workspace-write', () => {
-    const section = catalogToolSection(SANDBOX_ESCALATION_TOOL);
-    expect(section).toContain('"sandbox_permissions"');
-    expect(section).toContain('"workspace-write"');
+    const text = catalogToolText(SANDBOX_ESCALATION_TOOL);
+    expect(text).toContain('"sandbox_permissions"');
+    expect(text).toContain('"workspace-write"');
   });
 });
 

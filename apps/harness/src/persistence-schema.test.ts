@@ -8,7 +8,6 @@
  * （驗證器，⓪b-2；這裡改成比指紋）。
  *
  * 最後兩格跑真的 repo：已提交的 `docs/persistence-schema.json` 沒過期，以及每一種事件都在、每個可達節點都有指紋。
- * 事件探索的根（含 `apps/web/src`）跟抽取器 program 收哪些檔是兩回事（web 不進 program）。
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,7 +30,7 @@ import {
   type PersistenceSchemaInventory,
 } from './persistence-schema-model.js';
 
-const ROOTS = ['packages', 'apps/harness/src', 'apps/web/src'];
+const ROOTS = ['packages', 'apps/harness/src'];
 
 /** 每次抽取都建一個 program；夾具測試一格最多抽三次。 */
 const EXTRACT_TIMEOUT = 60_000;
@@ -75,7 +74,6 @@ function fixture(payload: string, options: { event?: string } = {}): string {
     }),
   );
   mkdirSync(join(root, 'apps/harness/src'), { recursive: true });
-  mkdirSync(join(root, 'apps/web/src'), { recursive: true });
   put(
     root,
     'apps/harness/src/jsonl-session-store.ts',

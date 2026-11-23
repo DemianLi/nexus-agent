@@ -1,8 +1,14 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-
 import type { QuestionItem, ToolEntry } from '@nexus/wire';
-import { UNFINISHED_TOOL_CODE, UNFINISHED_TOOL_TEXT } from '@nexus/wire';
+import {
+  APPROVAL_REJECTED_TEMPLATE,
+  EXIT_PLAN_MODE_TOOL_NAME,
+  PLAN_FEEDBACK_PREFIX,
+  PLAN_KEEP_PLANNING_MESSAGE,
+  PLAN_REVIEW_DISMISSED_MESSAGE,
+  UNFINISHED_TOOL_CODE,
+  UNFINISHED_TOOL_TEXT,
+} from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -21,9 +27,6 @@ import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
 import { memoryStorage } from '@/test/right-sidebar';
 
 /** 計劃審核（#654）的規則：認得審核、標題與摘要、從工具卡讀結果、自動打開過哪幾份。 */
-
-const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
-const PLAN_MODE_SOURCE = '../../../../../packages/nexus-plugin-plan-mode/src/index.ts';
 
 const review = (patch: Partial<QuestionItem> = {}): QuestionItem => ({
   id: 'plan-review',
@@ -142,29 +145,24 @@ describe('審核結果', () => {
   });
 });
 
-describe('抄來的字跟 harness 對得上（web 不相依那兩個套件，改了那邊這裡要紅）', () => {
-  const source = read(PLAN_MODE_SOURCE);
-
+describe('抄來的字跟 wire 對得上（wire 的值跟 plugin、core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住，改了那邊這裡要紅）', () => {
   it('工具名、關掉審核那一句（#1607 之前是舊字、之後是新字，兩種都認；換成第三種要紅）', () => {
-    expect(/EXIT_PLAN_MODE_TOOL_NAME = '([^']*)'/.exec(source)?.[1]).toBe('exit_plan_mode');
+    expect(EXIT_PLAN_MODE_TOOL_NAME).toBe('exit_plan_mode');
     expect([LEGACY_PLAN_REVIEW_DISMISSED_TEXT, PLAN_REVIEW_DISMISSED_TEXT]).toContain(
-      /PLAN_REVIEW_DISMISSED_MESSAGE =\s*'([^']*)'/.exec(source)?.[1],
+      PLAN_REVIEW_DISMISSED_MESSAGE,
     );
   });
 
   it('繼續規劃的兩種說法都以同一個開頭起頭', () => {
-    expect(
-      /PLAN_KEEP_PLANNING_MESSAGE = '([^']*)'/
-        .exec(source)?.[1]
-        ?.startsWith(PLAN_KEEP_PLANNING_LEAD),
-    ).toBe(true);
-    expect(source).toContain(`\`${PLAN_KEEP_PLANNING_LEAD}使用者的意見：\${feedback}\``);
+    expect(PLAN_KEEP_PLANNING_MESSAGE.startsWith(PLAN_KEEP_PLANNING_LEAD)).toBe(true);
+    expect(PLAN_FEEDBACK_PREFIX).toBe(`${PLAN_KEEP_PLANNING_LEAD}使用者的意見：`);
   });
 
   it('舊路由的拒絕：core 的閘門用這個樣板', () => {
-    const approval = read('../../../../../packages/nexus-core/src/approval.ts');
-    expect(approval).toContain('`有人看過並拒絕了 "${exec.name}"。`');
-    expect(LEGACY_PLAN_REJECTED_TEXT).toBe('有人看過並拒絕了 "exit_plan_mode"。');
+    expect(APPROVAL_REJECTED_TEMPLATE).toBe('有人看過並拒絕了 "{name}"。');
+    expect(LEGACY_PLAN_REJECTED_TEXT).toBe(
+      APPROVAL_REJECTED_TEMPLATE.replace('{name}', 'exit_plan_mode'),
+    );
   });
 });
 

@@ -147,7 +147,7 @@ export function findViolations(file: string, text: string): Violation[] {
   return found;
 }
 
-const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages', 'scripts'] as const;
+const SOURCE_ROOTS = ['apps/harness/src', 'packages', 'scripts'] as const;
 
 /**
  * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。
@@ -231,7 +231,6 @@ describe('量具自檢：每一種寫法都抓得到，註解與豁免不算', (
     expect(at("import { projectKey, readSessionEntry } from './jsonl-session-store.js';")).toEqual(
       [],
     );
-    // 網頁 trace 面板自己的同名函式（`apps/web/src/components/trace/call.tsx`）。
     expect(at('function parseHeader(json) { return json; }\nparseHeader(x);')).toEqual([]);
     expect(
       at("const a = 'cli.jsonl 不在這裡'; const b = 'x.json'; const c = 'a.jsonl.lock';"),

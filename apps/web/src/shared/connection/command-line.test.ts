@@ -1,54 +1,15 @@
 // @vitest-environment node
-import { normalizeCommandDefinition } from '@nexus/core';
-import type { CommandDefinition } from '@nexus/core';
-import { parseCommand } from '@nexus/plugin-commands';
+import { COMMAND_GRAMMAR_DESCRIPTORS, COMMAND_TOKEN_CASES } from '@nexus/wire';
 import type { SlashDescriptor } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { commandArm, commandToken } from '@/shared/connection/command-line';
 
-/** 照伺服器的寫法登記命令：同一份定義產生 `slash.list` 送的 descriptor。 */
-function command(name: string, input = true) {
-  const definition: CommandDefinition = {
-    name,
-    description: `${name} 的說明`,
-    ...(input ? { input: { hint: '<參數>' } } : {}),
-    handler: () => ({ kind: 'success' }),
-  };
-  return normalizeCommandDefinition(definition);
-}
-// 出貨的命令都宣告了 `input`（`/goal`、`/plan` 收參數）；`compact` 是沒宣告的 bare 命令（#1971），只有第三方會登記這種。
-const COMMANDS: readonly SlashDescriptor[] = [
-  command('goal'),
-  command('plan'),
-  command('demo'),
-  command('compact', false),
-].map((r) => r.descriptor);
+const COMMANDS: readonly SlashDescriptor[] = COMMAND_GRAMMAR_DESCRIPTORS;
 
 describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () => {
-  // 拿 `@nexus/plugin-commands` 真的 `parseCommand` 對照同一批輸入：認命令的文法在 web 分岔了就紅。
-  it.each([
-    '/plan',
-    ' /plan ',
-    '/plan off',
-    '/plan\toff',
-    '/plan\noff',
-    '/plan\u3000off',
-    '/plan\u3000',
-    '/planning',
-    '/Plan',
-    '/plan-b',
-    '/plan_b',
-    '/9plan',
-    '/計劃',
-    '/plan/off',
-    '/usr/bin 是什麼',
-    '/',
-    '',
-    'plan',
-    '說 /plan',
-  ])('%j', (line) => {
-    expect(commandToken(line)).toBe(parseCommand(line.trim())?.name);
+  it.each(COMMAND_TOKEN_CASES)('%j → %s', (line, name) => {
+    expect(commandToken(line)).toBe(name);
   });
 
   it('對照組裡兩種結果都有', () => {

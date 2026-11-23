@@ -7,7 +7,7 @@
  *
  * **只掃產品碼**（排除 `*.test.ts`）：測試為了驗機制而宣告的 `test/*` 事件不是事件表的一部分。
  *
- * **名字假設**：整棵樹裡任何叫 `Events` 的 interface 都被當成事件表。今天沒有同名的別的東西；哪天（例如 `apps/web`）出現無關的同名
+ * **名字假設**：整棵樹裡任何叫 `Events` 的 interface 都被當成事件表。今天沒有同名的別的東西；哪天出現無關的同名
  * interface，這裡會誤報，到時候要把掃描限制在 `@nexus/core` 的宣告與它的 `declare module` 區塊。
  * 同一個假設的另一面：原始碼裡寫不出 `Events` 這個識別字的檔，不可能宣告名叫 `Events` 的 interface，所以 `scanEventTableTree`
  * 不替它建 AST（建 AST 是掃整棵樹的主要成本，[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)；「寫不出」怎麼判見
@@ -146,22 +146,24 @@ function walk(dir: string, out: string[]): void {
 
 function productFiles(root: string): string[] {
   const files: string[] = [];
-  for (const group of ['packages', 'apps']) {
-    for (const pkg of readdirSync(join(root, group), { withFileTypes: true })) {
-      if (!pkg.isDirectory()) continue;
-      const src = join(root, group, pkg.name, 'src');
-      try {
-        walk(src, files);
-      } catch {
-        // 沒有 src 的套件不在掃描範圍。
-      }
+  for (const pkg of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
+    if (!pkg.isDirectory()) continue;
+    try {
+      walk(join(root, 'packages', pkg.name, 'src'), files);
+    } catch {
+      // 沒有 src 的套件不在掃描範圍。
     }
+  }
+  try {
+    walk(join(root, 'apps', 'harness', 'src'), files);
+  } catch {
+    // 沒有 harness 的樹（測試用的假 repo）不掃。
   }
   return files;
 }
 
 /**
- * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/*\/src`。寫不出 `Events` 這個識別字的檔不建 AST（前提見檔頭「名字假設」）。
+ * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/harness/src`（web 不宣告事件表）。寫不出 `Events` 這個識別字的檔不建 AST（前提見檔頭「名字假設」）。
  *
  * @param root - repo 根。
  * @returns 所有宣告在事件表上的成員。

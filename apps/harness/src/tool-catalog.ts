@@ -49,8 +49,8 @@ export interface CatalogTool {
   /** 送給供應商的 `parameters`（JSON Schema）。 */
   readonly parameters: unknown;
   /**
-   * 某個設定打開之後模型看到的另一個版本（出廠關著）。同名，所以**不另開一個工具標題**（web 的覆蓋測試把目錄標題當工具名、
-   * 要求不重複），而是接在這個工具底下，渲染成 `####` 小節。
+   * 某個設定打開之後模型看到的另一個版本（出廠關著）。同名，所以**不另開一個工具標題**（目錄標題當工具名，
+   * 名單要求不重複），而是接在這個工具底下，渲染成 `####` 小節。
    */
   readonly optionalVariant?: Pick<CatalogTool, 'description' | 'parameters'>;
 }
@@ -574,7 +574,7 @@ export const CATALOG_REGEN_COMMAND = 'pnpm --filter @nexus/harness run gen-tool-
  * @returns 整份目錄的文字，結尾一個換行。
  */
 export function renderToolCatalog(sections: readonly CatalogSection[]): string {
-  // 每個工具標題算一個：選配那一節裡同名的另一個版本也各算一個。web 的解析器拿這個數字對標題數（`apps/web/src/test/tool-catalog.ts`）。
+  // 每個工具標題算一個：選配那一節裡同名的另一個版本也各算一個。
   const total = sections.reduce((sum, section) => sum + section.tools.length, 0);
   const lines: string[] = [
     '# 工具 schema 目錄',

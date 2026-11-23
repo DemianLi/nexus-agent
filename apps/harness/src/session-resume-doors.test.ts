@@ -80,7 +80,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  * `MemorySaver` 在樹上命中二十幾個檔，**其中絕大多數是測試各自 `new` 一顆自己用的**——
  * 把它們收進來，這條絆索量的就變成「測試怎麼寫」而不是「產品組裝成什麼樣」。
  */
-const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const;
+const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;
 
 /** 遞迴列出 `.ts`，跳過測試、fixture 與建置產物。 */
 function sourceFiles(dir: string): string[] {

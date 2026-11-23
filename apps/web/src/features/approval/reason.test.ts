@@ -1,19 +1,12 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-
+import { APPROVAL_DEFAULT_REASON_TEMPLATE } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { approvalReasonOf, defaultApprovalReason } from '@/features/approval/reason';
 
-/** core 的閘門（web 的產品碼不從 core 取值，改了那邊這裡要紅）。 */
-const CORE_APPROVAL = '../../../../../packages/nexus-core/src/approval.ts';
-const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
-
-describe('抄來的預設字跟 core 對得上', () => {
+describe('抄來的預設字跟 wire 對得上（wire 的值跟 core 一致由 harness 的 `wire-harness-facts.test.ts` 釘住）', () => {
   it('沒有理由時 core 填的那一句，就是 `defaultApprovalReason` 的樣板', () => {
-    const template = /decision\.reason \?\? `([^`]*)`/.exec(read(CORE_APPROVAL))?.[1];
-    expect(template).toBe('"${exec.name}" 需要人工核准');
-    expect(template?.replace('${exec.name}', 'write_file')).toBe(
+    expect(APPROVAL_DEFAULT_REASON_TEMPLATE.replace('{name}', 'write_file')).toBe(
       defaultApprovalReason('write_file'),
     );
   });

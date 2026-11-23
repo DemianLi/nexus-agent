@@ -20,7 +20,7 @@ import {
 } from './known-event-types-catalog.js';
 import { repositoryRoot } from './package-invariants.js';
 
-const ROOTS = ['packages', 'apps/harness/src', 'apps/web/src'];
+const ROOTS = ['packages', 'apps/harness/src'];
 
 describe('認得的事件種類表', () => {
   const root = repositoryRoot();

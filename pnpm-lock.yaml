@@ -299,12 +299,6 @@ importers:
       '@fontsource-variable/noto-sans-tc':
         specifier: 5.3.0
         version: 5.3.0
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../../packages/nexus-core
-      '@nexus/plugin-commands':
-        specifier: workspace:*
-        version: link:../../packages/nexus-plugin-commands
       '@nexus/wire':
         specifier: workspace:*
         version: link:../../packages/nexus-wire
