@@ -661,34 +661,48 @@ function anchorTableProblem(
 function anchorProblem(text: string, anchor: string): string | undefined {
   const same = (line: string): boolean =>
     anchor.startsWith(' ') ? line.trimEnd() === anchor : line.trim() === anchor;
-  const quotedInComment = (line: string): boolean => {
-    const comment = /(?:\/\/+|\/\*+|^\s*\*+(?!\/))(.*)$/u.exec(line);
-    return comment !== null && comment[1]!.replace(/\*\/\s*$/u, '').trim() === anchor.trim();
-  };
-  const matched: number[] = [];
-  let quoted = 0;
-  let offset = 0;
-  for (const line of text.split('\n')) {
-    if (same(line)) matched.push(offset + line.length - line.trimStart().length);
-    else if (quotedInComment(line)) quoted += 1;
-    offset += line.length + 1;
-  }
-  if (matched.length === 0) return '錨點不見了';
-  if (matched.length + quoted > 1) return `錨點出現在 ${String(matched.length + quoted)} 行`;
   const source = ts.createSourceFile('anchor.ts', text, ts.ScriptTarget.Latest, true);
-  const opaque: [number, number][] = [];
+  const comments: ts.CommentRange[] = [];
+  const templates: [number, number][] = [];
   const visit = (node: ts.Node): void => {
-    for (const range of [
+    comments.push(
       ...(ts.getLeadingCommentRanges(text, node.pos) ?? []),
       ...(ts.getTrailingCommentRanges(text, node.end) ?? []),
-    ])
-      opaque.push([range.pos, range.end]);
-    if (ts.isTemplateLiteralToken(node)) opaque.push([node.getStart(source), node.end]);
+    );
+    if (ts.isTemplateLiteralToken(node)) templates.push([node.getStart(source), node.end]);
     for (const child of node.getChildren(source)) visit(child);
   };
   visit(source);
+  const matched: number[] = [];
+  const matchedLines = new Set<number>();
+  let offset = 0;
+  for (const [index, line] of text.split('\n').entries()) {
+    if (same(line)) {
+      matched.push(offset + line.length - line.trimStart().length);
+      matchedLines.add(index);
+    }
+    offset += line.length + 1;
+  }
+  if (matched.length === 0) return '錨點不見了';
+  const quoted = new Set<number>();
+  for (const range of comments) {
+    let start = range.pos;
+    for (const piece of text.slice(range.pos, range.end).split('\n')) {
+      const line = source.getLineAndCharacterOfPosition(start).line;
+      const content = piece
+        .replace(/^\s*(?:\/\/+|\/\*+|\*+(?!\/))/u, '')
+        .replace(/\*\/\s*$/u, '')
+        .trim();
+      if (!matchedLines.has(line) && content === anchor.trim()) quoted.add(line);
+      start += piece.length + 1;
+    }
+  }
+  const count = matched.length + quoted.size;
+  if (count > 1) return `錨點出現在 ${String(count)} 行`;
   const at = matched[0]!;
-  return opaque.some(([start, end]) => at > start && at < end)
+  return [...comments.map((c): [number, number] => [c.pos, c.end]), ...templates].some(
+    ([start, end]) => at > start && at < end,
+  )
     ? '錨點只剩在註解或樣板字串內容裡'
     : undefined;
 }
@@ -711,6 +725,16 @@ describe('錨點登記整行，不比行號，而且要在程式碼裡', () => {
     ['一行在程式碼、一行在整行註解', `${code}// ${anchor}\n`, '錨點出現在 2 行'],
     ['一行在程式碼、一行在 JSDoc 行', `${code}/**\n * ${anchor}\n */\n`, '錨點出現在 2 行'],
     ['一行在程式碼、一行在行尾註解', `${code}const a = 1; // ${anchor}\n`, '錨點出現在 2 行'],
+    [
+      '一行在程式碼、一行在行尾註解，註解前有含 // 的字串',
+      `${code}const __marker = '//'; // ${anchor}\n`,
+      '錨點出現在 2 行',
+    ],
+    [
+      '一行在程式碼、一行在行尾註解，註解前有區塊註解',
+      `${code}/* 舊 */ // ${anchor}\n`,
+      '錨點出現在 2 行',
+    ],
     ['一行在程式碼、一行在區塊註解', `${code}/*\n${anchor}\n*/\n`, '錨點出現在 2 行'],
     [
       '原地改成更長的一句，另一處有同樣字的另一句',
@@ -725,6 +749,11 @@ describe('錨點登記整行，不比行號，而且要在程式碼裡', () => {
     ['只剩帶 ${} 的樣板字串內容', `const a = \`x\n${anchor}\n\${y}\`;\n`, hidden],
   ])('%s：紅', (_name, text, problem) => {
     expect(anchorProblem(text, anchor)).toBe(problem);
+  });
+
+  it('字串裡有 // 但沒有註解，也沒有第二行：照樣是剛好一行', () => {
+    const text = `${code}const __u = 'http://x'; const __v = '${anchor}';\n`;
+    expect(anchorProblem(text, anchor)).toBeUndefined();
   });
 
   it('縮排登記的錨點：只認同樣縮排的那一行', () => {
