@@ -36,7 +36,7 @@ nexus 的 `@nexus/core/invariant` 是照 dsh 的「每個 package 的 `./invaria
 - dsh 的升級指南 `docs/upgrade-guide/v0.2.0-rc.2/remove-runtime-invariants/guide.md` 寫明：下一個版本不再發佈 `@deepseek-ai/dsh-invariants`、`InvariantRegistry`、`InvariantInstaller`、任何 `<package>/invariant` 子路徑；`sdk-minimal` 不再含 `session-invariant` 等五列。
 - `agent-spine-demo` 在 `8bd0733` 也已移除（`.agents/notes/archived/simplification/2026-08-26-remove-agent-spine-demo.md`；只確認該檔存在與檔名，**沒讀內容**）；`477b4f4` 的 `packages/` 下也已經沒有，所以舊檔頭那句在引 `477b4f4` 時就已過時。
 
-所以：nexus 的配套入口**形狀來源在 dsh 現行版本上已不存在**。移除的提交是 `f028f25667d`（2026-09-30，`refactor: remove runtime invariant plugins`），是 `8bd0733` 的祖先、不是 `477b4f4` 與 `c291e79` 的祖先。這件事與前因已記在 `.docs/invariant-companions-decision-2026-10-03.md`（第二刀未決），這份對照不重複、也不替它下結論。檢的東西少、只檢擁有者自己不負責的那部分，是 nexus 這邊自己站得住的理由，不靠 dsh。
+所以：nexus 的配套入口**形狀來源在 dsh 現行版本上已不存在**。移除的提交是 `f028f25667d`（2026-09-30，`refactor: remove runtime invariant plugins`），是 `8bd0733` 的祖先、不是 `477b4f4` 與 `c291e79` 的祖先。這件事與前因已記在 `docs/adr/0003-invariant-companions-first-cut.md`（第二刀未決），這份對照不重複、也不替它下結論。檢的東西少、只檢擁有者自己不負責的那部分，是 nexus 這邊自己站得住的理由，不靠 dsh。
 
 ## 五、沒核到的
 

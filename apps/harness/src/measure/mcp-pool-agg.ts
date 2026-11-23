@@ -1,5 +1,5 @@
 /**
- * MCP 連線池前測（#2570 PR-A）的彙總：照 `.docs/mcp-pool-baseline-2570-2026-11-10.md` 的規則，把
+ * MCP 連線池前測（#2570 PR-A）的彙總：照 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/mcp-pool-baseline-2570-2026-11-10.md 的規則，把
  * {@link ./mcp-pool-driver.ts} 寫的 JSON 印成報告。窗、中位數與 bootstrap 區間都用 {@link ./mcp-pool-stats.ts}，
  * 跟 #1947 的彙總同一個定義。
  */

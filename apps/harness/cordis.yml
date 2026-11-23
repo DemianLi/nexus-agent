@@ -477,7 +477,7 @@
 # **出廠的比例是 0.1，不是 dsh 的 0.2。偏離登記：理由 2（產品需求超出 dsh 的射程），demian 2026-10-17 拍板 Q4 (b)。**
 # dsh 的 web-app 出貨這一列不給 config、吃 0.2；那個「每 token 4 位元組」是照英文調的。本產品以中文為主：用 nexus 自己的估算器
 # （o200k，`token-estimate.ts`）量中文是約 0.31 token／位元組（2026-10-24 量 `AGENTS.md`、`docs/operations.md`、`docs/standards.md`、
-# `.docs/development-plan.md`：混排 0.3100、只留中日韓字元 0.3114）。出廠模型窗口 784,369：比例 0.2 時每條 627,495 位元組，
+# https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/development-plan.md：混排 0.3100、只留中日韓字元 0.3114）。出廠模型窗口 784,369：比例 0.2 時每條 627,495 位元組，
 # 三條約 587k–598k token，是摘要門檻 627,495 的 94%–95%，乘上實測的真實÷o200k（中文 1.10，`token-estimate.ts:41`）就超過；
 # 比例 0.1 時每條 313,747 位元組，三條約 294k–301k token，占門檻 47%–48%（乘 1.10 約 51%–53%），留下一半給 system prompt、
 # 工具定義與歷史。測試 `session-reference-budget.test.ts` 的 H 釘住這一點。
@@ -970,7 +970,7 @@
 # 只掛**有檢查的**配套入口，一共八個，不是只有 `@nexus/core`（#107 拍板）。#107 當時是二十個
 # 全進；其中十二個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬，所以 #974 拿掉了
 # （dsh 早就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量
-# 移除，見 `.docs/invariant-companions-decision-2026-10-03.md`）。**剩下這八個是暫時保留、
+# 移除，見 `docs/adr/0003-invariant-companions-first-cut.md`）。**剩下這八個是暫時保留、
 # 觀察中**，第二刀還沒決定。理由兩條：
 #
 # - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以

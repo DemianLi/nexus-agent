@@ -902,7 +902,7 @@ export interface CommandRegistrationPoint {
 
 /**
  * `projections` 通道：**插件宣告的會話投影**——從 root 日誌折出一份有名字的狀態，由 pump 以 `projection` frame 送到 web
- * （[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見 `.docs/session-projections-design.md`）。
+ * （[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-projections-design.md）。
  *
  * 與另外那些不折進 `createDeepAgent` 的通道同軸：產物不進圖，pump 與歷史路由讀這裡。照 dsh 的 `sessionProjections`
  * （`5badb15`）；**差異**：dsh 的 `register` 同 key 重複註冊共用一個單元並計數（為了 HMR），我們一次組裝一張註冊表、不熱換，

@@ -1,6 +1,6 @@
 # 不以 Rust 重寫容器：決議（2026-10-08）
 
-**來源**：2026-10-07 至 10-08 的一場討論。起點是「把 dsh 那種時空可組合性的 Cordis 翻寫成 Rust，替換成 nexus-agent 的核心，能不能保持熱插拔」。事實調研見 [`rust-and-langchain-removal-2026-10-06.md`](rust-and-langchain-removal-2026-10-06.md) 與 [`admin-plugin-swap-decision-draft-2026-10-07.md`](admin-plugin-swap-decision-draft-2026-10-07.md)，新舊並存的量測見 [`plugin-coexist-measurement-2026-10-07.md`](plugin-coexist-measurement-2026-10-07.md)。
+**來源**：2026-10-07 至 10-08 的一場討論。起點是「把 dsh 那種時空可組合性的 Cordis 翻寫成 Rust，替換成 nexus-agent 的核心，能不能保持熱插拔」。事實調研見 [`rust-and-langchain-removal-2026-10-06.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/rust-and-langchain-removal-2026-10-06.md) 與 [`admin-plugin-swap-decision-draft-2026-10-07.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/admin-plugin-swap-decision-draft-2026-10-07.md)，新舊並存的量測見 [`plugin-coexist-measurement-2026-10-07.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-coexist-measurement-2026-10-07.md)。
 
 **拍板**：demian 2026-10-08 要求正式登記。
 
@@ -18,7 +18,7 @@
 
 ## 範圍：這份決議**沒有**回答的
 
-- **要不要拿掉 LangChain／deepagents／langgraph**：不在這份決議內，仍在討論。見 [`rust-and-langchain-removal-2026-10-06.md`](rust-and-langchain-removal-2026-10-06.md) §五、§七。
+- **要不要拿掉 LangChain／deepagents／langgraph**：不在這份決議內，仍在討論。見 [`rust-and-langchain-removal-2026-10-06.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/rust-and-langchain-removal-2026-10-06.md) §五、§七。
 - **Rust 作為 plugin 內的實作語言**：不被這份決議排除。只在 profile 指出具體熱點、且 TypeScript 最佳化動不了時，用 N-API 或 sidecar 換那一塊。
 - **隔離不信任的插件**（WASM、子行程）：另議，與容器語言無關。
 

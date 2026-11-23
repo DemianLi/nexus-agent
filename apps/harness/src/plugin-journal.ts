@@ -4,7 +4,7 @@
  *
  * ## 它是什麼
  *
- * 決議 `.docs/decisions-2026-10-11.md` §3-5 第 18 條：**真相來源是 append-only 的稽核變更紀錄**。後台（今天是主機端的
+ * 決議 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md §3-5 第 18 條：**真相來源是 append-only 的稽核變更紀錄**。後台（今天是主機端的
  * `plugin-cli.ts`）每一次停用、啟用、改設定先寫進這份紀錄；`plugin-config.ts` 把它折成 dsh 的「profile patch」那一層，
  * 疊進清單。插件與載入器都不寫回 YAML。這個模組只管紀錄本身：格式、讀、折、寫；怎麼疊進清單在 `plugin-config.ts`，
  * 怎麼驗證一筆變更在 `plugin-change.ts`。它不 import `plugin-config.ts`，兩邊不成環。

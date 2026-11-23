@@ -1,5 +1,5 @@
 /*
- * 動效：模式清單、keyframes、reduced-motion。現行規則見 `.docs/web-ui-spec.md` §7；
+ * 動效：模式清單、keyframes、reduced-motion。現行規則見 `docs/web-ui.md` §7；
  * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401）。原型的 `proto-*` class 在這裡去掉前綴
  * （`border-beam`、`text-shimmer`、`stream-caret`）；reduced-motion 只認 media query，沒有 CPU 降速的退路（量過 60fps，規格說不需要）。
  *

@@ -57,7 +57,7 @@
  * 「檔案沒建出來，而且線上什麼都沒說」。所以 `readRaw` 一定包在 try/catch 裡。
  * 絆索見 `apps/harness/src/submit-record-wire.test.ts` 最後那一段。
  *
- * ## 寫進 backend 就算數，不送 LangGraph 的 state（#2352；`.docs/agent-loop-off-langchain-design-2026-11-03.md` 的 Q11）
+ * ## 寫進 backend 就算數，不送 LangGraph 的 state（#2352；https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/agent-loop-off-langchain-design-2026-11-03.md 的 Q11）
  *
  * backend 的 `write` 回 `filesUpdate`，意思是「我沒寫，要你把這份 state update 送出去才算數」。這個工具**不送 state**，
  * 所以那一支一律拒絕，不說「已經寫進」。宿主交的 backend 都不走這一支：零參數的 `StateBackend` 在 `write` 裡自己送，

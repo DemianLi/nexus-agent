@@ -1,5 +1,5 @@
 /**
- * 亮暗三態：淺、深、跟隨系統，預設跟隨系統（`.docs/web-ui-spec.md` §6，決議在
+ * 亮暗三態：淺、深、跟隨系統，預設跟隨系統（`docs/web-ui.md` §6，決議在
  * [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752)）。
  *
  * **套用邏輯有兩份**：這裡一份，`index.html` 的內嵌腳本一份。內嵌腳本是唯一在第一次繪製前生效的位置

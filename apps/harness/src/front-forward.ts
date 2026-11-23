@@ -1,5 +1,5 @@
 /**
- * 前台把一則 wire 請求轉給對話行程（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§4-2）：
+ * 前台把一則 wire 請求轉給對話行程（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §3-2、§4-2）：
  * HTTP over Unix socket，wire 協定原樣，對話行程那一端是 `peer-socket-auth.ts`。
  *
  * - **前台已經驗過人**，對話行程只信 socket 目錄的權限，所以瀏覽器帶來的憑證與來源標頭不往下傳：`cookie`、`authorization`、

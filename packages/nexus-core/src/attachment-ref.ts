@@ -26,7 +26,7 @@ export const ATTACHMENTS_MODEL_PREFIX = '/attachments';
 
 /**
  * 一張圖估多少 token。**量到的**：`meta/llama-3.2-11b-vision-instruct` 上，帶圖那一格的 `prompt_tokens` 減去無圖對照組 =
- * 3225 − 59 = 3166（工具結果後接圖的形狀是 3433 − 264 = 3169，兩個形狀差 0.1%）。見 `.docs/model-inventory.md`「收圖實測」。
+ * 3225 − 59 = 3166（工具結果後接圖的形狀是 3433 − 264 = 3169，兩個形狀差 0.1%）。見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md「收圖實測」。
  *
  * 這是**那顆模型**的數字，不是每顆視覺模型的：圖的 token 數由端點怎麼切塊決定，跟位元組數與像素數都不成比例。型錄之後
  * 若出現別的看圖模型，要各自量，這個值只在沒有更好的資料時用。

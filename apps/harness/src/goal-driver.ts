@@ -68,7 +68,7 @@
  *
  * （2026-09-19 註：「刻意掛載」這半句要打折——dsh 的 base 其實出廠就掛著這顆 driver，擋續行的
  * 是行程本地、每次 `agent/created` 歸零的啟用狀態。多一條操作者上限這個偏離本身不受影響，見
- * `.docs/plugin-architecture-gap-survey.md` §三第 18 列。**2026-10-07（#445）：serve 預設開、CLI 維持
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md §三第 18 列。**2026-10-07（#445）：serve 預設開、CLI 維持
  * 預設關**——serve 要核准時停下來等人，不會空轉；CLI 的 `HEADLESS_APPROVALS` 會確定性拒絕。）
  *
  * 剩下的那一半照舊：`blockedAfterConsecutiveRounds`（預設 3）讓模型從第 3 輪起**可以**把

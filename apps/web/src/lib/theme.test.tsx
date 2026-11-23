@@ -8,7 +8,7 @@ import { useThemePreference } from '@/shared/lib/use-theme-preference';
 import { applyTheme, readThemePreference, THEME_PREFERENCE_KEY } from '@/lib/theme';
 
 /**
- * `.docs/web-ui-spec.md` §11 第 9–11 條。套用邏輯有兩份（`index.html` 的內嵌腳本與 `lib/theme.ts`），
+ * `docs/web-ui.md` §11 第 9–11 條。套用邏輯有兩份（`index.html` 的內嵌腳本與 `lib/theme.ts`），
  * 下面每一格兩份都跑：key 對不上或判斷分岔時，畫面不會壞，只會每次開都閃一下，沒人會發現。
  */
 

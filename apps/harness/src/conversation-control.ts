@@ -1,5 +1,5 @@
 /**
- * 對話行程這一側的控制面（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §5-2、§7-2）：
+ * 對話行程這一側的控制面（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §5-2、§7-2）：
  * 從 stdin 讀監督行程的命令，往 stdout 寫回報，框格式與編解碼在 `supervisor-protocol.ts`。**stdout 只寫框**，日誌一律走 stderr。
  *
  * - `hello`：建構時就送自己的，宣告 loop 在自己這裡（`runsLoop: true`）。監督行程的第一框也要是版本相同的 `hello`，不是就當讀到解不開的框；它帶的 token 留在 {@link ConversationControl.hostToken}，

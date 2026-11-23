@@ -1,5 +1,5 @@
 /**
- * 宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 `.docs/host-page-tools-2374-design-2026-11-03.md`）：嵌入的對話框在
+ * 宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md）：嵌入的對話框在
  * `run.start` 替宿主頁宣告的工具，這一輪模型看到的是 `page__<name>`。只掛在嵌入版的組裝。
  *
  * - **每輪一份**：宣告放在 {@link HostToolsSlot}，pump 開一輪時寫進去（插話不換），這裡每次模型呼叫時讀。

@@ -1,6 +1,6 @@
 # Jev 偏題純觀測：拍板（2026-09-25）
 
-**來源**：一次 grilling。起點是「Jev 守門員」提案（草稿送出前平行判偏題、合規、格式，不合格就退回），事實調研見 [`jev-gatekeeper-survey.md`](jev-gatekeeper-survey.md)（PR [#614](https://github.com/DemianLi/nexus-agent/pull/614)）。
+**來源**：一次 grilling。起點是「Jev 守門員」提案（草稿送出前平行判偏題、合規、格式，不合格就退回），事實調研見 [`jev-gatekeeper-survey.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/jev-gatekeeper-survey.md)（PR [#614](https://github.com/DemianLi/nexus-agent/pull/614)）。
 
 **拍板**：demian 2026-09-25 逐題回覆，全部照建議。
 

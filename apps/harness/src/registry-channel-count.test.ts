@@ -16,7 +16,7 @@
  * （兩處的數字現在由下面的斷言看著。`services` 落地之後是 16，
  * [#459](https://github.com/DemianLi/nexus-agent/issues/459)。）
  *
- * **這個數字漂過兩次。** 第一次記在 `.docs/plugin-architecture-gap-survey.md` 那張表上
+ * **這個數字漂過兩次。** 第一次記在 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md 那張表上
  * （`registry.ts` 檔頭與計劃書當時寫著「一條」／「四條」，跟那份筆記同一張 PR 改正）。兩次
  * 之間沒有任何東西在數它——這就是這個檔案存在的理由。**為什麼會多數一條沒查，也不猜。**
  *
@@ -41,10 +41,6 @@
  * 點」與 `nexus-plugin-plan-mode/src/index.ts` 的「[#126] 加了第十四個註冊點」講的是**它們
  * 落地時排第幾**——第十五條通道出現之後，`sessions` 仍然是第十四個。把它們一起釘住，等於要求
  * 未來的人去改一句本來就對的話。
- *
- * `.docs/` 底下另有兩處（`plugin-architecture-gap-survey.md` 的「14 個欄位（9 ＋ 5）」與
- * `development-plan.md` 的「九個註冊點 ＋ 五條通道」）寫的是現況，**但用阿拉伯數字而且不在
- * #195 的改動範圍內**，所以只進下面的提醒清單、不進斷言。
  */
 
 import { readFileSync } from 'node:fs';
@@ -175,8 +171,6 @@ const PROSE_SITES: readonly ProseSite[] = [
 
 /** 斷言擋不到、但通道數變了就要人去看一眼的地方。**這份清單是這條絆索的價值所在。** */
 const ALSO_SWEEP = [
-  '.docs/plugin-architecture-gap-survey.md（兩處：§2 的「N 個欄位（9 ＋ M 條不折的通道）」與 §2.1 表格那一列的通道清單——**用阿拉伯數字，而且列出每一條的名字**，所以改幅不只是數字）',
-  '.docs/development-plan.md 與 development-plan-phase-5.md（「九個註冊點」、以及 development-plan.md 的「九個註冊點之外有 N 條不折疊的通道」＋那一串名字；#364 切檔後散在兩份）',
   "**掃的時候按形狀不按值**：`grep '個欄位（9\\|條通道\\|個註冊點'`。照上一版字面去掃會掃空——那幾處自己就漂過（#456 動工時量到 §2 與 development-plan 都還列著 #477 已經收掉的 `feedback`）",
   'packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
   'registry.ts 的「十個註冊點」在六行上（檔頭兩處、lifecycle／logger／telemetry／commands 四處），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',

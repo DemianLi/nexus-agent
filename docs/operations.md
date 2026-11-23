@@ -1732,7 +1732,7 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 
 ## 行程模型：`single` 與 `per-thread`
 
-serve 預設是 `single`：一個行程放所有 thread。`per-thread`（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md`）
+serve 預設是 `single`：一個行程放所有 thread。`per-thread`（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 [`supervisor-1947-design-2026-11-03.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md)）
 改由監督行程 `nexus-supervisor` 起一個前台、每條 thread 一個對話行程：一條 thread 的 heap 用完或卡死（心跳斷 15 秒），只死那一條。RSS 上限預設不設。
 
 ```bash
@@ -2512,7 +2512,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （設定可能放了秘密，原因照舊只進伺服器日誌）。
   `running` 是啟動時的樣子；組裝期讀的列，已儲存的那份已經在新對話生效，所以是 `next-thread`。列的全集與順序同
   `--dump-config`，磁碟上新插進來的列接在最後（`running` 是 `absent`）。分類依據是
-  [`.docs/plugin-reload-classification-2026-10-08.md`](../.docs/plugin-reload-classification-2026-10-08.md)，表在
+  [`plugin-reload-classification-2026-10-08.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-reload-classification-2026-10-08.md)，表在
   `apps/harness/src/plugin-row-classes.ts`。**不開 wire 路由**：還沒有管理員身分，`/threads` 底下每個登入的人都看得到；
   有了之後改走那道閘的只讀路由。
 - **還有哪些對話握著舊設定，看每一列的 `live`**（[#1442](https://github.com/DemianLi/nexus-agent/issues/1442)，版本路由的第一刀）。
@@ -2697,7 +2697,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
 | `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**           | 有（五格）                       | **關不掉**               |
 | `attachment-images`         | 圖片轉碼（落盤前規範化）同時最多幾張；**只有 `serve` 載**；**出廠 2**（1 到 8），見〈送出時帶附件〉                                | 有（一格）                       | **關不掉**               |
-| `host-tools`                | 嵌入的對話框替宿主頁宣告的工具（`page__<名字>`）：哪幾支不先問人（`approval.exempt`，宿主頁宣告時的名字），與宿主頁幾毫秒沒回就交回逾時（`timeoutMs`）；**只有 `serve` 載**；**出廠空名單、30 秒**，見 `.docs/host-page-tools-2374-design-2026-11-03.md` | 有（兩格）                       | 關得掉（＝空名單、30 秒） |
+| `host-tools`                | 嵌入的對話框替宿主頁宣告的工具（`page__<名字>`）：哪幾支不先問人（`approval.exempt`，宿主頁宣告時的名字），與宿主頁幾毫秒沒回就交回逾時（`timeoutMs`）；**只有 `serve` 載**；**出廠空名單、30 秒**，見 [`host-page-tools-2374-design-2026-11-03.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md) | 有（兩格）                       | 關得掉（＝空名單、30 秒） |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
 | `embed-login`               | 嵌入方用服務憑證換一次性登入票、元件拿票兌換嵌入 cookie：有哪些嵌入方、憑證檔在哪、票多久作廢、cookie 多久失效；**只有 `serve` 用**（CLI 也載這一列，不讀）；**出廠沒有嵌入方（沒有這兩條路由）、票 60 秒、cookie 900 秒**，見〈嵌入方換票登入〉 | 有（兩格）                       | 關得掉（＝沒有嵌入方）   |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
@@ -3480,7 +3480,7 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 
 它跑 `MEASURED_MODELS`，`--models` 可以挑子集，`--cases` 只跑指定的題目。**成本是題數 × 模型數 ×
 取樣數的乘積**，跑滿是小時級。量過的結論與模型盤點在
-[`.docs/model-inventory.md`](../.docs/model-inventory.md)。
+[`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)。
 
 ### 每晚真模型冒煙回歸（#436）
 

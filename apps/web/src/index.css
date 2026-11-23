@@ -33,7 +33,7 @@
 @source not '../guard';
 
 /*
- * 現行規則見 `.docs/web-ui-spec.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
+ * 現行規則見 `docs/web-ui.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
  *
  * 動效：基礎元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS（沒裝時一筆都不產出、也不報錯）。
  * 時長與曲線照 SG 的機制（#1687）：讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。

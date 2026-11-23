@@ -402,7 +402,7 @@ nexus 分兩條路（§20），結論不同：
 
 ## 36. 讀回被摘掉的原文：`history_read`、`history_search`
 
-**dsh 沒有實作**，只有一份 proposed 的提案（`.agents/notes/proposed/feature/2026-07-06-recallable-compaction.md`，SHA `8bd0733`）。nexus 做了，定址改用 `<index>` 的條目序號而不是事件 seq。完整的比較與取捨在 [`.docs/history-recall-tools-design-2026-11-15.md`](../.docs/history-recall-tools-design-2026-11-15.md)。
+**dsh 沒有實作**，只有一份 proposed 的提案（`.agents/notes/proposed/feature/2026-07-06-recallable-compaction.md`，SHA `8bd0733`）。nexus 做了，定址改用 `<index>` 的條目序號而不是事件 seq。完整的比較與取捨在 [`history-recall-tools-design-2026-11-15.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/history-recall-tools-design-2026-11-15.md)。
 
 ---
 

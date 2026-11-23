@@ -6,7 +6,7 @@
  * **預算超出時截到放得下**（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)、[#2934](https://github.com/DemianLi/nexus-agent/issues/2934)）：
  * 整份放得下的照放；剩下放不下的檔，最具體的那一份截成放得下的最長檔頭，其餘整份不放。通知行放在最前面，寫出哪一份被截、
  * 從幾位元組截到幾位元組、哪幾份整份沒放、各多大，以及其餘用 `read_file` 讀。
- * 截得到 {@link MIN_TRUNCATED_BYTES} 以上時讓檔頭進到請求裡，不靠模型照指標自己去讀：量過的真模型沒有一次去讀（#2929、#2934）。取捨見 `.docs/injection-source-budgets-design-2026-11-16.md`。
+ * 截得到 {@link MIN_TRUNCATED_BYTES} 以上時讓檔頭進到請求裡，不靠模型照指標自己去讀：量過的真模型沒有一次去讀（#2929、#2934）。
  *
  * 沒有抄過來的三段，都是這裡不做的（見 `index.ts` 檔頭；刷新與巢狀發現的
  * [#389](https://github.com/DemianLi/nexus-agent/issues/389) 已以 not planned 關閉）：

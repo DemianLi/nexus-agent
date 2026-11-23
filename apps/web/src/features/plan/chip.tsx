@@ -21,7 +21,7 @@ import {
  * - **跑著、停在核准點、斷線時停用**，原因放在 `title`，不讓人按下去才收到一句拒絕。SG Button 停用時是 `pointer-events-none`，
  *   滑鼠移上去跳不出 `title`，這顆把它開回來，停用時也不換 hover 底。
  * - **報讀**：「退出」鈕的無障礙名稱是「退出計劃模式」，看得到的「退出」在名稱開頭（WCAG 2.5.3）；失敗那句掛在 `aria-describedby`。
- *   不掛 `role="status"`：代理的現況只由狀態列唸（`.docs/web-ui-spec.md` §8）。
+ *   不掛 `role="status"`：代理的現況只由狀態列唸（`docs/web-ui.md` §8）。
  */
 export function PlanChip({
   planMode,

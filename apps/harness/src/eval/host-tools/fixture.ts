@@ -1,5 +1,5 @@
 /**
- * 宿主頁工具量測的題目（[#2398](https://github.com/DemianLi/nexus-agent/issues/2398)，設計 `.docs/host-page-tools-2374-design-2026-11-03.md` Q8）。
+ * 宿主頁工具量測的題目（[#2398](https://github.com/DemianLi/nexus-agent/issues/2398)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md Q8）。
  * 只定義**輸入**與期望的呼叫：宿主頁宣告的兩支工具、畫面上選了什麼、使用者問什麼。判準在 [`rubric.ts`](./rubric.ts)。
  *
  * 四類各兩題，每題都附畫面情境（選取的那台），選取的東西是設備編號加名稱，判分只認編號：

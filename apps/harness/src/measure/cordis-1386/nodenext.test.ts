@@ -5,8 +5,7 @@
  * 「解得到」不靠 tsc 綠證明——消費者裡有四行標了 `@ts-expect-error` 的錯用法，型別退化成 `any` 時那幾行不再報錯，
  * 標記變成未使用（TS2578），tsc 會紅。第二條測試把標記拿掉，確認那四行真的各報一個錯。
  *
- * 前提是 vendor 的宣告檔已經由 `prepare`（`pnpm install` 時）建好；量測數字與上游原樣的對照見
- * `.docs/cordis-probe-measurement-2026-10-11.md` 的 ①。
+ * 前提是 vendor 的宣告檔已經由 `prepare`（`pnpm install` 時）建好。
  */
 
 import { execFile } from 'node:child_process';

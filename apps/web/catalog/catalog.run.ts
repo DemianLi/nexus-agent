@@ -12,7 +12,7 @@ import { SHIPPED_DIST } from '../guard/server';
 import { CATALOG_GROUPS, MAIN } from './pages';
 
 /**
- * 給人看的元件目錄（`.docs/web-ui-spec.md` §13.5）：把 `guard/` 測試頁的每一個子頁在亮、暗各開一次，連同出貨的 CSS 與
+ * 給人看的元件目錄（`docs/web-ui.md` §13.5）：把 `guard/` 測試頁的每一個子頁在亮、暗各開一次，連同出貨的 CSS 與
  * token 的計算值寫成**一個**自足的 HTML（`catalog/dist/index.html`，不進版控）。跑法是 `pnpm --filter @nexus/web run catalog`。
  *
  * - 內容跟護欄量的是同一份：同一個測試頁、同一份出貨 CSS（`guard/server.ts`）。目錄自己不畫元件。

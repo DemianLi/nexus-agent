@@ -123,7 +123,7 @@ function SignedInChat({ threadId: first, ...props }: ChatProps & { readonly thre
 
 /**
  * 把 `hostCalls` 裡新來的那幾支轉交宿主頁，每顆中斷一次。同一顆因為重連補送或再度中斷又出現時不再轉交；重新整理（整個重掛）之後補送的
- * 那幾支照常轉交（設計 `.docs/host-page-tools-2374-design-2026-11-03.md` §四 Q6）。名字不在**目前**的宣告裡的，不轉交、當場交回 {@link HOST_TOOL_MISSING_ERROR}。宿主頁一直不回的由 server 的逾時收。
+ * 那幾支照常轉交（設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/host-page-tools-2374-design-2026-11-03.md §四 Q6）。名字不在**目前**的宣告裡的，不轉交、當場交回 {@link HOST_TOOL_MISSING_ERROR}。宿主頁一直不回的由 server 的逾時收。
  */
 function useHostCalls(
   conversation: Conversation,

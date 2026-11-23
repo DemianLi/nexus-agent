@@ -7,7 +7,7 @@ import { surfaceContrast } from './color-math';
 import { readCascade, type Query } from './css-cascade';
 
 /**
- * `.docs/web-ui-spec.md` §11 第 2 條：用 colorjs.io 重算**實際生效**的顏色 token，確認達到 §5 的對比度目標。
+ * `docs/web-ui.md` §11 第 2 條：用 colorjs.io 重算**實際生效**的顏色 token，確認達到 §5 的對比度目標。
  * 產生器（`tokengen/generate.mjs`）解的是目標，這裡驗的是 `index.css` 照 import 順序疊出來的結果（`css-cascade.ts`，#1498）：
  * 手改了產物、改了產生器輸入卻忘了重跑、oklch 四捨五入吃掉邊際、後面疊上來的樣式表蓋掉了產物，都在這裡紅。
  *

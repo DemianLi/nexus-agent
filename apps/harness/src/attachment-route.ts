@@ -5,7 +5,7 @@
  *
  * 附件儲存是整台 serve 一份、內容定址（照 dsh，`attachment-store.ts` 檔頭）。以前模型讀附件的路由根是整個 `files` 目錄，
  * thread B 的 `ls /attachments` 列得出 thread A 上傳的檔，照路徑 `read_file` 也讀得到。一台主機多人共用、所有 web 使用者在
- * 同一個 OS 帳號底下，`0700` 分不開人（`.docs/seven-layer-inventory-2026-10-18.md:64`）。wire 這一層早就按 thread 分開了
+ * 同一個 OS 帳號底下，`0700` 分不開人（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-10-18.md#L64）。wire 這一層早就按 thread 分開了
  * （收據只在收下它的 thread 有效；網頁讀圖的授權是「這條 thread 的日誌引用過它」，`attachment-reference.ts`）；這個檔把模型
  * 那一條路由收到同一個判準。**儲存不動**，收窄的只有這條路由。
  *

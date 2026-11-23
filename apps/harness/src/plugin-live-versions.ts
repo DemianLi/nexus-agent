@@ -32,7 +32,7 @@
  * 四條偏離的理由類別都是「產品需求超出 dsh 的射程」（決議 §五）：
  *
  * 1. **單位**：dsh 一代是一整組 preset 組合；這裡一版是一列的一份宣告。本專案判過不做 preset
- *    （`.docs/seven-layer-inventory-2026-09-26.md:328`，T-29），版本路由以列為單位（決議 §3-2 第 6 條）。
+ *    （https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-09-26.md#L330，T-29），版本路由以列為單位（決議 §3-2 第 6 條）。
  * 2. **計數 → 清單**：dsh 的 `users` 是私有計數；這裡記 thread id，因為要「列出受影響的 thread」（#1431 Q3 (a)）。
  * 3. **出口**：dsh 經 `inspectCompositions` 在行程內查；這裡寫進快照檔，沿用 #1406 已登記的偏離（沒有管理員身分，不開
  *    wire 路由）。

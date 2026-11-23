@@ -1,7 +1,7 @@
 /**
  * 只給新對話更新時，仍在用舊版插件的 thread 能不能被處置——[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)。
  *
- * 三個問題，各量一遍**今天的**行為（不是理想行為），整理在 `.docs/old-thread-disposal-2026-10-08.md`：
+ * 三個問題，各量一遍**今天的**行為（不是理想行為），整理在 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/old-thread-disposal-2026-10-08.md：
  *
  * 1. **能不能列出誰在用某一版？** 能，但只有一條路：讀落盤 header 的 `plugins` 清單。線上的列表沒有這一格。
  * 2. **能不能讓它們乾淨結束、日誌不壞？** 能：取消之後那一輪正常收尾；直接關機也只留下一份讀得出來的前綴。

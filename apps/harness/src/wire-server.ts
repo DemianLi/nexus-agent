@@ -21,7 +21,7 @@
  *
  * ### 偏離 A：心跳退成 SSE 註解行，死線判準退成「位元組卡著、連兩拍沒排出去」（理由 1：基座表達不出來）
  *
- * 我們的載體是已拍板的 SSE（`.docs/development-plan.md` 決策 6），HTTP/1.1 回應沒有 ping／pong 控制幀，對方無從回應，
+ * 我們的載體是已拍板的 SSE（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/development-plan.md 決策 6），HTTP/1.1 回應沒有 ping／pong 控制幀，對方無從回應，
  * 「漏了 pong」這個判準做不出來。退到最接近的：每拍寫 `: ping\n\n`（解碼端本來就跳過註解）；dsh 判準裡做得到的那一半是
  * 「排過隊之後才完成的寫入」＝ `'drain'`，另外**緩衝縮小也算活著**（對方有在收，只是慢）。只有寫入緩衝裡有位元組卡著
  * （`writableLength > 0`）、又沒有任何進展的那一拍算漏拍；閒著、緩衝是空的線不算漏拍，不然健康的閒置線閒過兩個間隔就被殺。

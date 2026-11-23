@@ -1,5 +1,5 @@
 /**
- * 前台這一側的監督行程控制面（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §五）：
+ * 前台這一側的監督行程控制面（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §五）：
  * 前台的 stdin 收 {@link FrontEvent}、stdout 送 {@link FrontRequest}，格式見 `supervisor-protocol.ts`。
  *
  * - **`ensure` 的回答是 `up`、`down` 或 `capacity`**，以 thread 為單位：同一條 thread 同時有幾個人在等，一則回答全部了結。

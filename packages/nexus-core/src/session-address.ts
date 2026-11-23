@@ -22,7 +22,7 @@
  * ## 鑰匙是 `checkpoint_ns`，而它整個包在這一個檔案裡
  *
  * LangGraph 的 `configurable.checkpoint_ns` 是**巢狀的圖命名空間**，用 `|` 分段，每一段是
- * 一次 task 的 id。實測（2026-09-01，調研見 `.docs/subagent-session-log-survey.md`）：
+ * 一次 task 的 id。實測（2026-09-01，調研見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/subagent-session-log-survey.md）：
  *
  * | 情境 | `checkpoint_ns` |
  * | --- | --- |

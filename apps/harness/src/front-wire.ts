@@ -1,5 +1,5 @@
 /**
- * 前台的 wire handler（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §三-3、§四）：
+ * 前台的 wire handler（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §三-3、§四）：
  * 包住前台自己那一支 `wire-handler.ts`，**指名一條 thread 的請求轉給那條的對話行程**，其餘在前台答。
  *
  * - **閘門在前台**：先過本地那支的 `admit`（信任圍欄、cookie），過了才 `ensure`、才轉送。驗出來的身分放進內部標頭往下傳
@@ -408,7 +408,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   }
 
   /**
-   * 分叉（`.docs/supervisor-1947-design-2026-11-03.md` §4-3）：來源的對話行程照 `handleFork`（`wire-handler.ts`）的第 1 到 4 步算出子 thread 的 seed
+   * 分叉（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §4-3）：來源的對話行程照 `handleFork`（`wire-handler.ts`）的第 1 到 4 步算出子 thread 的 seed
    * （`fork-seed`；冷的來源用 `read-only` 開：照樣佔一格，名額滿時先被收），分得出去才替子 thread 開一個行程、交給它照第 5、6 步建（`fork-adopt`）。
    * 來源開不起來（名額滿）時回那一份，排在參數與切點的檢查之前；分不出去的、子 thread 建不起來的，原樣回對話行程的那一份；`fork-adopt` 回的不是 2xx（例如本文超過上限的 413）時回 `unknown_error`，
    * 已經開好的子行程照閒置時間收。

@@ -1,5 +1,5 @@
 /**
- * 監督行程控制面的編解碼（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §五）：
+ * 監督行程控制面的編解碼（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §五）：
  * 監督行程與對話行程（或一對裡的組合行程）、與前台之間的訊息。**純函式、不依賴任何套件**。格式的定義在
  * `native/sandbox-spawner/src/supervisor_protocol.rs` 的檔頭；兩邊對同一份向量檔（`native/sandbox-spawner/supervisor-vectors.json`）測。
  *

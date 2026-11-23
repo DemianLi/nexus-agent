@@ -1,5 +1,5 @@
 //! 監督行程（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，[#2340](https://github.com/DemianLi/nexus-agent/issues/2340)，
-//! 設計 `.docs/supervisor-1947-design-2026-11-03.md` §三-2、§五、§六）：起一個前台、按前台的要求每條 thread 起一個對話行程，
+//! 設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §三-2、§五、§六）：起一個前台、按前台的要求每條 thread 起一個對話行程，
 //! 管它們的生死，寫稽核紀錄。資料不經這裡：前台直接連對話行程的 socket（成對時是組合行程的）。訊息格式在 [`crate::supervisor_protocol`]。
 //!
 //! **嚴格單執行緒**：子行程的 `PR_SET_PDEATHSIG` 看的是起它的那條執行緒，那條執行緒結束子行程就會被殺。不要在這裡起 thread。

@@ -4,7 +4,7 @@
  * ## 換得到的與換不到的
  *
  * 重讀用的是同一個 `loadDefaultPlugins`、同一份 env、home 層與 `--patch`，所以改了 home 層的 `cordis.yml`，下一條新 thread
- * 看得到：列的掛與不掛、組裝期讀的設定（`.docs/plugin-reload-classification-2026-10-08.md` 的 B、C 表）。**換不到程式碼版本**：
+ * 看得到：列的掛與不掛、組裝期讀的設定（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-reload-classification-2026-10-08.md 的 B、C 表）。**換不到程式碼版本**：
  * `import()` 有 ESM 快取，同一個 specifier 第二次拿到的是同一個模組物件；換版本是版本路由的事（決議 §3-2 第 6 條）。
  *
  * 起動期讀一次的列（{@link ThreadPluginListOptions.startupRead}）照舊到重啟才生效：重讀時它的值跟執行中的不同，就在伺服器
@@ -41,7 +41,7 @@
  *
  * dsh 開 HMR 時設定一改立即影響使用那個 profile 的全部會話，沒開就保留到重啟（dsh
  * `packages/boot/plugin-manager/README.zh.md`〈概述〉）。我們是組 thread 時拉、只給新 thread：產品需求超出 dsh 的射程，
- * 歸在決議 `.docs/decisions-2026-10-11.md` §3-2 第 6 條（插件更新只給新對話）。清單由變更紀錄導出（#1412，決議 §3-5），
+ * 歸在決議 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md §3-2 第 6 條（插件更新只給新對話）。清單由變更紀錄導出（#1412，決議 §3-5），
  * 重讀時一起讀；列不在 Loader 的樹上，因為插件還在相容層，上樹跟著逐顆搬出相容層一起做（`cordis-root.ts` 偏離登記）。
  *
  * ## 變更紀錄那一層的兩件事要讓人看得到（#1412）

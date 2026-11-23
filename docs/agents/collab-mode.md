@@ -183,7 +183,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 
 1. **廣度**：在 `deepseek-harness` 與 `nexus-agent` 兩個圖上用 `search_graph`、`trace_path` 找出相關的符號與呼叫路徑。「沒有」「只有 N 個」這類否定宣稱，配 `check_index_coverage` 再 grep 一次（[codebase-memory.md](codebase-memory.md)）。
 2. **深度**：對圖找到的關鍵點讀原始碼，引用寫 `path:line` 並註明 SHA（[引用 deepseek-harness 之前](codebase-memory.md#引用-deepseek-harness-之前)）。說出 dsh 在解決什麼問題、付出什麼代價；講不出來，就還不能選。
-3. **選**：至少比一種別的做法，用同一組標準比：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求（企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發）、現有基座做不做得到（今天是 deepagents／LangChain JS／LangGraph JS，正遷往 vendor 的 Cordis，見 [`.docs/decisions-2026-10-11.md`](../../.docs/decisions-2026-10-11.md)）。選比較好的那一個；比不出高下就照 dsh，因為它的做法已經在實際使用中驗證過。
+3. **選**：至少比一種別的做法，用同一組標準比：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求（企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發）、現有基座做不做得到（今天是 deepagents／LangChain JS／LangGraph JS，正遷往 vendor 的 Cordis，見 [`docs/adr/0002-vendor-cordis-and-plugin-contract.md`](../adr/0002-vendor-cordis-and-plugin-contract.md)）。選比較好的那一個；比不出高下就照 dsh，因為它的做法已經在實際使用中驗證過。
 
 比較結果寫在 PR 內文 Summary 的「對照 dsh」；符合下面 ADR 條件的寫成 ADR，「對照 dsh」只放一行連結。不寫進程式碼與註解。operator 事後不同意，走上面的導正。
 
@@ -201,7 +201,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 
 - 全系統的決策放 [`docs/adr/`](../adr/)，單一 app 的放 `apps/<name>/docs/adr/`；`packages/*` 的歸到根目錄。
 - 檔名 `NNNN-<kebab-slug>.md`，四位數編號從 `0001` 起依序遞增、不跳號。第一行 `# <標題>`，正文一段話說清楚情境、決定與理由就夠；有價值時才加「Considered Options」與「Consequences」（格式照 `domain-modeling` 的 ADR-FORMAT）。
-- `docs/` 只寫現況；決策與取捨寫 ADR；`.docs/` 逐步退場，不再新增。
+- `docs/` 只寫現況；決策與取捨寫 ADR；`.docs/` 只剩五份還沒逐條核對現況的決議（`decisions-2026-*`），逐步轉成 ADR 後退場，不再新增；其餘舊文件已移出版本控制，留在 tag `archive/docs-2026-11`。
 
 ## 規則與執行者
 

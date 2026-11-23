@@ -7,7 +7,7 @@
  * 半透明的面實際疊在什麼上面；這裡量的是畫出來的結果。
  *
  * 量這幾件事，亮暗各一次：
- * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279），
+ * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`docs/web-ui.md`、#1279），
  *    外框對它畫在上面的底色過非文字門檻 {@link NON_TEXT_MIN}（#1468 Q5）。
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
  *    量具只疊底色、不算 `opacity`（祖先半透明時字與底整組一起淡掉），所以元素自己或任一祖先的 `opacity` 不是 1 就直接判不合格（#1523：
@@ -148,7 +148,7 @@ export type ChipState = 'rest' | 'hover' | 'open';
 export const CHIP_STATES: ChipState[] = ['rest', 'hover', 'open'];
 
 /**
- * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。權限「全開」的 Pick 沒有 chip 底，字是警示色（`status-interrupted`）直接疊在頁面上，
+ * 狀態色對底色的門檻（`docs/web-ui.md` §5，#1468 Q5）。權限「全開」的 Pick 沒有 chip 底，字是警示色（`status-interrupted`）直接疊在頁面上，
  * 所以守這一條而不是文字的 4.5。不扣靜態那一層的 `ROUNDING`：瀏覽器量的是出貨的值，跟靜態那層對到小數第四位。
  */
 export const STATUS_MIN = 5.2;
@@ -1758,7 +1758,7 @@ export const THREAD_CLOCK = {
 };
 
 /**
- * axe 在真瀏覽器裡跑（#2765；`.docs/web-ui-spec.md` §13.3）。jsdom 那一層（`src/test/axe.ts`）沒有版面，`color-contrast`、
+ * axe 在真瀏覽器裡跑（#2765；`docs/web-ui.md` §13.3）。jsdom 那一層（`src/test/axe.ts`）沒有版面，`color-contrast`、
  * `target-size` 這類看尺寸與像素的規則算不了；這裡用同一組 WCAG 2.2 AA 的標籤、不關任何規則，對整頁跑。
  *
  * `key` 是「規則 元素」：元素用 `data-slot`（沒有就用 Base UI portal 的標記或標籤名），不用 axe 回的選擇器——那裡面是每次都會變的 id。

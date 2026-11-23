@@ -68,7 +68,7 @@ export interface LoadOptions {
    * - `requires`：宣告要的能力或服務沒人提供。**連鎖照 dsh**：一列掉了，要用它服務的列也掉
    *   （dsh `packages/boot/app-boot/README.zh.md:109`）。它的 `apply` 已經跑完、可能開了資源，所以先跑它自己登記的
    *   清理，再撤它的註冊。dsh 的可少掛列在這一格是等著（`:103`）；我們的載入一趟到底、表達不出等待
-   *   （`.docs/development-plan.md` 已登記），退到那一列掉了。
+   *   （https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/development-plan.md 已登記），退到那一列掉了。
    *
    * 整份清單的性質照舊整個拋：條目形狀不合法、兩個條目寫了同一個 id（dsh 失敗表第一列，`:96`）。
    *

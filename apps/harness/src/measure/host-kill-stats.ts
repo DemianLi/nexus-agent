@@ -1,5 +1,5 @@
 /**
- * 殺宿主量測（#3032，規則見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`「後測的規則」二、W 的量測與其補充段）的統計：段 A、段 B、兩段相加的
+ * 殺宿主量測（#3032，規則見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/mcp-pool-baseline-2570-2026-11-10.md「後測的規則」二、W 的量測與其補充段）的統計：段 A、段 B、兩段相加的
  * p50／p95／最大值，W 的正式值公式，以及規則寫死的回報條件。
  *
  * 百分位用 nearest-rank：第 p 百分位是排序後第 ⌈p/100 × n⌉ 個（n＝30 時 p95 是第 29 個）。
@@ -84,7 +84,6 @@ export function summarize(
 
 /**
  * 規則寫死的回報條件：A＋B 最大值超過 3 秒；A、B、A＋B 任一 p95 超過 2 秒；有缺樣本；兩架構最大值差一倍以上。回觸發了哪幾條，空陣列就是都沒觸發。
- * 觸發後怎麼處理，見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`「要回報 PM、不自己調的情況」。
  */
 export function reportTriggers(summaries: readonly ArchSummary[]): string[] {
   const out: string[] = [];

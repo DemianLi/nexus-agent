@@ -1,5 +1,5 @@
 /**
- * 對話行程的入口（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §四、§5-2）：
+ * 對話行程的入口（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §四、§5-2）：
  * 監督行程每條 thread 起一個，`node conversation-process.js --socket <path> [--host-socket <path>] [serve 的旗標…]`。
  *
  * - wire 只聽 `--socket` 那個 Unix socket，驗證用 {@link openPeerSocketAuth}：socket 所在目錄要是自己的、權限 0700，否則起不來。

@@ -1,5 +1,5 @@
 /**
- * per-thread 前台的全域下行（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3）：
+ * per-thread 前台的全域下行（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §4-3）：
  * 前台手上沒有 thread，`/threads/feed` 的每一件都來自對話行程。
  *
  * - **每個活著的對話行程接一條**：監督行程送 `up` 時，往那個 socket 開它自己的 `/threads/feed`，收到的照原樣接進前台的

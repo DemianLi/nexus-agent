@@ -10,7 +10,7 @@
  * 其中十二個是空 installer；#974 把這條規則翻了面：沒有可檢的關係就**不要發布**配套入口，
  * 空 installer 本身是違規。理由是 dsh 在 `2026-08-28-omit-unneeded-invariant-companions`
  * 就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量移除
- * （`.docs/invariant-companions-decision-2026-10-03.md`）。**剩下的八個是暫時保留、觀察中**。
+ * （`docs/adr/0003-invariant-companions-first-cut.md`）。**剩下的八個是暫時保留、觀察中**。
  * 代價是新增 package 的人不再被這裡擋下來——那條目的消失了，是接受的。
  *
  * 對讀日期 2026-08-30，dsh `cd5ef8148158c3a752a658978873241fdf8e2bbc`

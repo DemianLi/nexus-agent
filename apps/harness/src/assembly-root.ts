@@ -193,7 +193,7 @@ export interface CliInvocation {
    * 這個旗標**。
    *
    * （2026-09-19 註：引文是 dsh 當時 README 的原話，但 dsh 的 base 其實出廠就掛著續行驅動器——
-   * 「可選」指套件可以不掛，不是出廠關著。見 `.docs/plugin-architecture-gap-survey.md` §三第 18 列。
+   * 「可選」指套件可以不掛，不是出廠關著。見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md §三第 18 列。
    * **2026-10-07（#445）重核的結論：預設只有 CLI 關，serve 預設開。** CLI 用 `HEADLESS_APPROVALS`，
    * 要核准的工具被確定性拒絕，續行只會一再撞同一個拒絕空轉；serve 要核准時停下來等人，沒有
    * 這個問題。所以這個欄位在兩個入口的預設相反，旗標名同一個：CLI `--goal-driver` 開、

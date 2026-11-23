@@ -7,7 +7,7 @@ import { describe, expect, test } from 'vitest';
 import { isVendorUpstream } from '@/test/vendor-upstream';
 
 /**
- * `.docs/web-ui-spec.md` §11 第 1 條：邊緣畫在陰影裡，同一個元素不同時用 `border` 與陰影（§5）。
+ * `docs/web-ui.md` §11 第 1 條：邊緣畫在陰影裡，同一個元素不同時用 `border` 與陰影（§5）。
  *
  * 量的是原始碼裡的每一個字串字面值（className、cva 的各段、`cn(...)` 的參數都是字串）：同一個字串裡
  * 同時有「畫出邊線的 border utility」與「shadow utility」就報錯。只看顏色的 `border-input`、

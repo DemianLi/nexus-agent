@@ -7,7 +7,7 @@
  * subagent 的狀態合成一份，看起來像正常運作。
  *
  * 所以下面每一條都直接寫死那張表的一格。工具那兩列量自 2026-09-01 的探針，見
- * `.docs/subagent-session-log-survey.md`；模型那兩列量自 2026-09-03
+ * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/subagent-session-log-survey.md；模型那兩列量自 2026-09-03
  * （[#153](https://github.com/DemianLi/nexus-agent/issues/153)）。
  *
  * **四列都要在這裡。** 只釘 `tools:` 開頭的話，基座哪天把模型節點從 `model_request`

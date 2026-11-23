@@ -4,7 +4,7 @@
 
 **動工時間：2026-11-21 之後。** 在那之前先完成 harness 的既有工作（Cordis 遷移 [#1385](https://github.com/DemianLi/nexus-agent/issues/1385) 那條卡序與 [#1427](https://github.com/DemianLi/nexus-agent/issues/1427)）。S2（[#1339](https://github.com/DemianLi/nexus-agent/issues/1339)）排在企業功能交付之後，所以也跟著順延。
 
-前情：[`admin-plugin-swap-decision-draft-2026-10-07.md`](admin-plugin-swap-decision-draft-2026-10-07.md) §六～§八已定的兩層管理員、不做系統內核准、稽核不放紙本編號也不匯出、開發者管理員的三項安全設計，本文不重述，全部沿用。
+前情：[`admin-plugin-swap-decision-draft-2026-10-07.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/admin-plugin-swap-decision-draft-2026-10-07.md) §六～§八已定的兩層管理員、不做系統內核准、稽核不放紙本編號也不匯出、開發者管理員的三項安全設計，本文不重述，全部沿用。
 
 ## 一、這塊沒有 dsh 基準
 
@@ -68,7 +68,7 @@ dsh 沒有登入、角色或稽核（同上草稿 §3-2）。本文每一條都�
 27. **安裝流程用獨立的系統帳號**：
     - `nexus` 跑 serve 與 agent，對插件目錄只能讀。
     - `nexus-installer` 擁有插件目錄。
-    - 開發者管理員從命令列安裝：先過 nexus 帳號＋金鑰，再經一條只開放安裝指令的 sudo 規則切到 `nexus-installer`；安裝程式驗發行簽章、查跟 core 的版本相容性（[`decisions-2026-10-11.md`](decisions-2026-10-11.md) 第 15 條），都過才寫入，並記稽核。
+    - 開發者管理員從命令列安裝：先過 nexus 帳號＋金鑰，再經一條只開放安裝指令的 sudo 規則切到 `nexus-installer`；安裝程式驗發行簽章、查跟 core 的版本相容性（[`decisions-2026-10-11.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md) 第 15 條），都過才寫入，並記稽核。
     - 兩個帳號與 sudo 規則寫進部署文件；客戶主機的 sudo 由誰管待確認。
 
 ## 九、範圍

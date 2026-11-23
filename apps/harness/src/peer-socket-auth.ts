@@ -1,5 +1,5 @@
 /**
- * 對話行程 socket 上的驗證（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-2）：
+ * 對話行程 socket 上的驗證（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/supervisor-1947-design-2026-11-03.md §4-2）：
  * 登入只在前台，對話行程不帶 `BrowserAuth`、前台也不轉瀏覽器的 cookie。**信任來自 socket 所在的目錄**：監督行程建一個只有擁有者
  * 讀寫得到的目錄（0700），socket 放在裡面，連得進來的就是同一個使用者的行程（前台）。主機多人共用時，邊界就是這個目錄的權限。
  *
