@@ -71,13 +71,13 @@ class NewTest(unittest.TestCase):
 
     def test_runs_from_inside_a_worktree_too(self) -> None:
         first = self.fx.new('chore/x', '12')
-        second = self.fx.run('new', 'chore/y', '13', 'ver', cwd=first)
+        second = self.fx.run('new', 'chore/y', '13', cwd=first)
         self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertTrue((self.fx.root / 'worktrees' / 'ver-13').is_dir())
+        self.assertTrue((self.fx.root / 'worktrees' / 'eng-13').is_dir())
 
     def test_refuses_bad_input_and_existing_paths(self) -> None:
         self.fx.new()
-        for args in (('chore/z', '12'), ('chore/z', 'abc'), ('chore/z', '13', 'pm'), ('bad branch', '13'), ('chore/z',)):
+        for args in (('chore/z', '12'), ('chore/z', 'abc'), ('chore/z', '13', 'ver'), ('bad branch', '13'), ('chore/z',)):
             with self.subTest(args=args):
                 self.assertNotEqual(self.fx.run('new', *args).returncode, 0)
 
