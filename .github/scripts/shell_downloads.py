@@ -53,6 +53,7 @@ TMP_TARGET_OPTIONS = ('-t', '--target-directory')
 NPX_LAUNCHERS = frozenset({'npx', 'pnpx', 'bunx'})
 NPX_ADVICE = '不設放行路：已安裝的用 `pnpm exec <指令>`，沒裝的把套件與用途寫在卡上，需要時由 operator 在終端跑'
 WORKTREE_NAME = re.compile(r'(eng|ver)-\d+(-[a-z0-9]+)?')
+WORKTREE_CLUSTER = re.compile(r'-[A-Za-z]*[bB][A-Za-z]*')
 WORKTREE_VALUE_OPTIONS = frozenset({'-b', '-B', '--reason'})
 WORKTREE_ADVICE = '用 `worktree.sh new <分支> <卡號>`，它開在主 checkout 同層的 `worktrees/<eng|ver>-<卡號>`（docs/agents/collab-mode.md〈worktree 與上下文〉）'
 FORCE_ADVICE = '不加 `--force`／`-f`；拆不掉就把原因寫在卡上、停下，要強制移除由 operator 在終端自己跑'
@@ -492,6 +493,9 @@ def _worktree_add_path(args: list[str]) -> str | None:
             return args[i + 1] if i + 1 < len(args) else None
         if a in WORKTREE_VALUE_OPTIONS:
             i += 2
+        elif WORKTREE_CLUSTER.fullmatch(a):
+            cut = min(k for k in (a.find('b'), a.find('B')) if k >= 0)
+            i += 2 if cut == len(a) - 1 else 1
         elif a.startswith('-'):
             i += 1
         else:

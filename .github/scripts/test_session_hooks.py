@@ -393,13 +393,15 @@ class GuardTest(unittest.TestCase):
             'git worktree add /nope/fake', 'git worktree add --no-track -b feat/x /nope/fake origin/develop', 'git worktree add .claude/worktrees/eng-1 origin/develop',
             'git worktree add /nope/.claude/worktrees/eng-1', 'git worktree add worktrees/eng-1', 'git worktree add ../elsewhere/eng-1', 'git worktree add /nope/worktrees/fake',
             'git worktree add -b x ../worktrees/eng-1/sub', 'cd x && git worktree add /nope/fake', 'bash -c "git worktree add /nope/fake"', 'git -C /nope/repo worktree add ../fake',
+            'git worktree add /x/elsewhere/eng-1', 'git worktree add -fb ../worktrees/eng-1 /nope/x', 'git worktree add -fbchore/x /nope/x', 'git worktree add -qB x /nope/x',
         ):
             with self.subTest(command=command):
                 reason = guarded(command)
                 self.assertIsNotNone(reason)
                 self.assertIn('worktree.sh new', reason)
         for command in (
-            'git worktree add --no-track -b chore/x ../worktrees/eng-3151 origin/develop', 'git worktree add -B x /nope/worktrees/ver-3180-b', 'git worktree add --detach ~/p/worktrees/ver-12 HEAD',
+            'git worktree add --no-track -b chore/x ../worktrees/eng-3151 origin/develop', 'git worktree add -B x /nope/worktrees/ver-3180-b', 'git worktree add --detach ~/p/worktrees/ver-12 HEAD', 'git worktree add --detach ../worktrees/ver-3186 d8f60a1308e8976729a491efbe4d500edd6c5ed7',
+            'git worktree add -fb chore/x ../worktrees/eng-1', 'git worktree add -fbchore/x ../worktrees/eng-1',
             'git worktree add -b x "$WT" origin/develop', 'git worktree add "$(pwd)/../worktrees/eng-1"', 'git worktree list', 'git worktree remove /nope/fake',
             'git commit -m "git worktree add /nope/fake"',
         ):

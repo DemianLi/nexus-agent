@@ -81,6 +81,13 @@ class NewTest(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertNotEqual(self.fx.run('new', *args).returncode, 0)
 
+    def test_refuses_an_existing_empty_directory(self) -> None:
+        (self.fx.root / 'worktrees' / 'eng-14').mkdir(parents=True)
+        done = self.fx.run('new', 'chore/y', '14')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('已經有', done.stderr)
+        self.assertNotIn('chore/y', git(self.fx.main, 'branch', '--list', 'chore/y'))
+
     def test_refuses_without_local_origin_develop(self) -> None:
         git(self.fx.main, 'update-ref', '-d', 'refs/remotes/origin/develop')
         done = self.fx.run('new', 'chore/x', '12')
@@ -105,6 +112,26 @@ class DoneTest(unittest.TestCase):
         git(self.path, 'add', 'b.txt')
         git(self.path, 'commit', '-m', 'work')
         self.head = git(self.path, 'rev-parse', 'HEAD')
+
+    def test_a_detached_verifier_worktree_is_found_by_sha_and_removed_with_open_ok(self) -> None:
+        sha = git(self.path, 'rev-parse', 'HEAD')
+        ver = self.fx.root / 'worktrees' / 'ver-9'
+        git(self.fx.main, 'worktree', 'add', '--detach', str(ver), sha)
+        self.fx.prs(f'7 OPEN {sha}')
+        self.assertNotEqual(self.fx.run('done', str(ver)).returncode, 0)
+        self.assertTrue(ver.exists())
+        done = self.fx.run('done', '--open-ok', str(ver))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(ver.exists())
+
+    def test_a_relative_path_works_with_cdpath_set(self) -> None:
+        nested = self.fx.main / 'wt-x'
+        git(self.fx.main, 'worktree', 'add', '--detach', str(nested), self.head)
+        self.fx.prs(f'7 MERGED {self.head}')
+        env = {**os.environ, **GIT_ENV, 'GH': str(self.fx.bin / 'gh'), 'CDPATH': str(self.fx.main)}
+        done = subprocess.run(['bash', str(SCRIPT), 'done', 'wt-x'], cwd=self.fx.main, capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(nested.exists())
 
     def test_removes_a_merged_clean_worktree_and_keeps_the_branch(self) -> None:
         self.fx.prs(f'7 MERGED {self.head}')
@@ -143,9 +170,11 @@ class DoneTest(unittest.TestCase):
                 else:
                     (self.path / name).unlink()
 
-    def test_refuses_the_main_checkout(self) -> None:
+    def test_refuses_the_main_checkout_even_when_a_merged_pr_matches_its_head(self) -> None:
+        self.fx.prs(f'7 MERGED {git(self.fx.main, "rev-parse", "HEAD")}')
         done = self.fx.run('done', str(self.fx.main))
         self.assertNotEqual(done.returncode, 0)
+        self.assertIn('主 checkout', done.stderr)
         self.assertTrue(self.fx.main.exists())
 
     def test_half_deleted_directory_is_reported_with_its_files_and_left_alone(self) -> None:

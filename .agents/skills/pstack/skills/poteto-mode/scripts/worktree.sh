@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# engineer 與 verifier 開、收 worktree 的唯一入口（#3151）。
+# engineer 開、收 worktree 與 verifier 收 worktree 的入口。
 #
 # 用法：
 #   worktree.sh new <分支> <卡號> [eng|ver]
@@ -75,7 +75,7 @@ cmd_done() {
 	if [ "${1:-}" = "--open-ok" ]; then open_ok=1; shift; fi
 	[ $# -eq 1 ] || { usage >&2; exit 2; }
 	local path="${1%/}" main
-	[ ! -d "$path" ] || path=$(cd "$path" && pwd -P)
+	[ ! -d "$path" ] || path=$(CDPATH= cd "$path" >/dev/null && pwd -P)
 	main=$(main_checkout)
 	[ -n "${main}" ] || die "不在 git repo 裡"
 	[ "${path}" != "${main}" ] || die "這是主 checkout，不是 worktree"

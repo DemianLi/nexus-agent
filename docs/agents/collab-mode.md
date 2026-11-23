@@ -81,9 +81,9 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 ## worktree 與上下文
 
-- 一張卡一個 worktree，位置固定在主 checkout 同層的 `worktrees/<eng|ver>-<卡號>`（repo 外）。engineer 與 verifier 用 [`worktree.sh new <分支> <卡號> [eng|ver]`](../../.agents/skills/pstack/skills/poteto-mode/scripts/worktree.sh) 開：從本機的 `origin/develop` 開 `--no-track` 的分支（開分支前的 `git fetch origin develop` 先自己做一次，script 不 fetch），再 `pnpm install --offline` 與 `pnpm run build:lib`。app 自己開 session 時建的 `.claude/worktrees/` 由 app 決定，不管。
-- 收：卡合併、合併後那一輪綠了，PM 封存 engineer 時用 `worktree.sh done <路徑>`；verifier 判定貼上之前，自己用 `worktree.sh done --open-ok <路徑>` 移除自己開的。`done` 核對路徑登記在 `git worktree list`、不是主 checkout、沒有未提交或未追蹤的內容、HEAD 等於某張 PR 最後一個 commit 而且那張 PR 已合（`--open-ok` 時還開著也行），才用 `git worktree remove`（不加 force、不遞迴刪除）移除；移除後目錄還在，或路徑沒登記、目錄卻在（半刪），就報錯並列出留下的檔，不刪。半刪的目錄由 operator 決定怎麼刪（成因看過兩種：Finder 開著目錄而重新長出 `.DS_Store`；沒有行程開著、仍剩 `node_modules` 裡的唯讀檔）。分支不刪。
-- PM 每次掃描，列出不在任何開著的 session 名下的 worktree（含 `.claude/worktrees/` 與半刪的目錄），貼給 operator 核可之後才刪。`worktree-audit.sh` 會自己 `git fetch`，照〈下載〉每次要核可；掃描只要列清單時，讀本機的 `git worktree list` 與 `origin/develop`，不跑它。
+- 一張卡一個 worktree，位置固定在主 checkout 同層的 `worktrees/<eng|ver>-<卡號>`（repo 外）。engineer 用 [`worktree.sh new <分支> <卡號> [eng|ver]`](../../.agents/skills/pstack/skills/poteto-mode/scripts/worktree.sh) 開：從本機的 `origin/develop` 開 `--no-track` 的分支（開分支前的 `git fetch origin develop` 先自己做一次，script 不 fetch），再 `pnpm install --offline` 與 `pnpm run build:lib`。app 自己開 session 時建的 `.claude/worktrees/` 由 app 決定，不管。
+- 收：卡合併、合併後那一輪綠了，PM 封存 engineer 時用 `worktree.sh done <路徑>`；verifier 不用 `new`（它從 `develop` 開分支，拿不到 PR 的程式碼）：從主 checkout 用 `git worktree add --detach ../worktrees/ver-<PR 號碼> <head SHA>` 開（hook 放行這個形狀），判定貼上之前再用 `worktree.sh done --open-ok <路徑>` 移除；`done` 對 detached 的 worktree 以 HEAD 的 SHA 找 PR。`done` 核對路徑登記在 `git worktree list`、不是主 checkout、沒有未提交或未追蹤的內容、HEAD 等於某張 PR 最後一個 commit 而且那張 PR 已合（`--open-ok` 時還開著也行），才用 `git worktree remove`（不加 force、不遞迴刪除）移除；移除後目錄還在，或路徑沒登記、目錄卻在（半刪），就報錯並列出留下的檔，不刪。半刪的目錄由 operator 決定怎麼刪，PM 不自己刪。分支不刪。
+- PM 每次掃描，列出不在任何開著的 session 名下的 worktree（含 `.claude/worktrees/` 與半刪的目錄），貼給 operator 核可之後才刪；半刪的目錄照上一條由 operator 刪。`worktree-audit.sh` 會自己 `git fetch`，照〈下載〉每次要核可；掃描只要列清單時，讀本機的 `git worktree list` 與 `origin/develop`，不跑它。
 - 跑過 harness 測試之後 `apps/harness/.cordis` 會留下 Loader 的輔助檔。它自己帶 `.gitignore`，不進 commit；`prettier --check .`（`pnpm run format:check`）不讀子目錄的 `.gitignore`，所以 `.prettierignore` 排除它。
 - **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
 - 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
@@ -167,7 +167,7 @@ PM 在 engineer 可封存時依序做三件事：
 **需要人**（規則本來就停在這裡）：
 
 - 開場授權，一次。
-- 刪 worktree 時有未提交或來源不明的內容、或那不是這位 PM 派出去的 session 建的（後者照 #3151 先列清單）。
+- 刪 worktree 時有未提交或來源不明的內容、或那不是這位 PM 派出去的 session 建的（後者照〈worktree 與上下文〉先列清單）。
 - 放寬 gate。
 - 第 3 次 `FAIL`，或合併後那一輪紅了、撤回被基準擋下而往前修修不出來。
 
