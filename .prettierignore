@@ -48,3 +48,5 @@ apps/web/src/vendor/solid-glass/shadcn/
 
 # 請求基準檔：由 `request-baseline-refresh.ts` 寫出（單行 JSON，逐位元組比對用），交給 Prettier 改寫就跟重錄的結果對不上。
 apps/harness/src/fixtures/request-baseline/
+
+apps/harness/.cordis/

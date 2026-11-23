@@ -81,7 +81,10 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 ## worktree 與上下文
 
-- 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。移除到一半、目錄還有殘留時：PM 派出去的 session 建的 worktree，卡已結、合併後那一輪綠、沒有人在用，而且剩下的內容都能從 commit 或建置重建（`.DS_Store` 這類系統中繼檔也算），PM 直接刪那一個路徑，刪完確認目錄不在；分支不刪。
+- 一張卡一個 worktree，位置固定在主 checkout 同層的 `worktrees/<eng|ver>-<卡號>`（repo 外）。engineer 用 [`worktree.sh new <分支> <卡號> [eng|ver]`](../../.agents/skills/pstack/skills/poteto-mode/scripts/worktree.sh) 開：從本機的 `origin/develop` 開 `--no-track` 的分支（開分支前的 `git fetch origin develop` 先自己做一次，script 不 fetch），再 `pnpm install --offline` 與 `pnpm run build:lib`。app 自己開 session 時建的 `.claude/worktrees/` 由 app 決定，不管。
+- 收：卡合併、合併後那一輪綠了，PM 封存 engineer 時用 `worktree.sh done <路徑>`；verifier 不用 `new`（它從 `develop` 開分支，拿不到 PR 的程式碼）：從主 checkout 用 `git worktree add --detach ../worktrees/ver-<PR 號碼> <head SHA>` 開（hook 放行這個形狀），判定貼上之前再用 `worktree.sh done --open-ok <路徑>` 移除；`done` 對 detached 的 worktree 以 HEAD 的 SHA 找 PR。`done` 核對路徑登記在 `git worktree list`、不是主 checkout、沒有未提交或未追蹤的內容、HEAD 等於某張 PR 最後一個 commit 而且那張 PR 已合（`--open-ok` 時還開著也行），才用 `git worktree remove`（不加 force、不遞迴刪除）移除；移除後目錄還在，或路徑沒登記、目錄卻在（半刪），就報錯並列出留下的檔，不刪。半刪的目錄由 operator 決定怎麼刪，PM 不自己刪。分支不刪。
+- PM 每次掃描，列出不在任何開著的 session 名下的 worktree（含 `.claude/worktrees/` 與半刪的目錄），貼給 operator 核可之後才刪；半刪的目錄照上一條由 operator 刪。`worktree-audit.sh` 會自己 `git fetch`，照〈下載〉每次要核可；掃描只要列清單時，讀本機的 `git worktree list` 與 `origin/develop`，不跑它。
+- 跑過 harness 測試之後 `apps/harness/.cordis` 會留下 Loader 的輔助檔。它自己帶 `.gitignore`，不進 commit；`prettier --check .`（`pnpm run format:check`）不讀子目錄的 `.gitignore`，所以 `.prettierignore` 排除它。
 - **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
 - 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
 - engineer 與 verifier 的開場第一行讀主 checkout 的檔，`.env` 也從主 checkout 讀，所以 PM 每次派工前先把主 checkout 同步到 `origin/develop`：`git -C <主 checkout> fetch origin develop`，再 `git -C <主 checkout> merge --ff-only FETCH_HEAD`。不用 `pull`，也不用不帶 refspec 的 `fetch`。
@@ -113,10 +116,11 @@ agent 做的下載都要 operator 核可。常設核可只有一個形狀：`git
 
 ## 指令護欄
 
-同一支 `PreToolUse` hook（`session_hooks.py pre-download`，指令形狀在 `shell_downloads.py`，掃描器與〈下載〉共用）也擋下面三類，只看工具名、不分角色，對 PM、engineer、verifier 一律生效（子代理見下），**沒有放行路**：需要時由 operator 在終端自己跑。hook 出錯就放行。
+同一支 `PreToolUse` hook（`session_hooks.py pre-download`，指令形狀在 `shell_downloads.py`，掃描器與〈下載〉共用）也擋下面四類，只看工具名、不分角色，對 PM、engineer、verifier 一律生效（子代理見下），**沒有放行路**：需要時由 operator 在終端自己跑。hook 出錯就放行。
 
 - **`npx` 與等價指令**：`npx`、`pnpx`、`bunx`、`npm exec`／`npm x`、`pnpm dlx`、`yarn dlx`，包在 `env`、`timeout`、`bash -c` 之類裡面也擋。已安裝的用 `pnpm exec`，沒裝的寫在卡上。
 - **`git worktree remove` 帶 `--force` 或 `-f`**（含 `-ff`）：不帶 force 拆不掉，就把原因寫在卡上、停下。
+- **`git worktree add` 開在固定位置以外**：路徑要是 `worktrees/<eng|ver>-<卡號>`，在主 checkout 的同層。絕對路徑看最後三層（上一層叫 `worktrees`、再上一層不是 `.claude`，名字符合 `eng-<數字>` 或 `ver-<數字>`，可帶一段小寫尾碼）；相對路徑只認 `../worktrees/<名字>`；含變數、指令替換的路徑算不出來，放行。hook 不知道主 checkout 在哪，所以在別的 repo 底下叫 `worktrees` 的資料夾也過得了。開法用 `worktree.sh new`。
 - **對共用暫存區的寫入與刪除**：導向（`>`、`>>`、`&>`、`>|`）的目標，以及 `cp`（目的地）、`mv`（來源與目的地）、`tee`、`rm`、`rmdir`、`mkdir`、`touch` 的路徑，落在 `/tmp`、`/private/tmp`、`/var/tmp`、`/var/folders`（含 `/private` 開頭）底下就擋，`..` 先算掉。例外只有自己 session 的 scratchpad（`/private/tmp/claude-<uid>/<專案>/<session_id>/scratchpad`，`session_id` 用 hook 事件裡的值；事件沒給時，任何 session 的 scratchpad 都放行）；別的 session 的 scratchpad 算共用。
 
 **只防堵一部分**：相對路徑、含變數或指令替換的路徑（`$TMPDIR/x`、`"$(mktemp)"/x`）算不出來，一律放行；腳本或別的程式裡的寫檔（`python`、`node`、`sed -i`、`dd of=`、`find -delete`、`pnpm exec` 之後的子指令）、`cd /tmp` 之後的相對路徑看不到；`mktemp` 不擋。這些只有文件，由開場範本與 worker.md 那幾句規則把關。
@@ -163,7 +167,7 @@ PM 在 engineer 可封存時依序做三件事：
 **需要人**（規則本來就停在這裡）：
 
 - 開場授權，一次。
-- 刪 worktree 時有未提交或來源不明的內容、或那不是這位 PM 派出去的 session 建的（後者照 #3151 先列清單）。
+- 刪 worktree 時有未提交或來源不明的內容、或那不是這位 PM 派出去的 session 建的（後者照〈worktree 與上下文〉先列清單）。
 - 放寬 gate。
 - 第 3 次 `FAIL`，或合併後那一輪紅了、撤回被基準擋下而往前修修不出來。
 
@@ -247,6 +251,8 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | engineer、verifier 的開場有下載規則那一句 | `PreToolUse` hook（`session_hooks.py pre-start-session`，沒有 prompt 時不查） |
 | 不 npx（含 `npm exec`、`pnpm dlx`），沒有放行路 | `PreToolUse` hook（同 `pre-download`；包在 `env`、`bash -c` 裡也擋，腳本裡的看不到，出錯放行） |
 | `git worktree remove` 不加 `--force`／`-f` | `PreToolUse` hook（同上） |
+| `git worktree add` 的路徑在主 checkout 同層的 `worktrees/<eng\|ver>-<卡號>` | `PreToolUse` hook（同上；絕對路徑看最後三層，相對路徑只認 `../worktrees/`，含變數或指令替換的路徑、`git -C` 改過目錄後的相對路徑、算不出主 checkout 在哪，擋不到：只有文件） |
+| `worktree.sh done` 只移除 PR 已合（`--open-ok` 時開著也行）、乾淨、HEAD 等於 PR 最後一個 commit 的 worktree，不 force | script 自己拒絕（`test_worktree.py`）；不用 script 手動移除的只有文件 |
 | 共用暫存區（`/tmp`、`/var/folders` 等）不寫不刪，只寫自己 session 的 scratchpad | `PreToolUse` hook（同上，只防堵一部分：導向與 `cp`、`mv`、`tee`、`rm` 等的明確路徑；腳本裡的寫檔、算不出來的路徑只有文件） |
 | 開場有暫存、`--force`、npx 與「規則原文傳給每個子代理」那幾句；子代理的 prompt 帶這些規則 | `PreToolUse` hook（`pre-start-session`，只查開場有沒有那幾句）；子代理的 prompt 只有文件（hook 看不到子代理的 prompt） |
 | 子 session 不傳訊息給 PM、PM 開在主 checkout | 只有文件（hook 看不到訊息與 PM 所在的資料夾） |
