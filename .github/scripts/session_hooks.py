@@ -5,6 +5,8 @@ import re
 import sys
 from typing import NamedTuple
 
+from shell_downloads import check_command
+
 SKILL_MD = '.agents/skills/pstack/skills/poteto-mode/SKILL.md'
 
 
@@ -23,6 +25,14 @@ ROLES = {
 MIN_GENERATION = 5
 
 NOTES_RULE = re.compile(r'不讀不寫[^\n]*notes')
+DOWNLOAD_RULE = re.compile(r'下載[^\n]*git fetch origin develop[^\n]*核可')
+DOWNLOAD_NEGATED = re.compile(r'(不用|不需要?|不必|無[須需])(?![^\n。；;，,]{0,14}(自己|代|PM))[^\n。；;，,]{0,14}核可')
+SCRATCHPAD_RULE = re.compile(r'暫存[^\n]*scratchpad')
+FORCE_RULE = re.compile(r'worktree remove[^\n]*(--force|-f)')
+NPX_RULE = re.compile(r'不[^\n。]{0,6}npx')
+SUBAGENT_RULE = re.compile(r'子代理[^\n]*原文')
+SENTENCE_END = re.compile(r'[。\n]')
+DOWNLOAD_HELP = '寫在卡上、停下，等 operator 核可，核可後由 operator 自己在終端跑；agent 與 PM 不代跑（docs/agents/collab-mode.md〈下載〉）。'
 
 CLOSING_PREFIXES = ('可封存', '不可封存', '還在等')
 WAITING = '還在等'
@@ -45,6 +55,10 @@ def role_for(tool_input: dict) -> tuple[str, Role] | None:
     return None
 
 
+def download_rule_negated(prompt: str) -> bool:
+    return any(DOWNLOAD_NEGATED.search(s) for s in SENTENCE_END.split(prompt) if '下載' in s or 'git fetch' in s)
+
+
 def check_start_session(tool_input: dict) -> str | None:
     found = role_for(tool_input)
     if found is None:
@@ -64,6 +78,15 @@ def check_start_session(tool_input: dict) -> str | None:
     prompt = tool_input.get('prompt')
     if prompt is not None and not NOTES_RULE.search(prompt):
         return f'`{name}` 是 {role.table_row}，開場要寫一句「不讀不寫 app 給的共用 notes 目錄」。{where}'
+    if prompt is not None and (not DOWNLOAD_RULE.search(prompt) or download_rule_negated(prompt)):
+        return f'`{name}` 是 {role.table_row}，開場要寫一句下載規則：只有開分支前一次 `git fetch origin develop`，其餘下載先寫在卡上等 operator 核可。{where}'
+    if prompt is not None:
+        missing = [label for label, rule in (
+            ('暫存只寫自己的 scratchpad', SCRATCHPAD_RULE), ('`git worktree remove` 不加 `--force`／`-f`', FORCE_RULE),
+            ('不 npx', NPX_RULE), ('開子代理時把這些規則原文傳給它', SUBAGENT_RULE),
+        ) if not rule.search(prompt)]
+        if missing:
+            return f'`{name}` 是 {role.table_row}，開場要補上：{"；".join(missing)}。{where}'
     got_model = tool_input.get('model') or ''
     got_effort = tool_input.get('effort') or ''
     if model_matches(got_model, role.model) and got_effort == role.effort:
@@ -72,6 +95,18 @@ def check_start_session(tool_input: dict) -> str | None:
         f'`{name}` 是 {role.table_row}，要用 model `{role.model}`（第 {MIN_GENERATION} 代以後的 id 也行）、effort `{role.effort}`，'
         f'這次是 model `{got_model or "（沿用）"}`、effort `{got_effort or "（沿用）"}`。{where}'
     )
+
+
+def check_download(tool_input: dict, session_id: str | None = None) -> str | None:
+    command = tool_input.get('command')
+    if not isinstance(command, str):
+        return None
+    block = check_command(command, session_id=session_id)
+    if block is None:
+        return None
+    if block.kind == 'download':
+        return f'下載要 operator 核可：{block.text}。{DOWNLOAD_HELP}'
+    return f'{block.text}（docs/agents/collab-mode.md〈指令護欄〉）。'
 
 
 def check_closing(reply: str | None) -> str | None:
@@ -93,6 +128,8 @@ def main(argv: list[str]) -> int:
         event = json.load(sys.stdin)
         if argv[1:] == ['pre-start-session']:
             reason = check_start_session(event.get('tool_input') or {})
+        elif argv[1:] == ['pre-download']:
+            reason = check_download(event.get('tool_input') or {}, event.get('session_id'))
         elif argv[1:] == ['stop']:
             if event.get('stop_hook_active'):
                 return 0

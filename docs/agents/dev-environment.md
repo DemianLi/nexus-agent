@@ -6,7 +6,7 @@
 
 ## clone 之後設 `fetch.prune`
 
-PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。clone 之後各自設定一次，讓 `git fetch`／`git pull` 自動清掉：
+PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。clone 之後各自設定一次，讓 `git fetch`／`git pull` 自動清掉（這份文件講人手動的操作；agent session 不用 `git pull`，也不用不帶 refspec 的 `git fetch`，見 [collab-mode 〈下載〉](collab-mode.md#下載)）：
 
 ```bash
 git config fetch.prune true
@@ -45,7 +45,7 @@ fatal: couldn't find remote ref <branch>
 
 `~/.claude/stop-hook-git-check.sh:39-45` 用 `git rev-parse "origin/$branch"` 決定 upstream，而 `rev-parse` **只看本地的 remote-tracking ref**。本 repo 設定為 squash merge ＋ 合併後刪除分支，於是：遠端分支沒了、本地 ref 停在 squash 前、agent 照規矩把分支重設到更新後的 `develop`。HEAD 不是那個舊 ref 的後代，`$upstream..HEAD`（`:116`）就數出一個不存在的未推送 commit。
 
-**清理的陷阱**：`git fetch --prune origin <branch>` **清不掉**那個 ref——refspec 限制了 prune 的範圍。要用 `git remote prune origin`，或不帶 refspec 的 `git fetch --prune`。
+**清理的陷阱**（人手動的做法；agent session 不跑 `git remote prune` 與不帶 refspec 的 `git fetch --prune`，要清先照 [collab-mode 〈下載〉](collab-mode.md#下載)申請核可）：`git fetch --prune origin <branch>` **清不掉**那個 ref——refspec 限制了 prune 的範圍。要用 `git remote prune origin`，或不帶 refspec 的 `git fetch --prune`。
 
 ### 當場繞過
 
@@ -181,18 +181,18 @@ $ echo '{"stop_hook_active":false}' | bash ~/.claude/stop-hook-git-check.sh; ech
 
 ```bash
 cd apps/harness
-rtk proxy pnpm exec vitest run > /tmp/harness-all.txt 2>&1; echo EXIT=$?
-grep -E "Test Files|Tests " /tmp/harness-all.txt || echo "沒有摘要：沒跑完"
+rtk proxy pnpm exec vitest run > <scratchpad>/harness-all.txt 2>&1; echo EXIT=$?
+grep -E "Test Files|Tests " <scratchpad>/harness-all.txt || echo "沒有摘要：沒跑完"
 ```
 
 如果連 `EXIT=` 都沒印出來，表示外層 shell 也被殺了（群組訊號的特徵）。要讓這種情況看得見，把全套放進**自己的 session**，外層就殺不到：
 
 ```bash
 perl -MPOSIX -e 'my $p = fork(); if ($p == 0) { POSIX::setsid(); exec @ARGV or die } waitpid($p, 0); my $s = $? & 127; exit($s ? 128 + $s : $? >> 8);' \
-  rtk proxy pnpm exec vitest run > /tmp/harness-all.txt 2>&1; echo EXIT=$?
+  rtk proxy pnpm exec vitest run > <scratchpad>/harness-all.txt 2>&1; echo EXIT=$?
 ```
 
-（兩段都用 `rtk proxy` 是為了拿到原始輸出；沒裝 rtk 的環境把 `rtk proxy ` 拿掉即可。）被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。
+（兩段都用 `rtk proxy` 是為了拿到原始輸出；沒裝 rtk 的環境把 `rtk proxy ` 拿掉即可。`<scratchpad>` 換成自己 session 的 scratchpad 絕對路徑，不寫 `/tmp`：共用暫存區的寫入會被 hook 擋，見 [collab-mode](collab-mode.md#指令護欄)。）被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。
 
 ## 本機跑 spawner 的 fmt 與 clippy（#2620）
 
