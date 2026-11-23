@@ -6,7 +6,7 @@ HARNESS_DIR = 'harness'
 WEB_DIR = 'web'
 
 LEGACY_SOURCE_ROOTS = ('apps', 'packages', 'native', 'vendor', 'scripts')
-OTHER_ROOTS = ('docs', 'licenses', '.github', '.agents', '.claude', '.docs', 'references')
+OTHER_ROOTS = ('docs', 'licenses', '.github', '.agents', '.claude', 'references')
 SOURCE_SUFFIXES = ('.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.rs')
 
 

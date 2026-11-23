@@ -2,7 +2,6 @@
 
 - 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `vendor/README.md` 與
   `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
-- 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`、`.agents`）照認；符號連結指到同一份的只掃一次。
 - 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
 - 落在 repo 根目錄 `references/` 底下的目標不查（存在與錨點都不查）：那是 AGENTS.md〈技術實現標準〉要各自 clone 的唯讀參照，
@@ -41,7 +40,6 @@ GROUPS: list[tuple[str, list[str], int]] = [
     ('GLOSSARY-MAP', ['GLOSSARY-MAP.md'], 1),
     ('.github', ['.github/**/*.md'], 1),
     ('AGENTS', ['AGENTS.md'], 1),
-    ('.docs', ['.docs/**/*.md'], 0),
     ('.agents', ['.agents/skills/**/*.md'], 1),
 ]
 PATTERNS = [pattern for _, patterns, _ in GROUPS for pattern in patterns]
@@ -57,7 +55,7 @@ LINK_DEFINITION = re.compile(r'^ {0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s+.*)?$')
 INLINE_CODE = re.compile(r'`+[^`]*`+')
 
 
-def matches(root: Path, pattern: str) -> list[Path]:
+def visible_matches(root: Path, pattern: str) -> list[Path]:
     found = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
     literal = len(pattern.split('*', 1)[0].split('/')) - 1
     return [
@@ -70,7 +68,7 @@ def source_paths(root: Path) -> list[Path]:
     seen: set[str] = set()
     found: list[Path] = []
     for pattern in PATTERNS:
-        for path in matches(root, pattern):
+        for path in visible_matches(root, pattern):
             real = os.path.realpath(path)
             if real in seen:
                 continue
@@ -82,7 +80,7 @@ def source_paths(root: Path) -> list[Path]:
 def empty_groups(root: Path) -> list[str]:
     errors = []
     for name, patterns, floor in GROUPS:
-        count = len({os.path.realpath(path) for pattern in patterns for path in matches(root, pattern)})
+        count = len({os.path.realpath(path) for pattern in patterns for path in visible_matches(root, pattern)})
         if count < floor:
             errors.append(f'「{name}」這一組在 {root} 底下掃到 {count} 份，至少要 {floor} 份：{"、".join(patterns)}。')
     return errors

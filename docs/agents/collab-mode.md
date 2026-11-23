@@ -205,7 +205,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 
 - 全系統的決策放 [`docs/adr/`](../adr/)，單一 app 的放 `apps/<name>/docs/adr/`；`packages/*` 的歸到根目錄。
 - 檔名 `NNNN-<kebab-slug>.md`，四位數編號從 `0001` 起依序遞增、不跳號。第一行 `# <標題>`，正文一段話說清楚情境、決定與理由就夠；有價值時才加「Considered Options」與「Consequences」（格式照 `domain-modeling` 的 ADR-FORMAT）。
-- `docs/` 只寫現況；決策與取捨寫 ADR；`.docs/` 只剩五份還沒逐條核對現況的決議（`decisions-2026-*`），逐步轉成 ADR 後退場，不再新增；其餘舊文件已移出版本控制，留在 tag `archive/docs-2026-11`。
+- `docs/` 只寫現況；決策與取捨寫 ADR；舊文件已移出版本控制，留在 tag `archive/docs-2026-11`。
 
 ## 規則與執行者
 
