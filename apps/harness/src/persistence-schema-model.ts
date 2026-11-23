@@ -132,20 +132,10 @@ export function persistenceSchemaSnapshot(
   };
 }
 
-/**
- * 把宣告位置 `檔:行號` 的行號去掉，只留檔。
- *
- * @param source - 抽取器記下的 `檔:行號`。
- */
 export function withoutSourceLine(source: string): string {
   return source.replace(/:\d+$/, '');
 }
 
-/**
- * 去掉每筆宣告位置的行號，其餘照留。
- *
- * @param inventory - 完整清單。
- */
 export function inventoryWithoutSourceLines(
   inventory: PersistenceSchemaInventory,
 ): PersistenceSchemaInventory {
