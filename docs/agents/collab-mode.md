@@ -81,7 +81,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 
 ## worktree 與上下文
 
-- 一張卡一個 worktree，位置固定在主 checkout 同層的 `worktrees/<eng|ver>-<卡號>`（repo 外）。engineer 用 [`worktree.sh new <分支> <卡號> [eng|ver]`](../../.agents/skills/pstack/skills/poteto-mode/scripts/worktree.sh) 開：從本機的 `origin/develop` 開 `--no-track` 的分支（開分支前的 `git fetch origin develop` 先自己做一次，script 不 fetch），再 `pnpm install --offline` 與 `pnpm run build:lib`。app 自己開 session 時建的 `.claude/worktrees/` 由 app 決定，不管。
+- 一張卡一個 worktree，位置固定在主 checkout 同層的 `worktrees/eng-<卡號>`（verifier 是 `ver-<PR 號碼>`；repo 外）。engineer 用 [`worktree.sh new <分支> <卡號>`](../../.agents/skills/pstack/skills/poteto-mode/scripts/worktree.sh) 開：從本機的 `origin/develop` 開 `--no-track` 的分支（開分支前的 `git fetch origin develop` 先自己做一次，script 不 fetch），再 `pnpm install --offline` 與 `pnpm run build:lib`。app 自己開 session 時建的 `.claude/worktrees/` 由 app 決定，不管。
 - 收：卡合併、合併後那一輪綠了，PM 封存 engineer 時用 `worktree.sh done <路徑>`；verifier 不用 `new`（它從 `develop` 開分支，拿不到 PR 的程式碼）：從主 checkout 用 `git worktree add --detach ../worktrees/ver-<PR 號碼> <head SHA>` 開（hook 放行這個形狀），判定貼上之前再用 `worktree.sh done --open-ok <路徑>` 移除；`done` 對 detached 的 worktree 以 HEAD 的 SHA 找 PR。`done` 核對路徑登記在 `git worktree list`、不是主 checkout、沒有未提交或未追蹤的內容、HEAD 等於某張 PR 最後一個 commit 而且那張 PR 已合（`--open-ok` 時還開著也行），才用 `git worktree remove`（不加 force、不遞迴刪除）移除；移除後目錄還在，或路徑沒登記、目錄卻在（半刪），就報錯並列出留下的檔，不刪。半刪的目錄由 operator 決定怎麼刪，PM 不自己刪。分支不刪。
 - PM 每次掃描，列出不在任何開著的 session 名下的 worktree（含 `.claude/worktrees/` 與半刪的目錄），貼給 operator 核可之後才刪；半刪的目錄照上一條由 operator 刪。`worktree-audit.sh` 會自己 `git fetch`，照〈下載〉每次要核可；掃描只要列清單時，讀本機的 `git worktree list` 與 `origin/develop`，不跑它。
 - 跑過 harness 測試之後 `apps/harness/.cordis` 會留下 Loader 的輔助檔。它自己帶 `.gitignore`，不進 commit；`prettier --check .`（`pnpm run format:check`）不讀子目錄的 `.gitignore`，所以 `.prettierignore` 排除它。
@@ -120,7 +120,7 @@ agent 做的下載都要 operator 核可。常設核可只有一個形狀：`git
 
 - **`npx` 與等價指令**：`npx`、`pnpx`、`bunx`、`npm exec`／`npm x`、`pnpm dlx`、`yarn dlx`，包在 `env`、`timeout`、`bash -c` 之類裡面也擋。已安裝的用 `pnpm exec`，沒裝的寫在卡上。
 - **`git worktree remove` 帶 `--force` 或 `-f`**（含 `-ff`）：不帶 force 拆不掉，就把原因寫在卡上、停下。
-- **`git worktree add` 開在固定位置以外**：路徑要是 `worktrees/<eng|ver>-<卡號>`，在主 checkout 的同層。絕對路徑看最後三層（上一層叫 `worktrees`、再上一層不是 `.claude`，名字符合 `eng-<數字>` 或 `ver-<數字>`，可帶一段小寫尾碼）；相對路徑只認 `../worktrees/<名字>`；含變數、指令替換的路徑算不出來，放行。hook 不知道主 checkout 在哪，所以在別的 repo 底下叫 `worktrees` 的資料夾也過得了。開法用 `worktree.sh new`。
+- **`git worktree add` 開在固定位置以外**：路徑要是 `worktrees/eng-<卡號>` 或 `worktrees/ver-<PR 號碼>`，在主 checkout 的同層。絕對路徑看最後三層（上一層叫 `worktrees`、再上一層不是 `.claude`，名字符合 `eng-<數字>` 或 `ver-<數字>`，可帶一段小寫尾碼）；相對路徑只認 `../worktrees/<名字>`；含變數、指令替換的路徑算不出來，放行。hook 不知道主 checkout 在哪，所以在別的 repo 底下叫 `worktrees` 的資料夾也過得了。開法用 `worktree.sh new`。
 - **對共用暫存區的寫入與刪除**：導向（`>`、`>>`、`&>`、`>|`）的目標，以及 `cp`（目的地）、`mv`（來源與目的地）、`tee`、`rm`、`rmdir`、`mkdir`、`touch` 的路徑，落在 `/tmp`、`/private/tmp`、`/var/tmp`、`/var/folders`（含 `/private` 開頭）底下就擋，`..` 先算掉。例外只有自己 session 的 scratchpad（`/private/tmp/claude-<uid>/<專案>/<session_id>/scratchpad`，`session_id` 用 hook 事件裡的值；事件沒給時，任何 session 的 scratchpad 都放行）；別的 session 的 scratchpad 算共用。
 
 **只防堵一部分**：相對路徑、含變數或指令替換的路徑（`$TMPDIR/x`、`"$(mktemp)"/x`）算不出來，一律放行；腳本或別的程式裡的寫檔（`python`、`node`、`sed -i`、`dd of=`、`find -delete`、`pnpm exec` 之後的子指令）、`cd /tmp` 之後的相對路徑看不到；`mktemp` 不擋。這些只有文件，由開場範本與 worker.md 那幾句規則把關。
@@ -219,6 +219,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 發版 PR 內文要有〈變更內容〉〈驗證方式〉 | gate（`check_pr.py`） |
 | 發版 PR 的〈驗證方式〉只寫實際跑過的 | 只有文件 |
 | md 相對連結連得過去 | gate（`check_md_links.py`） |
+| web 只相依 wire、harness 與 `scripts/` 不讀不 import web（字串比對，變數拼出來的路徑不保證抓到） | gate（`.github/scripts/check_boundary.py`） |
 | 升級指南的格式 | gate（`check_upgrade_guides.py`） |
 | 升級指南有沒有寫 | verifier |
 | 禁止直接 push、force push、刪 `develop`／`main` | ruleset |
