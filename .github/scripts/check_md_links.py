@@ -31,7 +31,6 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
 # 一組是「同一批文件在舊形狀與新形狀（`harness/`、`web/`）的樣子」；`floor` 是這一組在這一版至少要掃到幾份。
-# 搬目錄之後 pattern 沒跟著搬，掃到的檔會悄悄變少、一條壞連結都不報，所以掃到的數目低於 floor 就是紅的。
 # floor 是 0 的組是會搬到項目倉庫外面的（協作設定與協作文件），只在項目倉庫裡時掃不到是對的。
 GROUPS: list[tuple[str, list[str], int]] = [
     ('README', ['README.md'], 1),
@@ -203,7 +202,7 @@ def link_violations(path: Path, root: Path) -> list[str]:
 
 
 def collect(root: Path, only: list[Path] | None = None) -> tuple[list[Path], int, list[str]]:
-    """掃過的檔、相對連結的條數、違規（`相對路徑：說明`）。`only` 給了就只掃這些檔（相對於 root 或絕對路徑），不看 PATTERNS。"""
+    """掃過的檔、相對連結的條數、違規（`相對路徑：說明`）。"""
     files = source_paths(root) if only is None else sorted(p if p.is_absolute() else root / p for p in only)
     links = 0
     violations: list[str] = []

@@ -446,8 +446,6 @@ if __name__ == '__main__':
 
 
 class OwnersShapesTest(unittest.TestCase):
-    """`owners_of` 認得舊形狀與搬目錄之後的新形狀：套件目錄與套件名照舊算進 owner。"""
-
     CASES = [
         ('apps/harness/src/a.ts', 'harness/apps/harness/src/a.ts', 'apps/harness', 'harness/apps/harness', '@nexus/harness'),
         ('packages/nexus-core/src/a.ts', 'harness/packages/nexus-core/src/a.ts', 'packages/nexus-core', 'harness/packages/nexus-core', '@nexus/core'),

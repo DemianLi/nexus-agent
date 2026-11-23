@@ -34,7 +34,6 @@ VITEST_RESULT = re.compile(r'cp\s+(\S+?)/node_modules/\.vite/vitest/\*/results\.
 
 
 def jobs_of(text: str) -> dict[str, str]:
-    """`jobs:` 底下每個 job 的原文（兩格縮排的鍵到下一個鍵）。"""
     head, _, body = text.partition('\njobs:\n')
     out: dict[str, str] = {}
     name = ''
@@ -105,7 +104,6 @@ TEE = re.compile(r'\|\s*tee\s+"([^"]+)"')
 
 
 def step_block(job: str, name: str) -> str | None:
-    """job 原文裡名叫 `name` 的步驟，到下一個步驟（或註解）之前。"""
     m = re.search(r'^      - name: ' + re.escape(name) + r'\s*$\n((?:(?!      - |      #).*\n)*)', job, re.M)
     return m.group(1) if m else None
 

@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 HARNESS_DIR = 'harness'
 WEB_DIR = 'web'
 
@@ -17,7 +19,6 @@ SOURCE_SUFFIXES = ('.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
 
 
 def canonical(path: str) -> str:
-    """新形狀的路徑換成舊形狀；舊形狀與不認得的原樣回傳。"""
     if path == WEB_DIR:
         return 'apps/web'
     head, _, rest = path.partition('/')
@@ -28,7 +29,7 @@ def canonical(path: str) -> str:
     return path
 
 
-def actual(path: str, exists) -> str:
+def actual(path: str, exists: Callable[[str], bool]) -> str:
     """舊形狀的路徑換成磁碟上真的那個：`exists` 判斷一個路徑在這一版有沒有；兩種都沒有就回舊形狀。"""
     head, _, rest = path.partition('/')
     if head == 'apps' and rest.startswith('web/') or path == 'apps/web':
@@ -44,7 +45,6 @@ def actual(path: str, exists) -> str:
 
 
 def known(path: str) -> bool:
-    """舊形狀的路徑落在認得的位置：根目錄的檔，或認得的頂層目錄底下。"""
     head, sep, _ = path.partition('/')
     if not sep:
         return True

@@ -15,7 +15,6 @@ PACKAGE_ADR_GLOBS = ('packages/*/docs/adr', 'harness/packages/*/docs/adr')
 
 
 def adr_dirs(root: Path) -> list[Path]:
-    """全項目的 ADR 目錄，加上 harness 與 web 的（舊形狀 `apps/*/docs/adr`、新形狀 `harness/apps/*/docs/adr`、`web/docs/adr`）。"""
     dirs = [root / PROJECT_ADR]
     for pattern in APP_ADR_GLOBS:
         dirs += sorted(root.glob(pattern))

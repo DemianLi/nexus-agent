@@ -15,8 +15,6 @@ NEW_HARNESS = 'harness/apps/harness'
 
 
 class Tree:
-    """真的 workflow 與 action 的副本；`crate`、`harness` 是這個副本裡 crate 與 harness 套件真的在的目錄。"""
-
     def __init__(self, test: unittest.TestCase, crate: str = OLD_CRATE, harness: str = OLD_HARNESS) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         test.addCleanup(self.tmp.cleanup)

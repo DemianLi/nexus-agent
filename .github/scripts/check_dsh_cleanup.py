@@ -302,7 +302,7 @@ def added_lines(base: str, head: str) -> dict[str, set[int]]:
 
 
 def owners_of(path: str, head: str) -> list[str]:
-    """指到這個檔的寫法：路徑本身，加上所屬套件的名字與目錄。舊形狀與新形狀（`harness/`、`web/` 開頭）各認一次。"""
+    """指到這個檔的寫法：路徑本身，加上所屬套件的名字與目錄。"""
     out = [path]
     parts = path.split('/')
     if parts[0] == 'web':

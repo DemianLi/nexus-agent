@@ -91,8 +91,6 @@ class MeasureTest(unittest.TestCase):
 
 
 class MovedLayoutTest(unittest.TestCase):
-    """搬目錄之後（`harness/<p>`、`web/<p>`）計數的鍵與排除規則沿用舊路徑，基準檔不用動。"""
-
     PAIRS = {
         'apps/harness/src/a.ts': 'harness/apps/harness/src/a.ts',
         'packages/nexus-core/src/b.ts': 'harness/packages/nexus-core/src/b.ts',

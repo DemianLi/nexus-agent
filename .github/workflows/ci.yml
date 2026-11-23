@@ -538,7 +538,6 @@ jobs:
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
-      # env 沒設時這幾支整支跳過、vitest 照樣 exit 0，所以要核對實際通過的條數不是 0（`shell: bash` 才有 pipefail，`tee` 才吞不掉 vitest 的失敗）。
       - name: 真的 spawner 跑整合測試
         shell: bash
         run: |
@@ -592,7 +591,6 @@ jobs:
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
-      # env 沒設時這幾支整支跳過、vitest 照樣 exit 0，所以要核對實際通過的條數不是 0（`shell: bash` 才有 pipefail，`tee` 才吞不掉 vitest 的失敗）。
       - name: 真的 spawner 跑整合測試
         shell: bash
         run: |

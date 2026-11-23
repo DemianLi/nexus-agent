@@ -150,8 +150,6 @@ class Scope(unittest.TestCase):
 
 
 class Floors(unittest.TestCase):
-    """搬目錄之後掃到的份數悄悄變少，要紅，不是少掃了還說通過。"""
-
     OLD = {
         'README.md': '', 'docs/a.md': '', 'packages/p/README.md': '', 'apps/harness/README.md': '', 'vendor/README.md': '',
         'apps/web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',

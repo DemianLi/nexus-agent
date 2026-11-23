@@ -105,8 +105,6 @@ def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False
 # 這些異動影響每一個套件，一律全查：相依與工具鏈、根的 tsconfig（paths 也在這裡）、vendor 的 Cordis。
 TYPECHECK_ALL_RE = re.compile(r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$|^vendor/')
 
-# 全查用的篩選，兩種形狀都比得到（`./**/packages/*` 配 `packages/*` 也配 `harness/packages/*`）；寫死其中一種時，另一種形狀下
-# 篩選比對不到任何專案，pnpm 印警告就當成功，型別檢查什麼都不跑。每條篩選至少要比對到一個專案（`--fail-if-no-match`）。
 TYPECHECK_ALL_FILTERS = ('--filter=./**/packages/*', '--filter=./**/apps/*')
 # 型別檢查的範圍是 `packages/*` 與 `apps/*`，跟全跑那一層的 typecheck job 一樣。
 PROJECT_RE = re.compile(r'^((?:packages|apps)/[^/]+)/')
