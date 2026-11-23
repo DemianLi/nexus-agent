@@ -59,7 +59,7 @@ import {
 import { assertSameWorkspaceRoot } from './resume-guards.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/session-format/', import.meta.url));
-const REPO = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
 
 interface Replay {
   readonly computedBy: string;

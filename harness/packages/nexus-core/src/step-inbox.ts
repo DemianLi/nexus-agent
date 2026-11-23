@@ -6,7 +6,7 @@
  *
  * dsh 的迴圈在 driver 裡，一步一步走：每一步的 `preStep` 領走整條 `next-step`（一輪開頭再多領一件 `next-turn`），
  * 寫成 `user/message` 送進模型；模型說完了但 `next-step` 不空時，這一輪不收，接著跑下一步
- * （`harness/packages/core/agent-loop/src/agent.ts:271`、`:342-347`、`:403-405`，`477b4f4`）。
+ * （`packages/core/agent-loop/src/agent.ts:271`、`:342-347`、`:403-405`，`477b4f4`）。
  *
  * ## 我們的縫
  *

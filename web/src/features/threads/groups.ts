@@ -2,7 +2,7 @@
  * 以前的會話怎麼分組、怎麼搜（inventory 列 6；決定見 [#610](https://github.com/DemianLi/nexus-agent/issues/610)）。
  *
  * - **按時間分組**：今天、昨天、過去 7 天、更早，分界是瀏覽器當地的日曆日。dsh 按工作區分組，但一台 serve 只對一個專案
- *   （`projectKey(cwd)`），照它分只會有一組；UI 的形狀以 shadcn 為基底，不必照 dsh（AGENTS.md「技術實現標準」）。
+ *   （`projectKey(cwd)`），照它分只會有一組；UI 的形狀以 shadcn 為基底，不必照 dsh（docs/web-ui.md §14.1）。
  * - **空白的那一列不進分組**：它的時間是建立時間，不是誰說過話（`thread-list.tsx` 不帶時間的同一個理由），排在所有組前面。
  * - **這裡只比標題**：列表上寫的那一句（模型產生的，還沒產生時是第一則人打的字的開頭），不分大小寫、子字串。這是 dsh 側欄在前端做的那一半
  *   （`ui-workspace/src/client/tree.ts` 的 `deriveSearchResults`）；內容那一半問伺服器，合併在 `features/threads/search.ts`（#760）。

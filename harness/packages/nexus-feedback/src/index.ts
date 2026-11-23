@@ -34,7 +34,7 @@
  * 服務的方法**一律不碰 `this.ctx`**：宿主拿到的是快照時取的那個值，列卸載之後開著的 thread 仍要能呼叫它（traceable proxy 讀屬性
  * 不檢查提供的 fiber 還在不在）。需要的設定在建構時進閉包，需要的日誌由呼叫端逐次傳進來。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

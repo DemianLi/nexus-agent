@@ -174,7 +174,7 @@ describe('skills 進到 system prompt', () => {
  * **基座的空結果不算**：載入結果為空時 `loadedSkills.length > 0` 是 false，於是每一次
  * `beforeAgent` 都重掃整個來源。**這條絆索翻面了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
  * 原本斷言「沒 skill」是兩次掃描，現在是一次——照 dsh，掃描結果連空的也進快取
- * （`harness/packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
+ * （`packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
  */
 describe('skills 的快取邊界', () => {
   it('載到 skill 就凍住，載到空的也凍住', async () => {

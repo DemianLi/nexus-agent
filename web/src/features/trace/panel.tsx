@@ -6,7 +6,7 @@
  * **有軌跡投影時**（`features/trace/view.ts` 的結構化模式）輪界、模型呼叫段落、重試、重複呼叫提醒、時刻與耗時都讀它；**沒有時**
  * 退回第 0 版（只有順序）。兩種的限制清單不在畫面上，在 `docs/operations.md`〈成本與觀測分頁的口徑與限制〉；畫面只留結構
  * （沒有的值標「—」、更早的輪只剩摘要列）和必要的短句。投影的歸位在
- * `features/trace/view.ts`，這裡只畫。UI/UX 照 AGENTS.md「不在這條範圍內的」：數值以 solid-glass 為準，
+ * `features/trace/view.ts`，這裡只畫。UI/UX 照 docs/web-ui.md §14.1：數值以 solid-glass 為準，
  * Libraries.dev 只當元件多樣性與交互模式的參考，不是照 dsh 的 `ui-trajectory` 畫時間線。
  *
  * - **畫面上的列數有上限**：只畫最新的 {@link TURN_PAGE} 組、每組只畫最新的 `ROW_PAGE` 列（`groups.tsx`），更早的按「顯示更早的」再展開；窗口外的輪摘要（最多 200 列）收在

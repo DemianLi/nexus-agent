@@ -5,7 +5,7 @@
  * ## 與 dsh 的關係
  *
  * **視窗本身在 dsh 的投影通道上沒有對應物**：`SessionControl` 的 `projection` frame 每次變動就廣播，沒有合併或節流
- * （`harness/packages/api/session-controller/src/control.ts:22-31`，`ControlQueue` 只是先進先出佇列，`5badb15`）。合併器的形狀借自
+ * （`packages/api/session-controller/src/control.ts:22-31`，`ControlQueue` 只是先進先出佇列，`5badb15`）。合併器的形狀借自
  * dsh job-controller 的觀察串流（`observeFlushMs`，`packages/api/job-controller/src/index.ts:47`：`z.natural().min(1).default(100)`，
  * 註冊表提交之後睡一個合併視窗、醒來才讀現況），所以**視窗是偏離，旋鈕的形狀抄的是 `observeFlushMs`**：自然數、最小 1、預設 100。
  * 欄位名叫 `flushMs`（不叫 `observeFlushMs`：它不是「觀察」job，是投影 frame）。

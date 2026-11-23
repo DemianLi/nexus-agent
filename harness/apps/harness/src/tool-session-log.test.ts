@@ -4,7 +4,7 @@
  *
  * dsh 的模型工具靠 `exec.agent.session.append(...)` 寫日誌
  * （`references/deepseek-harness/packages/todo/tool-todo/src/index.ts:210`），而那個
- * `agent` 是 **agent loop 派發工具時主動塞進去的**（`harness/packages/core/agent-loop/src/tool-calls.ts:78`，
+ * `agent` 是 **agent loop 派發工具時主動塞進去的**（`packages/core/agent-loop/src/tool-calls.ts:78`，
  * `ToolExecutionInput.agent` 的註解就寫著 “set by the agent loop”）。**那個派發點是
  * dsh 自己的**；我們的工具是 LangGraph 的 ToolNode 在跑，插不進去。
  *

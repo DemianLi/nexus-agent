@@ -35,7 +35,7 @@
  * - **一條通道加一個判別式**（#231 登記過，不在這張新增）：LangGraph 只給一顆 `interrupt()`，沒有兩條獨立的事件通道，所以提問的中斷酬載明著帶 `kind`，判別式是
  *   {@link QUESTION_INTERRUPT_KIND}。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

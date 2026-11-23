@@ -2,8 +2,8 @@
  * `fs` 服務：**工具拿到工具實際讀寫的那一個 backend** 的地方（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。
  *
  * dsh 只有一個 `fs` 服務（`packages/fs/fs/src/index.ts:89` 的 `super(ctx, 'fs')`，SHA `477b4f4`），
- * 檔案工具、`present` 與 `agent-instructions` 注入的都是同一個（`harness/packages/fs/tool-fs/src/index.ts:22`、
- * `harness/packages/deliverables/tool-present/src/index.ts:26`）。我們照它：要讀寫工作區檔案的工具從這裡拿，
+ * 檔案工具、`present` 與 `agent-instructions` 注入的都是同一個（`packages/fs/tool-fs/src/index.ts:22`、
+ * `packages/deliverables/tool-present/src/index.ts:26`）。我們照它：要讀寫工作區檔案的工具從這裡拿，
  * 拿到的是 {@link foldRegistry} 折出來、也交給基座檔案工具的那一個——包含組裝點在 fold 之前包的路由
  * （`harness/apps/harness/src/agent-factory.ts` 的會話歷史與工具結果暫存）與 plugin `backend.mount()` 掛的路由。
  *

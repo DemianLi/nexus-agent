@@ -19,24 +19,25 @@ import { ROOT } from '../../../scripts/workspace-packages.js';
 
 function manifests(): Map<string, { name: string; deps: string[] }> {
   const found = new Map<string, { name: string; deps: string[] }>();
-  for (const parent of ['packages', 'apps']) {
-    for (const name of readdirSync(join(ROOT, parent))) {
-      const dir = `${parent}/${name}`;
-      let raw: string;
-      try {
-        raw = readFileSync(join(ROOT, dir, 'package.json'), 'utf8');
-      } catch {
-        continue;
-      }
-      const manifest = JSON.parse(raw) as Record<string, unknown> & { name: string };
-      const deps = [
-        'dependencies',
-        'devDependencies',
-        'peerDependencies',
-        'optionalDependencies',
-      ].flatMap((field) => Object.keys((manifest[field] as object | undefined) ?? {}));
-      found.set(dir, { name: manifest.name, deps });
+  const dirs = ['harness/packages', 'harness/apps'].flatMap((parent) =>
+    readdirSync(join(ROOT, parent)).map((name) => `${parent}/${name}`),
+  );
+  dirs.push('web');
+  for (const dir of dirs) {
+    let raw: string;
+    try {
+      raw = readFileSync(join(ROOT, dir, 'package.json'), 'utf8');
+    } catch {
+      continue;
     }
+    const manifest = JSON.parse(raw) as Record<string, unknown> & { name: string };
+    const deps = [
+      'dependencies',
+      'devDependencies',
+      'peerDependencies',
+      'optionalDependencies',
+    ].flatMap((field) => Object.keys((manifest[field] as object | undefined) ?? {}));
+    found.set(dir, { name: manifest.name, deps });
   }
   return found;
 }
@@ -108,7 +109,7 @@ describe('產生的設定', () => {
         composite: true,
         noEmit: false,
         emitDeclarationOnly: true,
-        rootDir: '../../../../..',
+        rootDir: '../../../../../..',
         outDir: 'out',
         tsBuildInfoFile: 'out/tsconfig.tsbuildinfo',
       },

@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /** 檔名與讀法的擁有者：寫檔名、解 header 是它們的本分。`in-tree/` 複製進舊 tag 的樹裡跑，import 不到新模組。 */
 const OWNERS = [
@@ -147,7 +147,7 @@ export function findViolations(file: string, text: string): Violation[] {
   return found;
 }
 
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages', 'scripts'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'harness/packages', 'harness/scripts'] as const;
 
 /**
  * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。
@@ -169,7 +169,7 @@ function sourceFiles(dir: string): string[] {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === 'dist') continue;
-      if (/^packages\/[^/]+\/lib$/u.test(relative(REPO_ROOT, full))) continue;
+      if (/^harness\/packages\/[^/]+\/lib$/u.test(relative(REPO_ROOT, full))) continue;
       out.push(...sourceFiles(full));
     } else if (isSource(entry.name)) {
       out.push(full);

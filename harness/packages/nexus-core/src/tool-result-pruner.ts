@@ -46,7 +46,7 @@
  *
  * ## dsh 怎麼做
  *
- * `harness/packages/compaction/compaction-tool-result-pruner`（SHA `4e84901`，動工當天對過
+ * `packages/compaction/compaction-tool-result-pruner`（SHA `4e84901`，動工當天對過
  * upstream，這條路徑只有 `package.json` 版號與一行測試 fixture 的差別）：
  *
  * - 預算是 **Unicode code point**，不是 UTF-16 code unit——切點不會劈開代理對。

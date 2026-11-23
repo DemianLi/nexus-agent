@@ -35,7 +35,7 @@
  * ## 過渡：訊息上的來源不進型別圖
  *
  * **`@persistenceSource`／`@persistenceAttribution` 這一刀不搬，登記為過渡（不掛偏離理由）。** dsh 用這兩個標記把訊息來源
- * （`harness/packages/llm/llm/src/message.ts:145` 的 `MessageBase.source`）綁進型別圖，讓「新增一種來源」走寬鬆的相容政策。
+ * （`packages/llm/llm/src/message.ts:145` 的 `MessageBase.source`）綁進型別圖，讓「新增一種來源」走寬鬆的相容政策。
  * nexus 訊息上的來源 `MessageSource`（`harness/packages/nexus-core/src/message-source.ts`）落盤在 `additional_kwargs.nexus_source`，
  * 今天的 `LoggedMessage` 照 LangChain 把 `additional_kwargs` 宣告成 `Record<string, any>`，所以圖裡是 `any`。**表達得出來**：
  * 跟 `role`、`name`、`tool_call_id` 一樣在 `LoggedMessage` 改寫型別就行；這一刀不收窄，是因為 `MessageSource` 本身是開放記錄
@@ -281,10 +281,10 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
   return extraction.inventory(roots);
 }
 
-/** program 的檔案：`packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（對應 dsh 的 `hostSourceFiles`）。 */
+/** program 的檔案：`harness/packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（對應 dsh 的 `hostSourceFiles`）。 */
 function programSourceFiles(root: string): string[] {
   return [
-    ...productFilesUnder(root, 'packages').filter((file) => /^packages\/[^/]+\/src\//u.test(file)),
+    ...productFilesUnder(root, 'harness/packages').filter((file) => /^harness\/packages\/[^/]+\/src\//u.test(file)),
     ...productFilesUnder(root, 'harness/apps/harness/src'),
   ].map((file) => resolve(root, file));
 }

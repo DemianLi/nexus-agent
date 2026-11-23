@@ -1,4 +1,4 @@
-"""檢查 PR 標題與內文格式。規範見 AGENTS.md。
+"""檢查 PR 標題與內文格式。規範見 docs/contributing.md。
 
 標題與內文是外部輸入，一律從環境變數讀取，不經 shell 展開。
 """
@@ -61,7 +61,7 @@ def check_body(body: str) -> None:
     if missing:
         fail(
             f'develop → main 的 PR 內文缺少段落：{"、".join(missing)}',
-            '這種 PR 的內文會成為 main 上的 commit message，見 AGENTS.md「PR 內文」',
+            '這種 PR 的內文會成為 main 上的 commit message，見 docs/contributing.md〈PR 內文〉',
         )
 
 

@@ -1368,7 +1368,7 @@ export const TURN_ELAPSED = `${STATUS_RUNNING} [data-testid="running-elapsed"]`;
 
 export const TURN_GLYPH = `${TURN} [data-slot="status-glyph"]`;
 
-/** glyph 三個 circle 的 `[[cx, cy, r, opacity], …]`：vendor `draw` 每幀改這四個（同 `harness/scripts/measure-frames.mjs`）。 */
+/** glyph 三個 circle 的 `[[cx, cy, r, opacity], …]`：vendor `draw` 每幀改這四個（同 `scripts/measure-frames.mjs`）。 */
 export const readPose = (page: Page) =>
   page.$$eval(`${TURN_GLYPH} circle`, (circles) =>
     circles.map((c) => ['cx', 'cy', 'r', 'opacity'].map((a) => c.getAttribute(a) ?? '')),

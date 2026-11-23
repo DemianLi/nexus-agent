@@ -11,7 +11,7 @@
  * - **不做骨架**：骨架跟真的內容不一樣高，換掉那一下又要補一次位置；規格 §7 也把載入歷史列在不動的那一類。
  *
  * dsh 也是一顆按鈕、自己記錨點補位置（`ui-chat/src/client/chat/ChatView.tsx` 的 `loadOlderAnchored`，`6b1808f`），
- * 沒有自動載入；UI 以 shadcn 為基底，不必照 dsh（AGENTS.md「技術實現標準」）。
+ * 沒有自動載入；UI 以 shadcn 為基底，不必照 dsh（docs/web-ui.md §14.1）。
  *
  * @module
  */

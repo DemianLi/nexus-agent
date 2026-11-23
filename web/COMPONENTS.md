@@ -1,6 +1,6 @@
 # web 新增元件規則
 
-給「要在 `web` 加元件、改樣式」的人。詞（基礎元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`docs/web-ui.md`](../../docs/web-ui.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。什麼算一條規則、元件分哪三層、哪些改動要 demian 核可，見規格 §13。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`web-design-style.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/web-design-style.md)。
+給「要在 `web` 加元件、改樣式」的人。詞（基礎元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`docs/web-ui.md`](../docs/web-ui.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。什麼算一條規則、元件分哪三層、哪些改動要 demian 核可，見規格 §13。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`web-design-style.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/web-design-style.md)。
 
 ## 放哪一層
 
@@ -19,7 +19,7 @@
 `src/styles/design-system.test.ts` 會掃元件原始碼的字串字面值，下面這些寫了就紅：
 
 - **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-muted`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。浮層的遮罩走 `--scrim`（vendor 的 dialog、alert-dialog、sheet 已由覆寫檔接上，自己寫的遮罩用 `bg-(--scrim)`）。
-- **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。`harness/vendor/` 裡 SG 元件現有的任意值字級釘在測試的 `VENDOR_PINNED`。
+- **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。`vendor/` 裡 SG 元件現有的任意值字級釘在測試的 `VENDOR_PINNED`。
 - **停用的透明度**：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50`；這顆不靠透明度變淡時寫 `opacity-100`。
 - **表面**：卡片與內層底用 `Surface`，不手寫 `bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
@@ -27,13 +27,13 @@
 - **對話泡泡**：用 `ChatBubble`，不手寫 `rounded-3xl px-4 py-2.5`。
 - **程式碼小框**：用 `MonoBlock`，不手寫 `bg-muted … rounded-lg p-2 font-mono`。
 - **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
-- **時長**：只用 Tailwind 的 `duration-*` 級距（0、75、100、150、200、300、500、700、1000），不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137`，也不寫 `animation-duration-*`（#1827 D21，照 SG）。這條連 `ui/` 一起管。`harness/vendor/` 裡 SG 元件寫的 `duration-*` 原樣留著，進出場的時長就照它（#1687）。
+- **時長**：只用 Tailwind 的 `duration-*` 級距（0、75、100、150、200、300、500、700、1000），不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137`，也不寫 `animation-duration-*`（#1827 D21，照 SG）。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的 `duration-*` 原樣留著，進出場的時長就照它（#1687）。
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
 - **焦點外框**：不寫 `focus-visible:ring-*`，`ui/` 的 nexus 層也一樣；只有 vendor 上游原樣的檔留著它自己的。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - **陰影**：用具名的階（`shadow-sm`、`shadow-md`…）或引用 token 的畫法，不寫自己調的 `shadow-[0_2px_8px_#0003]`。
-- **層級**：只用 `z-0`、`z-10`、`z-20`、`z-50`（各層的用途在 [`docs/web-ui.md`](../../docs/web-ui.md) §13.4）。不寫別的數字、負值與 `z-[60]`。
-- **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`docs/web-ui.md`](../../docs/web-ui.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`harness/vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
+- **層級**：只用 `z-0`、`z-10`、`z-20`、`z-50`（各層的用途在 [`docs/web-ui.md`](../docs/web-ui.md) §13.4）。不寫別的數字、負值與 `z-[60]`。
+- **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`docs/web-ui.md`](../docs/web-ui.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
 真的要例外：列進該測試的 `ALLOWED`，附理由。**例外只會變少**：列了卻不再命中的條目會報錯。
@@ -124,7 +124,7 @@ token、基礎元件的 nexus 層與共用元件不直接刪（規格 §13.6）�
 
 1. **標記**：元件在 JSDoc 加 `@deprecated <版號>：改用 <什麼>`，token 在定義的那一行上面加同樣格式的註解（`/* @deprecated 0.7.0：改用 --scrim */`）。版號寫標記當下 `package.json` 的版號。同一張 PR 把 repo 裡的用法全部換掉。
 2. **保留一個 Release**：標記之後至少隨一個 Release 出去，下一個 Release 才刪。
-3. **刪除**：刪的那張 PR 確認 repo 裡沒有用法。token 是 `<nexus-chat>` 給宿主頁用的（升級指南列的那些）就是外部看得到的不相容變更，照[升級指南](../../docs/release.md#升級指南)寫一份。
+3. **刪除**：刪的那張 PR 確認 repo 裡沒有用法。token 是 `<nexus-chat>` 給宿主頁用的（升級指南列的那些）就是外部看得到的不相容變更，照[升級指南](../docs/release.md#升級指南)寫一份。
 
 改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 上游原樣的 SG 元件檔與 SG 自己的 token 不適用，它們跟著上游同步走（vendor README）。
 
@@ -210,7 +210,7 @@ pnpm --filter @nexus/web run catalog
 
 每個合進 `develop` 的 commit，合併後那一輪的「視覺差異（只報告）」會把這個 commit 與上一個 commit 的 `guard/` 測試頁各拍一次（總覽與每個子頁、亮暗），在那一輪的摘要列出畫面有差的，前、後與標出差異的圖放在 artifact `visual-diff`。
 
-- **不紅，但要有人確認**：畫面本來就會改，有差不等於壞掉，所以它不讓這一輪變紅、不走撤回。有差（或多了、少了畫面）時那一輪會在對應的 PR 留言列出來，作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修（[`docs/agents/collab-mode.md`](../../docs/agents/collab-mode.md)〈合併與撤回〉）。
+- **不紅，但要有人確認**：畫面本來就會改，有差不等於壞掉，所以它不讓這一輪變紅、不走撤回。有差（或多了、少了畫面）時那一輪會在對應的 PR 留言列出來，作者開下一張 PR 之前回那則留言：都在打算改的範圍裡就回「畫面變動符合預期」，不是就當成 bug 修。
 - 擋的是人不是機器：沒人回，CI 不會紅。不放在 PR 上擋是因為兩邊各 build、各拍一次要將近三分鐘，功能 PR 的檢查要壓在一分鐘內（[#2088](https://github.com/DemianLi/nexus-agent/issues/2088)）。
 - 不存基準圖：兩邊都是同一台 runner 當場拍的，字型與 Chrome 版本一定相同。
 - 容差：只數跟另一個不同像素相鄰的像素，不超過 30 個算雜訊（`visual/compare.ts`）。小於這個的改動報不出來。

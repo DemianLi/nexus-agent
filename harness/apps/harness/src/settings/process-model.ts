@@ -5,7 +5,7 @@
  *
  * 1. **`mode`**：`single` 是一個行程放所有 thread；`per-thread` 是監督行程起一個前台、每條 thread 一個對話行程。
  *    預設 `single`，`--process-model` 旗標蓋過這一格。`per-thread` 只在 Linux 起得來。
- * 2. **`supervisorBinary`**：監督行程執行檔的絕對路徑。省略就從 harness 的位置往上找產物裡的 `harness/native/nexus-supervisor`，
+ * 2. **`supervisorBinary`**：監督行程執行檔的絕對路徑。省略就從 harness 的位置往上找產物裡的 `native/nexus-supervisor`，
  *    同 spawner 的找法（`tool-launcher.ts` 的 `findSpawnerBinary`）。
  * 3. **`startTimeoutMs`**：交給監督行程的 `--start-timeout-ms`（`0` 是不判）。省略就不傳旗標，用監督行程的預設。只在 `per-thread` 下有作用。
  * 4. **消費者在任何組裝之前**：啟動器（`process-launcher.ts`）只疊層、不載模組（`composeDefaultEntries`），找到這一列就用這份

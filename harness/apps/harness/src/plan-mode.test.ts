@@ -224,7 +224,7 @@ describe('計劃指引進不進 system prompt', () => {
 
   /**
    * **這一條是「未激活不增加 token」那句話的執行版**（dsh
-   * `harness/packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
+   * `packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
    * 但 prompt 裡一個字都沒有多——不然「掛了這個 plugin」就變成一筆每輪都在付的稅。
    *
    * 這一條走**出貨的 `plan-mode` 那一列、不加任何 config**：出貨預設是關的才算數。
@@ -409,7 +409,7 @@ function exitVerdicts(events: readonly SessionEvent[]): unknown[] {
 
 /**
  * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），照 dsh
- * `harness/packages/plan/plan-mode/src/index.ts:278-350`。
+ * `packages/plan/plan-mode/src/index.ts:278-350`。
  *
  * **以前這一組叫「三條路」**，走的是核准：plan-mode 掛一位閘門對 `exit_plan_mode` 回 `ask`，計劃變成
  * 核准卡上的工具參數。dsh 明文否決那條路（核准的詞彙封閉，拒絕帶不回意見）。現在的結局有五種：

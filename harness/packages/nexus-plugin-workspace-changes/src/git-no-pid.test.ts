@@ -3,7 +3,7 @@
  *
  * spawn 失敗的 `ChildProcess`，在 `'error'` 事件送到之前沒有 `pid`；這時 `child.kill(sig)` 送出去的是 `kill(0, sig)`，等於對**整個
  * 行程群組**送訊號，serve 自己也在群組裡。視窗只有同一個 tick：abort 或 `process.exit` 剛好落在這裡。照 dsh `signalTree` 的
- * `if (pid === undefined) return`（`harness/packages/subprocess/subprocess-local/src/spawn.ts:139-140`，`687f282e`）。
+ * `if (pid === undefined) return`（`packages/subprocess/subprocess-local/src/spawn.ts:139-140`，`687f282e`）。
  *
  * 兩種證據：
  * - **形狀**：把 `ChildProcess.prototype.kill` 換成記錄器（不真的送訊號），看守衛有沒有擋住。

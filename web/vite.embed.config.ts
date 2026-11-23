@@ -42,7 +42,7 @@ export default defineConfig(({ mode }) => ({
     rejectStandaloneServe(),
     react(),
     tailwindcss(),
-    tsconfigPaths({ projects: ['../../tsconfig.base.json'] }),
+    tsconfigPaths({ projects: ['../tsconfig.base.json'] }),
     ...embedShadowCss(),
     elementTypes(),
   ],

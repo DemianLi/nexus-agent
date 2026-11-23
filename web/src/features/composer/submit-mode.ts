@@ -2,7 +2,7 @@ import type { ConversationStatus, RunStartMode } from '@nexus/wire';
 
 /**
  * 送出的那一句要排隊還是插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。照 dsh `resolveSubmitMode`
- * （`harness/packages/client/ui-conversation/src/client/input/submission-policy.ts`，`477b4f4`）與它的按鍵
+ * （`packages/client/ui-conversation/src/client/input/submission-policy.ts`，`477b4f4`）與它的按鍵
  * （`input/editor/keymap.ts:35`：只按 Enter 是一般送出，**剛好** Ctrl+Enter 或 Cmd+Enter 是加速）：
  *
  * - 這一輪沒在跑：一律排隊（閒著時排隊就是馬上開跑）。

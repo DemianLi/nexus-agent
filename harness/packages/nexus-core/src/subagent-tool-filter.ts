@@ -4,7 +4,7 @@
  * ## 照 dsh
  *
  * dsh 的 `tool-subagent` 有一格 `toolFilter: { allow?, deny? }`，作用在那個委派工具派出的**每個**子代理；
- * 實作是 base `tools` 的 `restrict(filter)`（`harness/packages/core/tools/src/index.ts:1097`，`477b4f4`）：
+ * 實作是 base `tools` 的 `restrict(filter)`（`packages/core/tools/src/index.ts:1097`，`477b4f4`）：
  *
  * - `allow` 只留列到的、`deny` 拿掉列到的，可並用；
  * - 空 filter 拋錯、未知名字拋錯並列出已知名單；

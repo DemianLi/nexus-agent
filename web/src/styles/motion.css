@@ -33,10 +33,10 @@
  * 換內容、上下題、進場、展開收合、進度、按壓、resize、持續狀態：下面這些。
  * 元件只能從這份清單挑；清單外沒有動效，只留顏色過渡（規格 §7）。
  *
- * 新增或刪掉 @keyframes 時，同一個 PR 更新 `harness/scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
+ * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
  *
  * 效能：持續動畫只動 transform／opacity（執行中那道 conic 邊框光隨 #1682 的工具卡換成 SG 拿掉，邊框光只剩等你處理
- * 那一圈的呼吸）；大面積的 blur 照 SG（#1468 Q7，效能門檻由 `harness/scripts/measure-frames.mjs` 量，#1512）；
+ * 那一圈的呼吸）；大面積的 blur 照 SG（#1468 Q7，效能門檻由 `scripts/measure-frames.mjs` 量，#1512）；
  * 不常駐 will-change。
  */
 
@@ -285,7 +285,7 @@
  *
  * 每條都帶 `:root:root` 前綴，多出 (0,2,0) 的 specificity。拿掉它，`.border-beam[data-kind='pending'][data-active='true']::before`
  * 這類帶狀態的選擇器（(0,3,1)）就比這裡的 `.border-beam::before`（(0,1,1)）強，reduced-motion 會無聲失效
- * （`harness/scripts/check-built-css.mjs` 比對 specificity）。
+ * （`scripts/check-built-css.mjs` 比對 specificity）。
  */
 @media (prefers-reduced-motion: reduce) {
   :root:root {

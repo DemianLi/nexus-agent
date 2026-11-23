@@ -1,6 +1,6 @@
 /**
  * 工具結果暫存的啟動清掃**放到背景**（#1553 N0952），照 dsh `spill-local` 的 `LocalSpillStore` 建構子
- * （`harness/packages/spill/spill-local/src/index.ts:90-101`，`687f282e`）：啟動時放出一次清掃、**不等它**，服務照常開始；
+ * （`packages/spill/spill-local/src/index.ts:90-101`，`687f282e`）：啟動時放出一次清掃、**不等它**，服務照常開始；
  * 清掃歸一個 effect 所有，它交出的 disposer 等**同一顆** promise，所以卸載一定等清掃收斂，沒有清掃的 I/O 活得比擁有者久。
  *
  * 擁有者是 Cordis 根的 context：`serve` 與 `cli` 起得來、起不來、跑完，每一條收尾都會卸載根（`root.dispose()`），

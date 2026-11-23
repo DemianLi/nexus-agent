@@ -96,7 +96,7 @@ function sampleRoot(
 ): string {
   const root = mkdtempSync(join(tmpdir(), 'package-invariants-'));
   temporaryRoots.push(root);
-  const dir = join(root, 'packages', 'sample');
+  const dir = join(root, 'harness', 'packages', 'sample');
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(
     join(dir, 'package.json'),

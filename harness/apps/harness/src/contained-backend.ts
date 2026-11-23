@@ -414,7 +414,7 @@ interface EditFailure {
 /**
  * 字串替換。**錯誤字句逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：模型看到的拒絕理由不因為這個 backend
  * 自己寫檔而換了一套話；`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 釘住字句。**行尾照 dsh 的 `applyLiteralEdit`**
- * （`harness/packages/fs/fs-local/src/fsio.ts:814-834`，`687f282e`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：
+ * （`packages/fs/fs-local/src/fsio.ts:814-834`，`687f282e`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：
  * `content` 要已經正規化成 LF，`oldString`／`newString` 裡的 `\r\n` 在比對前收成 `\n`；字句裡回顯的仍是模型給的原字串。
  *
  * 碼的歸類照 dsh：`old_string` 是空的或找不到是 `FS_EDIT_NOT_FOUND`，命中好幾處又沒有 `replaceAll` 是 `FS_AMBIGUOUS_EDIT`。
@@ -1244,7 +1244,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 搜尋檔案內容。**rg 由這裡自己起**（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)），照 dsh
-   * `harness/packages/fs/tool-fs-search/src/search-core.ts:222-287`（`687f282e`）：`--no-config`、`cwd` 是工作區根、stdout 上限、
+   * `packages/fs/tool-fs-search/src/search-core.ts:222-287`（`687f282e`）：`--no-config`、`cwd` 是工作區根、stdout 上限、
    * 取消與逾時、錯誤分類，細節在 `ripgrep-runner.ts`。
    *
    * **基座的做法有四個洞**（`deepagents@1.13.1`，`dist/src-C9o7b5C6.js:935-984`）：`spawn("rg", …)` 沒有 `--no-config`，
@@ -1371,7 +1371,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 列出符合 glob 的檔案。**rg 由這裡自己起**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)），共用 `grep` 的
    * 起法（`ripgrep-runner.ts`：不經 shell、`--no-config`、輸出上限、取消與逾時、錯誤分類），argv 照 dsh
-   * `buildGlobCommand`（`harness/packages/fs/tool-fs-search/src/glob.ts:89-92`，`687f282e`）：
+   * `buildGlobCommand`（`packages/fs/tool-fs-search/src/glob.ts:89-92`，`687f282e`）：
    * `--files --glob=<pattern> --sort=modified --no-ignore --hidden`，再為 {@link GLOB_VCS_EXCLUDES} 每個名字各加兩條否定 glob
    * （一條剪掉目錄，一條在搜尋起點就在那個目錄裡面時排除內容），起點放在 `--` 後面。
    *

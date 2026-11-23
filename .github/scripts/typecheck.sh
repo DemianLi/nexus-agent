@@ -14,7 +14,7 @@ lap() { local us=$(($(now) - $2)); printf '計時：%s %d.%02d\n' "$1" $((us / 1
 
 # 直接跑 node_modules/.bin 底下的 tsx，不經 pnpm exec：少一次 pnpm 的啟動。
 t=$(now)
-node_modules/.bin/tsx scripts/gen-typecheck-projects.ts
+node_modules/.bin/tsx harness/scripts/gen-typecheck-projects.ts
 lap gen-typecheck-projects "$t"
 t=$(now)
 dirs=$(pnpm "$@" --fail-if-no-match --silent exec pwd)
@@ -28,7 +28,7 @@ projects=()
 web=false
 while IFS= read -r dir; do
   [ -n "$dir" ] || continue
-  if [ "$dir" = "$PWD/apps/web" ]; then
+  if [ "$dir" = "$PWD/web" ]; then
     web=true
   elif [ -f "$dir/$cache/tsconfig.json" ]; then
     projects+=("$dir/$cache/tsconfig.json")
@@ -48,7 +48,7 @@ fi
 if $web; then
   # 跟 tsc -b 同時跑，輸出先收起來，免得兩邊的錯誤訊息交錯。
   log=$(mktemp)
-  (cd apps/web && "$tsc" --noEmit --incremental --tsBuildInfoFile "$cache/tsconfig.tsbuildinfo") > "$log" 2>&1 || rc=1
+  (cd web && "$tsc" --noEmit --incremental --tsBuildInfoFile "$cache/tsconfig.tsbuildinfo") > "$log" 2>&1 || rc=1
   lap 'tsc web' "$t" >> "$log"
 fi
 if [ -n "$build" ]; then

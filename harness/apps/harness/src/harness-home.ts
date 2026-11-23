@@ -49,7 +49,7 @@ export const HARNESS_SESSIONS_DIR_NAME = 'sessions';
  * 會話日誌的預設根（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。
  *
  * **照 dsh**：base 與 sdk-minimal 出廠就掛 `session-persistence-jsonl`，根是
- * `dshHomePath('sessions')`（`harness/packages/bundle/base/cordis.patch.yml:130-133`、`477b4f4`）。
+ * `dshHomePath('sessions')`（`packages/bundle/base/cordis.patch.yml:130-133`、`477b4f4`）。
  * 這裡只換 home 的名字。`--session-log` 給了就換成那個位置；清單上 `session-persistence` 那一列
  * 關掉（#612，同 dsh 不掛那一列）就一個字都不寫，這個路徑也不解析。
  *

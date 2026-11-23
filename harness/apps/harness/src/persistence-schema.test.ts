@@ -30,7 +30,7 @@ import {
   type PersistenceSchemaInventory,
 } from './persistence-schema-model.js';
 
-const ROOTS = ['packages', 'harness/apps/harness/src'];
+const ROOTS = ['harness/packages', 'harness/apps/harness/src'];
 
 /** 每次抽取都建一個 program；夾具測試一格最多抽三次。 */
 const EXTRACT_TIMEOUT = 60_000;
@@ -67,7 +67,7 @@ function fixture(payload: string, options: { event?: string } = {}): string {
         skipLibCheck: true,
         types: [],
         paths: {
-          '@nexus/core': ['./packages/nexus-core/src/index.ts'],
+          '@nexus/core': ['./harness/packages/nexus-core/src/index.ts'],
           '@fixture/payload': [`./${PAYLOAD}`],
         },
       },

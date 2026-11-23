@@ -8,6 +8,7 @@
 
 import {
   chmodSync,
+  globSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -19,7 +20,7 @@ import {
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -135,12 +136,28 @@ describe('版號', () => {
     }
   });
 
-  it('發版成員共用同一個版本（根、apps、packages）；vendor 不在內', () => {
+  it('發版成員共用同一個版本（根、web、harness 的 apps 與 packages）；vendor 不在內', () => {
     const members = releaseMembers();
     expect(members.map((member) => member.manifestPath)).toContain('package.json');
+    expect(members.map((member) => member.manifestPath)).toContain('web/package.json');
     expect(members.map((member) => member.manifestPath)).toContain('harness/apps/harness/package.json');
     expect(members.some((member) => member.manifestPath.startsWith('harness/vendor/'))).toBe(false);
     expect(() => sharedVersion(members)).not.toThrow();
+  });
+
+  it('發版成員等於 workspace 套件扣掉 vendor，加上根：另一條路（fs.globSync）展開同一份 pnpm-workspace.yaml', () => {
+    const yaml = readFileSync(join(ROOT, 'pnpm-workspace.yaml'), 'utf8');
+    const groups = [...yaml.matchAll(/^ {2}- '([^']+)'$/gm)].map((match) => match[1]!);
+    expect(groups).toContain('web');
+    const workspace = groups
+      .flatMap((group) => globSync(`${group}/package.json`, { cwd: ROOT }))
+      .map((path) => path.split(sep).join('/'));
+    const expected = [
+      'package.json',
+      ...new Set(workspace.filter((path) => !path.startsWith('harness/vendor/'))),
+    ].sort();
+    expect(releaseMembers().map((member) => member.manifestPath)).toEqual(expected);
+    expect(workspace.some((path) => path.startsWith('harness/vendor/'))).toBe(true);
   });
 
   it('有一份版本不同就拒收，訊息列出每一份', () => {

@@ -156,7 +156,7 @@ describe('workspace/changes', () => {
 
 /**
  * 查詢怎麼拼、回應長什麼樣歸 wire（[#684](https://github.com/DemianLi/nexus-agent/issues/684)，照 dsh
- * `harness/packages/client/ui-deliverables/src/changes.ts`）。對著真 handler 的那一條在 `@nexus/harness` 的
+ * `packages/client/ui-deliverables/src/changes.ts`）。對著真 handler 的那一條在 `@nexus/harness` 的
  * `workspace-changes.test.ts`：同一個 builder 的輸出打進去，回應再過這裡的 validator。
  */
 describe('改動紀錄的網址與回應檢查', () => {

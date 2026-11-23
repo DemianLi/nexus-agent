@@ -1430,13 +1430,13 @@ function sourceTree(payload: string): string {
         skipLibCheck: true,
         types: [],
         paths: {
-          '@nexus/core': ['./packages/nexus-core/src/index.ts'],
+          '@nexus/core': ['./harness/packages/nexus-core/src/index.ts'],
           '@fixture/payload': [`./${PAYLOAD}`],
         },
       },
     }),
   );
-  mkdirSync(join(root, 'apps', 'harness', 'src'), { recursive: true });
+  mkdirSync(join(root, 'harness', 'apps', 'harness', 'src'), { recursive: true });
   put(
     root,
     'harness/apps/harness/src/jsonl-session-store.ts',

@@ -10,7 +10,7 @@
  *
  * 出貨檔（`cordis.yml`）是**條目清單**，使用者的檔（`cordis.patch.yml`、`--patch`）是
  * **patch 清單**。dsh 的 `renderConfigDump(binName, absoluteConfigPath, layers, warn)` 就是
- * 這個形狀：一個 base 設定檔加上若干層 patch（`harness/packages/boot/app-boot/src/index.ts:403`）。
+ * 這個形狀：一個 base 設定檔加上若干層 patch（`packages/boot/app-boot/src/index.ts:403`）。
  *
  * ## 疊加順序
  *
@@ -19,7 +19,7 @@
  *
  * **home 的 `cordis.patch.yml` 不再是一層**（#1412，demian 2026-10-13 Q2）：第一次啟動時遷進變更紀錄（{@link prepareJournal}），
  * 之後出現這個檔只警告、不讀。`--patch` 是部署端在命令列給的，照 dsh 的覆蓋層留著。照 dsh 的層序
- * （`harness/packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
+ * （`packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
  * 後台只寫 profile 那一層，我們把它與 home 那層併成一份稽核過的紀錄。
  *
  * ## 權限檢查只管使用者那兩層
@@ -357,7 +357,7 @@ const warnToStderr: PluginConfigWarn = (message) => {
  *
  * 兩種方言共用這一段，因為它們的檔案層級規則一樣：**不是頂層陣列就是設定錯了，一律拋**。
  * 空檔與只有註解的檔會 parse 成 `null`，落在同一條——要停用某一層請寫 `[]`，照 dsh
- * （`harness/packages/boot/app-boot/README.zh.md` 的「本机偏好」一節）。
+ * （`packages/boot/app-boot/README.zh.md` 的「本机偏好」一節）。
  *
  * @param source - 檔案全文。
  * @param label - 錯誤訊息裡怎麼稱呼這個檔（路徑）。
@@ -700,7 +700,7 @@ export const PLUGIN_MODULE_ROLE: PrivateFileRole = {
  *
  * **同一條理由也蓋住被 import 的那個模組檔**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)），
  * 所以 {@link resolveEntryModule} 對指到檔案的條目也跑這一條——射程往前推一跳，登記不變。dsh 在這條路上
- * 什麼都不檢查（`harness/packages/boot/app-boot/src/index.ts:519` 的 `Include.import` 只做 specifier 解析）。
+ * 什麼都不檢查（`packages/boot/app-boot/src/index.ts:519` 的 `Include.import` 只做 specifier 解析）。
  *
  * **這句理由改過一次，而改的是理由不是結論**（#456 第四刀）：原本寫的是「patch 檔停得掉
  * 核准」。那件事現在擋住了——`approval-gate` 那一列在 {@link PROTECTED_ENTRY_NAMES} 上，

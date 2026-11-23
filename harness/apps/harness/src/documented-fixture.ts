@@ -1,5 +1,5 @@
 /**
- * 把 [`docs/operations.md`](../../../docs/operations.md) 裡那道核准指令的 `--patch` 值讀出來。
+ * 把 [`docs/operations.md`](../../../../docs/operations.md) 裡那道核准指令的 `--patch` 值讀出來。
  *
  * **這個檔案的目的是讓一種漂移在機制上不可能發生**：文件教人跑的那道指令，與測試真的跑的那條
  * 參數，今天是兩份手抄的字串。改了文件、測試不會紅；改了測試、文件不會紅。`serve.test.ts` 與
@@ -73,6 +73,6 @@ export function parseDocumentedFixture(source: string): string {
  * @returns 文件裡那道核准指令用的 fixture 路徑。
  */
 export function documentedFixture(): string {
-  const source = readFileSync(new URL(`../../../${OPERATIONS_DOC}`, import.meta.url), 'utf8');
+  const source = readFileSync(new URL(`../../../../${OPERATIONS_DOC}`, import.meta.url), 'utf8');
   return parseDocumentedFixture(source);
 }

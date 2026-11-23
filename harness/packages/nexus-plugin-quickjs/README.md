@@ -110,7 +110,7 @@ middleware are left untouched」。絆索測試在
 ## 與 dsh 的偏離
 
 這是**結構性偏離**，不是細節不同。dsh 的 sandbox（`packages/sandbox/*`、
-`harness/packages/shell/*-sandbox`）是把子行程的 argv 包進**核心級**的檔案效果策略（Linux
+`packages/shell/*-sandbox`）是把子行程的 argv 包進**核心級**的檔案效果策略（Linux
 bwrap/Landlock、macOS Seatbelt、Windows ACL 受限 token）。它整個 repo grep `quickjs`
 零命中。dsh 有程式碼執行的接口 `ctx.ptcRuntime`（`packages/ptc-runtime/ptc-runtime/src/index.ts:98`），語言與
 執行方式由提供方決定，是它「模型寫程式、程式裡呼叫工具」那個模式（PTC，工具叫 `run_code`）的執行環境；出廠的

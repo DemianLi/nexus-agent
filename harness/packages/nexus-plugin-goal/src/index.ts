@@ -17,7 +17,7 @@
  *
  * - 血緣：三顆工具用 `rootOnly` 註冊，fold 把每個 subagent 那一份裡的同名項換成拒絕樁
  *   （`@nexus/core` 的 `fold.ts`）——而**「拒絕 subagent」正是 dsh 對 `tool-goal` 的政策
- *   本身**，不是我們的收窄（`harness/packages/goal/tool-goal/src/authority.ts` 的
+ *   本身**，不是我們的收窄（`packages/goal/tool-goal/src/authority.ts` 的
  *   `ctx.agents.roots().includes(execution.agent)`，描述寫著 “rejects non-human and
  *   subagent authority”）。
  * - 人類輪次：讀會話日誌的 `turn/start`，判準與它為什麼不能寫成「看最後一顆」在

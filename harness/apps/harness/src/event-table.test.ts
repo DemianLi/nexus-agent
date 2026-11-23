@@ -24,7 +24,7 @@ import {
   scanEventTableTree,
 } from './event-table-scan.js';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 function scan(body: string, wrapper: 'direct' | 'augment' = 'augment') {
   const text =
@@ -140,7 +140,7 @@ describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件或生產者',
   it('`Events` 與派發方法名用 `\\u` 跳脫寫的檔照樣掃得到', () => {
     const root = mkdtempSync(join(tmpdir(), 'nexus-event-scan-'));
     try {
-      const src = join(root, 'packages', 'probe', 'src');
+      const src = join(root, 'harness', 'packages', 'probe', 'src');
       mkdirSync(src, { recursive: true });
       const member = (name: string) =>
         `  /**\n   * 探針事件。\n   * @mode emit\n   */\n  '${name}'(): void;\n`;

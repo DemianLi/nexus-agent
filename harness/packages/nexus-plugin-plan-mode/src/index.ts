@@ -5,7 +5,7 @@
  * [#16](https://github.com/DemianLi/nexus-agent/issues/16) 原本列的兩個強化方向
  * （每步多一次 LLM 呼叫的自我批判、顯式意圖分類）在 dsh 全樹**都不存在**——
  * `reflection` 的命中全是 TypeScript 型別反射，`intent classif` 零命中。它對「先想
- * 再做」的答案是**計劃模式**（`harness/packages/plan/plan-mode/`），配上 todo 與 goal：
+ * 再做」的答案是**計劃模式**（`packages/plan/plan-mode/`），配上 todo 與 goal：
  * 讓模型自己承擔規劃、把狀態外顯，人可以介入。三件裡我們一件都沒有，所以先補的是這
  * 一件。細節見 [#116](https://github.com/DemianLi/nexus-agent/issues/116)。
  *
@@ -159,7 +159,7 @@
  *      `command/run` → `command/done` 的配對先完整收掉，才有 `turn/start`，序列性規則看不到這一輪。
  *
  *   **一個表達上的退路，登記在這裡：** dsh 的 handler 拿到 agent，閒著時 steer 會喚醒一輪
- *   （`harness/packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
+ *   （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
  *   我們的命令沒有 agent 把手，而且只跑在兩輪之間（見上），所以 steer 永遠是閒著的那一種，
  *   退成「宿主在命令落定後開一輪」（`serve` 進送出佇列、REPL 逐句跑）。這一輪的訊息是普通的 `user` 來源，
  *   同 dsh 的 `source: { kind: 'user' }`。命令落定成 `error` 時，已經收下的 steer 作廢（dsh 沒有這一條，
@@ -173,7 +173,7 @@
  *   dsh 還有 `narrate: false`（`exit_plan_mode` 同意那條路，工具結果已經講過）與「從沒送過請求就不講」兩條；
  *   旁白要一種新的訊息來源，會牽動 goal 的 authority 絆索、各套件的 fold 測試、日誌版號與 web 的畫法。
  * - **附件**（`input.attachments: true`，[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）：照 dsh
- *   （`harness/packages/plan/plan-mode/src/index.ts:228-275`）。`/plan <字>`＋附件與**只有附件的 `/plan`** 都進計劃模式並送出一輪
+ *   （`packages/plan/plan-mode/src/index.ts:228-275`）。`/plan <字>`＋附件與**只有附件的 `/plan`** 都進計劃模式並送出一輪
  *   （附件隨 steer 那句話走，字可以是空的）；`/plan off`＋附件回 `error`（{@link PLAN_OFF_ATTACHMENTS_MESSAGE}），在 steer 與寫日誌之前判。
  *   以前這一格寫「我們沒有 attachment store」，[#732](https://github.com/DemianLi/nexus-agent/issues/732) 之後已過時。
  */

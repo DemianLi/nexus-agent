@@ -480,7 +480,7 @@ export interface MiddlewarePlacement {
    *
    * 給「要最後一個往 system prompt 附加文字」的 middleware 用：洋蔥的外層先附加、內層後附加，所以想排在最後一段，
    * 就要在所有會附加文字的 middleware 的內側。dsh 用名字加序號排提示詞的段落（`deployment:persona-suffix` 永遠最後，
-   * `harness/packages/core/system-prompt/README.md:137`），我們的提示詞是 middleware 一層層接出來的，沒有段落序號，所以退到
+   * `packages/core/system-prompt/README.md:137`），我們的提示詞是 middleware 一層層接出來的，沒有段落序號，所以退到
    * 最接近的表達：一個位置旗標。射程一樣只到 plugin 與子代理自帶的 middleware——基座的檔案系統、輸出校驗那些貼著
    * 工具本體的內建層在它更內側，它們不附加文字。
    */
@@ -838,7 +838,7 @@ export interface TelemetryRegistrationPoint {
  *    **這一條補上了**（[#137](https://github.com/DemianLi/nexus-agent/issues/137)）：
  *    {@link ./session-registry.ts | SessionRegistry} 就是那個服務，`observe()` 就是那兩行。
  *    installer 仍然**每一份會話各跑一次**——那不是退讓，dsh 的配套入口也是每一份 session
- *    各 seed 一次（`harness/packages/core/session/src/invariant.ts:218-220`）。差別只在誰負責掃：
+ *    各 seed 一次（`packages/core/session/src/invariant.ts:218-220`）。差別只在誰負責掃：
  *    以前是組裝點手接，現在是註冊表。
  * 4. **違規的去處** —— dsh 的 `fail()` 從報告它的 context 拋出去；我們這側日誌會把
  *    listener 的拋錯吞成 warn（#99 刻意的）。退到：runner 擁有訂閱、接住
@@ -955,7 +955,7 @@ export interface SessionRegistrationPoint {
    * **模型工具問「我這次呼叫該寫進哪一份日誌」的地方。**
    *
    * 這是 dsh 的 `exec.agent.session` 在我們這裡的對應物。它那側由 agent loop 派發工具時
-   * 塞進來（`harness/packages/core/agent-loop/src/tool-calls.ts:78`），我們的派發點是 LangGraph 的
+   * 塞進來（`packages/core/agent-loop/src/tool-calls.ts:78`），我們的派發點是 LangGraph 的
    * ToolNode，插不進去，所以身分從 config 推出來——見
    * {@link ./session-address.ts | toolCallSessionAddress}。
    *
@@ -1392,11 +1392,11 @@ export function pickSessionForCall(
  * **不在訂閱者裡寫**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：這一句進模型歷史，寫不進去要拋。而訂閱者跑在
  * `SessionRegistry.open` 的通知迴圈裡，拋錯會跳過排在後面的訂閱者——持久化接在 `bind` 之後（serve 的 `wire-handler.ts`、CLI 同序），
  * 跳過它，這份子日誌之後寫的每一顆都靜靜不落盤，而同一個位址再 `open` 也不會重新通知。挪到 `open` 回來之後，同 dsh：子代理的第一句
- * 由它自己的迴圈在第一步寫（`harness/packages/core/agent-loop/src/agent.ts:426-436`，`687f282e`），排在所有 `session/created` 監聽者之後；
+ * 由它自己的迴圈在第一步寫（`packages/core/agent-loop/src/agent.ts:426-436`，`687f282e`），排在所有 `session/created` 監聽者之後；
  * 寫不進去是子代理那一步失敗，經 `task` 回到父代理成一次失敗的委派。
  *
  * **所以順序是委派政策在前、這一句在後**，同 dsh：子會話的 setup 先寫 `subagent/descriptor` 與委派那一刻的政策
- * （`harness/packages/subagent/subagent/src/manager.ts:880-891` 的 `appendDelegatedPolicyOverrides`），第一句等迴圈的第一步。我們的參與者
+ * （`packages/subagent/subagent/src/manager.ts:880-891` 的 `appendDelegatedPolicyOverrides`），第一句等迴圈的第一步。我們的參與者
  * （沙箱政策的 `sandbox/mode {source:'delegation'}`、權限組合的 `permission/preset`）在 `open` 裡寫，這一句在 `open` 回來之後寫。
  * 用真的參與者釘在 `harness/apps/harness/src/subagent-sandbox.test.ts`。
  *
@@ -1416,7 +1416,7 @@ const pendingSpawnInputs = new WeakMap<SessionLog, LoggedMessage>();
  * **偏離 dsh，理由 1（基座表達不出來）——失敗浮出的位置。** dsh 寫不進去就在派出那一刻 `dispose(activation)` 再重拋
  * （`manager.ts:1405-1413`），派出的工具呼叫失敗。我們的子日誌是惰性出生的（`SessionRegistry` 偏離第 1 條），deepagents 的 `task`
  * 在派出前沒有掛點；在出生通知的訂閱者裡拋，又會跳過排在後面的訂閱者（持久化在內，理由同 {@link pendingSpawnInputs}）。所以從
- * 子代理第一次查找拋出去，經 `task` 回到父代理成一次失敗的委派（工具錯誤，`harness/packages/core/tools/src/index.ts:1594-1595`）。
+ * 子代理第一次查找拋出去，經 `task` 回到父代理成一次失敗的委派（工具錯誤，`packages/core/tools/src/index.ts:1594-1595`）。
  * **回頭點**：底座換成 Cordis、子日誌改成在派出那一刻出生之後（#1385），改回在派出點寫，寫不進去撤掉 activation。
  *
  * **寫成功才清掉**，理由同 {@link pendingSpawnInputs}。以子日誌為鍵、弱引用。

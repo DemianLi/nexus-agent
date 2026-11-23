@@ -1,6 +1,6 @@
 import { pluginLintConfig } from '@nexus/sdk/lint';
 
-import base from '../../eslint.config.js';
+import base from '../../../eslint.config.js';
 
 // 遷出的插件套用 SDK 的 lint 設定（#1420），**唯一的排除是 `src/invariant.ts`**（#2533，照 #1463 Q3 (a)，偏離登記在
 // `docs/plugin-contract.md`）：它是相容層的配套入口（`sandbox-policy-invariant` 那一列），寫的是 `NexusPlugin`，import `@nexus/core`；

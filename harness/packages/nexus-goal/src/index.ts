@@ -21,7 +21,7 @@
  *   #1421 Q2 (b)。
  * - **折疊與續行提示文字搬進來**（#1486 Q4 (a)）：宿主的 pump 與排程器值 import 它們，插件自己的配套入口也要比對同一段文字，
  *   放在定義套件才不會讓配套入口反向依賴 app（#1486 Q4 (c) 的反例）。`hasDirectHumanTurn` 留在插件：宿主只有測試在用，
- *   不放進定義套件（`harness/packages/AGENTS.md`「Require a current owner and need」）。
+ *   不放進定義套件（`packages/AGENTS.md`「Require a current owner and need」）。
  *
  * ## `serviceFor` 只收 root 日誌，沒有 `attached()`
  *

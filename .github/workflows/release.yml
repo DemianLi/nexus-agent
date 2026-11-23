@@ -128,7 +128,7 @@ jobs:
       # 不自己 git tag：runner 沒有 committer 身分，git tag -a 會 exit 128。
       # gh release create 會依 --target 自行建立 tag，少一段 git 操作也少一個失敗點。
       # 產物（tar.gz、SBOM 的 .cdx.json、漏洞掃描結果的 -audit.json，各配一份 .sha256，#1545）附在 Release 上；沒有 npm publish（理由 2：完全內網，沒有 registry 可用）。
-      # 上一個 tag 有升級指南目錄（AGENTS.md「發版」〈升級指南〉，#1537）就在 notes 開頭連過去：`--notes` 與 `--generate-notes`
+      # 上一個 tag 有升級指南目錄（docs/release.md〈升級指南〉，#1537）就在 notes 開頭連過去：`--notes` 與 `--generate-notes`
       # 並用時，生成的內容接在後面。上一個 tag 取這次 commit 往回最近的 `v*`，新 tag 這時還沒建，所以就是讀者正在跑的那一版。
       - name: 建立 tag 與 GitHub Release
         env:

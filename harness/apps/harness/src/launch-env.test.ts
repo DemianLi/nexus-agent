@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { legacyEnvFileFor, legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
+import { legacyEnvFilesFor, legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
 
 let root: string;
 let cwd: string;
@@ -239,27 +239,29 @@ describe('舊位置（程式碼資料夾根目錄的 .env）', () => {
 
 /**
  * 舊位置只對原始碼樹有意義（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。兩種形狀都在暫存目錄裡造，
- * 不碰這台機器上真的 `/opt`：安裝樹是 `<前綴>/nexus-agent/<版本>/lib`（連結解開之後），`lib` 往上三層就是 `<前綴>`，
- * 那裡放一份不相干的 `.env`；原始碼樹是 `<repo>/apps/harness/src`，往上三層是 repo 根。
+ * 不碰這台機器上真的 `/opt`：安裝樹是 `<前綴>/nexus-agent/<版本>/lib`（連結解開之後），`lib` 往上四層與五層放著不相干的 `.env`；
+ * 原始碼樹是 `<外層>/nexus/harness/apps/harness/src`，往上四層是 `nexus/`，往上五層是外層，兩處的 `.env` 都是舊位置。
  */
 describe('舊位置：安裝樹與原始碼樹', () => {
-  /** 安裝樹：往上三層有 `.env`，產物根有（或沒有）建置戳記。回 `lib` 與那份 `.env`。 */
-  function installedTree(stamp: string | undefined): { moduleDir: string; strayEnv: string } {
-    const prefix = join(root, 'opt');
+  /** 安裝樹：往上四層與五層有 `.env`，產物根有（或沒有）建置戳記。回 `lib` 與那兩份 `.env`。 */
+  function installedTree(stamp: string | undefined): { moduleDir: string; strayEnvs: string[] } {
+    const outer = join(root, 'x');
+    const prefix = join(outer, 'y', 'opt');
     const release = join(prefix, 'nexus-agent', 'v1');
     const moduleDir = join(release, 'lib');
     mkdirSync(moduleDir, { recursive: true });
-    env(prefix, 'NVIDIA_API_KEY=unrelated\n');
+    env(join(outer, 'y'), 'NVIDIA_API_KEY=unrelated\n');
+    env(outer, 'NVIDIA_API_KEY=unrelated\n');
     if (stamp !== undefined) writeFileSync(join(release, 'build-stamp.json'), stamp);
-    return { moduleDir, strayEnv: join(prefix, '.env') };
+    return { moduleDir, strayEnvs: [join(outer, 'y', '.env'), join(outer, '.env')] };
   }
 
-  function sourceTree(): { moduleDir: string; repoEnv: string } {
-    const repo = join(root, 'repo');
-    const moduleDir = join(repo, 'apps', 'harness', 'src');
+  function sourceTree(): { moduleDir: string; repoEnv: string; outerEnv: string } {
+    const outer = join(root, 'outer');
+    const repo = join(outer, 'nexus');
+    const moduleDir = join(repo, 'harness', 'apps', 'harness', 'src');
     mkdirSync(moduleDir, { recursive: true });
-    env(repo, 'NVIDIA_API_KEY=old\n');
-    return { moduleDir, repoEnv: join(repo, '.env') };
+    return { moduleDir, repoEnv: join(repo, '.env'), outerEnv: join(outer, '.env') };
   }
 
   const STAMP = JSON.stringify({
@@ -267,16 +269,16 @@ describe('舊位置：安裝樹與原始碼樹', () => {
     dirty: false,
   });
 
-  it('安裝樹：往上三層有 .env，也沒有舊位置，缺 key 時不給搬家訊息', () => {
+  it('安裝樹：往上四層與五層有 .env，也沒有舊位置，缺 key 時不給搬家訊息', () => {
     const { moduleDir } = installedTree(STAMP);
 
-    expect(legacyEnvFileFor(moduleDir)).toBeUndefined();
+    expect(legacyEnvFilesFor(moduleDir)).toEqual([]);
     const snapshot = loadLaunchEnv({ cwd, home, target: {}, warn: () => undefined, moduleDir });
     expect(snapshot.legacyEnvFile).toBeUndefined();
     expect(legacyEnvMovedError(snapshot, 'NVIDIA_API_KEY', { cwd, home })).toBeUndefined();
   });
 
-  it('安裝樹：不讀那份 .env（值不會進環境）', () => {
+  it('安裝樹：不讀那兩份 .env（值不會進環境）', () => {
     const { moduleDir } = installedTree(STAMP);
     const target: NodeJS.ProcessEnv = {};
 
@@ -287,28 +289,34 @@ describe('舊位置：安裝樹與原始碼樹', () => {
 
   it('安裝樹的戳記壞了（不是 JSON）仍是安裝樹：判準是戳記在不在，不是它讀不讀得懂', () => {
     const { moduleDir } = installedTree('not json');
-    expect(legacyEnvFileFor(moduleDir)).toBeUndefined();
+    expect(legacyEnvFilesFor(moduleDir)).toEqual([]);
   });
 
-  it('原始碼樹（沒有戳記）：舊位置是 repo 根的 .env，缺 key 時照舊給搬家訊息', () => {
-    const { moduleDir, repoEnv } = sourceTree();
+  it('原始碼樹（沒有戳記）：舊位置是 nexus/ 與外層兩處的 .env，兩處都不被讀', () => {
+    const { moduleDir, repoEnv, outerEnv } = sourceTree();
 
-    expect(legacyEnvFileFor(moduleDir)).toBe(repoEnv);
-    const snapshot = loadLaunchEnv({ cwd, home, target: {}, warn: () => undefined, moduleDir });
-    expect(snapshot.legacyEnvFile).toBe(repoEnv);
-    expect(legacyEnvMovedError(snapshot, 'NVIDIA_API_KEY', { cwd, home })?.message).toContain(
-      repoEnv,
-    );
+    expect(legacyEnvFilesFor(moduleDir)).toEqual([repoEnv, outerEnv]);
+    for (const file of [repoEnv, outerEnv]) {
+      writeFileSync(file, 'NVIDIA_API_KEY=old\n');
+      const target: NodeJS.ProcessEnv = {};
+      const snapshot = loadLaunchEnv({ cwd, home, target, warn: () => undefined, moduleDir });
+      expect(target).toEqual({});
+      expect(snapshot.legacyEnvFile).toBe(file);
+      expect(legacyEnvMovedError(snapshot, 'NVIDIA_API_KEY', { cwd, home })?.message).toContain(
+        file,
+      );
+      rmSync(file);
+    }
   });
 
-  it('同一份 .env、同樣往上三層，只差產物根的戳記：有戳記沒有舊位置，沒有戳記有', () => {
+  it('同樣的位置，只差產物根的戳記：有戳記沒有舊位置，沒有戳記有', () => {
     const prefix = join(root, 'opt');
-    const lib = join(prefix, 'a', 'b', 'src');
+    const lib = join(prefix, 'a', 'b', 'c', 'src');
     mkdirSync(lib, { recursive: true });
     env(prefix, 'NVIDIA_API_KEY=x\n');
-    // `lib` 的上一層是 `b`，戳記放那裡才是「產物根」。
-    expect(legacyEnvFileFor(lib)).toBe(join(prefix, '.env'));
-    writeFileSync(join(prefix, 'a', 'b', 'build-stamp.json'), STAMP);
-    expect(legacyEnvFileFor(lib)).toBeUndefined();
+    // `lib` 的上一層是 `c`，戳記放那裡才是「產物根」。
+    expect(legacyEnvFilesFor(lib)).toEqual([join(prefix, '.env'), join(root, '.env')]);
+    writeFileSync(join(prefix, 'a', 'b', 'c', 'build-stamp.json'), STAMP);
+    expect(legacyEnvFilesFor(lib)).toEqual([]);
   });
 });

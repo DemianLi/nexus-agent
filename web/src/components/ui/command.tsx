@@ -1,6 +1,6 @@
 /**
- * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/command.tsx`，cmdk），外觀照 SG（#1468 Q8）。
- * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 26 條）：
+ * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/command.tsx`，cmdk），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 26 條）：
  *
  * - `CommandDialog` 預設的標題與說明換成中文（§8）。vendor 預設是英文，產品碼目前沒用到 CommandDialog，照舊保留中文預設。
  *

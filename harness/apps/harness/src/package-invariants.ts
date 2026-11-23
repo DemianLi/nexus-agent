@@ -10,7 +10,7 @@
  * 其中十二個是空 installer；#974 把這條規則翻了面：沒有可檢的關係就**不要發布**配套入口，
  * 空 installer 本身是違規。理由是 dsh 在 `2026-08-28-omit-unneeded-invariant-companions`
  * 就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量移除
- * （`docs/adr/0003-invariant-companions-first-cut.md`）。**剩下的八個是暫時保留、觀察中**。
+ * （`docs/adr/0002-invariant-companions-first-cut.md`）。**剩下的八個是暫時保留、觀察中**。
  * 代價是新增 package 的人不再被這裡擋下來——那條目的消失了，是接受的。
  *
  * 對讀日期 2026-08-30，dsh `cd5ef8148158c3a752a658978873241fdf8e2bbc`
@@ -20,7 +20,7 @@
  * **有一條規則現在是反過來的，那是登記過的偏離**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 第一刀）：dsh 的規則是「**不得** default export」，我們是「**必須** default export 一顆
  * 具名常數」。理由是前提不同，不是口味——dsh 的配套入口把 `name` / `inject` / `apply` 散在
- * 頂層（`harness/packages/core/session/src/invariant.ts:18`），**模組的 namespace 自己就是那顆
+ * 頂層（`packages/core/session/src/invariant.ts:18`），**模組的 namespace 自己就是那顆
  * plugin**，而 loader 的 `unwrapExports` 是 `exports.default ?? exports`
  * （`harness/vendor/loader/src/index.ts:189`），所以在那邊一個 default export 會把真的 plugin 遮掉。
  * 我們的配套入口匯出的是一顆巢狀的 `NexusPlugin` 常數，namespace 不是 plugin，遮不掉任何
@@ -45,7 +45,7 @@ import ts from 'typescript';
  * `packages` 底下**再深一層**，app 本來就不在裡面；而配套入口認領的是「這個 package 擁有的跨筆關係」，
  * 組裝點與前端不擁有任何人的關係——它們是消費者。理由與另外兩個選項見 #108。
  */
-const OWNER_ROOT = 'packages';
+const OWNER_ROOT = 'harness/packages';
 
 /** 一個 owner，與它參與規則的那幾個檔案。 */
 export interface PackageInvariantOwner {

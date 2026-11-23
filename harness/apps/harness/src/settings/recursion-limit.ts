@@ -30,8 +30,8 @@
  *    自己的 `node_modules`）。
  * 2. **旗標贏過這一列的那個「贏」，載體跟 dsh 不同。** dsh 沒有「旗標層」與「設定層」兩條路，
  *    只有一條——**設定值本身是一個運算式，旗標是第一個運算元**：`port: !!js ctx.webStartup.port
- *    ?? 3080`（`harness/packages/bundle/web-app/cordis.patch.yml:136-139`，配 `inject: [webStartup]`），
- *    而 `harness/packages/boot/cmdline/src/index.ts:11-15` 逐字寫著「**No row has launcher-level
+ *    ?? 3080`（`packages/bundle/web-app/cordis.patch.yml:136-139`，配 `inject: [webStartup]`），
+ *    而 `packages/boot/cmdline/src/index.ts:11-15` 逐字寫著「**No row has launcher-level
  *    command-line status**」（`ddefc45`）。
  *
  *    **我們表達不出來的是兩樣東西**：條目的 `inject`（`plugin-config.ts` 的 `entrySchema` 是

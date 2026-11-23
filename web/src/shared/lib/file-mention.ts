@@ -2,7 +2,7 @@
  * 輸入框的 `@` 引用（[#653](https://github.com/DemianLi/nexus-agent/issues/653)）：觸發、選了之後怎麼改草稿、每一列寫什麼。
  * 照 dsh（`477b4f4`，MIT，Copyright (c) DeepSeek）：
  *
- * - 觸發照 `harness/packages/context/file-reference/src/grammar.ts` 的 `activeAtToken`：`@` 只在字首或空白後面才算，
+ * - 觸發照 `packages/context/file-reference/src/grammar.ts` 的 `activeAtToken`：`@` 只在字首或空白後面才算，
  *   所以 `a@b`、`user@host`、`(@x`、全形 `＠` 都不開。`@"` 開頭的引號形式可以跨空白。
  *   **先判 `@` 再判 `/`**（`ui-input-trigger/src/core/detect.ts`），`@/` 因此不會叫出斜線選單。
  * - 插入的文字照同檔的 `formatFileMention`：資料夾補結尾的 `/`；有空白就用 `@"…"`；路徑裡有雙引號或控制字元

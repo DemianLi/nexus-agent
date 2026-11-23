@@ -62,7 +62,7 @@
  *
  * **`session-reference` 也同一型，方向是「寫壞靜靜變回不合需求的預設」**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
  * 沿用 #707 那筆登記，偏離理由 2）：dsh 的 `SessionReferenceResolver` 在建構子裡越界就拋 `SESSION_REFERENCE_INVALID_CONFIG`
- * （`harness/packages/context/session-reference/src/index.ts:100-128`），我們的載入器把它變成「那一列掉了」，掉了之後 `startupSetting` 回 schema 的預設
+ * （`packages/context/session-reference/src/index.ts:100-128`），我們的載入器把它變成「那一列掉了」，掉了之後 `startupSetting` 回 schema 的預設
  * （`referenceContextFraction` 0.2，dsh 的英文換算）。出廠把比例調低到 0.1 是因為中文三條 0.2 的來源逼近摘要門檻
  * （`cordis.yml` 那一列），打錯一個字就靜靜回到 0.2。這一列**同時關不掉**（`PROTECTED_ENTRY_NAMES`）：兩道一起，寫壞與關掉都不會讓出廠的比例消失。
  *
@@ -318,7 +318,7 @@ export function formatActivationError(error: unknown): string {
 
 /**
  * 根沒建起來時要拋的那句：`${階段}：${原因}`，原因後面接最深那一顆 `cause` 的堆疊。照 dsh `boot` 的 catch
- * （`harness/packages/boot/app-boot/src/index.ts:1252-1263`）。`StartupError` 不經這裡，原樣拋。
+ * （`packages/boot/app-boot/src/index.ts:1252-1263`）。`StartupError` 不經這裡，原樣拋。
  *
  * @param stage - 失敗在哪一段（根準備、插件樹）。
  * @param cause - 原本拋的值。

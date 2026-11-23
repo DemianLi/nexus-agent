@@ -171,7 +171,7 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('todo')).toEqual({ allowParallelInProgress: true });
 
     // 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
-    // （`harness/packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
+    // （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
     // 所以出貨檔那一行是整棵樹上唯一講這個數字的地方。
     expect(byId.get('feedback')).toEqual({ maxNoteBytes: 8192 });
 
@@ -960,7 +960,7 @@ describe('模組解析', () => {
 describe('--dump-config', () => {
   /**
    * **不做黃金檔比對。** dsh 自己的開發備註寫著這份輸出不承諾跨包版本的位元組穩定性
-   * （`harness/packages/boot/app-boot/README.zh.md` 的「待定：配置 dump 稳定性」）。照抄一個它自己
+   * （`packages/boot/app-boot/README.zh.md` 的「待定：配置 dump 稳定性」）。照抄一個它自己
    * 說不穩定的東西當判準，是把別人的免責聲明變成我們的絆索。所以驗的是結構性質。
    */
   it('印出來的東西讀得回來，而且就是啟動真的會掛的那一份', () => {

@@ -94,7 +94,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - `--start-timeout-ms`（成對）：一對從起組合行程到讀到它的 `ready`，整段一筆期限；補葉子時從補的那一刻另算一筆。過了就當場對組合行程的群組送 SIGKILL（不走拆除梯度），葉子等它收完屍連帶收（稽核記 `peer`），死因 `stalled`、`down` 一次，名額讓出來。組合行程沒送 `hello`、葉子沒在橋上登記、組合行程沒替它送 `ready`，從外面分不出來，都算這一條。判之前先讀一次組合行程的控制通道；停機中不判；監督行程判定自己被停住過時（比准許的晚了超過 `--start-timeout-ms` 的一半，跟 `--stall-ms` 開不開無關）從那一刻重新算。預熱池裡的一對逾時不回 `down`，照預熱池的退避再補。短於那一半的停住照樣算進期限；認不認得出來靠 poll 醒得夠勤，有一對時最晚每 `--rss-poll-ms` 醒一次，`--rss-poll-ms` 調到期限的一半以上就認不出來。期限很小（一輪的處理時間就超過它的一半）或監督行程的 fd 2 一直卡著時，每一輪都重算，一直不逾時（讀程式推論，沒量過）。`--start-timeout-ms 0` 是不判。預設 30000 跟 `--host-ready-timeout-ms` 取一樣的值，一對冷起動實際要多久沒有量過。
 - `bind` 之後等 `bound` 沒有期限，靠三件事收：
   - 葉子回 `attach` 錯（或 `attach` 送不出去）：組合行程以 4 結束，照「組合行程死了」整對收。稽核裡組合行程那一行是 `crash`、`exit_code` 4；葉子這時沒在收的話，`down` 的死因是 `crash`、葉子那一行是 `peer`，已經在收就照葉子的死因。
-  - 葉子結束（含橋斷了它自己以 70 結束；葉子自己的結束碼 70、71 見 [`docs/operations.md`](../../docs/operations.md)〈成對執行：對話行程連組合行程的橋〉）：還沒 `bound`，整對收。
+  - 葉子結束（含橋斷了它自己以 70 結束；葉子自己的結束碼 70、71 見 [`docs/operations.md`](../../../docs/operations.md)〈成對執行：對話行程連組合行程的橋〉）：還沒 `bound`，整對收。
   - 葉子或組合行程沒有心跳：`--stall-ms`。真的葉子在綁定裡才開始送心跳，`attach` 還沒走到那裡就停住的，從 `bind` 起算的沉默到了就判。
   - **已知限制**：葉子心跳照送、`attach` 一直不回（冷開不結束）的一對留在等 `bound`，佔著名額，到停機或葉子自己結束為止（還沒 `up` 的不能逐出）；這段期間同一條 thread 再來的 `ensure` 也拿不到回答；不成對的對話行程 `bind` 之後也一樣沒有期限。冷開最久要多久沒有量過，沒有數字就不設期限。
 - `--stall-ms` 兩個行程各看各的：葉子停住只殺葉子，組合行程停住整對收。組合行程的心跳是 1 秒一次，`--stall-ms` 要超過 4000：監督行程最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值，整棵樹凍住才認得出來（見上面「心跳」那一條）；參數解析不擋，但啟動時 `--stall-ms` 不是 0 又不超過 4000 會在 stderr 警告一行。不超過心跳間隔（1000 上下）時組合行程一送出 `bind` 就會在兩則心跳之間被判 `stalled`，整對收（[#2876](https://github.com/DemianLi/nexus-agent/issues/2876)）。`--rss-limit-mb` 只管葉子；組合行程的 RSS 只記進稽核與 `stats`。壓住吃滿 CPU 的也只有葉子。
@@ -108,7 +108,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 nexus-host [--plugins <檔>] --socket <路徑>
 ```
 
-- 插件清單（`--plugins`，`host/src/host/plugins.rs`）：跟監督行程換完 `hello`、bind socket 之前讀。JSON 陣列，一列一個插件：`name`（必填，編進執行檔的插件名；出貨的建置只有 `mcp`，見 [`docs/host-mcp.md`](../../docs/host-mcp.md)）、`config`（選填，原封不動交給插件，裡面的鍵由插件自己判）、`disabled`（選填，只收字面布林；`null` 當沒寫）。沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了、超過 1 MiB、JSON 壞了（重複的鍵不算壞，取後者），或哪一列少了 `name`、是不認得的鍵、名字對不上、型別不對，整份拒絕：寫一行 stderr、送 `config-broken`（帶同一句錯誤）取代 `ready`、回 4，不 bind。`intercept` 還沒做（#2596），寫了一樣整份拒絕，錯誤指到那張卡。插件自己不收它的 `config` 的，只有那一列沒掛（寫一行 stderr），其他照掛。插件的每一筆事件（狀態轉換、apply 失敗…）寫一行 stderr。整合測試用的 `test-echo` 只在 `test-hooks` 的建置裡有。
+- 插件清單（`--plugins`，`host/src/host/plugins.rs`）：跟監督行程換完 `hello`、bind socket 之前讀。JSON 陣列，一列一個插件：`name`（必填，編進執行檔的插件名；出貨的建置只有 `mcp`，見 [`docs/host-mcp.md`](../../../docs/host-mcp.md)）、`config`（選填，原封不動交給插件，裡面的鍵由插件自己判）、`disabled`（選填，只收字面布林；`null` 當沒寫）。沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了、超過 1 MiB、JSON 壞了（重複的鍵不算壞，取後者），或哪一列少了 `name`、是不認得的鍵、名字對不上、型別不對，整份拒絕：寫一行 stderr、送 `config-broken`（帶同一句錯誤）取代 `ready`、回 4，不 bind。`intercept` 還沒做（#2596），寫了一樣整份拒絕，錯誤指到那張卡。插件自己不收它的 `config` 的，只有那一列沒掛（寫一行 stderr），其他照掛。插件的每一筆事件（狀態轉換、apply 失敗…）寫一行 stderr。整合測試用的 `test-echo` 只在 `test-hooks` 的建置裡有。
 
 - 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`；插件清單壞了的改送 `config-broken`，不 bind（見上一條）。之後收身分表：先是整張表的 `grant`，最後一筆 `synced`（表是空的也送；收到之前不讀客戶端連線），之後是增量的 `grant`／`revoke`；回報 `violation`／`unregistered`。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪 socket、回 0。
 - 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON（`serde_json`：數字收小數；宿主編出來的 payload 裡，物件的鍵照碼位順序；解的時候任何一層重複的鍵都取後者），協定在 `host/src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。版本是 `HOST_PROTOCOL_VERSION`（4），跟控制通道的版本各自獨立；不用 3（那是控制通道的版本）：客戶端送 3 進來會被判版本不對。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條（收監督行程的 `revoke` 時收 backlog 不受這個上限），宿主起來時把開檔數的軟上限拉到硬上限；連上 5 s 內沒送 `hello` 就斷。開檔數還是用完時，排著的連線接下來就關（宿主先留著一個 fd，用完時關掉它騰出位子），不留在 backlog、也不空轉；連那個 fd 都開不回來（整台主機的 fd 用完）、或 backlog 收空了，停 100 ms 不 poll listener 再試（收 `revoke` 時照樣收 backlog）；EMFILE、ENFILE 以外的 accept 錯也一樣停 100 ms。
@@ -269,7 +269,7 @@ docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARG
 
 - `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
 - `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下、讓第一個子行程故意 panic；宿主那邊的 `NEXUS_HOST_TEST_NO_PEER_PID` 讓它讀不到任何連線的 pid（A⁰）。出貨的建置不帶它。
-- 受管憑證檔（`host/src/credentials/`）：照 [`docs/credentials-file.md`](../../docs/credentials-file.md) 的契約解析 `.credentials.yaml`，跟 TS 跑同一份 `credentials-vectors.json`；對外 HTTPS 的 TLS 設定在 `host/src/tls.rs`（固定 ring，根憑證只來自設定指定的 PEM 檔），代理政策在 `host/src/proxy.rs`（由 config 交進來，不讀環境變數）。HTTP MCP 的連線、監督者、連線池與插件 `mcp` 在 `host/src/mcp/`，見 [`docs/host-mcp.md`](../../docs/host-mcp.md)；對話行程那一側還沒接上（#2570）。
+- 受管憑證檔（`host/src/credentials/`）：照 [`docs/credentials-file.md`](../../../docs/credentials-file.md) 的契約解析 `.credentials.yaml`，跟 TS 跑同一份 `credentials-vectors.json`；對外 HTTPS 的 TLS 設定在 `host/src/tls.rs`（固定 ring，根憑證只來自設定指定的 PEM 檔），代理政策在 `host/src/proxy.rs`（由 config 交進來，不讀環境變數）。HTTP MCP 的連線、監督者、連線池與插件 `mcp` 在 `host/src/mcp/`，見 [`docs/host-mcp.md`](../../../docs/host-mcp.md)；對話行程那一側還沒接上（#2570）。
 - `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock，或 ABI 不到 6 而驗不到訊號 scope 時，整合測試直接紅，不跳過。CI 會設。
 - 出貨的是 musl 版：要對著它測，先 `rustup target add "$(uname -m)-unknown-linux-musl"` 並裝 `musl-tools`（ring 的 C 要用 `musl-gcc` 編，設 `CC_<arch>_unknown_linux_musl=musl-gcc`），再加 `--target "$(uname -m)-unknown-linux-musl"`。CI 兩種都跑：musl 那輪驗出貨的 libc；不帶 target 的那輪，測試用的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試 `clone3`）拿到 ENOSYS 會退回 `clone`。
 
@@ -277,7 +277,7 @@ CI 的 `sandbox-spawner` job（`.github/workflows/ci.yml`，步驟在 `.github/a
 
 ## 出貨
 
-Linux 的離線包帶 x64 的 release 執行檔，放在 `harness/native/nexus-sandbox-spawner`：靜態連結 musl 的 static-pie（`x86_64-unknown-linux-musl`），不依賴主機的 glibc。`bundle.sh` 把執行檔與連進去的程式碼的授權全文打成 bundle，`pnpm run release:pack --spawner <目錄>` 原樣放進產物。bundle 的形狀與產物裡的檢查在 `harness/scripts/release/spawner.ts`。授權全文有三個來源：
+Linux 的離線包帶 x64 的 release 執行檔，放在 `native/nexus-sandbox-spawner`：靜態連結 musl 的 static-pie（`x86_64-unknown-linux-musl`），不依賴主機的 glibc。`bundle.sh` 把執行檔與連進去的程式碼的授權全文打成 bundle，`pnpm run release:pack --spawner <目錄>` 原樣放進產物。bundle 的形狀與產物裡的檢查在 `harness/scripts/release/spawner.ts`。授權全文有三個來源：
 
 - crate：`cargo tree -e normal,no-proc-macro` 收到的，從 cargo 的 registry 原始碼複製；
 - 標準函式庫：工具鏈的 `COPYRIGHT-library.html`；

@@ -1,6 +1,6 @@
 /**
  * 按「新對話」要去哪一條——[#313](https://github.com/DemianLi/nexus-agent/issues/313)，照 dsh 的
- * `connectWorkspace`（`harness/packages/client/ui-workspace/src/client/navigation.ts`，本地 clone `c291e79`）：
+ * `connectWorkspace`（`packages/client/ui-workspace/src/client/navigation.ts`，本地 clone `c291e79`）：
  * **先找一條已經有的空白會話拿來用，沒有才開新的**，開了沒講話的會話就不會越積越多。
  *
  * 「目前這條還是空白就留在原地」不在這裡判，在畫面那一側（`app/App.tsx`）：清單是冷讀磁碟，還沒落盤的目前這條

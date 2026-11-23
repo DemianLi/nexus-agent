@@ -21,9 +21,9 @@ import { fileURLToPath } from 'node:url';
  * - 這幾個變數都在這一端讀，不傳進子行程，見 {@link e2eServeInvocation}。
  */
 
-const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const TSX = join(ROOT, 'node_modules', '.bin', 'tsx');
-const SERVE = join(ROOT, 'apps', 'harness', 'src', 'serve.ts');
+const SERVE = join(ROOT, 'harness', 'apps', 'harness', 'src', 'serve.ts');
 const TSCONFIG = join(ROOT, 'tsconfig.runtime.json');
 
 /** 起動日誌裡帶登入 token 的那個網址。 */

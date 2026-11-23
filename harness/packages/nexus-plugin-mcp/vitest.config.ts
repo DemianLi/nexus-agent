@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { pathsPlugin } from '../../vitest.shared.ts';
+import { pathsPlugin } from '../../../vitest.shared.ts';
 
 /**
  * 這個套件的測試差不多都要起一個真的子行程（stdio MCP server，`node --import tsx …`）。

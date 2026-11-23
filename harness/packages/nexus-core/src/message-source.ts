@@ -10,8 +10,8 @@
  * `HumanMessage`，鏈會被悄悄清零，而且沒有測試會紅。
  *
  * 照 dsh：每則訊息帶 `source`，每個生產者在自己的模組宣告自己的 kind；提醒器只看 `source.kind === 'user'`
- * （`harness/packages/guard/repeat-tool-reminder/src/index.ts:236-238`，`477b4f4`）。續行訊息帶
- * `{ kind: 'goal', goalId, revision, round }`（`harness/packages/goal/goal-round-driver/src/index.ts:176-179`）。
+ * （`packages/guard/repeat-tool-reminder/src/index.ts:236-238`，`477b4f4`）。續行訊息帶
+ * `{ kind: 'goal', goalId, revision, round }`（`packages/goal/goal-round-driver/src/index.ts:176-179`）。
  * 讀的一端沒有白名單，新的生產者不必改提醒器。
  *
  * ## 載體

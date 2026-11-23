@@ -12,7 +12,7 @@
  * ## 與 dsh 的關係：dsh 沒有，為什麼做
  *
  * dsh 只有**已經生出來的子會話**的目錄投影（`subagentCatalog`，列 id、createdAt、mode、label；
- * `harness/packages/subagent/subagent/src/projection-types.ts:10-19`，`5badb150`），沒有「有哪幾種子代理可以派」的清單，也沒有使用者
+ * `packages/subagent/subagent/src/projection-types.ts:10-19`，`5badb150`），沒有「有哪幾種子代理可以派」的清單，也沒有使用者
  * 直接派工的入口——派子代理的只有模型（委派工具），使用者只能點進已存在的子會話。所以這裡**沒有可照抄的形狀**，
  * 也不該照抄成投影：可派的種類是這個組裝的靜態事實（`registry.subagents.register` 註冊的那幾份），用一支讀取的 RPC 就夠。
  *

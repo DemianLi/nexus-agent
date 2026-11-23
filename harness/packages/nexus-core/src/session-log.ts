@@ -188,7 +188,7 @@ export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unava
 
 /**
  * 一輪被中止的原因，見 {@link TurnEndReason} 的 `aborted`。`hook` 照 dsh 的 `{ kind: 'hook'; reason: string }`
- * （`harness/packages/core/session/src/types.ts:189-193`，`687f282e`），`reason` 是穩定的機器字串（今天只有 `turn-timeout`）。
+ * （`packages/core/session/src/types.ts:189-193`，`687f282e`），`reason` 是穩定的機器字串（今天只有 `turn-timeout`）。
  */
 export type TurnAbortCause =
   | { readonly kind: 'user' }
@@ -207,7 +207,7 @@ export type TurnAbortCause =
  *   **三種都是「這一輪被打斷」**：讀 `reason.kind === 'aborted'` 的人（goal 續行、歷史、掃描）不看 `cause`。
  * - **`max-tokens`**：這一輪裡**至少一次** root 的模型回覆撞到輸出上限
  *   （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。照 dsh 的 `'max-tokens'`
- *   （`harness/packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
+ *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
  * - **`max-turns`**：這一輪撞到輪數上限收掉（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
@@ -220,7 +220,7 @@ export type TurnAbortCause =
  *
  * - **`blocked`**：這一輪的某一步在送出模型請求**之前**被準入閘門擋下，一個請求都沒發
  *   （[#633](https://github.com/DemianLi/nexus-agent/issues/633)，封存的會話：dsh 的 `ArchivedSessionGate` 在 `agent/pre-step`
- *   回 `reject`，迴圈把那一輪以 `{ kind: 'blocked' }` 收掉，`harness/packages/core/agent-loop/src/agent.ts:316-319`，`5badb15009a`）。
+ *   回 `reject`，迴圈把那一輪以 `{ kind: 'blocked' }` 收掉，`packages/core/agent-loop/src/agent.ts:316-319`，`5badb15009a`）。
  *   **被領走的輸入沒有進對話**：dsh 的 `user/message` 要到 pre-step 放行之後才寫（`agent.ts:419-423`），`consumed-work.ts` 明說
  *   「被擋下的那一輪把領走的訊息丟掉了，它帶走的工作不會再跑」。我們的 `turn/start` 照既有的登記帶著那句話的文字，所以日誌與歷史
  *   仍看得到使用者打了什麼；只有模型的對話狀態沒有它。**讀者把它當「這一輪沒有做事」**：goal 續行看到它不是看 `reason`，而是
@@ -258,7 +258,7 @@ export interface LlmFailure {
   readonly status?: number;
   /**
    * 供應商發的不透明請求編號，供診斷用（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）。名字與語意照 dsh 的
-   * `LlmFailure.requestId`（`harness/packages/llm/llm/src/types.ts:41-51`）：**只收非空字串**，空字串整格不帶；管理者拿它去問模型閘道那一側
+   * `LlmFailure.requestId`（`packages/llm/llm/src/types.ts:41-51`）：**只收非空字串**，空字串整格不帶；管理者拿它去問模型閘道那一側
    * 「哪一次請求」。從回應標頭取（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個有的），取法在 `live-model.ts`。
    * 格式版本不升，見 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「49 之內」。
    */
@@ -397,7 +397,7 @@ export type UserMessageSource =
   | {
       /**
        * 人在句子裡寫 `/名字` 叫用的技能說明（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），形狀照 dsh 的
-       * `SkillInvocationSource`（`harness/packages/skill/skill/src/index.ts:146-152`，`687f282e`）。唯一的生產者是 `@nexus/plugin-skills`
+       * `SkillInvocationSource`（`packages/skill/skill/src/index.ts:146-152`，`687f282e`）。唯一的生產者是 `@nexus/plugin-skills`
        * 的 `agent/pre-step` listener，只在 root 注入。
        */
       readonly kind: 'skill-invocation';
@@ -537,7 +537,7 @@ export interface SessionEventMap {
    *
    * **`error` 是選填，舊日誌沒有**：那時只有 `message`，讀的人要容忍缺欄位（缺就是缺，不是 `UNKNOWN`）。新日誌四個寫入點
    * （`thread-pump` 兩處、`cli`、背景子代理）一律帶，不是模型的錯也帶——`code` 是 `UNKNOWN`，同 dsh
-   * （`harness/packages/core/session/src/types.ts:206-210`）。碼的詞彙與判法見 `live-model.ts` 的 `classifyTurnFailure`。
+   * （`packages/core/session/src/types.ts:206-210`）。碼的詞彙與判法見 `live-model.ts` 的 `classifyTurnFailure`。
    *
    * **與 dsh 的形狀差（偏離登記）**：dsh 沒有這顆事件，失敗放在 `turn/end` 的 `reason: { kind: 'error', error: LlmFailure }`。
    * 獨立的 `turn/failed` 從 #98 就在，二十個非測試的讀者（goal 續行、歷史、統計、遙測、軌跡、token 用量…）都認它。
@@ -612,11 +612,11 @@ export interface SessionEventMap {
    * **之後每一次真的變了的切換**由 `/permission`（`harness/packages/nexus-plugin-permission-presets/src/index.ts` 的 `handler`）
    * 直接往 root 日誌 `append`，控制器訂閱日誌跟著，自己不再有寫入口。切到已經生效的那一格不寫
    * ——照 dsh 的「净变化为零的选择不追加任何内容」
-   * （`harness/packages/interaction/permission-presets/README.zh.md`）。
+   * （`packages/interaction/permission-presets/README.zh.md`）。
    *
    * **子代理的日誌只有一顆，帶 `source: 'delegation'`**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：
    * 委派那一刻拍下的那一格，照 dsh 的 `appendDelegatedPolicyOverrides`
-   * （`harness/packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）。子代理之後一直照這一格判，root 再切
+   * （`packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）。子代理之後一直照這一格判，root 再切
    * 也不會寫進子代理的日誌——所以 root 的日誌答不出子代理跑在哪一格，要記在這裡。
    *
    * **沒掛 fence 的組裝一顆都不寫。** 沒有 `--workspace` 就沒有
@@ -802,7 +802,7 @@ export interface SessionEventMap {
   };
   /**
    * 一次模型請求失敗、而且**排定了重試**（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。照 dsh 的
-   * `llm/retry`（`harness/packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
+   * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
    * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
    *
    * 重試只有一層（#1427，`stream-retry.ts` 的 `retryModelCall`，SDK 層不重試），不分第一則事件之前或之後：一次呼叫的所有重試共用
@@ -887,7 +887,7 @@ export interface SessionEventMap {
   /**
    * 一次**作廢的**模型嘗試吐出來的部分回覆（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）：串流在第一則事件之後出錯，
    * 整次重打（{@link ./stream-retry.ts}）之前，畫面上已經有字的那一半。照 dsh 的 `assistant/attempt`
-   * （`harness/packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
+   * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
    * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416），54 以前標。**誰寫、寫在哪取決於 loop**。
    * - `langgraph`：pump 寫——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts`
@@ -912,14 +912,14 @@ export interface SessionEventMap {
    * 塞進對話的一則 user-role 訊息。兩種來源：
    *
    * - **`plugin`：外掛塞的，不是人打的字**。照 dsh 的 `user/message` 帶 `source: {kind: 'plugin', plugin}`
-   *   （`harness/packages/llm/llm/src/message.ts`，`c291e79`；repeat-tool-reminder 與 tool-goal 都這樣注入）。今天兩個生產者：
+   *   （`packages/llm/llm/src/message.ts`，`c291e79`；repeat-tool-reminder 與 tool-goal 都這樣注入）。今天兩個生產者：
    *   - repeat-reminder 的提醒，`plugin` 是那顆 middleware 的名字。落在它提醒的那次模型呼叫的
    *     `model/start` 之前，同 dsh 在 `agent/pre-step` 注入。
    *   - goal 收尾時注入的那段指示，`plugin` 是回它的那顆**工具**的名字：它包在工具回的 `Command` 裡，
    *     由圍堵讀出來，而圍堵只知道工具、不知道工具屬於哪個 plugin。落在那次呼叫的 `tool/result` 之後，
    *     同它在對話裡的位置。
    * - **`user`：人在一輪跑著時插的話**（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），照 dsh 輪中領走
-   *   `next-step` 時寫的 `user/message`（`harness/packages/core/agent-loop/src/agent.ts:403-405`，`477b4f4`）。**唯一的生產者是
+   *   `next-step` 時寫的 `user/message`（`packages/core/agent-loop/src/agent.ts:403-405`，`477b4f4`）。**唯一的生產者是
    *   pump 領走插話的那條路**（`harness/apps/harness/src/thread-pump.ts`），緊跟在領走那顆 `inbox/spliced` 後面、那次模型呼叫
    *   的 `model/start` 之前。goal 的直接人類授權認它（dsh `packages/goal/tool-goal/src/authority.ts:82-83`），所以外掛
    *   與工具不能寫這一種：上面兩個生產者都寫死 `plugin`。
@@ -1321,7 +1321,7 @@ export interface SessionEventMap {
   'subagent/descriptor': SubagentDescriptorData;
   /**
    * 模型要叫一次工具，**在它進任何一層之前記**——照 dsh 在核准之前就記
-   * （`harness/packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的
+   * （`packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的
    * 呼叫一樣有這一顆。與 `tool/result` 靠 `callId` 配對。生產者是圍堵，見 `containment.ts`。
    *
    * ## 對 dsh 的兩處偏離
@@ -1344,11 +1344,11 @@ export interface SessionEventMap {
    * （`containment.ts`，`human-input.ts` 的 `onResumed`），日誌一樣。
    * 所以暫停那一輪留一顆沒配對的、後面跟著 `interrupt/raised`，resume 那一輪再一對——
    * **配對取最後那一顆**。這樣結果永遠跟呼叫落在同一輪，dsh `session-stats` 在 `turn/end`
-   * 丟掉沒配對的呼叫那條規則（`harness/packages/session/session-stats/src/projection.ts:190-194`）
+   * 丟掉沒配對的呼叫那條規則（`packages/session/session-stats/src/projection.ts:190-194`）
    * 照抄得動。
    *
    * ⚠️ **`arguments` 原樣進本機日誌、也原樣進遙測**——`write_file` 寫的內容就在這裡。照 dsh
-   * 不加開關（它的 `recordInput` 只蓋斜線命令，`harness/packages/interaction/commands/src/index.ts:376`）；
+   * 不加開關（它的 `recordInput` 只蓋斜線命令，`packages/interaction/commands/src/index.ts:376`）；
    * 要擋在遙測外靠部署方掛脫敏規則，而脫敏只作用在送出去的那份，**本機的 jsonl 照舊是原文**。
    */
   'tool/call': {
@@ -1433,7 +1433,7 @@ export interface SessionEventMap {
   'feedback/message-delete': MessageFeedbackDelete;
   /**
    * 一則對整個會話的評語。**跟任何一輪都沒有綁**。照 dsh 的 `feedback/record`
-   * （`harness/packages/feedback/command-feedback/src/types.ts:33-40`）。
+   * （`packages/feedback/command-feedback/src/types.ts:33-40`）。
    *
    * ⚠️ **`text` 是使用者的原話，而它會原樣進遙測**。所以 `/feedback` 宣告 `recordInput: false`
    * ——同一段話不在 `command/run` 再記一次。
@@ -1519,7 +1519,7 @@ export interface SessionEventMap {
    * 要在這裡重設——見 {@link currentTurnStart} 與 core、todo、commands 三份配套入口。
    *
    * **`inherited: true` 是分叉的切點**（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)，照 dsh 的
-   * `{ inherited?: true }`，`harness/packages/core/session/src/types.ts:428`，`687f282e`）：它之前的事件是從另一份會話複製來的前綴，
+   * `{ inherited?: true }`，`packages/core/session/src/types.ts:428`，`687f282e`）：它之前的事件是從另一份會話複製來的前綴，
    * 它自己與之後的才是這一份的（{@link inheritedEventCount}）。寫它的只有 {@link buildForkSeed}；續接時建構子補的仍是普通的 `{}`。
    * 讀「當前這一段」的人不分兩種，一樣在這裡重設：繼承來的前綴同樣屬於一個已經結束的生命週期。
    */
@@ -1604,7 +1604,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
        *
        * 寫方只在**純資訊性、遺失了也不影響重建**的種類上標 `true`。預設必需是刻意的：忘了標只會多拒（不便），
        * 預設可略過則會讓同一個疏忽變成靜靜接續一份被掏空的日誌（安全失敗）。同 dsh
-       * （`harness/packages/core/session/src/types.ts:501-511`，`5badb15`）。
+       * （`packages/core/session/src/types.ts:501-511`，`5badb15`）。
        *
        * **對已經認得的種類沒有作用**：認得就照該種類的語意讀，標不標都一樣。
        */
@@ -1845,7 +1845,7 @@ export function isModelVisibleEvent(
 
 /**
  * **不產出訊息、卻左右模型看到什麼的事件**（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)），對應 dsh 的
- * `MESSAGE_PROJECTION_EVENT_TYPES`（`harness/packages/core/session/src/known-event-types.ts:84-87`，`5badb15009a`）：「進模型的效果要另外
+ * `MESSAGE_PROJECTION_EVENT_TYPES`（`packages/core/session/src/known-event-types.ts:84-87`，`5badb15009a`）：「進模型的效果要另外
  * 寫解譯器」的那一類。今天有 `image/offload`、`compaction/prune` 與 `compaction/truncate-args`。
  *
  * 跟 {@link ModelVisibleEventType} 的差別：那一份是**替模型多出一則訊息**的事件，replay 對它們窮舉；這一份**改變已經存在的訊息**
@@ -1862,7 +1862,7 @@ export type MessageProjectionEventType = (typeof MESSAGE_PROJECTION_EVENT_TYPES)
 
 /**
  * 這個原型是不是某個 realm 的內建原型，而且 constructor 是引擎原生的那一支。照 dsh `hasIntrinsicConstructor`
- * （`harness/packages/util/values/src/index.ts:17-29`，`687f282e`）：名字、`prototype` 互指、`Function.prototype.toString` 三樣都對才算，
+ * （`packages/util/values/src/index.ts:17-29`，`687f282e`）：名字、`prototype` 互指、`Function.prototype.toString` 三樣都對才算，
  * 所以跨 realm 的收、偽造的不收。
  */
 function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
@@ -2033,7 +2033,7 @@ export class SessionEventDepthError extends TypeError {
  * 深拷貝成**無損的**純 JSON，**拷不動就當場拋**。
  *
  * 這一條是 fail-closed 的，照 dsh 的 `snapshotJsonValue`／`walkJsonValue`（`packages/util/values/src/index.ts:71-174`，
- * `687f282e`；`Session.append` 在 `harness/packages/core/session/src/index.ts:808-811` 呼叫它）。**存參考會讓日誌變成活的**——
+ * `687f282e`；`Session.append` 在 `packages/core/session/src/index.ts:808-811` 呼叫它）。**存參考會讓日誌變成活的**——
  * LangGraph 的 payload 帶的是 `BaseMessage` 實例，存進去之後別人改那顆訊息，歷史就跟著被改寫，而且沒有任何徵兆。
  * 所以這裡連 class 實例都不收。規則逐條照 dsh：
  *
@@ -2191,7 +2191,7 @@ export function snapshotJsonValue(
 
 /**
  * 持久化後端寫入前，把一批事件驗過並拷成一份**沒凍過**的副本，照 dsh `materializeAppendBatch`
- * （`harness/packages/session/session-persistence/src/storage-contract.ts:131-137`，`687f282e`；JSONL 後端在
+ * （`packages/session/session-persistence/src/storage-contract.ts:131-137`，`687f282e`；JSONL 後端在
  * `session-persistence-jsonl/src/storage.ts:191` 與 `:308` 寫入前都先跑它）。
  *
  * **後端為什麼不能直接序列化日誌裡那份：** 日誌裡的事件全凍過，而 V8 的 `JSON.stringify` 對凍過的巢狀撐得比較淺：
@@ -2379,8 +2379,8 @@ export interface SessionAppendOptions {
  * （`references/deepseek-harness/packages/runtime-diagnostics/invariants/src/index.ts:32`），
  * `register()` 裡是 `ctx.plugin(installInvariant)`（同檔 `:160-168`），**註冊表一份
  * session 都不交**。要看得到 session 的配套入口自己 `inject: ['sessions']`
- * （`harness/packages/goal/goal/src/invariant.ts:71`），而那樣拿到的 `Session` 是寫得動的
- * （`append` 在 `harness/packages/core/session/src/index.ts:602`）。
+ * （`packages/goal/goal/src/invariant.ts:71`），而那樣拿到的 `Session` 是寫得動的
+ * （`append` 在 `packages/core/session/src/index.ts:602`）。
  *
  * 所以 dsh 的答案不是「配套入口不准寫」，是「**寫入要另外去要**」。收窄之後我們一樣：
  * 要寫日誌走 {@link ./sessions.ts | registry.sessions}，那個通道的名字認這件事。
@@ -2499,7 +2499,7 @@ export class SessionLog implements SessionLogView {
 
   /**
    * 接上 seed：逐顆拷、驗信封與資料規則、驗連續、凍，最後補一顆 `session/end-seed`。順序照 dsh 的 seed
-   * （`harness/packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。可共用的陣列不拷不凍，
+   * （`packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。可共用的陣列不拷不凍，
    * 見 {@link SessionLogOptions.seed}。
    *
    * @throws 某一顆信封或資料規則不對、沒標過的 seed 某一顆帶了 JSON 表達不出來的東西（`TypeError`，#1549），或 `seq` 不等於它的位置。

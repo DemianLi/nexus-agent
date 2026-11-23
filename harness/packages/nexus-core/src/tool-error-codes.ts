@@ -39,7 +39,7 @@ export interface ToolErrorInfo {
 export const TOOL_TIMEOUT = 'TOOL_TIMEOUT';
 /**
  * 這一輪被中止，取消了這次呼叫：**本體已經開始**，落定之後結果被換掉。dsh `packages/core/tools` 的
- * `TOOL_ABORTED`，字串是 `ABORTED`（`harness/packages/core/tools/src/index.ts:462`）。
+ * `TOOL_ABORTED`，字串是 `ABORTED`（`packages/core/tools/src/index.ts:462`）。
  */
 export const TOOL_ABORTED = 'ABORTED';
 /**

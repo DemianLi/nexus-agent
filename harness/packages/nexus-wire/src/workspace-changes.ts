@@ -2,7 +2,7 @@
  * 每一輪改動檔案的紀錄上線的形狀（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。
  *
  * 照 dsh `workspace-changes`（`packages/deliverables/workspace-changes/src/types.ts`、
- * `harness/packages/client/ui-deliverables/src/{changes.ts,present-open.ts}`，`ddefc45`）：
+ * `packages/client/ui-deliverables/src/{changes.ts,present-open.ts}`，`ddefc45`）：
  *
  * - **事件只是一個指標**：`custom` frame，`data.name` 是 {@link WORKSPACE_CHANGES}，`payload` 是
  *   {@link WorkspaceChangesPayload}。摘要本身留在 server，web 拿 `seq` 去兩條路由要。
@@ -80,7 +80,7 @@ export function changesDiffPath(threadId: string): string {
  * 一輪改動摘要的網址（路徑加查詢），`GET`。
  *
  * **查詢怎麼拼歸 wire**（[#684](https://github.com/DemianLi/nexus-agent/issues/684)），照 dsh
- * `harness/packages/client/ui-deliverables/src/changes.ts` 的 URL builder：用 `URLSearchParams` 拼，參數名住在這一處，
+ * `packages/client/ui-deliverables/src/changes.ts` 的 URL builder：用 `URLSearchParams` 拼，參數名住在這一處，
  * web 與 harness 的測試都從這裡拿。參數名兩邊各拼一份的時候，harness 把它改名、連自己的測試一起改，
  * web 照舊送舊名，server 回 400，兩邊的測試照樣綠。
  *

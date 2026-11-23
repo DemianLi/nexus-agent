@@ -21,7 +21,7 @@
           args: ['-y', '@modelcontextprotocol/server-github']
 ```
 
-完整的 patch 寫法見 [`docs/operations.md`](../../docs/operations.md)。
+完整的 patch 寫法見 [`docs/operations.md`](../../../docs/operations.md)。
 
 `apply` 只登記一個逐條 thread 的工具來源（`tools.threadSource`，要 `@nexus/tools` `^2.6.0`）；工具、閘門、隱藏規則與 hub 都在組每一條
 thread 時由 `mountServer` 建，每條 thread 各一份；連線在 CLI 是每條 thread 自己開，serve 向連線池取用、同一份設定整台共用一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
@@ -53,13 +53,13 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `approval`             | 兩者      | 否   | 哪些工具要先讓人核准，預設 `{ default: ask }`：整台都問（見核准）                          |
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
-[`docs/standards.md`](../../docs/standards.md)）。
+[`docs/standards.md`](../../../docs/standards.md)）。
 
 **憑證**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：設定檔裡要給秘密時，`connection.env` 或 `connection.headers`
 的值寫成 `{ credential: <名字> }`（標頭可以加 `prefix`，例如 `'Bearer '`）。建連線那一刻向宿主的 `mcp:credentials` 服務要值、代入；
 設定、`--dump-config`、池鍵、錯誤訊息裡都只有名字。名字是環境變數形狀（`[A-Za-z_][A-Za-z0-9_]*`）。宿主沒提供服務、名字沒有值、
 服務拋錯，這一列都算連不上（同 `failOnStartupError`）。serve 與 CLI 從哪裡找值見
-[`docs/operations.md`〈MCP server 要的憑證〉](../../docs/operations.md#mcp-server-要的憑證)。
+[`docs/operations.md`〈MCP server 要的憑證〉](../../../docs/operations.md#mcp-server-要的憑證)。
 
 **stdio server 的環境照 dsh 以清洗過的父環境為底**（[#726](https://github.com/DemianLi/nexus-agent/issues/726)）：
 子行程拿到的是 nexus 這個行程的環境，扣掉名字像憑證的（`/KEY|PASSWORD|SECRET|TOKEN/i`，不分大小寫）與
@@ -149,7 +149,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **問人之後的事不歸這一列**，全在核准中介層，跟 `submit_record` 同一條路、同一組碼：
   - 人按不允許：`APPROVAL_REJECTED_BY_USER`。
   - 核准政策是 `never`：不問、一律回絕，`APPROVAL_POLICY_NEVER`。出廠的兩組權限組核准都是 `ask`，要 `never` 得用 `--patch`
-    改 `permission-presets` 那一列（只在有 `--workspace` 時生效，見 [`docs/operations.md`](../../docs/operations.md)）。
+    改 `permission-presets` 那一列（只在有 `--workspace` 時生效，見 [`docs/operations.md`](../../../docs/operations.md)）。
   - **背景子代理**叫到：背後沒有人，一律回絕（`APPROVAL_POLICY_NEVER`）。前景子代理照 #328 問 root 的人。
   - **CLI**（一次性與 REPL 都是）：這個入口沒有核准管道（`HEADLESS_APPROVALS`），沒宣告免問的工具一律回絕，`APPROVAL_POLICY_NEVER`。
     要在 CLI 用 MCP 工具，那幾支得列進 `exempt` 或整台 `default: allow`。
@@ -193,7 +193,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   `permissions` 也不經過 backend——deepagents 明文「custom tools from the agent or other
   middleware are left untouched」。harness 管得住的是「MCP 讀來的資料經由內建 `write_file`
   寫進虛擬 FS」那條路。沒宣告 `connection.sandbox` 的 server 不受管束，宣告了見
-  [`docs/operations.md`](../../docs/operations.md)。其他圍堵方式（容器）不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
+  [`docs/operations.md`](../../../docs/operations.md)。其他圍堵方式（容器）不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
 - **Prompts 不橋接。** dsh 也不支援 MCP prompt templates；工具、指引與資源見上一節。
 - **`tools/list_changed` 不處理，重連也不改工具集合。** dsh 在 server 通知工具清單變了、或重連之後會重新同步並換掉註冊的工具；
   deepagents 建好之後工具集合不可變，註冊表上的工具換不掉。所以：新工具要到下一次組裝才有；重連回來的新一代若少了某個原本有的
@@ -249,7 +249,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 ## 與 dsh 的偏離
 
 技術實現以 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的
-`packages/mcp/mcp-client` 為標準（見 [AGENTS.md](../../AGENTS.md)）。這裡同 dsh 直接接
+`packages/mcp/mcp-client` 為標準（見 [contributing.md](../../../docs/contributing.md)）。這裡同 dsh 直接接
 SDK client（`@modelcontextprotocol/client`），每顆工具是一份 `NexusTool`（#2353）：原樣的 `inputSchema` 當參數上線
 （dsh `packages/mcp/mcp-client/src/tools.ts:260`），`taskSupport: 'required'` 當場拒絕（`:137`、`:280`）。結果的轉換與 elicitation
 跟 `@langchain/mcp-adapters` 2.0.0 同形，由 `harness/apps/harness/src/mcp-migration.test.ts` 的對照組釘住。重連是自己包的 supervisor（指數退避與穩定期重置照 dsh）。

@@ -76,7 +76,7 @@ export const WORKSPACE_CAPABILITY = 'workspace';
  *
  * 要它是因為「有沒有工作區、根在哪」原本只有組裝點知道，要用的 plugin 只能靠組裝點把根塞進自己的 `Config`
  * （`workspace-changes` 的 `root`）——那一列就進不了出貨清單。照 dsh：dsh 的 `eligible` 看會話 header 的 `cwd`
- * （`harness/packages/deliverables/workspace-changes/src/index.ts:58-61`，`ddefc45`），沒有 `cwd` 就不合格、什麼都不做；
+ * （`packages/deliverables/workspace-changes/src/index.ts:58-61`，`ddefc45`），沒有 `cwd` 就不合格、什麼都不做；
  * 我們的 header `cwd` 記的是行程目錄不是工作區根（見 {@link WORKSPACE_CAPABILITY}），所以退到最接近的實作：
  * 由組裝點經 host 服務交一格根，**不合格由服務缺席表達**。與 {@link WORKSPACE_CAPABILITY} 的分工：那一個答「有沒有」、
  * 在 plugin 的 `apply` 之後才知道；這一個答「在哪」、組裝點最前面就提供，`apply` 當下讀得到。
@@ -163,7 +163,7 @@ export function hostPathOf(root: string, path: string): string {
  * `SandboxModeController`。兩邊分屬不同套件，合約就不能住在其中一邊。
  *
  * 這是 dsh 的分法，不是我們的發明：它的基底套件 `@deepseek-ai/dsh-sandbox` 出的就是
- * 詞彙**加上升級協定**（`harness/packages/sandbox/sandbox/src/index.ts:20` 把 `escalation.ts` 的
+ * 詞彙**加上升級協定**（`packages/sandbox/sandbox/src/index.ts:20` 把 `escalation.ts` 的
  * `EscalationApproval` / `EscalationApprover` / `EscalationOutcome` / `EscalationRequest`
  * 一起轉出去，SHA `6b1808f`），而 `sandbox-policy` 與執行端的 `sandbox-local` 各自依賴它。
  *

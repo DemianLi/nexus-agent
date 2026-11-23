@@ -31,11 +31,23 @@ export function reportSandbox(line: string): void {
   report(line);
 }
 
-/** 從這個模組往上找產物裡的 spawner；找不到回 `undefined`。 */
+/**
+ * 從這個模組往上找產物裡的 spawner；找不到回 `undefined`。
+ *
+ * 找的範圍到 harness 根為止：原始碼樹裡 spawner 放在 `harness/native/`，往上一層就是 repo 根，那裡的 `native/nexus-sandbox-spawner`
+ * 是搬到 `harness/` 之前的舊位置，不拿來用，存在就拋錯講要搬去哪裡，免得既有的 checkout 悄悄跑著舊執行檔。
+ */
 export function findSpawnerBinary(from = fileURLToPath(import.meta.url)): string | undefined {
   for (let dir = dirname(from); ; dir = dirname(dir)) {
     const candidate = join(dir, SPAWNER_PATH);
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) {
+      if (existsSync(join(dir, 'pnpm-workspace.yaml'))) {
+        throw new Error(
+          `${candidate} 是搬到 harness/ 之前的舊位置，已經不再使用：請把它搬到 ${join(dir, 'harness', SPAWNER_PATH)}。`,
+        );
+      }
+      return candidate;
+    }
     if (dirname(dir) === dir) return undefined;
   }
 }

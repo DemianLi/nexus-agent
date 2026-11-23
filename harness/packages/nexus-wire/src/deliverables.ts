@@ -49,7 +49,7 @@ export interface DeliverablesPresentedPayload {
 
 /**
  * 一個交付檔在 server 上的身分，照 dsh 的 `statOf`
- * （`harness/packages/api/workspace-files/src/index.ts:448-454`，`ddefc45`）。
+ * （`packages/api/workspace-files/src/index.ts:448-454`，`ddefc45`）。
  *
  * **不回 `absolutePath`，這是一條偏離。** dsh 那一格是給它的「在 Host 上開啟」用的——瀏覽器拿著
  * 主機絕對路徑去叫 `present.open`。我們不做那個動作（#452 的背景：多人共用的遠端主機，在那裡開檔
@@ -104,7 +104,7 @@ export interface DeliverableFilePage extends DeliverableFileStat {
  *   碼是 {@link DeliverableRefusalCode}，形狀照 dsh 的 `<命名空間>/<理由>`（dsh 的讀檔服務是 `workspace-file/…`）。
  *   `too-large` 照 dsh 帶上限數字。**沒有狀態碼這一層**，也就沒有「理由→數字→理由」的兩份對照表。
  * - **參數本身不合格**（座標、翻頁、窗口）不是讀檔服務的碼：dsh 回閘道層共用的 `gateway/bad-request`
- *   （`harness/packages/api/workspace-files/src/index.ts:360`、`:370`），這裡對應協定錯誤 `invalid_argument`。
+ *   （`packages/api/workspace-files/src/index.ts:360`、`:370`），這裡對應協定錯誤 `invalid_argument`。
  *
  * ### 位元組怎麼上線：多段表單，不是 base64
  *

@@ -30,7 +30,7 @@
  * `peerDependencies`，`devDependencies` 留 `workspace:*`），core 不 import 它。**撤除條件**同 #1421 Q2 (b)：SDK 與定義套件要發布到
  * 私有 registry 之前，把實作搬進這個套件。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：下面三個值與型別是 `skills` 的 `/名字` 叫用的。
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：下面三個值與型別是 `skills` 的 `/名字` 叫用的。
  *
  * @module
  */

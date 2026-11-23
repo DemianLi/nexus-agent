@@ -22,12 +22,12 @@ const SCOPE = {
 
 /** 目標目錄 ← 上游路徑。 */
 const COPIES = [
-  ['cordis/src', 'harness/packages/core/src'],
-  ['cordis/tests', 'harness/packages/core/tests'],
-  ['loader/src', 'harness/packages/loader/src'],
-  ['include/src', 'harness/packages/include/src'],
-  ['logger-console/src', 'harness/packages/logger-console/src'],
-  ['logger-console/tests', 'harness/packages/logger-console/tests'],
+  ['cordis/src', 'packages/core/src'],
+  ['cordis/tests', 'packages/core/tests'],
+  ['loader/src', 'packages/loader/src'],
+  ['include/src', 'packages/include/src'],
+  ['logger-console/src', 'packages/logger-console/src'],
+  ['logger-console/tests', 'packages/logger-console/tests'],
 ];
 
 const [upstream, flag] = process.argv.slice(2);
@@ -343,7 +343,7 @@ try {
   // 1. 上游原樣。
   const base = join(work, 'upstream');
   for (const [, from] of COPIES) cpSync(join(upstream, from), join(base, from), { recursive: true });
-  // 2. 上游修補，依檔名順序；每一份都是上游 PR 的原樣 diff（只留 harness/packages/core 與 harness/packages/loader）。
+  // 2. 上游修補，依檔名順序；每一份都是上游 PR 的原樣 diff（只留 packages/core 與 packages/loader）。
   const patches = existsSync(PATCHES) ? readdirSync(PATCHES).filter((name) => name.endsWith('.patch')).sort() : [];
   for (const name of patches) {
     execFileSync('patch', ['-p1', '--forward', '--batch', '-s', '-d', base, '-i', join(PATCHES, name)], { stdio: 'inherit' });

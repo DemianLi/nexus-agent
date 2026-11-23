@@ -1,7 +1,7 @@
 /**
- * nexus 層（#1684）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/status-glyph.tsx`），外觀照 SG（#1468 Q8）。
+ * nexus 層（#1684）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/status-glyph.tsx`），外觀照 SG（#1468 Q8）。
  * 它是 `turn-status.tsx` 的依賴（vendor 那份 import `@/components/ui/status-glyph`，解析到這一層），所以一起 vendor 進來。
- * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」：
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」：
  *
  * - vendor 檔有一條 patch（第 71 條，`0022` strict-index）：nexus 的 `noUncheckedIndexedAccess` 下補非空斷言。
  * - 這一層（第 73 條）：沒有 `window.matchMedia` 或 `IntersectionObserver` 的環境（jsdom）不畫 glyph、回 `null`。vendor 的 effect

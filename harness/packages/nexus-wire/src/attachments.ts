@@ -6,7 +6,7 @@
  * `run.start` 帶 {@link PromptAttachment} 的收下**已實作**（有附件儲存的組裝）：檔案要有這條 thread 的收據，圖要過收圖檢查與
  * 五道上限（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) 加了單邊上限）；沒有附件儲存的組裝仍回 `not_supported`。只有附件、文字是空的也收（dsh 同）。
  *
- * 照 dsh 的 `file-upload`（`harness/packages/client/file-upload/src/{protocol,types,http-route}.ts`，`5badb150`）：
+ * 照 dsh 的 `file-upload`（`packages/client/file-upload/src/{protocol,types,http-route}.ts`，`5badb150`）：
  *
  * - **上傳**：`POST` 一個原始位元組的 body（`content-type: application/octet-stream`），檔名走查詢參數 `name`；回
  *   一張**收據**。位元組存在會話日誌之外，日誌與訊息只留參照（dsh 的 `attachment-local`）。

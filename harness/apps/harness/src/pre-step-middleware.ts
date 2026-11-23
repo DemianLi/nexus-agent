@@ -171,7 +171,7 @@ function injectionSource(name: string, injection: PreStepInjection): UserMessage
 
 /**
  * 交給 listener 的中止訊號（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：dsh 交的是這一步的 `signal`
- * （`harness/packages/core/agent-loop/src/agent.ts:275`），也就是人按停止時舉起的那一顆。
+ * （`packages/core/agent-loop/src/agent.ts:275`），也就是人按停止時舉起的那一顆。
  *
  * 我們這一顆**不在 `runtime.signal`**：pump 把這一輪的中止訊號放在 `configurable` 的 `TURN_CANCEL_CONFIG_KEY`，刻意不交給
  * LangGraph（交了會丟下正在跑的工具，見 `@nexus/core` 的 `turn-cancel.ts`）。所以先讀那一顆；呼叫端若另外給了 LangGraph 的

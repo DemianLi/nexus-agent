@@ -128,7 +128,7 @@ export function collectSessionEventTypes(repoRoot: string, roots: readonly strin
         if (topLevel) {
           const exported =
             declaration.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-          if (!/^packages\/nexus-core\/src\//u.test(path)) {
+          if (!/^harness\/packages\/nexus-core\/src\//u.test(path)) {
             violations.push(
               `頂層的 interface SessionEventMap（${here}）不在 ${CORE_MODULE} 裡。改個名字，或改用 declare module '${CORE_MODULE}' 補種類。`,
             );
@@ -186,7 +186,7 @@ export function collectSessionEventTypes(repoRoot: string, roots: readonly strin
 }
 
 /** 預設要掃的目錄（相對於 repo 根）。 */
-export const EVENT_CATALOG_ROOTS: readonly string[] = ['packages', 'harness/apps/harness/src'];
+export const EVENT_CATALOG_ROOTS: readonly string[] = ['harness/packages', 'harness/apps/harness/src'];
 
 /** 生成檔的位置，相對於 repo 根。 */
 export const KNOWN_EVENT_TYPES_PATH = 'harness/packages/nexus-core/src/known-event-types.ts';

@@ -25,7 +25,7 @@
  * ## 舊位置
  *
  * 以前讀的是**程式碼資料夾根目錄**的 `.env`。`pnpm --filter` 起 `cli:live` 與 `serve:live` 時目前資料夾是
- * `harness/apps/harness`，那個檔不會再被讀到。**不偷偷再讀舊位置當退路**（[docs/standards.md](../../../docs/standards.md)
+ * `harness/apps/harness`，那個檔不會再被讀到。**不偷偷再讀舊位置當退路**（[docs/standards.md](../../../../docs/standards.md)
  * 的「不得 fallback」）；也不能默默失效——舊檔還在、而需要的名字又沒有值時，直接失敗並指名搬去哪裡
  * （{@link LaunchEnvOptions.needs}）。
  *
@@ -143,21 +143,24 @@ function isBootstrapOnly(name: string): boolean {
 }
 
 /**
- * 程式碼資料夾根目錄的舊 `.env`；**安裝樹沒有這個位置，回 `undefined`**（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
+ * 程式碼資料夾根目錄的舊 `.env`；**安裝樹沒有這個位置，回空陣列**（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
  *
- * 原始碼樹裡 `moduleDir` 是 `harness/apps/harness/src`，往上三層是 repo 根，那裡的 `.env` 才是以前讀的那一份。
- * 安裝樹（`lib/`）往上三層是 `/opt` 這種系統目錄——`current` 連結被 Node 解成實際路徑之後，那裡根本不是什麼
+ * 原始碼樹裡 `moduleDir` 是 `harness/apps/harness/src`，往上四層是 repo 根，往上五層是放著 repo 的外層資料夾：
+ * 兩處的 `.env` 都曾經是讀取來源，所以兩處都列，不因此變成讀取來源。
+ * 安裝樹（`lib/`）往上幾層是 `/opt` 這種系統目錄——`current` 連結被 Node 解成實際路徑之後，那裡根本不是什麼
  * 「程式碼資料夾根目錄」，把一份不相干的 `/opt/.env` 當成舊檔叫人搬，是誤導。判準是產物根有沒有建置戳記
  * （{@link isPackedTree}，為什麼選它寫在那裡）。
  *
  * @param moduleDir - 本模組所在的目錄，省略即真的位置；測試才傳。
  */
-export function legacyEnvFileFor(moduleDir: string = import.meta.dirname): string | undefined {
-  return isPackedTree(moduleDir) ? undefined : resolve(moduleDir, '../../../.env');
+export function legacyEnvFilesFor(moduleDir: string = import.meta.dirname): readonly string[] {
+  return isPackedTree(moduleDir)
+    ? []
+    : [resolve(moduleDir, '../../../../.env'), resolve(moduleDir, '../../../../../.env')];
 }
 
-/** {@link legacyEnvFileFor} 在真的位置上的答案。 */
-export const LEGACY_ENV_FILE = legacyEnvFileFor();
+/** {@link legacyEnvFilesFor} 在真的位置上的答案。 */
+export const LEGACY_ENV_FILES = legacyEnvFilesFor();
 
 /** 讀一份 `.env` 但不套用。檔案不存在是正常的（回 `undefined`）；其他讀不了的原因走 `warn`。 */
 function readEnvLayer(
@@ -207,7 +210,7 @@ export interface LaunchEnvOptions {
   readonly warn?: (line: string) => void;
   /** 舊位置的檔案路徑。省略即程式碼資料夾根目錄的 `.env`（安裝樹沒有）；測試才傳。 */
   readonly legacyFile?: string;
-  /** 本模組所在的目錄，決定「舊位置」在哪、有沒有（{@link legacyEnvFileFor}）；測試才傳。 */
+  /** 本模組所在的目錄，決定「舊位置」在哪、有沒有（{@link legacyEnvFilesFor}）；測試才傳。 */
   readonly moduleDir?: string;
 }
 
@@ -239,11 +242,13 @@ export function loadLaunchEnv(options: LaunchEnvOptions): LaunchEnvironment {
     ...(user === undefined ? [] : [{ source: 'user-env' as const, ...user }]),
   ];
   const read = new Set([project?.path, user?.path]);
-  const legacy =
-    options.legacyFile ??
-    (options.moduleDir === undefined ? LEGACY_ENV_FILE : legacyEnvFileFor(options.moduleDir));
-  const legacyEnvFile =
-    legacy !== undefined && !read.has(legacy) && existsSync(legacy) ? legacy : undefined;
+  const legacyCandidates =
+    options.legacyFile === undefined
+      ? options.moduleDir === undefined
+        ? LEGACY_ENV_FILES
+        : legacyEnvFilesFor(options.moduleDir)
+      : [options.legacyFile];
+  const legacyEnvFile = legacyCandidates.find((file) => !read.has(file) && existsSync(file));
   const snapshot: LaunchEnvironment = Object.freeze({
     layers: Object.freeze(layers),
     ...(legacyEnvFile === undefined ? {} : { legacyEnvFile }),

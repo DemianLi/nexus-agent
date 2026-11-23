@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { pathsPlugin, sourceHook } from '../../vitest.shared.ts';
+import { pathsPlugin, sourceHook } from '../../../vitest.shared.ts';
 import { DurationSequencer } from './src/test-shard-sequencer.ts';
 
 /**

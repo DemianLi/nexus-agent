@@ -1,6 +1,6 @@
 /**
- * nexus 層（#1684）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/turn-status.tsx`），外觀照 SG（#1468 Q8）。
- * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」：
+ * nexus 層（#1684）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/turn-status.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」：
  *
  * - vendor 檔有一條 patch（第 72 條，`0023`）：拿掉兩處 `role="status"`。代理的現況只由 `features/status/line.tsx` 唸（§8），
  *   live region 由它包在外面；`live-region.test.ts` 不放行 vendor。

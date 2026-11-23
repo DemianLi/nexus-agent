@@ -212,6 +212,6 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   `dist/index.mjs:5363-5366`），舊協定才送。
 - 一則回應的上限 16 MiB：TS 的 HTTP 兩條路都不設上限。
 - SSE 事件超過上限時，錯誤訊息只說這一則的串流斷了，不說是太大（見〈橋〉）。只讓這一則失敗這一點跟 dsh 相同：dsh 的 `lost` 只在 SDK 的 `onclose`
-  與工具同步失敗時呼叫（`harness/packages/mcp/mcp-client/src/connection.ts:292-294`、`:304`，`8bd0733`），請求失敗只往外丟（`:380-383`）。
+  與工具同步失敗時呼叫（`packages/mcp/mcp-client/src/connection.ts:292-294`、`:304`，`8bd0733`），請求失敗只往外丟（`:380-383`）。
 - 新協定的 `server/discover` 10 秒沒回就退回 `initialize`，這 10 秒關不掉（rmcp 的私有常數）。TS 用 `startupTimeoutMs` 當握手期限，逾時就是錯、不退回。
 - 監督者的訊息有兩處不逐字：小於 1e-6 或不小於 1e21 的毫秒數，宿主不寫成指數；超過 2^31−1 ms 的延遲，TS 的 `setTimeout` 改成 1 ms，宿主照設定的時間等。

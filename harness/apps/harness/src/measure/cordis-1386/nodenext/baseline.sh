@@ -55,7 +55,7 @@ build() {
   measure "  建 loader 宣告檔" "$T/loader" tsconfig.json
 }
 
-echo "== 上游原樣（harness/packages/core/src 不改）"
+echo "== 上游原樣（packages/core/src 不改）"
 rm -rf "$T/cordis/src" && cp -R "$UPSTREAM/packages/core/src" "$T/cordis/src"
 rm -rf "$T/cordis/lib" "$T/loader/lib"
 measure "原始碼模式、NodeNext 消費者" "$T/consumer" tsconfig.src.json

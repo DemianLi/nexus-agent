@@ -14,7 +14,7 @@ import { readCascade } from './css-cascade';
 
 /**
  * `solid-glass.overrides.css` 裡沒有別的測試釘住的幾條（#1512，#1468 Q8「機制類保留」）。每一條登記在
- * `harness/vendor/solid-glass/README.md` 的「本地修改」。量的是 `index.css` 疊出來實際勝出的那一條：搬進 layer、被後面的樣式表蓋掉都會紅。
+ * `vendor/solid-glass/README.md` 的「本地修改」。量的是 `index.css` 疊出來實際勝出的那一條：搬進 layer、被後面的樣式表蓋掉都會紅。
  */
 const cascade = readCascade();
 const OVERRIDES = 'styles/solid-glass.overrides.css';

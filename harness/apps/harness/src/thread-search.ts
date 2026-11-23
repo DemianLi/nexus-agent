@@ -3,7 +3,7 @@
  * `THREAD_SEARCH_PATH`，設定見 `settings/thread-search.ts`。
  *
  * 照 dsh 的兩層（`477b4f4`）：host 的 `ApiSessionList.search`（`packages/api/session-controller/src/list.ts:163-266`）與
- * `session-query-sqlite` 的提供方（`harness/packages/session-query/session-query-sqlite/src/index.ts`）。我們沒有「提供方」這一層
+ * `session-query-sqlite` 的提供方（`packages/session-query/session-query-sqlite/src/index.ts`）。我們沒有「提供方」這一層
  * 服務，兩層併在這一個類別裡，順序照 host 那一支。
  *
  * ## 搜得到的一定列得出來；活的讀記憶體

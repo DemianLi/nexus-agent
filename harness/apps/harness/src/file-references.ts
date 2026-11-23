@@ -1,7 +1,7 @@
 /**
  * `@` 引用的列檔與它那一句提示（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）。
  *
- * 照 dsh 的 `file-reference-local`（`harness/packages/context/file-reference-local/src/{search,index}.ts`，`477b4f4`）：
+ * 照 dsh 的 `file-reference-local`（`packages/context/file-reference-local/src/{search,index}.ts`，`477b4f4`）：
  *
  * - {@link WorkspaceFileSearch} **逐字移植** dsh 的同名 class：不讀 `.gitignore`、用固定清單按 basename 排除目錄、
  *   隱藏檔預設不列、不跟符號連結、不出工作區；一次最多 20 筆，索引上限 5 萬筆。空 query 或含 `/` 的即時列那一層，

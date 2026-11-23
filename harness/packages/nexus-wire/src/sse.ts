@@ -59,7 +59,7 @@ function isComment(line: string): boolean {
  * 把一段 SSE 位元流解回 `Event`。
  *
  * 吃的是 `Response.body` 那種 `ReadableStream<Uint8Array>`——**streaming fetch，
- * 不是 `EventSource`**。這一點也照 dsh（`harness/packages/host/apiproxy/src/fetch/client.ts`）：
+ * 不是 `EventSource`**。這一點也照 dsh（`packages/host/apiproxy/src/fetch/client.ts`）：
  * `EventSource` 只能 GET、不能帶 body，而協定規定下行是 `POST … /stream` 帶
  * `EventStreamRequest`，兩者接不上。
  *

@@ -78,7 +78,7 @@ const SUITE = options.suite;
 if (SUITE !== 'glass' && SUITE !== 'reasoning' && SUITE !== 'turn-status')
   throw new Error(`--suite 只收 glass、reasoning 或 turn-status：${SUITE}`);
 const RUNS = Number(options.runs);
-const HARNESS_DIR = options.harness ?? fileURLToPath(new URL('../../harness/', import.meta.url));
+const HARNESS_DIR = options.harness ?? fileURLToPath(new URL('../../harness/apps/harness/', import.meta.url));
 const TSX = join(HARNESS_DIR, 'node_modules/.bin/tsx');
 
 /** 門檻（#1468 Q13）。 */

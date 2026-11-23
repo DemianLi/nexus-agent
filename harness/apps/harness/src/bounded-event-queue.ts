@@ -4,7 +4,7 @@
  *
  * ## 照 dsh 的哪裡
  *
- * 形狀與語意照 `TerminalFollower`（`harness/packages/api/terminal-controller/src/stream.ts:5-87`，`1517a4db`，與 `687f282e` 的 blob 相同）：
+ * 形狀與語意照 `TerminalFollower`（`packages/api/terminal-controller/src/stream.ts:5-87`，`1517a4db`，與 `687f282e` 的 blob 相同）：
  * 每顆以 `Buffer.byteLength(JSON.stringify(frame), 'utf8')` 計，`已排位元組 + 這顆 > 上限` 就失敗並清空佇列，只斷這一個訂閱者；
  * 上限預設 `2 * 1024 * 1024`（`terminal-controller/src/index.ts:87`）。底下的容器用 {@link Deque}（`@nexus/deque`，原碼照抄
  * dsh `packages/util/deque`），和 dsh 的 `RemoteEventQueue`（`packages/api/gateway/src/index.ts:1172-1210`）、`TerminalFollower` 一樣，
@@ -36,7 +36,7 @@
  * 把超過 {@link DOWNLINK_MAX_DEPTH} 層的子樹換成 {@link DEPTH_TRUNCATED}，下行不斷，之後 root 的 `lifecycle failed` 照常到。
  *
  * - **dsh 的對照**：gateway 沒有預檢（遞迴 `JSON.stringify`，失敗送終止 `error` frame，見上）；headless NDJSON 投影
- *   （`harness/packages/bundle/headless/src/json-stream.ts:65-89`，`687f282e`）有 `MAX_DEPTH = 64`、超過換成 `'[truncated: depth]'`，註解點名的就是
+ *   （`packages/bundle/headless/src/json-stream.ts:65-89`，`687f282e`）有 `MAX_DEPTH = 64`、超過換成 `'[truncated: depth]'`，註解點名的就是
  *   這個情境。我們採後者的做法（壓形狀）、前者的標記字串。dsh 的事件裡工具參數是模型吐的原始字串，不會以巢狀物件進事件流；
  *   我們的 `messages` 事件帶 parse 後的物件，這是結構差異。
  * - **為什麼不用 64**：64 是 headless 專用；套到 web 下行會截掉合法的深值。我們的門檻只截「連日誌都收不下」的那一類。

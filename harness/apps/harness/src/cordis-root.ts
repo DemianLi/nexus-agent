@@ -28,13 +28,13 @@
  *
  * **收尾**：相容層組出來的每一個 agent 都用 `ctx.effect` 登記收尾，登記完才交出去；agent 的 `dispose` 就是那筆 effect 的
  * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。這是 dsh
- * `agent-loop` 把 agent 綁在 `ownerCtx.effect` 上的同一招（`harness/packages/core/agent-loop/src/index.ts:603-622`）。根由入口持有，
+ * `agent-loop` 把 agent 綁在 `ownerCtx.effect` 上的同一招（`packages/core/agent-loop/src/index.ts:603-622`）。根由入口持有，
  * 照 dsh launcher 的 `app.current?.fiber.dispose()`（`apps/cli/src/profile-boot.ts:256-263`）：起不來與關掉時都卸載它。
  *
  * ## 偏離登記
  *
  * - **清單由變更紀錄導出（#1412），清單上只有函式插件的列在 Loader 的樹上（#1416 PR 2）**：dsh 的整棵樹本來就由一份 patch
- *   清單導出（`harness/packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以
+ *   清單導出（`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以
  *   「Cordis 不管插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch
  *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘的列不上樹的理由是插件
  *   還在相容層**：上樹跟著「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader

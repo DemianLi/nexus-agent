@@ -73,7 +73,7 @@ export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
 
 /**
  * 檔案工具失敗的原因碼（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。除 `FS_NO_SPACE` 外字面照 dsh `FsErrorCode`
- * （`harness/packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
+ * （`packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
  * （{@link noteFsError}），監聽者標錯時帶出去，最後落進會話日誌那顆 `tool/result` 的 `error`，web 的 trace 列照實顯示。
  *
  * - `FS_NOT_FOUND`：路徑不存在（`read`／`edit`）。
@@ -107,7 +107,7 @@ export type FsErrorCode =
 
 /**
  * 搜尋失敗的碼（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。dsh `SearchErrorCode` 的四個成員
- * （`harness/packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
+ * （`packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
  * 一樣：backend 在這一次呼叫的記錄上寫碼（{@link noteSearchError}），監聽者標錯時帶出去，最後落進會話日誌
  * 那顆 `tool/result` 的 `error`。nexus 沒有 dsh 的 `HarnessError` 註冊表，這是 #293 已經用過的載體，不另立新的。
  */
@@ -276,7 +276,7 @@ export function recordBackendOutcomes<T extends object>(backend: T): T {
  * `FS_SANDBOX_DENIED`（[#316](https://github.com/DemianLi/nexus-agent/issues/316)）。
  *
  * **只補碼**，文字與狀態是工具自己的。照 dsh：註冊表從拋出來的 `HarnessError` 通用地取碼
- * （`harness/packages/core/tools/src/index.ts:635-641`，SHA `c291e79`），不看是哪顆工具。成功的、已經有碼的、
+ * （`packages/core/tools/src/index.ts:635-641`，SHA `c291e79`），不看是哪顆工具。成功的、已經有碼的、
  * 包在 `Command` 裡的都原樣交出。
  */
 function withSandboxCode(result: PipelineResult, record: CallRecord): PipelineExecuteResult {

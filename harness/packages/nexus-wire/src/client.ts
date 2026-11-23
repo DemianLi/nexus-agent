@@ -1051,7 +1051,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | ThreadManagementCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
-    // （`harness/packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
+    // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
     const response = await postJson(commandPath(threadId, method), command);
     if (!response.ok) {
       throw new UplinkTransportError(response.status, await response.text());

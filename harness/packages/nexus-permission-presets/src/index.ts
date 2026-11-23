@@ -38,7 +38,7 @@
  * `permission/preset` 的事件宣告（`SessionEventMap`）住在 `@nexus/core` 的 `session-log.ts`（前例 `feedback/*`、`todo/write`），遷出的插件因此
  * 不必對 core 寫 `declare module`。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

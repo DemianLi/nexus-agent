@@ -2,7 +2,7 @@ name: 合併後完整一輪
 
 # 每個合進 develop 的 commit 各跑一輪完整的 ci.yml（不看異動、一律全跑），而且不被下一個 commit 取消，
 # 紅了就能指出是哪一張 PR。不擋合併，也不能設成 required check：它只在 push 時跑，PR 上永遠等不到它。
-# 紅了怎麼處理見 docs/agents/collab-mode.md「合併與撤回」。
+# 紅了先只重跑失敗的 job 一次；仍紅就分類，撤回與否由合併的人判斷。
 #
 # 這支刻意不設 concurrency：ci.yml 被呼叫時用 sha 當 group、不取消（見 ci.yml 的 concurrency）。
 # 呼叫端若設成同一個 group，兩邊會搶同一組。
@@ -154,7 +154,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @nexus/web --fail-if-no-match run build
           pnpm --filter @nexus/web --fail-if-no-match exec vite build --config guard/vite.config.ts
-          node "$GITHUB_WORKSPACE/apps/web/visual/shoot.ts" web "$RUNNER_TEMP/visual/base"
+          node "$GITHUB_WORKSPACE/web/visual/shoot.ts" web "$RUNNER_TEMP/visual/base"
       - name: 比對
         env:
           VISUAL_HEAD: ${{ github.sha }}
@@ -225,6 +225,6 @@ jobs:
             echo "- PR：$pr_line"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RESULT" != "success" ] || [ "$NATIVE_RESULT" != "success" ]; then
-            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先試撤回：過得了 gate 就開撤回 PR，修好再重新開；要調高基準才過得了就不撤回，改開修復 PR 往前修（不調基準、不改 gate）。見 docs/agents/collab-mode.md〈合併與撤回〉。"
+            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先試撤回：過得了 gate 就開撤回 PR，修好再重新開；要調高基準才過得了就不撤回，改開修復 PR 往前修（不調基準、不改 gate）。"
             exit 1
           fi

@@ -48,7 +48,7 @@
  *   拒絕——撞名照樣會響，續接不會被當成撞名。
  * - **原版號另外交一格 `storedFormatVersion`**（{@link ReadonlyStoredSession.storedFormatVersion} 等三處；理由 1，
  *   **類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：dsh 的邏輯 header 永遠是目前版，
- *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`harness/packages/core/session/src/types.ts:96-100`，`687f282e`），
+ *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`packages/core/session/src/types.ts:96-100`，`687f282e`），
  *   所以介面上沒有原版號。我們沒有遷移鏈：續接把舊檔的事件原樣搬進目前版的世代檔
  *   （[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③），只讀打開不遷，舊檔一直是舊版號的那一份。讀方
  *   （本文解析、引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交
@@ -58,7 +58,7 @@
  * - **引用快照的 `capturedFormatVersion` 記原版號**（`SessionReferenceSourceEntry.capturedFormatVersion`，寫在
  *   `harness/apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
  *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`，`687f282e`），也就是目前版——
- *   前提是 store 先把事件轉成目前版才交出去（`harness/packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
+ *   前提是 store 先把事件轉成目前版才交出去（`packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
  *   （`session-format.ts` 模組說明），交給讀方的事件是磁碟上的原樣，不是目前版的表示法，所以記原版號才對得上內容。
  *   **撤除條件**：遷移鏈把事件轉成目前版再交給讀方的那一刀（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)
  *   第四刀）落地時，改成照 dsh 記目前版。跟上一條的撤除條件不同，兩條分開撤。
@@ -90,7 +90,7 @@ import type { SessionEvent } from './session-log.js';
  * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
  * **偏離 dsh，已部分撤除**（#1537 Q2 (a)，demian 2026-10-17 拍板）：dsh 的格式紀錄是機器檢查的——
  * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
- * 由 `harness/scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的
+ * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的
  * 段落（理由 1）；機器檢查那一半已由 #1856 補上（`82c95e1a`）。剩下 `finalized/` 凍結點與 `session-format-status.md`，
  * **類別：過渡**（型別抽取的工具鏈已經有了，不再是理由 1；延到發版節奏定了再做），撤除條件
  * [#1890](https://github.com/DemianLi/nexus-agent/issues/1890)。七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條的來歷。
@@ -193,7 +193,7 @@ import type { SessionEvent } from './session-log.js';
  * 在比這一格，於是它在 `/B` 底下跑、把 `/B` 生出來的事件續寫進同一份日誌，之後一台 13 讀它，
  * 照 header 把 `/B` 的檔錨到 `/A`。升到 13 把這條路封掉——12 讀 header 的時候就以
  * {@link SessionFormatUnsupportedError} 拒讀。這正是 dsh 那條門檻寫的原文情形
- * （`harness/packages/core/session/src/types.ts:75-87`，`ddefc45`：「parses without error」不算 correctness，
+ * （`packages/core/session/src/types.ts:75-87`，`ddefc45`：「parses without error」不算 correctness，
  * 靜靜略過會左右重建的內容就是一次讀錯）。
  *
  * 12 以前的檔直接讀，但這一次「舊檔怎麼讀」跟前幾次不同：**沒有那一格是常態，不是異常**
@@ -211,7 +211,7 @@ import type { SessionEvent } from './session-log.js';
  * root 的回覆撞到輸出上限的那一輪以 `reason: {kind:'max-tokens'}` 收尾（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。
  * **非升不可**：14 讀到它會當成正常結束——14 的 goal 續行只認得 `aborted`，於是在一輪撞到上限之後照樣
  * 排下一輪，而 15 在那一刻收回了續行授權。同 dsh 那條門檻（「no longer handle a new log with full semantic
- * correctness」，`harness/packages/core/session/src/types.ts:74-85`，`477b4f4`）。
+ * correctness」，`packages/core/session/src/types.ts:74-85`，`477b4f4`）。
  *
  * v14 的檔直接讀：沒有這一種就是那時候沒記——**不是沒撞到**。那時候的 `assistant/message` 已經帶著
  * `response_metadata.finish_reason`，要數舊檔的截斷得從那一格推，不能讀 `turn/end`。
@@ -348,7 +348,7 @@ import type { SessionEvent } from './session-log.js';
  * 四格都是**建立者的描述**，見 {@link StoredSessionHeader} 各格。這是 header 的形狀第二次變（第一次是 13）。
  *
  * 升版照新增欄位的慣例（同 27），也照 dsh 那條門檻把 header 的形狀列為結構性變更、「拿不準就升」
- * （`harness/packages/core/session/src/types.ts:74-87`，`5badb15`），**不是 13 那種非升不可**：29 續接一份 30 的日誌時，
+ * （`packages/core/session/src/types.ts:74-87`，`5badb15`），**不是 13 那種非升不可**：29 續接一份 30 的日誌時，
  * 重寫 header 那一行是 `{ ...header, version: … }`（`harness/apps/harness/src/jsonl-session-store.ts`），這四格原樣活過重寫；
  * 而它們描述的本來就是**最初寫這份日誌的那一個行程**，續接的行程不該蓋掉它（30 自己續接也不蓋），沒有任何讀方拿它們
  * 判准不准續接、怎麼重建對話。
@@ -605,7 +605,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * 一輪的時鐘到點（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）時，這一輪照停止鍵的路收尾，
  * 日誌以 `reason: {kind:'aborted', cause:{kind:'hook', reason:'turn-timeout'}}` 收尾；root 與背景子代理的日誌都會寫。形狀照 dsh 的
- * `AgentCancelCause`（`harness/packages/core/session/src/types.ts:189-193`，`687f282e`）。v49 的檔直接讀：那時候沒有時鐘，`cause` 只有
+ * `AgentCancelCause`（`packages/core/session/src/types.ts:189-193`，`687f282e`）。v49 的檔直接讀：那時候沒有時鐘，`cause` 只有
  * `user` 與 `parent`。
  *
  * 升版照新增詞彙的慣例（同 22），不是非升不可：讀 `aborted` 的 goal 續行與掃描只看 `reason.kind`，一樣當成「被打斷」；歷史把 `cause` 原樣帶上收尾的 frame。
@@ -808,7 +808,7 @@ export interface StoredSessionHeader {
   readonly parentSession?: string;
   /**
    * 這份是 spawn 出來的子代理（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh `SessionHeader.origin`
-   * （`harness/packages/core/session/src/types.ts:95-131`，`687f282e`）。51 起新建的子代理一律寫；50 以前的沒有，見 {@link isSubagentSessionHeader}。
+   * （`packages/core/session/src/types.ts:95-131`，`687f282e`）。51 起新建的子代理一律寫；50 以前的沒有，見 {@link isSubagentSessionHeader}。
    */
   readonly origin?: 'subagent';
   /**
@@ -979,7 +979,7 @@ export interface StoredSessionListOptions {
 
 /**
  * {@link SessionStore.list} 的一格，照 dsh 的 `SessionPersistenceSnapshot`
- * （`harness/packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
+ * （`packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
  */
 export interface StoredSessionSnapshot {
   /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
@@ -1052,7 +1052,7 @@ export interface ResumedStoredSession {
 
 /**
  * 這一版拒絕解讀的那份原始日誌在哪裡，照 dsh 的 `SessionLocation`
- * （`harness/packages/session/session-persistence/src/errors.ts:85-90`）：只給拒絕診斷用，讓管理員找得到那份檔。
+ * （`packages/session/session-persistence/src/errors.ts:85-90`）：只給拒絕診斷用，讓管理員找得到那份檔。
  */
 export interface SessionLocation {
   /** 後端的種類，例如 `'jsonl'`。 */
@@ -1156,7 +1156,7 @@ export class SessionNotFoundError extends Error {
 
 /**
  * 另一個寫入把手握著這份會話——照 dsh 的 `SessionAlreadyOwnedError`
- * （`harness/packages/session/session-persistence/src/errors.ts`，SHA `c291e79`）。
+ * （`packages/session/session-persistence/src/errors.ts`，SHA `c291e79`）。
  *
  * 多半是另一個行程還開著它：兩邊都寫的話 `seq` 會撞號，所以第二個不寫。行程死了租約就跟著
  * 放掉（kernel 放的），**沒有逾期**——卡住但還活著的持有者不會被搶，照 dsh。

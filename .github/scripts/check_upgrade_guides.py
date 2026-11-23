@@ -1,4 +1,4 @@
-"""檢查 `docs/upgrade-guide/` 的升級指南：路徑形狀、frontmatter、段落（#1537）。規則見 AGENTS.md「發版」。
+"""檢查 `docs/upgrade-guide/` 的升級指南：路徑形狀、frontmatter、段落（#1537）。規則見 docs/release.md〈升級指南〉。
 
 規則逐條照 dsh `scripts/verify-upgrade-guides.ts`（687f282e）：
 
@@ -222,7 +222,7 @@ def main() -> int:
     for violation in violations:
         print(f'::error::{violation}')
     if violations:
-        print('升級指南的格式不對，規則見 AGENTS.md「發版」。')
+        print('升級指南的格式不對，規則見 docs/release.md〈升級指南〉。')
         return 1
     print('升級指南格式通過。')
     return 0

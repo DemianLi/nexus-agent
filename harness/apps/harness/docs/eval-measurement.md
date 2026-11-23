@@ -2,7 +2,7 @@
 
 `harness/apps/harness/src/eval/` 這一層（基準任務、評分器、`eval:compare`、`eval:survey`、`eval:sessions`）怎麼量、
 量出來的數字能拿去做什麼、哪些量法**現在不建**以及哪天要建。詞彙見 [`GLOSSARY.md`](../GLOSSARY.md)；
-怎麼跑、報表怎麼讀見 [`docs/operations.md`](../../../docs/operations.md) 的 eval 一節。
+怎麼跑、報表怎麼讀見 [`docs/operations.md`](../../../../docs/operations.md) 的 eval 一節。
 
 **這一份記「現在不建」的決定，以及量任何分數之前先守的七條紀律（〈四〉）。** 已經落地的（結果落檔並記版本、「這題成功」判準與平凡地板、
 以題目為單位的區間）寫在 operations.md，不在這裡重複。

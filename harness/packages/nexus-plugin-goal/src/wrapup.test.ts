@@ -2,7 +2,7 @@
  * 收尾指示的文字**逐字**釘在這裡。
  *
  * dsh 自己的測試只寫 `expect(block.text).toContain('<goal_complete>')`
- * （`harness/packages/goal/tool-goal/tests/tool-goal.spec.ts:394`）——那個強度連「正文刪光只留
+ * （`packages/goal/tool-goal/tests/tool-goal.spec.ts:394`）——那個強度連「正文刪光只留
  * 標籤」都抓不到。模型面的文字是這個套件真正交付出去的東西之一，改一個字就該有人看見。
  *
  * @module

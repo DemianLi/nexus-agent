@@ -215,7 +215,7 @@ export const CHANNEL_SERVICE = 'channel';
  * **宿主的義務：同一份組裝服務多條 thread 時，`channel` 是每一條 thread 都會拿到的預設。** 所以 `channel` 只能放
  * 每條 thread 都適用的值；逐條不同的答題者一律交給這支函式，並且不提供 `channel`（或只放每條都適用的那個）。
  * 這是照 dsh：它的答題者用 `scopeTarget(agent, agent)` 分發，對**沒有標籤的監聽者一律放行**、只有帶標籤的才看是不是
- * 這個 agent 或它的上層（`harness/packages/core/scope/src/index.ts:170-185`）——行程級、不分 scope 的答題者服務每一個 agent。
+ * 這個 agent 或它的上層（`packages/core/scope/src/index.ts:170-185`）——行程級、不分 scope 的答題者服務每一個 agent。
  * 我們的 `channel` 對應那個沒有標籤的監聽者，往下退回它就是那個語意。
  *
  * @param threadId - 這次呼叫的 `thread_id`；認不出來（不在圖裡）是 `undefined`。
@@ -294,7 +294,7 @@ export async function runApprovalGate(
 
 /**
  * 一則說得出原因的拒絕，政策擋的與人按拒絕的都走這裡。dsh 兩種都是 `Error: <原因>`
- * （`harness/packages/core/tools/src/index.ts:1479-1487`）。**`status` 不是模型分辨它的依據**：Chat
+ * （`packages/core/tools/src/index.ts:1479-1487`）。**`status` 不是模型分辨它的依據**：Chat
  * Completions 的轉換器不送它（見 `tool-events.ts` 的 `toolRefusal`），模型靠的是前綴與原因。
  */
 function denial(exec: ToolExecution, reason: string, error: ToolErrorInfo): ToolMessage {
@@ -310,8 +310,8 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
  * `sessions` 的測試組裝）就整對不記。
  *
  * **寫不進去就往外拋**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），照 dsh：`user-approval` 的兩顆
- * 都直接 `append`、不接（`harness/packages/interaction/user-approval/src/index.ts:225`、`:232`），拋出去由工具執行那層轉成這次呼叫的
- * 錯誤結果（`harness/packages/core/tools/src/index.ts:1544-1545` → `toolErrorResult`）。我們的對應物是排在第 0 格、包住這顆閘門的
+ * 都直接 `append`、不接（`packages/interaction/user-approval/src/index.ts:225`、`:232`），拋出去由工具執行那層轉成這次呼叫的
+ * 錯誤結果（`packages/core/tools/src/index.ts:1544-1545` → `toolErrorResult`）。我們的對應物是排在第 0 格、包住這顆閘門的
  * 圍堵（`containment.ts` 的 `createContainmentMiddleware`）：它接住這裡拋的錯、翻成錯誤 ToolMessage 並記 `tool/result`。
  * 工具本體一樣沒跑，模型看到的從「被拒」變成「審計寫不進去」的工具錯誤。
  *

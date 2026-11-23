@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
  * 設定檔裡非寫字面不可的（ESLint、`.prettierignore`、`.gitattributes`、`index.css` 的 `@source`）不在這裡。
  */
 const SRC = fileURLToPath(new URL('..', import.meta.url));
-const VENDOR = 'harness/vendor/solid-glass';
+const VENDOR = 'vendor/solid-glass';
 
 const manifest = JSON.parse(readFileSync(join(SRC, VENDOR, 'manifest.json'), 'utf8')) as {
   files: Record<string, unknown>;

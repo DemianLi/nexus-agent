@@ -107,7 +107,7 @@ function sourceEntry(packageDir: string, entry: string): string {
  * @throws 某個套件的 `package.json` 沒有 `name`，或沒有入口。
  */
 export function pluginPackages(root: string): PluginPackage[] {
-  const packagesRoot = resolve(root, 'packages');
+  const packagesRoot = resolve(root, 'harness', 'packages');
   return readdirSync(packagesRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(PLUGIN_DIR_PREFIX))
     .map((entry) => entry.name)

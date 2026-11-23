@@ -27,7 +27,7 @@
  *    {@link ./startup.ts | startupSetting} 在起動期解一次、往下傳一份。
  *
  * **形狀與數值本身沒有偏離**：dsh 的 `@deepseek-ai/dsh-api-workspace-files` 就是**一顆 plugin 三格**
- * （`harness/packages/api/workspace-files/src/index.ts:185-189`，`ddefc45`），三個預設值逐字相同——
+ * （`packages/api/workspace-files/src/index.ts:185-189`，`ddefc45`），三個預設值逐字相同——
  * `maxBytes` 2 MiB、`maxFileBytes` 32 MiB、`maxLines` 5000。欄位名照它。
  *
  * ## `maxLines` 是雙用的，那是 dsh 的形狀

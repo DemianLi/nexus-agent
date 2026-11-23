@@ -212,7 +212,7 @@ afterAll(() => {
 function fakeRepo(options: FakeOptions = {}): string {
   const root = mkdtempSync(join(tmpdir(), 'nexus-plugin-gate-'));
   temporaryRoots.push(root);
-  const dir = join(root, 'packages', 'nexus-plugin-fake');
+  const dir = join(root, 'harness', 'packages', 'nexus-plugin-fake');
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(
     join(dir, 'package.json'),
@@ -300,7 +300,7 @@ export default [{ files: ['**/*.ts'] }, ...pluginLintConfig.map((c) => ({ ...c, 
 
   it('lint：找不到設定也算沒生效（臨時目錄往上沒有任何 eslint.config.js，ESLint 拋錯、被接成違規）', async () => {
     const root = fakeRepo();
-    rmSync(join(root, 'packages', 'nexus-plugin-fake', 'eslint.config.js'));
+    rmSync(join(root, 'harness', 'packages', 'nexus-plugin-fake', 'eslint.config.js'));
     const { violations } = await gate(root);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations.every((v) => v.check === 'lint')).toBe(true);
@@ -342,7 +342,7 @@ export default [{ files: ['**/*.ts'] }, ...pluginLintConfig.map((c) => ({ ...c, 
   it('沒有入口宣告就拋，不回退成「不管它」', () => {
     const root = fakeRepo();
     writeFileSync(
-      join(root, 'packages', 'nexus-plugin-fake', 'package.json'),
+      join(root, 'harness', 'packages', 'nexus-plugin-fake', 'package.json'),
       JSON.stringify({ name: '@nexus/plugin-fake' }),
     );
     expect(() => pluginPackages(root)).toThrow(/沒有入口/);

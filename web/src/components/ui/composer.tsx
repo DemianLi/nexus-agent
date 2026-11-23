@@ -1,6 +1,6 @@
 /**
- * nexus 層（#1591）：轉出 vendor 的 solid-glass 版（`harness/vendor/solid-glass/components/ui/composer.tsx`），外觀照 SG（#1468 Q8）。
- * 本地修改登記在 `harness/vendor/solid-glass/README.md` 的「本地修改」；這個檔沒有本地修改。改 vendor 檔的有三條（第 28 條的
+ * nexus 層（#1591）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/composer.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」；這個檔沒有本地修改。改 vendor 檔的有三條（第 28 條的
  * `textareaProps` 上游 `c60cb14f` 已收，#1701 升到 `6e8903e` 時拿掉）：
  *
  * - 第 29 條 `patches/0005-composer-combobox.patch`：`textareaProps` 再收 `aria-controls`／`aria-activedescendant`（`/`、`@`

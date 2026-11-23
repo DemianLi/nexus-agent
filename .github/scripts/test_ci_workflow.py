@@ -26,6 +26,7 @@ from pathlib import Path
 import yaml
 
 import check_rust_paths
+from project_paths import actual
 import plan_ci
 from node_compat import read_list
 
@@ -111,7 +112,7 @@ class NodeCompatShape(unittest.TestCase):
         files = read_list()
         self.assertTrue(files)
         for f in files:
-            self.assertTrue((ROOT / f).is_file(), f)
+            self.assertTrue((ROOT / actual(f, lambda c: (ROOT / c).exists())).is_file(), f)
 
 
 class LowerBound(unittest.TestCase):
@@ -529,7 +530,7 @@ class PostMerge(unittest.TestCase):
         self.assertEqual(job['steps'][0]['with']['fetch-depth'], 2)
         runs = '\n'.join(step.get('run', '') for step in job['steps'])
         self.assertIn('git worktree add --detach "$RUNNER_TEMP/prev" HEAD^', runs)
-        self.assertIn('apps/web/visual/compare.ts', runs)
+        self.assertIn('web/visual/compare.ts', runs)
 
     def test_visual_diff_comments_on_the_pr(self) -> None:
         """有差時在對應的 PR 留言請作者確認：寫 PR 的權限只給這一個 job，commit 訊息經環境變數傳，沒有留言檔或沒有 PR 號就不留。"""
@@ -660,7 +661,7 @@ class SandboxSpawner(unittest.TestCase):
         """`-t` 篩不到任何一支時 vitest 4 回 exit 0（全部 skipped），測試改名後這一步會靜靜變綠：名字要恰好對到一支 it。"""
         step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
         name = re.search(r"-t '([^']+)'", step['run']).group(1)
-        source = (ROOT / 'apps/harness/src/serve-thread-search.test.ts').read_text(encoding='utf-8')
+        source = (ROOT / 'harness/apps/harness/src/serve-thread-search.test.ts').read_text(encoding='utf-8')
         titles = re.findall(r"^\s*it\('([^']*)'", source, re.MULTILINE)
         matched = [title for title in titles if name in title]
         self.assertEqual(len(matched), 1, matched)
@@ -812,7 +813,7 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('--target "$SPAWNER_TARGET"', self.steps['編譯']['run'])
         self.assertIn('--target "$SPAWNER_TARGET"', self.steps['測試（musl）']['run'])
         self.assertNotIn('--target', self.steps['測試（glibc 的子行程）']['run'])
-        bundle = (ROOT / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
+        bundle = (ROOT / 'harness' / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
         self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
 
     def test_musl_gcc_is_installed_before_anything_compiles(self) -> None:
@@ -880,7 +881,7 @@ class SandboxSpawner(unittest.TestCase):
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
-        native = ROOT / 'native' / 'sandbox-spawner'
+        native = ROOT / 'harness' / 'native' / 'sandbox-spawner'
         root = (native / 'Cargo.toml').read_text(encoding='utf-8')
         self.assertIn('[workspace]\nmembers = ["host"]\n', root)
         deps = re.search(r'(?ms)^\[dependencies\]\n(.*?)(?:^\[|\Z)', root)
@@ -895,7 +896,7 @@ class SandboxSpawner(unittest.TestCase):
             self.assertIn(' --workspace ', self.steps[name]['run'], name)
 
     def test_toolchain_is_pinned(self) -> None:
-        toolchain = (ROOT / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')
+        toolchain = (ROOT / 'harness' / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')
         self.assertRegex(toolchain, r'(?m)^channel = "\d+\.\d+\.\d+"$')
         self.assertIn('rust-toolchain.toml', self.steps['安裝釘住的 Rust']['run'])
 
@@ -977,25 +978,25 @@ class TypecheckCache(unittest.TestCase):
         self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
         script = (ROOT / '.github' / 'scripts' / 'typecheck.sh').read_text(encoding='utf-8')
         self.assertIn(f'cache={TYPECHECK_CACHE}\n', script)
-        generator = (ROOT / 'scripts' / 'gen-typecheck-projects.ts').read_text(encoding='utf-8')
+        generator = (ROOT / 'harness' / 'scripts' / 'gen-typecheck-projects.ts').read_text(encoding='utf-8')
         self.assertIn(f"CACHE_DIR = '{TYPECHECK_CACHE}'", generator)
         # 整個目錄：產生的設定、out/（宣告檔與 buildinfo）、沒人引用的套件的 buildinfo，少了哪一份都要從頭查。
         self.assertEqual(
             self.save['with']['path'].split(),
-            [f'packages/*/{TYPECHECK_CACHE}', f'apps/*/{TYPECHECK_CACHE}'],
+            [f'harness/packages/*/{TYPECHECK_CACHE}', f'harness/apps/*/{TYPECHECK_CACHE}', f'web/{TYPECHECK_CACHE}'],
         )
 
     def test_full_layer_checks_every_package_from_scratch(self) -> None:
         uses = [str(s.get('uses', '')) for s in self.typecheck['steps']]
         self.assertFalse(any(u.startswith(('actions/cache/restore@', 'actions/cache@')) for u in uses))
         run = next(s['run'] for s in self.typecheck['steps'] if s.get('name') == 'Typecheck')
-        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'")
+        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*' '--filter=./web'")
 
     def test_root_script_matches_full_layer(self) -> None:
         # 開發時的 `pnpm typecheck` 跟全跑同一支、同一組篩選：宣告檔輸出才有的錯，本機與 CI 一起紅。
         manifest = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
         self.assertEqual(
-            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'"
+            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*' '--filter=./web'"
         )
 
 
@@ -1048,11 +1049,11 @@ class HarnessDurations(unittest.TestCase):
         self.assertLess(names.index(self.restores[-1]['uses']), names.index('Test'))
 
     def test_sequencer_reads_the_restored_dir(self) -> None:
-        source = (ROOT / 'apps' / 'harness' / 'src' / 'test-shard-sequencer.ts').read_text(encoding='utf-8')
+        source = (ROOT / 'harness' / 'apps' / 'harness' / 'src' / 'test-shard-sequencer.ts').read_text(encoding='utf-8')
         env = re.search(r"DURATIONS_DIR_ENV = '([A-Z_]+)'", source)
         assert env is not None
         self.assertEqual(self.test['env'], {env.group(1): '${{ github.workspace }}/.harness-durations'})
-        config = (ROOT / 'apps' / 'harness' / 'vitest.config.ts').read_text(encoding='utf-8')
+        config = (ROOT / 'harness' / 'apps' / 'harness' / 'vitest.config.ts').read_text(encoding='utf-8')
         self.assertIn('sequence: { sequencer: DurationSequencer }', config)
 
     def test_only_post_merge_saves_its_own_shard(self) -> None:
@@ -1112,7 +1113,7 @@ class NativeDurations(unittest.TestCase):
 
     def test_sequencer_reads_the_restored_dir(self) -> None:
         self.assertEqual(self.test['env'], {'NEXUS_TEST_DURATIONS_DIR': '${{ github.workspace }}/.native-durations'})
-        config = (ROOT / 'apps' / 'harness' / 'vitest.native.config.ts').read_text(encoding='utf-8')
+        config = (ROOT / 'harness' / 'apps' / 'harness' / 'vitest.native.config.ts').read_text(encoding='utf-8')
         self.assertIn("mergeConfig(base", config)
 
     def test_saves_its_own_shard(self) -> None:
@@ -1303,7 +1304,7 @@ class LightScope(unittest.TestCase):
     def test_web_structure_guards_exist_on_disk(self) -> None:
         for g in plan_ci.WEB_STRUCTURE_GUARDS:
             with self.subTest(guard=g):
-                self.assertTrue((plan_ci.ROOT / g).is_file())
+                self.assertTrue((plan_ci.ROOT / actual(g, lambda c: (plan_ci.ROOT / c).exists())).is_file())
 
     def test_web_design_guards_are_the_style_tests_on_disk(self) -> None:
         guards = plan_ci.web_design_guards()
@@ -1400,7 +1401,7 @@ class NodeModulesCache(unittest.TestCase):
         for part in ('runner.os', 'runner.arch', 'inputs.node-version', "'pnpm-lock.yaml'", "'pnpm-workspace.yaml'"):
             with self.subTest(part=part):
                 self.assertIn(part, key)
-        for manifest in ("'package.json'", "'packages/*/package.json'", "'apps/*/package.json'", "'vendor/*/package.json'"):
+        for manifest in ("'package.json'", "'harness/packages/*/package.json'", "'harness/apps/*/package.json'", "'web/package.json'", "'harness/vendor/*/package.json'"):
             with self.subTest(manifest=manifest):
                 self.assertIn(manifest, key)
 
@@ -1408,7 +1409,7 @@ class NodeModulesCache(unittest.TestCase):
         self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
         self.assertEqual(self.save['with']['key'], '${{ steps.modules.outputs.cache-primary-key }}')
         # 型別檢查的快取由 ci.yml 另外存取，混進來會讓它跟著 lockfile 的鍵走。
-        self.assertIn('!packages/*/node_modules/.cache', self.save['with']['path'].split())
+        self.assertIn('!harness/packages/*/node_modules/.cache', self.save['with']['path'].split())
 
     def test_install_runs_on_both_paths(self) -> None:
         install = next(s for s in self.steps if s.get('name') == '安裝相依套件')
@@ -1421,8 +1422,8 @@ class NodeModulesCache(unittest.TestCase):
 
     def test_vendor_declarations_follow_their_source(self) -> None:
         # 命中時不跑 prepare，宣告檔只能從快取來；鍵若不含 vendor 的 src 與 tsconfig，改了它們仍會命中舊的宣告檔。
-        self.assertIn('vendor/*/lib/types', self.restore['with']['path'].split())
-        for part in ("'vendor/*/tsconfig.json'", "'vendor/*/src/**'"):
+        self.assertIn('harness/vendor/*/lib/types', self.restore['with']['path'].split())
+        for part in ("'harness/vendor/*/tsconfig.json'", "'harness/vendor/*/src/**'"):
             with self.subTest(part=part):
                 self.assertIn(part, self.restore['with']['key'])
 

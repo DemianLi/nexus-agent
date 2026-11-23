@@ -177,7 +177,8 @@ jobs:
         with:
           path: |
             harness/packages/*/node_modules/.cache/nexus-typecheck
-            apps/*/node_modules/.cache/nexus-typecheck
+            harness/apps/*/node_modules/.cache/nexus-typecheck
+            web/node_modules/.cache/nexus-typecheck
           key: typecheck-${{ steps.base.outputs.sha }}
           restore-keys: typecheck-
 
@@ -414,14 +415,15 @@ jobs:
         with:
           save-cache: ${{ inputs.full }}
       - name: Typecheck
-        run: .github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*'
+        run: .github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*' '--filter=./web'
       - name: 存型別檢查快取
         if: inputs.full
         uses: actions/cache/save@v6
         with:
           path: |
             harness/packages/*/node_modules/.cache/nexus-typecheck
-            apps/*/node_modules/.cache/nexus-typecheck
+            harness/apps/*/node_modules/.cache/nexus-typecheck
+            web/node_modules/.cache/nexus-typecheck
           key: typecheck-${{ github.sha }}
 
   # 沒有測試的套件照樣會紅（vitest 找不到測試檔就失敗，見 docs/standards.md）。
@@ -545,23 +547,23 @@ jobs:
           grep -Eq 'Tests +([0-9]+ failed \| )?[1-9][0-9]* passed' "$RUNNER_TEMP/spawner-integration.txt"
         env:
           NO_COLOR: '1'
-          NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
-          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
-          NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
+          NEXUS_SPAWNER_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
       # 「批次窗口裡那一句搜得到」用 per-thread 再跑一次（#2689）：靠前台搜之前請對話行程排空。只跑這一支，同檔其餘測的是前台搜尋本身，與行程模型無關。
       # 沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘；`-t` 篩不到任何一支時 vitest 照樣 exit 0，test_ci_workflow.py 釘住這個名字還在。
       - name: per-thread 跑內容搜尋
         run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
-          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
       # 刪除碰到分叉用 per-thread 再跑一次（#2957）：刪除前前台要請對話行程放手寫入方，single 走不到那一段；祖先被刪之後讀外溢檔的
       # 祖先鏈是對話行程組裝時算的。env 要釘，理由同上一步。
       - name: per-thread 跑刪除碰到分叉
         run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
-          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
   # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。
@@ -598,9 +600,9 @@ jobs:
           grep -Eq 'Tests +([0-9]+ failed \| )?[1-9][0-9]* passed' "$RUNNER_TEMP/spawner-integration.txt"
         env:
           NO_COLOR: '1'
-          NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
-          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
-          NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
+          NEXUS_SPAWNER_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
 
   # 真瀏覽器的對話 e2e（#1602）：子行程起真的 serve（模型是腳本，不帶 key、不打模型端點），供應這裡 build 出來的 dist，Chrome 開它。
   # 只在合併後完整一輪跑（#1602；#2088 決議第 5 條：瀏覽器檢查不擋功能 PR 的 gate）：PR 與 main 的 push 上 skipped，gate 照 inputs.full 判。
@@ -646,7 +648,7 @@ jobs:
         run: pnpm --filter @nexus/web --fail-if-no-match run test:e2e
         env:
           NEXUS_E2E_PROCESS_MODEL: per-thread
-          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/harness/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # 真瀏覽器 e2e 換成 native agent loop（#2358）：同一套測試、single 行程模型，存截圖（embed 的照情境名，核准卡四種收法的帶 `native-` 前綴），
   # 成敗都上傳。

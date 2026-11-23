@@ -11,7 +11,7 @@
  * > output and its accounting travel together (**there is no separate usage record**).
  * > `usage` is absent when the adapter reported none.
  *
- * 輪級的彙總則是**一道純折疊**（`harness/packages/llm/token-meter/src/turn-usage.ts` 的
+ * 輪級的彙總則是**一道純折疊**（`packages/llm/token-meter/src/turn-usage.ts` 的
  * `deriveTurnTokenUsage`），從 `turn/start` 讀到 `turn/end`，不回寫任何東西。
  *
  * **我們的用量也不掛在 `assistant/message` 上，是一顆只帶帳目的獨立事件**（`model/usage`）。
@@ -33,7 +33,7 @@
  * ## 沒有正常回來的呼叫也記（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）
  *
  * dsh 的 `assistant/attempt` 串流裡報了用量就算，失敗與中止的 attempt 也在帳上
- * （`harness/packages/llm/token-meter/src/usage-projection.ts`）。我們的呼叫拋錯時沒有回應物件可讀，v3 串流的模型層又收不到 token 回呼，
+ * （`packages/llm/token-meter/src/usage-projection.ts`）。我們的呼叫拋錯時沒有回應物件可讀，v3 串流的模型層又收不到 token 回呼，
  * 供應商的用量只活在 `fetch` 回來的位元組裡——所以由 adapter（`live-model.ts` 的串流用量嗅探）在請求開跑時拿一個回報函式
  * （`beginAttemptReport`，{@link ./model-call-scope.ts}），串流裡看到用量就回報；這顆 middleware 在呼叫拋錯（或子代理被中止回合成收尾）
  * 時讀它，**過同一把尺**（{@link validateUsage}）才記，記成帶 `outcome` 的 `model/usage`。**沒報就不記**：「不知道花了多少」
@@ -62,7 +62,7 @@
  * ## 帳目記不進去，這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
  * dsh 的用量跟著 `assistant/message`／`assistant/attempt` 一起寫（見上），那兩顆寫不進去這一輪失敗
- * （`harness/packages/core/agent-loop/src/agent.ts:484-510`、`:537-558`）。所以 `append` 自己拋就往外拋：正常回來的那次，
+ * （`packages/core/agent-loop/src/agent.ts:484-510`、`:537-558`）。所以 `append` 自己拋就往外拋：正常回來的那次，
  * 回覆不進 graph state（它排在 {@link ./model-calls.ts} 記 `assistant/message` 之前，日誌上也沒有那則回覆）；
  * **已經在失敗路徑上**的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `agent.ts:495-499`）。
  *

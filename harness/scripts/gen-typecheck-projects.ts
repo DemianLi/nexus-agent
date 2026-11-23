@@ -77,10 +77,10 @@ export function typecheckProjects(): TypecheckProject[] {
   }));
 }
 
-/** `harness/packages/*`、`apps/*` 底下有 `package.json`、卻沒有產生設定也不是 {@link STANDALONE} 的目錄。 */
+/** `harness/packages/*`、`harness/apps/*` 底下有 `package.json`、卻沒有產生設定也不是 {@link STANDALONE} 的目錄。 */
 export function uncoveredDirs(projects: readonly TypecheckProject[]): string[] {
   const covered = new Set<string>([...projects.map((project) => project.dir), ...STANDALONE]);
-  return ['packages', 'apps']
+  return ['harness/packages', 'harness/apps']
     .flatMap((parent) => readdirSync(join(ROOT, parent)).map((name) => `${parent}/${name}`))
     .filter((dir) => existsSync(join(ROOT, dir, 'package.json')) && !covered.has(dir))
     .sort();

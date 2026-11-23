@@ -41,7 +41,7 @@
  *   `deliverables/presented` 的事件擴充搬進 core 的 `session-log.ts`（前例 `todo/write`），遷出的 `present` 因此不必對 core 寫
  *   `declare module`。
  *
- * 只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：四個讀法只有 `trajectory` 在用；
+ * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：四個讀法只有 `trajectory` 在用；
  * 兩個日誌型別（`SessionLog`、`SessionEvent`）是 `feedback` 的（#1456）；查找與 todo 的名字是 `todo` 的（#1463）；
  * `currentTurnStart`、`sourceKwargs` 與 `SessionEventMap`（`turn/start` 酬載的型別）是 `goal` 的（#1486）；
  * `sessionDurabilityToken` 與 {@link SessionDurabilityService}（落盤確認）是 `feedback` 的（#1606）。

@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-time-context`——讓模型知道現在的日期時間（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）。
  * 對上 dsh 的 `@deepseek-ai/dsh-time-context`（`packages/context/time-context`，`687f282e`），web-app 的 standard、cordis、ptc 三個 preset
- * 都掛它（`harness/packages/bundle/web-app/presets/*.patch.yml`），所以是出廠就開的。
+ * 都掛它（`packages/bundle/web-app/presets/*.patch.yml`），所以是出廠就開的。
  *
  * 在一次 agent 呼叫開頭追加**一則持久的讀數**（同一條 thread 至多每 `refreshIntervalMs` 一次），四行：
  *

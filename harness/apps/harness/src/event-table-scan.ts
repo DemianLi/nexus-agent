@@ -146,16 +146,16 @@ function walk(dir: string, out: string[]): void {
 
 function productFiles(root: string): string[] {
   const files: string[] = [];
-  for (const pkg of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
+  for (const pkg of readdirSync(join(root, 'harness', 'packages'), { withFileTypes: true })) {
     if (!pkg.isDirectory()) continue;
     try {
-      walk(join(root, 'packages', pkg.name, 'src'), files);
+      walk(join(root, 'harness', 'packages', pkg.name, 'src'), files);
     } catch {
       // 沒有 src 的套件不在掃描範圍。
     }
   }
   try {
-    walk(join(root, 'apps', 'harness', 'src'), files);
+    walk(join(root, 'harness', 'apps', 'harness', 'src'), files);
   } catch {
     // 沒有 harness 的樹（測試用的假 repo）不掃。
   }

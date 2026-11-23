@@ -4,7 +4,7 @@ Refs #
 
 <!-- 最小的一張圖：虛擬碼、呼叫樹、元件樹、檔案樹或 diff 草圖，配一兩句話。挑一種就好。 -->
 
-**對照 dsh：** <!-- dsh 怎麼做與為什麼（path:line＋SHA）、比較了哪些做法、選了哪個與好在哪。做法跟 dsh 一樣的寫一行出處；寫成 ADR 的只放一行連結（docs/agents/collab-mode.md〈ADR〉）。沒有涉及技術實現就刪掉這一段。 -->
+**對照 dsh：** <!-- dsh 怎麼做與為什麼（path:line＋SHA）、比較了哪些做法、選了哪個與好在哪。做法跟 dsh 一樣的寫一行出處；寫成 ADR 的只放一行連結（docs/contributing.md〈ADR〉）。沒有涉及技術實現就刪掉這一段。 -->
 
 ## Evidence
 
@@ -17,6 +17,6 @@ Refs #
 
 **Blast Radius:** <!-- 一個詞 -->
 
-<!-- 有外部看得到的不相容變更嗎？有的話附 docs/upgrade-guide/… 的路徑（AGENTS.md「發版」〈升級指南〉）。 -->
+<!-- 有外部看得到的不相容變更嗎？有的話附 docs/upgrade-guide/… 的路徑（docs/release.md〈升級指南〉）。 -->
 
-<!-- 這份只給 feature → develop 的 PR。develop → main 的發版 PR 不用它：內文要有變更內容與驗證方式兩個二級標題，見 AGENTS.md「PR 內文」。 -->
+<!-- 這份只給 feature → develop 的 PR。develop → main 的發版 PR 不用它：內文要有變更內容與驗證方式兩個二級標題，見 docs/contributing.md〈PR 內文〉。 -->

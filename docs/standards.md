@@ -1,6 +1,6 @@
 # 程式碼規範
 
-程式碼該怎麼寫。協作流程（PR 標題、分支命名、PR 內文）見 [AGENTS.md](../AGENTS.md)。
+程式碼該怎麼寫。提交規則（PR 標題、分支命名、PR 內文）見 [contributing.md](contributing.md)。
 
 這份文件只寫已經定案的條文。沒遇過的問題不先寫規範 — 憑空發明的條文與實際長出來的程式碼對不上，最後會變成沒人遵守、卻被 code review 拿來挑錯的死條文。
 
@@ -24,7 +24,7 @@
 
 ## 註解
 
-**註解寫 HEAD 的現況：契約、不變量、理由、外部限制，以及程式碼表達不出來的事。** 變更的來龍去脈（原本怎樣、改成怎樣、審查時怎麼決定）寫在 PR 內文；squash 合併時 PR 內文會成為 develop 上的 commit 內文，那裡就是它的家。對照 dsh 的出處與取捨同理，寫在 PR 內文 Summary 的「對照 dsh」，符合條件的寫成 ADR（[collab-mode](agents/collab-mode.md#adr)），不寫進程式碼與註解；註解只用 nexus 自己的話寫這段程式碼的契約與理由。拿不準的註解就刪，刪掉的每一條列進 PR 內文。逐條的判準與審查流程見 [no-comments](../.agents/skills/pstack/skills/no-comments/SKILL.md)。
+**註解寫 HEAD 的現況：契約、不變量、理由、外部限制，以及程式碼表達不出來的事。** 變更的來龍去脈（原本怎樣、改成怎樣、審查時怎麼決定）寫在 PR 內文；squash 合併時 PR 內文會成為 develop 上的 commit 內文，那裡就是它的家。對照 dsh 的出處與取捨同理，寫在 PR 內文 Summary 的「對照 dsh」，符合條件的寫成 ADR（[contributing](contributing.md#adr)），不寫進程式碼與註解；註解只用 nexus 自己的話寫這段程式碼的契約與理由。拿不準的註解就刪，刪掉的每一條列進 PR 內文。逐條的判準與審查流程見 [no-comments](../.agents/skills/pstack/skills/no-comments/SKILL.md)。
 
 ## 秘密與環境變數
 

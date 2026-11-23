@@ -12,7 +12,7 @@ const EMPTY_CSS = '\0guard-empty-css';
  * 根目錄的 `tsconfig.base.json`。寫成絕對路徑：外掛的 `projects` 相對於 Vite 的 `root` 解析，這份的 `root` 是 `guard/`，
  * 照抄出貨那份的 `'../../tsconfig.base.json'` 會指到 `apps/` 底下不存在的檔，而外掛只印警告、不擋 build（#1642 實測）。
  */
-export const BASE_TSCONFIG = fileURLToPath(new URL('../../../tsconfig.base.json', import.meta.url));
+export const BASE_TSCONFIG = fileURLToPath(new URL('../../tsconfig.base.json', import.meta.url));
 
 /** 測試頁不帶自己的樣式：所有 `.css` 的 import 解析成一個空的 JS 模組（見檔頭）。 */
 const dropCss: Plugin = {

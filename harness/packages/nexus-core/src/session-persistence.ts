@@ -554,7 +554,7 @@ function throwAggregate(failures: readonly Error[], what: string): void {
  * schema 上，載入期就失敗。
  *
  * 同 `@nexus/plugin-telemetry-otel` 對 `shutdownTimeoutMillis` 的檢查，也同 dsh
- * （`harness/packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`，`ddefc45`）。
+ * （`packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`，`ddefc45`）。
  */
 export const MAX_PERSISTENCE_WINDOW_MS = MAX_TIMER_DELAY_MS;
 
@@ -610,9 +610,9 @@ export type SessionPersistenceConfig = z.infer<typeof sessionPersistenceConfigSc
  * ## 與 dsh 的關係
  *
  * **dsh 對這個值沒有意見。** 它的 `@deepseek-ai/dsh-session-persistence-jsonl` 只收兩格
- * （`root`、`compression`，`harness/packages/session/session-persistence-jsonl/src/index.ts:236-239`，
+ * （`root`、`compression`，`packages/session/session-persistence-jsonl/src/index.ts:236-239`，
  * `ddefc45`），沒有批次窗口——因為 dsh 的批次是**呼叫端傳一整批**
- * （`harness/packages/session/session-persistence/src/handle.ts:86-94`：「Append a contiguous batch」），
+ * （`packages/session/session-persistence/src/handle.ts:86-94`：「Append a contiguous batch」），
  * 不是我們這種計時器攢批。所以這一列的形狀抄的是同一份清單上 core 那幾列，不是抄 dsh 的
  * 某一列；這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
  *

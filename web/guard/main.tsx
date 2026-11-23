@@ -23,7 +23,7 @@
  *   - `data-guard-opacity`：InputGroup 的 `opacity` 與底色（`reference` 一般的、`send-disabled` 只有按鈕停用、`control-disabled` 欄位停用），
  *     vendor 的 `has-disabled:opacity-50` 被按鈕停用觸發的那一半由覆寫檔擋掉（#1523 本地修改第 18 條）。
  *   - `data-guard-choice`：問答的選項（已勾選、沒勾選、停用），量平常與滑鼠移上去的底色、停用的樣子：shadcn 的 `data-*` custom variant
- *     （`harness/vendor/solid-glass/shadcn/tailwind.css`，#1523）specificity 是 0，不能改掉這幾個 variant 原本的行為。
+ *     （`vendor/solid-glass/shadcn/tailwind.css`，#1523）specificity 是 0，不能改掉這幾個 variant 原本的行為。
  *   - `data-guard-backdrop`：dialog／sheet 的遮罩，量 `backdrop-filter`（不透明的退路要拿掉 blur，#1583 本地修改第 22 條）
  *     與底色（遮罩在不透明的退路下看得出來，本地修改第 84 條）。
  *   - `data-guard-border`：手機側欄的抽屜，量四邊的 border 寬（只留陰影、不畫邊，#1583 本地修改第 21 條）。

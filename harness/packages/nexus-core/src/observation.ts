@@ -7,7 +7,7 @@
  *
  * ## 照抄 dsh 的哪些、退了哪一條
  *
- * 標準是 `harness/packages/fs/fs-observation-policy`（SHA `4e84901`，對到上游
+ * 標準是 `packages/fs/fs-observation-policy`（SHA `4e84901`，對到上游
  * `76fda72` 時該套件除了版號沒有變動）。**三個狀態、三個錯誤碼、以及「部分讀也算」
  * 都是照抄的**：
  *
@@ -38,7 +38,7 @@
  * 用 stat 組版本、不讀內容，token 的形狀由 backend 自己決定。沒有這一格的 backend 整份 `readRaw`，算 {@link versionOf}。
  *
  * **規則寫在系統提示詞，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 的 `write`、`edit` 各用一個
- * `ctx.systemPrompt.section`（`harness/packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
+ * `ctx.systemPrompt.section`（`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
  * 「Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.」、
  * 「Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.」
  * 工具描述本身只有一句「Create or fully replace a UTF-8 text file.」／「Edit an existing UTF-8 text file by replacing literal text.」。
@@ -270,11 +270,11 @@ export async function fileVersionOf(backend: unknown, path: string): Promise<Fil
 /**
  * 一則說得出恢復辦法的拒絕：模型看到 `Error: <原因>`，**碼不進文字**
  * （[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。照 dsh：`FsError` 拋出來由
- * `toolErrorResult` 渲染，碼只在 `error.info`（`harness/packages/core/tools/src/index.ts:635-641`）。
+ * `toolErrorResult` 渲染，碼只在 `error.info`（`packages/core/tools/src/index.ts:635-641`）。
  */
 function refusal(code: string, reason: string): PipelineExecuteResult {
   // 碼標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
-  // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`harness/packages/llm/llm/src/error.ts:20`）。
+  // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`packages/llm/llm/src/error.ts:20`）。
   return freshTextResult('message', `${TOOL_ERROR_PREFIX}${reason}`, {
     isError: true,
     error: { name: 'FsError', code },

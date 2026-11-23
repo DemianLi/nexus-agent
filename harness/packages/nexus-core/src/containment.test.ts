@@ -529,7 +529,7 @@ describe('工具事件', () => {
 
 /**
  * [#1665](https://github.com/DemianLi/nexus-agent/issues/1665)：這三種都進模型歷史，日誌那一關拒收就照 dsh 讓這一步失敗，
- * 不吞（`harness/packages/core/agent-loop/src/tool-calls.ts:156`、`agent.ts:344-355`，`687f282e`）。拋出去的錯走出 `wrapToolCall`，
+ * 不吞（`packages/core/agent-loop/src/tool-calls.ts:156`、`agent.ts:344-355`，`687f282e`）。拋出去的錯走出 `wrapToolCall`，
  * 不會被圍堵翻成一則錯誤訊息交給模型。
  */
 describe('工具事件記不進去：這一步失敗', () => {
@@ -650,7 +650,7 @@ describe('工具事件記不進去：這一步失敗', () => {
 
   /**
    * 結果那顆被拒時，跟著它注入的 `user/message` 不寫：結果沒進日誌，注入接在它後面就是孤兒。同 dsh：`appendToolResult` 拋了，
-   * 同一處後面的 `acceptContext` 輪不到（`harness/packages/core/agent-loop/src/tool-calls.ts:156-157`，`687f282e`）。
+   * 同一處後面的 `acceptContext` 輪不到（`packages/core/agent-loop/src/tool-calls.ts:156-157`，`687f282e`）。
    */
   it('tool/result 被拒（真的拒收）：跟著的注入不寫', async () => {
     const log = new SessionLog('s');

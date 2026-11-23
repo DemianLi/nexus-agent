@@ -47,7 +47,7 @@ export function stubGlyphEnvironment(): void {
  */
 export const GLYPH_RADIUS = 1.7;
 
-/** glyph 每個 circle 畫的四個屬性（同 `harness/scripts/measure-frames.mjs`）：只比 `cx`／`cy` 的話，`r` 與 `opacity` 畫錯也綠。 */
+/** glyph 每個 circle 畫的四個屬性（同 `scripts/measure-frames.mjs`）：只比 `cx`／`cy` 的話，`r` 與 `opacity` 畫錯也綠。 */
 export const POSE_ATTRIBUTES = ['cx', 'cy', 'r', 'opacity'] as const;
 
 /** 一種 activity 的起始姿勢，照 vendor `draw` 的寫法取到小數兩位：`[[cx, cy, r, opacity], …]`。 */

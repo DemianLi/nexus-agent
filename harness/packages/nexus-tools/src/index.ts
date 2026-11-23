@@ -12,7 +12,7 @@
  * **不相依 `@nexus/core`**（第 17 條）：外部插件只該看見 SDK 與服務定義。工具的型別取自 `@langchain/core`，
  * 只用型別。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：
  * `@nexus/core` 註冊點的選項裡，`rootOnly` 與 `outputSchema` 在 `ask-user` 遷出時加進來（#1458，契約跳到 `1.1.0`）；
  * `scope` 今天沒有遷出的消費者，不加。
  *

@@ -9,7 +9,7 @@
  *
  * dsh 的 job-controller 觀察串流也是整份取代（`streamJobRows`：「一顆開啟時、之後每陣合併過的生命週期提交一顆」），
  * 作法是等一次 `wake` 之後睡一個合併視窗（`observeFlushMs`，預設 100 毫秒），**醒來才讀現況**再送一顆
- * （`harness/packages/api/job-controller/src/rows.ts`、`wake.ts`，`5badb15`）。這裡同形：一個單元的值變了，若這個單元沒有排著的
+ * （`packages/api/job-controller/src/rows.ts`、`wake.ts`，`5badb15`）。這裡同形：一個單元的值變了，若這個單元沒有排著的
  * 視窗，就開一個；視窗到了送**那一刻最新的**值；視窗內再變的只換掉待送的那份，不另開。
  *
  * ## 最後一顆一定是最終值

@@ -16,7 +16,7 @@ import { existsSync, globSync, readFileSync, readdirSync, statSync } from 'node:
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const ROOT = fileURLToPath(new URL('..', import.meta.url));
+export const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 /** manifest 裡 `exports` 的一個值：字串，或條件物件（取 `default`）。 */
 type ExportValue = string | { readonly default?: string; readonly [condition: string]: unknown };

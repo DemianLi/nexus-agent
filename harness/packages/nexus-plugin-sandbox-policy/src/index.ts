@@ -61,7 +61,7 @@
  *   服務在不在當訊號**——那是控制器，不是事實。有圍堵：控制器、可寫根、`WORKSPACE_CAPABILITY`、`sandbox/mode`、升級
  *   全部掛上。沒有圍堵：只貢獻那一句話，其餘一樣都不掛（沒有東西可以切、可以升、可以記）。
  * - **有圍堵卻缺 `sandboxPolicy` 服務：載入當場拋**，訊息指名缺什麼（dsh 的 `tool-str-replace-editor` 有圍堵卻缺政策時同樣當場拋，
- *   `harness/packages/fs/tool-str-replace-editor/src/index.ts:71-74`）。不把「沒有圍堵」與「有圍堵但缺件」併成同一種無聲退路。
+ *   `packages/fs/tool-str-replace-editor/src/index.ts:71-74`）。不把「沒有圍堵」與「有圍堵但缺件」併成同一種無聲退路。
  * - **有圍堵時整列被關掉：組裝點起不來**（`harness/apps/harness/src/assembly-root.ts`），同上，因為這時 fence 還在擋、模型卻不知道、也請不到升級。
  *
  * ### 登記：沒有圍堵時 `/permission` 不註冊，dsh 是拋錯
@@ -100,7 +100,7 @@ const DELEGATION_TOOL_NAME = 'task';
 
 /**
  * 一格模式對模型講的那一段話，**照 dsh 的措辭：每一句只講「受檔案沙箱管的操作」**
- * （`harness/packages/sandbox/sandbox-policy/src/index.ts` 的 `renderPolicyContext`，`5badb15`）。
+ * （`packages/sandbox/sandbox-policy/src/index.ts` 的 `renderPolicyContext`，`5badb15`）。
  *
  * 這個限定是句子「不宣稱圍堵」的來源：沒有圍堵的組裝上，沒有任何操作受沙箱管，句子照樣為真，
  * 不會暗示根外被擋著。以前的措辭（「改不動任何檔案」「直接放行」）把一道 fence 當前提，沒有圍堵時是謊。
@@ -210,7 +210,7 @@ export interface SandboxPolicyService {
 
 /**
  * 「這次組裝的檔案系統有圍堵」這一格事實的服務名，對應 dsh 的 `ctx.fs.sandboxMode`（capability fact，
- * `harness/packages/fs/tool-fs/src/sandbox.ts:7`）：**有就是有圍堵，沒有就是沒有**。由組裝點經 host 服務交，與
+ * `packages/fs/tool-fs/src/sandbox.ts:7`）：**有就是有圍堵，沒有就是沒有**。由組裝點經 host 服務交，與
  * {@link SANDBOX_POLICY_SERVICE}（控制器）分開——訊號不能是控制器在不在。
  */
 export const FS_CONTAINMENT_SERVICE = 'fsContainment';

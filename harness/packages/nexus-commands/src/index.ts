@@ -33,7 +33,7 @@
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（#1421 PM 決策 3）。
  * - **撤除條件**：併入 #1421 Q2 (b)——SDK 與定義套件要發布到私有 registry 之前，型別的實作搬進定義套件。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）：沒有 `ScopedLayers`、
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：沒有 `ScopedLayers`、
  * `commands/change` 通知與 `definitionId`（`@nexus/core` 的 `CommandRegistrationPoint` 檔頭已登記為什麼不做）。
  *
  * @module

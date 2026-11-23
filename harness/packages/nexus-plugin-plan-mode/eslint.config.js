@@ -1,6 +1,6 @@
 import { pluginLintConfig } from '@nexus/sdk/lint';
 
-import base from '../../eslint.config.js';
+import base from '../../../eslint.config.js';
 
 // 遷出的插件套用 SDK 的 lint 設定（#1420），**排除只有一個檔**（#2551，偏離登記在 `docs/plugin-contract.md`）：
 // `src/invariant.ts`，相容層的配套入口（`plan-mode-invariant` 那一列），照 #1463 Q3 (a)。撤除條件：配套入口重審——拿掉就連檔一起刪，

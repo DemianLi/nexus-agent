@@ -21,7 +21,7 @@ import type { StoredSessionHeader } from '@nexus/core';
 
 /**
  * 續接的那份會話屬於另一個目錄——照 dsh 的 `ApiSessionCwdConflict`
- * （`harness/packages/api/session-controller/src/agent.ts`，SHA `c291e79`）。
+ * （`packages/api/session-controller/src/agent.ts`，SHA `c291e79`）。
  *
  * dsh 的會話**按目錄歸屬**：header 的 `cwd` 是建立當下的事實，採用一份已存會話之前先比，
  * 對不上就拒；**沒記 `cwd` 的也拒**，不猜。這是 [#251](https://github.com/DemianLi/nexus-agent/issues/251)
@@ -85,11 +85,11 @@ export function assertSameCwd(
  * 一模一樣。
  *
  * dsh 沒有這個分岔：它的會話 `cwd` **就是**工作區根，所以它的 header 不需要第二格。兩處出處
- * （`ddefc45`）：`harness/packages/sandbox/sandbox-policy/src/index.ts:83`「Calling session; its immutable
+ * （`ddefc45`）：`packages/sandbox/sandbox-policy/src/index.ts:83`「Calling session; its immutable
  * cwd becomes the workspace boundary.」與 `:168` 的
  * `resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)`；
- * `harness/packages/deliverables/workspace-changes/src/index.ts:58-61` 的 `eligible` 直接回 `header.cwd`。
- * （#504 的 triage 把這兩行引成 `harness/packages/core/sandbox-policy/…`，`ddefc45` 上沒有那個路徑；
+ * `packages/deliverables/workspace-changes/src/index.ts:58-61` 的 `eligible` 直接回 `header.cwd`。
+ * （#504 的 triage 把這兩行引成 `packages/core/sandbox-policy/…`，`ddefc45` 上沒有那個路徑；
  * 行號與內容對得上，錯的只有套件位置。）
  */
 export class ResumeWorkspaceConflictError extends Error {

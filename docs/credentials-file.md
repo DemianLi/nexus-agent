@@ -291,7 +291,7 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`harness/ap
 ## 對照 dsh
 
 引用在 dsh `8bd073392eef` 核對過。
-不帶路徑的 `:行號` 指 `harness/packages/credentials/credentials-local/src/index.ts`。
+不帶路徑的 `:行號` 指 `packages/credentials/credentials-local/src/index.ts`。
 
 - **兩邊的找值順序照 dsh。** serve 對應 dsh 的 Web profile，受管檔最優先，理由同 `:1-20`：使用者明確存進受管檔的 key 要一致生效。
   dsh 的決策紀錄 `.agents/notes/implemented/architecture/2026-10-09-stored-credential-precedence.md`（在 dsh repo 裡）否決了「受管值蓋掉環境值時警告」（第 38 行），nexus 照採。
@@ -309,6 +309,6 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`harness/ap
   理由用 dsh 自己的規則（`:179-183`）：nexus 不會用 `records` 裡的東西，放過它，使用者會以為存進去的 grant 有作用。
 - **偏離：拒絕指令、明示 tag、錨點與別名**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）。dsh 只看 `document.errors`（`:198-202`），這幾樣都收，別名照常展開。見〈形狀〉。
 - **偏離：拒絕解析前的四種字元、超過 64 層的巢狀與集合鍵**（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。dsh 只有一個 TS 解析器
-  （`harness/packages/credentials/credentials-local/src/index.ts:198`、`:246` 的 `parseDocument`，沒有字元前置檢查、深度上限與集合鍵檢查），
+  （`packages/credentials/credentials-local/src/index.ts:198`、`:246` 的 `parseDocument`，沒有字元前置檢查、深度上限與集合鍵檢查），
   沒有第二個實作要對齊；nexus 的宿主用 Rust 自己解析，這三類是兩個 YAML 函式庫實測讀出不同結果的地方，整份拒絕才能讓兩邊跑同一份樣本得到同樣的結果。
   NUL 與檔中間的 U+FEFF 在 dsh 會靜靜進到值或鍵名裡；只用 CR 換行的檔在 dsh 多半以別的 YAML 錯誤拒絕，沒拒絕的會把 CR 當成內容讀錯。見〈形狀〉。

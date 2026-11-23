@@ -6,7 +6,7 @@
  * ## dsh 的 `step/*`，以及為什麼不叫那個名字
  *
  * dsh 的一步是「一次模型請求＋它派發的工具」：`step/start` 在請求前，`step/end` 在
- * `finally` 裡、**工具跑完之後**（`harness/packages/core/agent-loop/src/agent.ts:302-312`，SHA
+ * `finally` 裡、**工具跑完之後**（`packages/core/agent-loop/src/agent.ts:302-312`，SHA
  * `c291e79`；`executeToolCalls` 在 `step()` 裡面）。所以 dsh 的工具事件**包在**一步裡。
  *
  * 我們拿得到的邊界是 `wrapModelCall`，而它只包模型那一段：工具事件落在這一對**之後**。
@@ -83,7 +83,7 @@
  *   這次請求沒送出，這裡補寫 `model/start`、記 `model/end{outcome:'error'}` 再往外拋（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）。
  *
  * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
- * `live.settle()` 裡寫（`harness/packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
+ * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
  * （`assistant-stream.ts:83-88`），不交給重試，這一輪失敗。會讓它拋的是日誌那一關拒收（#1526 的有損值、#1661 的深度上限）。
  * 吞掉的話，這則回覆照樣進 graph state、日誌上卻沒有：記憶體與日誌分岔，續接後模型看到的歷史跟之前不同。往外拋則模型
  * 節點失敗，state 不收它，兩邊一致。重試只看回報的碼（{@link ./stream-retry.ts}），這個錯沒有回報碼，所以不會重打，同 dsh。

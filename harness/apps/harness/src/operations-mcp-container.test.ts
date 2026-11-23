@@ -22,7 +22,7 @@ import {
   validateEntries,
 } from './plugin-config.js';
 
-const operationsDoc = join(dirname(fileURLToPath(import.meta.url)), '../../../docs/operations.md');
+const operationsDoc = join(dirname(fileURLToPath(import.meta.url)), '../../../../docs/operations.md');
 
 const BEGIN = '<!-- mcp-container-example:begin';
 const FENCE =

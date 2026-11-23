@@ -423,7 +423,7 @@ const failureRequestIds = new WeakMap<object, string>();
 /**
  * HTTP 狀態 → 失敗碼。**整個專案唯一的一張表**（#1437）：分類器、第一則事件的錯誤信封、第一則事件之後的信封監看用同一張，
  * 所以同一個狀態不論從哪條路進來都是同一個碼。表的順序與詞彙照 dsh 的 `providerError`
- * （`harness/packages/llm/llm-deepseek/src/transport.ts:22-35`）：
+ * （`packages/llm/llm-deepseek/src/transport.ts:22-35`）：
  *
  * | 狀態 | 碼 |
  * | --- | --- |
@@ -576,9 +576,9 @@ function firstEventError(buffered: string, ended: boolean): Record<string, unkno
  * 那個錯誤信封要當成哪個 HTTP 狀態碼。梯子本體在 `inband-error.ts` 的 {@link classifyInbandError}（#1805）。
  *
  * **照 dsh 的 `providerError` 分類，再翻回一個載體狀態。** dsh 的串流內信封不帶狀態
- * （`harness/packages/llm/llm-deepseek/src/sse.ts:25`，`687f282e`：`providerError(event, undefined)`），只看 `error.type`、字串型的
+ * （`packages/llm/llm-deepseek/src/sse.ts:25`，`687f282e`：`providerError(event, undefined)`），只看 `error.type`、字串型的
  * `error.code` 與訊息字樣，依序 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`，
- * 都對不上就兜底 `SERVER`（`harness/packages/llm/llm-deepseek/src/transport.ts:22-35`）。翻成我們的載體：`AUTH` 是 401（或信封自己的 403）、
+ * 都對不上就兜底 `SERVER`（`packages/llm/llm-deepseek/src/transport.ts:22-35`）。翻成我們的載體：`AUTH` 是 401（或信封自己的 403）、
  * `QUOTA` 402、`RATE_LIMIT` 429、`INVALID_REQUEST` 400（或信封自己的 413）、兜底 500，經 {@link failureCodeOfStatus} 回到同一個碼；
  * `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`），其餘不在。`CONTEXT_WINDOW_EXCEEDED` 沒有對應的狀態，載體是 400，
  * 串流中段那一格靠 `classifyTurnFailure` 的 `overflow` 旗標、監看那一格直接取梯子的碼，見 {@link classifyInbandError}。
@@ -1286,7 +1286,7 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  * ## 照 dsh
  *
  * dsh 的 chat-completions 由 pi-ai 組請求（`@earendil-works/pi-ai@0.85.1`，dsh `477b4f4` 的
- * `harness/packages/llm/llm-pi-ai/package.json`），`dist/api/openai-completions.js` 的 `convertMessages`：
+ * `packages/llm/llm-pi-ai/package.json`），`dist/api/openai-completions.js` 的 `convertMessages`：
  * 助手文字為空時 content 是 `null`（`:959-961`，NVIDIA 端點偵測出的 `requiresAssistantAfterToolResult`
  * 是 `false`，`:1285`）；沒有 content 也沒有工具呼叫的整則略過（`:1050-1060`）。這裡照做。
  *
@@ -1340,7 +1340,7 @@ export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
  *
  * ## 照 dsh
  *
- * `harness/packages/llm/llm-pi-ai/src/context.ts:31-47` 的 `toolResultOf`：空的工具輸出補 `(no output)`（`:42`，`content || '(no output)'`）；
+ * `packages/llm/llm-pi-ai/src/context.ts:31-47` 的 `toolResultOf`：空的工具輸出補 `(no output)`（`:42`，`content || '(no output)'`）；
  * 純文字那條路先用 `flattenText`（`:22-27`，把文字區塊的 `text` 串起來）再進 `toolResultOf`（`:251`）。
  *
  * ## 偏離登記
@@ -1669,7 +1669,7 @@ function credentialRejection(
  * 真實供應商的 model。
  *
  * key **每次請求前才向憑證服務取**（`credentials.ts`），缺少時直接失敗，沒有預設值也不 fallback
- * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
+ * （[docs/standards.md](../../../../docs/standards.md) 的秘密處理規則）。
  *
  * @param config - 連線值與型錄（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
  *   一個預設參數會讓「呼叫端忘了傳」跟「設定就是這個」長得一模一樣。產品路徑（CLI、serve）
@@ -2007,7 +2007,7 @@ export function failureOriginalText(
  * 任何狀態都記 `SERVER`）與這一支。**同一顆錯在兩處的碼不同**（串流中段的信封、斷流：`llm/retry` 記 `SERVER`／
  * `TRANSPORT`，`turn/failed` 記 `UNKNOWN`），而且 408／422／425 這類被當成 `SERVER` 重打。現在只有這一支：
  * 分類、`llm/retry` 的回報、串流內信封的監看、`turn/failed` 全走它，重打與否由重試那一層**只看碼**。照 dsh 的
- * `providerError`（`harness/packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
+ * `providerError`（`packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
  *
  * | 條件（結構化欄位優先；額度與超窗再比措辭，只在模型呼叫的錯誤鏈上，見表後） | `code` | 預設重打 |
  * | --- | --- | --- |

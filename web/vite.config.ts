@@ -41,7 +41,7 @@ export default defineConfig({
     rejectStandaloneServe(),
     react(),
     tailwindcss(),
-    tsconfigPaths({ projects: ['../../tsconfig.base.json'] }),
+    tsconfigPaths({ projects: ['../tsconfig.base.json'] }),
     fontLicenses(),
   ],
   resolve: { alias: RESOLVE_ALIAS },

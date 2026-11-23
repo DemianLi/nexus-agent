@@ -15,7 +15,7 @@
  * ## 它為什麼住在 core 而不是某個 plugin
  *
  * dsh 那側**不把這件事做成可選的**：它是註冊表執行管線自己的 `catch`
- * （`harness/packages/core/tools/src/index.ts:1494-1496` → `toolErrorResult`，SHA `4e84901`），
+ * （`packages/core/tools/src/index.ts:1494-1496` → `toolErrorResult`，SHA `4e84901`），
  * 文件把它寫成性質而不是功能——「未知工具和抛出异常的工具都会变为结构化错误……
  * **调用失败但不终止当前轮次**」（`docs/subsystems/tools.zh.md:404`）。
  * 做成一個掛不掛隨人的 plugin 才是偏離。
@@ -69,7 +69,7 @@
  * 另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
  * ——那正是這一層要擋的東西。
  *
- * 時刻同 dsh：`tool/call` 在核准之前（`harness/packages/core/agent-loop/src/tool-calls.ts:168` 在
+ * 時刻同 dsh：`tool/call` 在核准之前（`packages/core/agent-loop/src/tool-calls.ts:168` 在
  * `prepare` 之前記），所以被閘門擋掉的呼叫一樣有一對。形狀與偏離見 `session-log.ts` 的
  * `SessionEventMap`。
  *
@@ -251,7 +251,7 @@ export function resolveToolName(request: {
  *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
  *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼；
  * - 工具拋出 {@link HarnessError} → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`
- *   （`harness/packages/core/tools/src/index.ts:661-668`，`477b4f4`）。`NexusTool` 回 `ok: false` 時，碼由轉接器掛在訊息上
+ *   （`packages/core/tools/src/index.ts:661-668`，`477b4f4`）。`NexusTool` 回 `ok: false` 時，碼由轉接器掛在訊息上
  *   （`@nexus/tool-adapter`），不經這裡。
  *
  * @param error - `catch` 到的東西。
@@ -349,7 +349,7 @@ function recordUnknownOutcome(
  *
  * ## 記不進去，這一步失敗（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）
  *
- * 這三種都進模型歷史，照 dsh 不吞（`harness/packages/core/agent-loop/src/tool-calls.ts:156`、`:168`，`687f282e`）。會讓它們拋的是
+ * 這三種都進模型歷史，照 dsh 不吞（`packages/core/agent-loop/src/tool-calls.ts:156`、`:168`，`687f282e`）。會讓它們拋的是
  * 日誌那一關拒收（#1526 的有損值、#1661 的深度上限）：
  *
  * - `tool/call` 寫不進去：原錯當場拋，工具本體不跑（dsh 的 `appendToolCall` 在 `prepare` 之前）。

@@ -63,7 +63,7 @@ export const SBOM_FILE = 'sbom.cdx.json';
 
 /**
  * 產物 manifest（產物根的 `package.json`，即 `harness/apps/harness/package.json`）的 `license` 該是什麼，照 dsh
- * `harness/scripts/build-python-release.py:256-259`（`687f282e`）驗 `License-Expression == "MIT"`。
+ * `scripts/build-python-release.py:256-259`（`687f282e`）驗 `License-Expression == "MIT"`。
  */
 const PRODUCT_LICENSE = 'MIT';
 
@@ -192,7 +192,7 @@ function isLinkPath(path: string): boolean {
 
 /** 從 repo 的 `harness/vendor/*` 讀出它們的套件名。 */
 export function vendorPackageNames(root: string = ROOT): string[] {
-  const base = join(root, 'vendor');
+  const base = join(root, 'harness', 'vendor');
   if (!existsSync(base)) {
     throw new Error(`${base} 不存在：vendor 搬了，路徑沒跟著搬，不能當成沒有 vendor 套件`);
   }

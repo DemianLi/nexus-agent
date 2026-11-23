@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /** 第一個參數是 state 的 middleware 掛鉤。 */
 const STATE_HOOKS = new Set(['beforeAgent', 'beforeModel', 'afterModel', 'afterAgent']);
@@ -274,7 +274,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'harness/packages/nexus-core/src/tool-result-eviction.ts › toolResultEvictionWrap request.state': 2,
 };
 
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'harness/packages'] as const;
 
 describe('全樹掃描', () => {
   it('讀 state 的地方與白名單一致', () => {

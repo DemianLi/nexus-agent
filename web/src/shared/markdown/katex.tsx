@@ -7,7 +7,7 @@
  *
  * `.katex-mathml` 那棵子樹給輔助技術讀（照標籤名讀，不看 namespace）；看得到的是 `.katex-html` 那棵 span 樹。
  *
- * **跟 dsh 不同的一處**（外觀，AGENTS.md「技術實現標準」不約束 UI）：錯誤色用 `--destructive`，不用 KaTeX
+ * **跟 dsh 不同的一處**（外觀，UI 不受技術實現標準約束，見 docs/web-ui.md §14.1）：錯誤色用 `--destructive`，不用 KaTeX
  * 預設的 `#cc0000`——那個顏色在暗色的底上對比度不夠。
  */
 

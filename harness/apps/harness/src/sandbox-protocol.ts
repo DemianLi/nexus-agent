@@ -7,7 +7,7 @@
  */
 
 /** 沙箱 spawner 的執行檔在產物裡的位置。 */
-export const SPAWNER_PATH = 'harness/native/nexus-sandbox-spawner';
+export const SPAWNER_PATH = 'native/nexus-sandbox-spawner';
 
 /** 一框最多多大，同 spawner 的 `MAX_FRAME`。 */
 export const MAX_FRAME = 1 << 20;

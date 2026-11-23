@@ -18,7 +18,7 @@ import { PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { parseServeArgs } from './serve-run.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const operationsDoc = join(here, '../../../docs/operations.md');
+const operationsDoc = join(here, '../../../../docs/operations.md');
 const supervisorArgs = join(here, '../../../native/sandbox-spawner/src/supervisor/args.rs');
 
 /** 監督行程 `args.rs` 的預設寬限（毫秒）。讀不到就丟錯，不回預設值，免得正規式失效時拿舊數字比過。 */

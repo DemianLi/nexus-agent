@@ -48,7 +48,7 @@ describe('裸的 cn 解析到 lib/utils.ts（#1523）', () => {
     const guard = fileURLToPath(new URL('../guard/vite.config.ts', import.meta.url));
     const { BASE_TSCONFIG } = await import('../guard/vite.config');
     expect(BASE_TSCONFIG).toBe(
-      fileURLToPath(new URL('../../../tsconfig.base.json', import.meta.url)),
+      fileURLToPath(new URL('../../tsconfig.base.json', import.meta.url)),
     );
     expect(existsSync(BASE_TSCONFIG)).toBe(true);
     // 外掛實際讀的那份：它在 configResolved 就開始解析 `projects`，解析不了只走 logger.error、不擋 build。收下 logger 的錯誤，
@@ -111,7 +111,7 @@ describe('tsconfig 的 @nexus paths（#1633）', () => {
     expect(text).toContain('// BEGIN generated package aliases');
     expect(text).toContain('// END generated package aliases');
     const { paths } = readTsconfig().compilerOptions;
-    expect(paths['@nexus/wire']).toEqual(['../../apps/packages/nexus-wire/src/index.ts']);
+    expect(paths['@nexus/wire']).toEqual(['../harness/packages/nexus-wire/src/index.ts']);
     // 條數與區塊有沒有漂移交給產生器的 `--check`（#1502）；這裡只管每一條都指到某個套件的 src 底下的 .ts。
     const packages = Object.entries(paths).filter(([key]) => key.startsWith('@nexus/'));
     expect(packages.length).toBeGreaterThan(0);
@@ -124,7 +124,7 @@ describe('tsconfig 的 @nexus paths（#1633）', () => {
     ]);
     for (const [key, targets] of packages) {
       expect(targets, key).toEqual([
-        expect.stringMatching(/^\.\.\/\.\.\/packages\/[^/]+\/src\/.+\.ts$/),
+        expect.stringMatching(/^\.\.\/harness\/packages\/[^/]+\/src\/.+\.ts$/),
       ]);
     }
   });

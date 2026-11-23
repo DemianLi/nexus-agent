@@ -233,7 +233,7 @@ describe('assertLaunchPathsOutsideWorkspace', () => {
 
   it('原始碼樹的形狀：同樣位置的 .env 在工作區裡就被點名為舊位置', async () => {
     const repo = await tmp('nexus-1671-repo-');
-    const moduleDir = join(repo, 'apps', 'harness', 'src');
+    const moduleDir = join(repo, 'harness', 'apps', 'harness', 'src');
     await mkdir(moduleDir, { recursive: true });
     await writeFile(join(repo, '.env'), 'FAKE_1671_API_KEY=x\n');
     const home = await tmp('nexus-1671-home-');

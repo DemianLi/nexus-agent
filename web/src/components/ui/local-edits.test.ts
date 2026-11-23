@@ -202,7 +202,7 @@ describe('基礎元件的本地修改還在', () => {
       'data-autoscrolling:scrollbar-thumb-transparent data-autoscrolling:scrollbar-track-transparent',
     );
     expect(vendor).toContain('scrollbar-gutter-stable');
-    // nexus 層也不加會動寬度的寫法。產物另由 `harness/scripts/check-built-css.mjs` 掃。
+    // nexus 層也不加會動寬度的寫法。產物另由 `scripts/check-built-css.mjs` 掃。
     expect(code(read('./message-scroller.tsx'))).not.toMatch(width);
   });
 

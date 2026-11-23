@@ -5,8 +5,8 @@
  * server 回 `not_supported`，web 據那個碼把這幾個動作藏起來（或退回瀏覽器本地）；改名寫在會話日誌上，不依賴整理檔。
  * **分叉（`thread.fork`）只有契約**：#1580 刀 1 先合，server 一律回 `not_supported`，刀 2 接上實作。
  *
- * 照 dsh 的 `workspace-controller` 與 `session-controller`（`harness/packages/api/workspace-controller/src/{commands,types}.ts`、
- * `harness/packages/api/session-controller/src/{commands,types}.ts`，`5badb150`）：
+ * 照 dsh 的 `workspace-controller` 與 `session-controller`（`packages/api/workspace-controller/src/{commands,types}.ts`、
+ * `packages/api/session-controller/src/{commands,types}.ts`，`5badb150`）：
  *
  * - **釘選與封存是兩個全域集合**，不是會話身上的旗標。每次變更**回完整的集合**（`WorkspacePinValue`、`WorkspaceArchiveValue`），
  *   呼叫端拿它整份取代本地的；釘選集合**最近釘的在前**。

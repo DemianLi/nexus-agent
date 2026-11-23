@@ -11,7 +11,7 @@
  *
  * **dsh 沒有 thread 數上限**（`grep` 不到任何一處對會話數設限）。這一列是 serve 跑在多人共用的內網主機上、
  * 而 thread 不回收（#1464）才有的需求，登記為「產品需求超出 dsh」。它借的是 dsh 背景工作准入的形狀
- * （`harness/packages/jobs/jobs-local/src/index.ts:221-223`，`1517a4db`：`start()` 在建立任何資源之前先比 `active >= maxConcurrentJobsPerOwner`；
+ * （`packages/jobs/jobs-local/src/index.ts:221-223`，`1517a4db`：`start()` 在建立任何資源之前先比 `active >= maxConcurrentJobsPerOwner`；
  * 決策紀錄 `.agents/notes/archived/bug-fix/2026-08-11-bounded-background-job-admission.zh.md`），逐點對到我們：
  *
  * 1. 數量從權威紀錄現算，不另存一份計數——數 `threads.size + closing.size`（`closing` 是正在撤的）。
@@ -36,7 +36,7 @@
  *   「沒有不限、最小 1」照 dsh 各入口的上限（`jobs-local` 的 `maxConcurrentJobsPerOwner`、`terminal-controller` 的 `maxTerminals`、
  *   `subagent` 的 `maxActiveSubagents`，都是 `min(1)` 加有限的預設）。
  * - **`idleEvictAfterMs` 7 200 000（2 小時）**，非負整數，**`0` 表示不逐出**。照 dsh 終端的 `unattendedTimeoutMs`
- *   （`harness/packages/api/terminal-controller/src/index.ts:90`：`min(0)`、`default(7_200_000)`；`0` 不回收在 `retention.ts:101`，`687f282e`），不算偏離。
+ *   （`packages/api/terminal-controller/src/index.ts:90`：`min(0)`、`default(7_200_000)`；`0` 不回收在 `retention.ts:101`，`687f282e`），不算偏離。
  *   時間是從沒有人看著開始算的（閒置條件含「沒有下行訂閱者」），所以 2 小時是使用者關掉頁籤之後的 2 小時。
  *
  * 兩格的上界都是 `Number.MAX_SAFE_INTEGER`，同 dsh 那幾格。

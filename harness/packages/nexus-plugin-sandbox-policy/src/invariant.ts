@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-sandbox-policy` 的不變量配套入口：**日誌上每一顆 `sandbox/mode` 帶的都是認得的模式**。
  *
- * 照 dsh 的 sandbox-policy 配套入口（`harness/packages/sandbox/sandbox-policy/src/invariant.ts:17-21`，
+ * 照 dsh 的 sandbox-policy 配套入口（`packages/sandbox/sandbox-policy/src/invariant.ts:17-21`，
  * `477b4f4`）：逐筆看 `sandbox/mode`，`mode` 不在 `SANDBOX_MODES` 就報。只有詞彙這一條，沒有
  * 跨筆關係——模式只有一格，住在 `SandboxModeController.current`，每一次真的變了都當場追加一顆
  * 整份值的 `sandbox/mode`，沒有投影、沒有快照可以跟日誌分岔。
@@ -14,8 +14,8 @@
  * 提示句與升級工具也都不認得它。這正是 `@nexus/core` 的 `sandbox.ts` 檔頭描述的分岔。
  *
  * **讀取邊界不擋，照 dsh。** dsh 讀事件時同樣不驗 mode：投影的 `apply` 原樣收下
- * （`harness/packages/sandbox/sandbox-policy/src/index.ts:138`），fence 同形地落進 workspace-write
- * （`harness/packages/fs/fs-sandbox/src/index.ts:125-126`）。它對未知模式的回應就是這顆配套入口報違規。
+ * （`packages/sandbox/sandbox-policy/src/index.ts:138`），fence 同形地落進 workspace-write
+ * （`packages/fs/fs-sandbox/src/index.ts:125-126`）。它對未知模式的回應就是這顆配套入口報違規。
  * runner 安裝時先重播已有的事件，所以續接讀回來的那一份也涵蓋在內（同 `@nexus/plugin-plan-mode`
  * 的配套入口檢 `plan/mode` 的形狀）。
  *

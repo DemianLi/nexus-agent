@@ -19,7 +19,7 @@
  * ## 偏離（登記）
  *
  * 1. **起始的兩顆值由 `--sandbox` 一個來源推。** dsh 用 `DSH_PERMISSION_MODE` 同時決定沙箱模式與核准政策（全開就是 `never`，其他是 `ask`，
- *    `harness/packages/bundle/base/cordis.patch.yml:243-247`、`:259-262`，`687f282e`）；我們用 `--sandbox` 當這個來源（組裝點做，見 `assembly-root.ts`）。這是行為改變：以前
+ *    `packages/bundle/base/cordis.patch.yml:243-247`、`:259-262`，`687f282e`）；我們用 `--sandbox` 當這個來源（組裝點做，見 `assembly-root.ts`）。這是行為改變：以前
  *    `--sandbox danger-full-access` 只放寬檔案、核准照舊會問；現在連核准也是 `never`（2026-09-26 demian 拍板「全開＋不問」）。
  * 2. **`defaultPreset` 與 `--sandbox` 同時給而且互相矛盾：啟動時報錯。** dsh 沒有命令列旗標，沒有這個情況。不悄悄讓其中一個蓋掉另一個。
  * 3. **沒有使用者設定那一層。** dsh 的 `settings` 讓使用者另外存「新會話的預設組」；我們沒有使用者設定這一層，預設只來自 `defaultPreset` 與 `--sandbox`。
@@ -28,7 +28,7 @@
  *    同 `@nexus/plugin-sandbox-policy` 登記過的 `/sandbox`。判準是 `@nexus/fs` 的 `hasContainment()`（行程級；#1491 Q4 (a)，#1774 起 2.0.0）。可寫根是逐條 thread 的：`/permission` 不帶引數時報**這條 thread** 的根（`forThread(sessionLog.sessionId)` 取把手、`FsService.workspaceRoot()` 讀值）。
  * 5. **沒有 `auto` 那一組與目錄變動通知。** dsh 的 `auto` 是選配、出廠沒開的一組，目錄靠 payload-free 的事件通知變動；我們出廠的目錄啟動時就定了。
  * 6. **出廠表不含 `danger-full-access`（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）。** dsh base 出廠三組
- *    （`harness/packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`），表裡有就人人可選；我們的 serve 多人共用一台主機，同一把 token 底下
+ *    （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`），表裡有就人人可選；我們的 serve 多人共用一台主機，同一把 token 底下
  *    的每個人都切得到，所以出廠只留兩組。CLI 跟著少一組屬理由 1：出貨層只有一份表，表達不出「serve 少、CLI 照舊」。部署方要全開就把整張表
  *    重寫一份加回（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
  * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn、起始值在宿主的組 thread 那一步算。**
@@ -41,15 +41,15 @@
  *    之後切控制器會被它們蓋回去。寫事件的順序照 `/permission`（`permission/preset` → `sandbox/mode` → `approval/policy`，只寫真的變了的）；
  *    沒有新事件種類、日誌格式不動。**撤除條件**：沒有（出廠表沒有全開這件事一天不變，這條就一天要在）。
  *    **為什麼目標不照 dsh 的 `inferredDefault`**（理由 1）：dsh 的預設組是 `config.defaultPreset ?? inferredDefault`，`inferredDefault` 由行程起始的沙箱與核准推出
- *    （`harness/packages/interaction/permission-presets/src/index.ts:222-231`，`687f282e`）；寫事件的參與者拿不到行程的 `--sandbox`，root 的 `SessionAddress` 也沒有
+ *    （`packages/interaction/permission-presets/src/index.ts:222-231`，`687f282e`）；寫事件的參與者拿不到行程的 `--sandbox`，root 的 `SessionAddress` 也沒有
  *    thread 鍵可以對回 `start`，所以退到「`defaultPreset`，沒設取沙箱最寬的一組」。兩種規則只有一格結果不同：`--sandbox read-only` 起動、沒設
  *    `defaultPreset`、日誌記著全開——照 dsh 收到 `read-only`，照這裡收到 `workspace-write`（要收得更窄就設 `defaultPreset`）。
  *    dsh 的對照點：續接時保留日誌裡的值是 `:446-455`（`pinInitialPermission` 後半），續接時拒絕的前例是 `:431-436`（`auto` 在續接時拋錯）。
  * 10. **冷復活的背景子代理，讀回的委派沙箱比表裡每一組都寬就收回預設組（理由 2，[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)，跟 #1621 同一個理由）。**
  *    dsh 的表也是部署方可以設定的，全開只是預設值（`packages/interaction/permission-presets/src/index.ts:158-166`、`:183-195`），所以部署方把全開拿掉之後，
  *    dsh 既有子代理的快照一樣可以比表寬；dsh 的答案是取消再重派（`.agents/notes/archived/feature/2026-07-25-subagent-policy-inheritance.md:34`：
- *    「cancel-and-respawn picks up a tightening」）——冷復活只重播子代理日誌上已持久化的委派政策事件（`harness/packages/subagent/subagent/src/manager.ts:881-882`，`687f282e`），
- *    fence 解析取的是 session 自己的 override（`harness/packages/sandbox/sandbox-policy/src/index.ts:164-168`）。我們的 serve 多人共用一台主機：改表的人看不到別人的會話，
+ *    「cancel-and-respawn picks up a tightening」）——冷復活只重播子代理日誌上已持久化的委派政策事件（`packages/subagent/subagent/src/manager.ts:881-882`，`687f282e`），
+ *    fence 解析取的是 session 自己的 override（`packages/sandbox/sandbox-policy/src/index.ts:164-168`）。我們的 serve 多人共用一台主機：改表的人看不到別人的會話，
  *    而部署方改表就是要對整台主機生效，沒有人能替每一個背景子代理逐一取消重派，所以**改成讀回時收**。
  *    做法：{@link PermissionPresetsService.narrowDelegated}（1.2.0，純函式，只看「表＋這一格快照」，條件與目標同偏離 9），宿主在
  *    `SandboxModeController.delegateFromLog` 讀回時過這個上限；**只收「這一輪實際用的那一格」，不寫子代理日誌**

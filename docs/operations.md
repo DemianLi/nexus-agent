@@ -1,7 +1,7 @@
 # 操作指南
 
 跑起來之後會撞到的事：圍堵、會話日誌、瀏覽器會話的安全約束、執行上限、評測。
-怎麼安裝與怎麼起一條 agent 見 [README.md](../README.md)；協作流程見 [AGENTS.md](../AGENTS.md)。
+怎麼安裝與怎麼起一條 agent 見 [README.md](../README.md)；提交規則見 [contributing.md](contributing.md)。
 
 ## 檔案圍堵
 
@@ -118,7 +118,7 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
 怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
 
-**4. `grep`／`glob` 起的 rg 與 workspace-changes 的 git 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `harness/native/nexus-sandbox-spawner` 起，
+**4. `grep`／`glob` 起的 rg 與 workspace-changes 的 git 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `native/nexus-sandbox-spawner` 起，
 seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽略規則，讀不到 serve 的 home。`danger-full-access` 不上 Landlock，網路照擋。
 
 - 主機沒有 Landlock，或不是 Linux：`read-only`、`workspace-write` 下的 `grep`／`glob` 回 `SEARCH_FAILED`，訊息裡有 `SANDBOX_UNAVAILABLE`，不退回不設防。
@@ -169,7 +169,7 @@ connection:
 - 在 Linux 容器裡起 serve；
 - 在本機的 `--patch` 覆寫檔把 `danger-full-access` 加回權限表（寫法見上面〈權限組合〉那一節），用它起。非 Linux 上這一格直接 spawn，不套 OS 沙箱。
 
-從原始碼起的 serve 沒有產物裡那支 spawner，在 Linux 上也回 `SANDBOX_UNAVAILABLE`，要先把編好的執行檔放到 repo 根的 `harness/native/nexus-sandbox-spawner`（編法見 [`harness/native/sandbox-spawner/README.md`](../harness/native/sandbox-spawner/README.md)）。
+從原始碼起的 serve 沒有產物裡那支 spawner，在 Linux 上也回 `SANDBOX_UNAVAILABLE`，要先把編好的執行檔放到 `harness/native/nexus-sandbox-spawner`（編法見 [`harness/native/sandbox-spawner/README.md`](../harness/native/sandbox-spawner/README.md)）。搬到 `harness/` 之前放在 repo 根 `native/nexus-sandbox-spawner` 的舊執行檔不會被拿來用：只有它存在時，serve 啟動就報錯，訊息講要搬去哪裡。
 
 ### serve：key 與 home 不能跟工作區重疊
 
@@ -922,7 +922,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
   行程不管怎麼死（`kill -9`、當機、致命退出），kernel 都放鎖，沒有要手動清的殘骸；鎖檔本身留著，不用刪。**正常停 `serve`** 時鎖是最後一步放的，
   排在日誌、thread、插件都收完之後。致命退出（上面那條）後**馬上**重啟，若舊行程還在做那最多 2 秒的收尾，新行程會被這把鎖擋一下，舊行程一結束就拿得到。
   只擋 serve 對 serve：一次性 CLI 與 `plugin-change` 照樣能在 serve 跑著時用同一個 home。
-  只有 Linux 鎖得到，拿鎖的是出貨包裡的 `harness/native/nexus-sandbox-spawner`（找不到它也算鎖不到）；其他情形 `serve` 照常起來，伺服器日誌講一行 `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve`，
+  只有 Linux 鎖得到，拿鎖的是出貨包裡的 `native/nexus-sandbox-spawner`（找不到它也算鎖不到）；其他情形 `serve` 照常起來，伺服器日誌講一行 `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve`，
   同會話寫租約。拿不到鎖的原因是 `EACCES` 這類權限／IO 錯誤則不照常起來，原樣報出。
 
 **網頁與 API 都要瀏覽器會話。** `serve` 印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie
@@ -1431,7 +1431,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 | `nexus-agent-<版本>-audit.json` | 發版當下的漏洞掃描結果，見下面〈漏洞掃描〉 |
 | `nexus-agent-<版本>-audit.json.sha256` | 掃描結果的雜湊 |
 
-tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文，以及 `licenses/sandbox-spawner/` 底下沙箱 spawner 連進去的程式碼的授權全文）、`harness/native/nexus-sandbox-spawner`（沙箱 spawner 的執行檔，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
+tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文，以及 `licenses/sandbox-spawner/` 底下沙箱 spawner 連進去的程式碼的授權全文）、`native/nexus-sandbox-spawner`（沙箱 spawner 的執行檔，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
 以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這些檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
 閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
 （`harness/apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
@@ -1467,7 +1467,7 @@ const lic="licenses/sandbox-spawner";
 const clibs=["musl","llvm-libunwind"];
 if(fs.existsSync(lic))for(const d of fs.readdirSync(lic))if(d!=="rust-std"){const m=/^(.+)-(\d+\.\d+\.\d+\S*)$/.exec(d);installed.add((m&&clibs.includes(m[1])?"":"cargo:")+(m?m[1]+"@"+m[2]:d))}
 if(fs.existsSync(lic+"/rust-std/COPYRIGHT-library.html"))installed.add("rust-std");
-if(fs.existsSync("harness/native/nexus-sandbox-spawner"))installed.add("nexus-sandbox-spawner");
+if(fs.existsSync("native/nexus-sandbox-spawner"))installed.add("nexus-sandbox-spawner");
 const bom=JSON.parse(fs.readFileSync("sbom.cdx.json","utf8"));
 const key=(c)=>{const p=c.purl||"";return p.startsWith("pkg:generic/")&&!clibs.includes(c.name)?c.name:(p.startsWith("pkg:cargo/")?"cargo:":"")+(c.group?c.group+"/":"")+c.name+"@"+c.version};
 const listed=new Set([bom.metadata.component,...bom.components].map(key));
@@ -1477,14 +1477,14 @@ if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆
 <!-- verify-install:end -->
 
 第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`harness/scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
-沙箱 spawner 那一側，crate 與 C 函式庫（musl、LLVM libunwind）從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`harness/native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`、C 函式庫印成 `<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
+沙箱 spawner 那一側，crate 與 C 函式庫（musl、LLVM libunwind）從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`、C 函式庫印成 `<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
 同一件事 CI 的 `packed-install` 跑在每個合進 `develop` 的 commit（合併後完整一輪）、動到 TypeScript 或相依這類要掃的檔的 `develop → main` PR 與 push 到 `main`、動到 `.github/workflows|scripts|actions/` 的功能 PR，其他功能 PR 走輕的模式，不打包；每次 Release 也由 `release:verify-packed-install` 跑一次。主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
 
 - **SBOM 的雜湊是 registry tarball 的。** 第三方套件的 `hashes` 取自閉包 lockfile 的 integrity（npm registry 上那個 `.tgz` 的 SHA-512），
   拿來對弱點資料庫或 registry 都對得上，但**不能**拿主機上解開的檔案重算出來。我們自己的套件（`@nexus/*`）lockfile 不記 integrity，所以沒有 `hashes`，
   版本與內容跟 tarball 一起由 `.sha256` 釘住；授權取 repo 根 `LICENSE`（MIT）。
   沙箱 spawner 的 crate 帶 `Cargo.lock` 記的 checksum（crates.io 上那個 `.crate` 檔的 SHA-256），一樣不能拿主機上的檔重算；
-  spawner 執行檔本身帶它的 SHA-256，可以直接 `sha256sum harness/native/nexus-sandbox-spawner` 對。
+  spawner 執行檔本身帶它的 SHA-256，可以直接 `sha256sum native/nexus-sandbox-spawner` 對。
 - **缺口：擋得住損壞，擋不住惡意替換。** `.sha256` 與 SBOM 跟 tarball 從同一個 Release 頁面下載；能換掉 tarball 的人也換得掉其他幾個檔，
   雜湊照樣對得上。產物簽章不在這張（#1545 Q3 (a)），併進企業決議 §八 的發行金鑰（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 第二版）。
 
@@ -1751,7 +1751,7 @@ nexus-agent serve --process-model per-thread
 
 - 旗標蓋過設定列；起動期讀一次，改了要重啟。關掉這一列就是 `single`。
 - **只在 Linux 起得來**，其他平台起動就停下來講原因。
-- 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `harness/native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去；宿主 `nexus-host` 也要放在它旁邊（見〈宿主 `nexus-host`〉）。
+- 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去；宿主 `nexus-host` 也要放在它旁邊（見〈宿主 `nexus-host`〉）。
 - **執行檔不能帶 setuid／setgid，node 行程不能帶 capability**（例如對 node 做過 `setcap cap_net_bind_service`）。監督行程替子行程設了「父行程死了就跟著死」（`PR_SET_PDEATHSIG`），這兩種情形下核心在 exec 時會把它清掉，監督行程被 `SIGKILL` 時就留下孤兒，所以起動時查到就拒起。capability 是看 serve 自己行程的 `CapPrm`，以 root 跑時不查（root 本來就有全部的 capability）；監督行程執行檔上的 file capability 查不到、**不擋**，不要對它做 `setcap`。要綁 1024 以下的 port，放在反向代理後面（見〈放在反向代理後面〉）。
 - `startTimeoutMs`（毫秒，非負整數，`0` 不判）交給監督行程的 `--start-timeout-ms`：對話行程從起行程到它回 `ready` 的上限，已指派 thread 與預熱池裡的都算；逾時被殺，那條 thread 的前台請求回「對話行程沒起來（stalled）」。**省略就不傳旗標，用監督行程的預設（30000），行為與沒有這個鍵時相同。**只在 `per-thread` 下有作用。
   成對的（組合行程加葉子）從起到讀到組合行程的 `ready` 算一筆，補葉子時另算一筆，過了就整對收、`down` 帶 `stalled`；`nexus-agent serve` 起的是不成對的，從 spawn 到讀到對話行程自己的 `ready` 算一筆，預熱池裡的也算，過了殺它；已指派的回 `down(stalled)`，預熱池的沒有 thread、不回 `down`，之後照預熱池的退避再補：從退避起點（`--front-restart-ms` 與 100 毫秒的較大者）起、每失敗一次加倍、最多 30 秒。距上一次預熱失敗至少 60 秒，或這個預熱行程到過 `ready`、活過 60 秒才死，等待就回到起點；看的是失敗的時間，不看有沒有行程被指派走。永不 `ready` 的預熱行程每次要活到逾時才死，預設 30 秒，所以等待長到 30 秒那一輪之後會回到起點重來，補的間隔仍至少隔一個逾時。旗標小於 100 毫秒（含 0）時退避起點是 100 毫秒，前台重起的間隔仍是旗標本身。`startTimeoutMs` 的預設 30000 是跟 `--host-ready-timeout-ms` 取同一個值；依據是 CI 兩輪共 40 個樣本，冷起動 1.4–2.3 秒（最大 2274 ms）。量的是跑原始碼的對話行程，不含外掛與 MCP，也不是客戶主機，所以只說 30 秒對這個量測有餘裕，不是對任何部署都夠（細節見 [#2852](https://github.com/DemianLi/nexus-agent/issues/2852)）。
@@ -2301,7 +2301,7 @@ dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:35
 ## 前景子代理的核准
 
 **前景子代理要核准的操作，卡片送到使用者面前**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，**dsh 沒有**：dsh 委派時把子代理的核准政策釘成 `never`，
-`harness/packages/subagent/subagent/src/child-agent.ts:220-247`）。為什麼做：前景時主對話本來就停著等這個子代理，Claude Code 的前景子代理也是這樣；要核准的事一律回絕，
+`packages/subagent/subagent/src/child-agent.ts:220-247`）。為什麼做：前景時主對話本來就停著等這個子代理，Claude Code 的前景子代理也是這樣；要核准的事一律回絕，
 子代理能做的事就比主對話少得多。這翻了 #324 的決定，**僅限前景**。
 
 - **政策與管道跟主對話當下的一樣**：核准政策（`ask`／`never`，#437）每次要問人之前讀一次，所以主對話中途切到 `never`，子代理下一次要核准的操作就確定性回絕。

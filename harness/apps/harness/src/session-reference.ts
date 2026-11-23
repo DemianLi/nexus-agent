@@ -2,7 +2,7 @@
  * 引用別的會話的準備那一半（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：把人在句子裡 `@` 的會話，
  * 凍成一則附在那句話後面的 user-role 快照。候選那一半在 `session-reference-candidates.ts`。
  *
- * 照 dsh 的 `SessionReferenceResolver`（`harness/packages/context/session-reference/src/{index,projection,spill,serialization}.ts`，
+ * 照 dsh 的 `SessionReferenceResolver`（`packages/context/session-reference/src/{index,projection,spill,serialization}.ts`，
  * `477b4f4`）：
  *
  * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 `maxReferences` 條不同的會話（預設 3，

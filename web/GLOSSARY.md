@@ -1,6 +1,6 @@
 # Web
 
-瀏覽器端的介面：對話、側欄、卡片與它們共用的外觀。這一份收「元件」相關與側欄會話管理裡容易混用的詞；怎麼做見 [`COMPONENTS.md`](./COMPONENTS.md)，值見 [`docs/web-ui.md`](../../docs/web-ui.md)。
+瀏覽器端的介面：對話、側欄、卡片與它們共用的外觀。這一份收「元件」相關與側欄會話管理裡容易混用的詞；怎麼做見 [`COMPONENTS.md`](./COMPONENTS.md)，值見 [`docs/web-ui.md`](../docs/web-ui.md)。
 
 ## Language
 

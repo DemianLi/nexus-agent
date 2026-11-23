@@ -27,7 +27,7 @@
  * ## 登記的偏離：未知欄位讓載入失敗
  *
  * dsh **放行**未知欄位：schemastery 的 `~standard.validate` 跑非嚴格模式
- * （`harness/vendor/schemastery/src/index.ts:282`、`:470` 的 `strict = false`），而 object 在
+ * （`vendor/schemastery/src/index.ts:282`、`:470` 的 `strict = false`），而 object 在
  * 非嚴格模式下把未知欄位原樣併進去（`:761`）——拼錯的欄位名因此悄悄沒有作用。
  *
  * 我們讓它**載入失敗**：每一層 object 都用 `z.strictObject`。理由是 YAML 拼錯字會悄悄

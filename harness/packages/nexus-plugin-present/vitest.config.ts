@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { pathsPlugin, sourceHook } from '../../vitest.shared.ts';
+import { pathsPlugin, sourceHook } from '../../../vitest.shared.ts';
 
 /**
  * `eslint-exclusion.test.ts` 用 `new ESLint({ overrideConfigFile })` 量這個套件真的那份 `eslint.config.js`，而 ESLint 是用 Node

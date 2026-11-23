@@ -2,7 +2,7 @@
  * 附件儲存：使用者上傳的檔案存在 harness home 底下、會話日誌之外，日誌與訊息只留參照
  * （[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  *
- * ## 照 dsh 的部分（`harness/packages/attachment/attachment-local/src/{file-store,store}.ts`，`5badb150`）
+ * ## 照 dsh 的部分（`packages/attachment/attachment-local/src/{file-store,store}.ts`，`5badb150`）
  *
  * - **內容定址、逐位元組原樣存**：參照是 `sha256:<hex>`＋清過的檔名＋位元組數。同樣的內容只存一份物件
  *   （`file-objects/<前兩碼>/<hex>`），每個檔名是指向它的硬連結（`files/<前兩碼>/<hex>/<檔名>`），所以模型與使用者

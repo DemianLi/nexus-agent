@@ -9,7 +9,7 @@
  * ## 為什麼要有這一層
  *
  * dsh 的模型工具直接問 `exec.agent.session`——**它自己擁有派發點**，所以身分是被塞進來的
- * （`harness/packages/core/agent-loop/src/tool-calls.ts:78`，`ToolExecutionInput.agent` 的註解寫著
+ * （`packages/core/agent-loop/src/tool-calls.ts:78`，`ToolExecutionInput.agent` 的註解寫著
  * “set by the agent loop”）。我們的工具跑在 LangGraph 的 ToolNode 裡，那個派發點不是我們的，
  * 所以身分只能從執行期的 config 推出來。
  *

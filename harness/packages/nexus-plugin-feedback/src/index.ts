@@ -3,10 +3,10 @@
  *
  * 規則照 dsh 的兩個套件（`references/deepseek-harness`，SHA `c291e79`）：
  *
- * - 評分：`harness/packages/feedback/message-feedback/src/index.ts`——樂觀鎖（新建要 `ifVersion: null`、
+ * - 評分：`packages/feedback/message-feedback/src/index.ts`——樂觀鎖（新建要 `ifVersion: null`、
  *   修改要帶目前的版本）、內容一樣就不記也不換版本、收回不存在的成功但不記、備註不能全是空白
  *   而且有位元組上限、先驗備註再驗目標再驗版本。
- * - 評語：`harness/packages/feedback/command-feedback/src/index.ts`——`/feedback <文字>` 記一顆
+ * - 評語：`packages/feedback/command-feedback/src/index.ts`——`/feedback <文字>` 記一顆
  *   `feedback/record`，空字串回用法說明，`recordInput: false`。
  *
  * 評分的目標是一則回覆的訊息 id，同 dsh；格式 10 以前以輪記的怎麼讀、其他偏離見 `@nexus/core` 的

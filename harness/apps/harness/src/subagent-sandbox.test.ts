@@ -287,7 +287,7 @@ describe('子代理的沙箱模式', () => {
   /**
    * **子代理的模型請求也帶沙箱政策句，講的是委派那一格**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
    * 照 dsh：子代理併入父代理的組合，`sandbox:policy` 段落讀子代理自己 session 上委派時寫下的模式
-   * （`harness/packages/sandbox/sandbox-policy/src/index.ts:141-151`）。
+   * （`packages/sandbox/sandbox-policy/src/index.ts:141-151`）。
    *
    * 子代理第二次請求在 `flip` 之後：root 那一格已經換了，句子仍是委派那一格——驗的是「每次」而且是「委派那格」，
    * 不是組裝當下那格。root 收尾那次拿的是新那一格，對照組。

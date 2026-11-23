@@ -25,7 +25,7 @@
  * - 會話日誌的**讀法**（`loggedContentBlocks` 等四個值）不在這裡，由 `@nexus/session` 單向轉出（#1435 Q1 (c)）；`SessionEvent`、
  *   `isLogicalTurnStart` 日後歸 `@nexus/session`，撤除條件一併涵蓋。`ProjectionDetailError` 屬於投影（按需拉細節的錯誤），放這裡名實相符。
  *
- * 介面只放今天有消費者的東西（`harness/packages/AGENTS.md`「Require a current owner and need」）。
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
  *
  * @module
  */

@@ -110,7 +110,7 @@ export interface TokenMeterSpan {
   readonly outputTokens: number;
   /**
    * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
-   * （`harness/packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊。
+   * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊。
    *
    * `uncachedInputTokens`：**永遠等於 {@link inputTokens}**，server 每次都送。留著它是因為 web 靠「有沒有這一格」分辨
    * 新舊 server（舊 server 的 `inputTokens` 含快取）；同總帳的 `uncachedInputTokens`。

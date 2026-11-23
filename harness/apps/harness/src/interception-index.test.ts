@@ -118,7 +118,7 @@ import { describe, expect, it } from 'vitest';
 import { scanEventTableTree } from './event-table-scan.js';
 
 /** 這個 repo 的根。從 `harness/apps/harness/src/` 往上三層。 */
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /**
  * 「這一格的頻率**沒有量過**」——見 {@link InterceptionRow.frequencyDelta}。
@@ -336,7 +336,7 @@ const EXPECTED_SITES = 17;
  *
  * **例外明著列**：第 2 列裡不是靠 `beforeAgent` 佔住的那幾個，見 {@link PRE_STEP_OTHER_CARRIERS}。
  */
-const PRE_STEP_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
+const PRE_STEP_ROOTS = ['harness/apps/harness/src', 'harness/packages'] as const;
 
 /**
  * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。

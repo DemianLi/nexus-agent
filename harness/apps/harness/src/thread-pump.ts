@@ -36,8 +36,8 @@
  * ## 工具卡從日誌開、以日誌收（[#296](https://github.com/DemianLi/nexus-agent/issues/296)、[#297](https://github.com/DemianLi/nexus-agent/issues/297)）
  *
  * dsh 的 web 工具卡從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
- * （`harness/packages/client/ui-chat/src/client/conversation-nodes/tool.ts:40-66`，`c291e79`）。`tool/call`
- * 在核准之前就寫（`harness/packages/core/agent-loop/src/tool-calls.ts:168`），`tool/result` 在所有鉤子之後
+ * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:40-66`，`c291e79`）。`tool/call`
+ * 在核准之前就寫（`packages/core/agent-loop/src/tool-calls.ts:168`），`tool/result` 在所有鉤子之後
  * 才寫，所以等核准時畫面上已經有卡，事後被改成錯誤的結果畫面上就是錯誤。
  *
  * **dsh 之後提前了開卡的時機，我們沒跟（2026-10-04 對讀 `5badb15009a`）。** `91818992b05`（2026-09-30）刪掉
@@ -550,7 +550,7 @@ interface Subscriber {
  * 排著、還沒開跑的一件事（[#629](https://github.com/DemianLi/nexus-agent/issues/629)）。
  *
  * 分兩種，照 dsh：**答覆**（`resume` 與收回）屬於停在核准點的那一輪，**開新一輪的**（說話、續行）是收件匣
- * 裡的東西，只在一輪開始時領（`harness/packages/core/agent-loop/src/agent.ts:296-330` 的 `turn()`，`477b4f4`）。
+ * 裡的東西，只在一輪開始時領（`packages/core/agent-loop/src/agent.ts:296-330` 的 `turn()`，`477b4f4`）。
  */
 interface QueuedJob {
   /** 是答覆：停在核准點時照樣跑，而且排在開新一輪的前面。 */
@@ -802,8 +802,8 @@ interface ToolVerdict {
   readonly meta?: unknown;
   /**
    * 日誌 `tool/result.error.code` 的那個碼，原樣（例如 `ABORTED_BEFORE_DISPATCH`、`FS_SANDBOX_DENIED`）。
-   * 照 dsh 碼跨線（`harness/packages/core/agent-loop/src/tool-calls.ts:285` 把 `error` 放進 `tool/result`，
-   * `harness/packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76` 原樣交給 client 的工具節點），畫面比碼不比字。
+   * 照 dsh 碼跨線（`packages/core/agent-loop/src/tool-calls.ts:285` 把 `error` 放進 `tool/result`，
+   * `packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76` 原樣交給 client 的工具節點），畫面比碼不比字。
    * 只在失敗那一支上線，見 {@link applyVerdict}。
    */
   readonly code?: string;
@@ -1158,7 +1158,7 @@ function trackUnsettledReply(current: CurrentRun, raw: RawProtocolEvent): void {
  * 的 `replace`，`5badb15009a`）：進行中那一次嘗試的前綴在連上時一次交出，之後的即時片段接在後面。
  *
  * **三處偏離**（載體表達不出來，不是形狀不同）：dsh 的 baseline 與持久視窗在 `follow` 的同一個同步段裡產出，再用序號切掉
- * 在那之前排進佇列的 frame（`harness/packages/api/session-controller/src/history.ts` 的 `follow`），客戶端還把持久的那則壓到
+ * 在那之前排進佇列的 frame（`packages/api/session-controller/src/history.ts` 的 `follow`），客戶端還把持久的那則壓到
  * `end` 才發布；我們的下行與歷史是兩個請求，所以 ①在下行註冊時補送、②蓋新號（合成的片段沒有原始號）、③撐到
  * `assistant/message` 落盤才放掉（量過 `message-finish` 先到），重疊由折疊器照訊息 id 擋。
  */
@@ -1811,7 +1811,7 @@ export class ThreadPump {
   /**
    * 整個 agent 在跑沒有，給列表與全域下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：
    * {@link ThreadPump.running}，**加上停在等人回答**。照 dsh 的 `agent/status`：核准與提問發生在一輪的工具執行
-   * 當中，那段時間是 `running`（`harness/packages/core/agent-loop/src/agent.ts:140-152`，`477b4f4`）。我們的那一輪在中斷時
+   * 當中，那段時間是 `running`（`packages/core/agent-loop/src/agent.ts:140-152`，`477b4f4`）。我們的那一輪在中斷時
    * 就收了，所以要把掛著的中斷加回來。按了停止之後停住的仍然不算，同 dsh 的 `cancel({keepInbox: true})` 之後是 idle。
    *
    * **不拿它取代 {@link ThreadPump.running}**：斜線命令的閘門與續行的讓行靠的是那一個，停在核准點另有
@@ -1846,7 +1846,7 @@ export class ThreadPump {
    * 收線時丟掉的那幾件，不是被掛著的中斷擋著（那時照樣算在跑），就是按停止停住的（本來就不算）。
    *
    * 續行那一輪會在兩輪之間先講一次閒著：`settle` 放下 `#busy` 之後，排程器非同步才送下一輪。**dsh 也是**：它的
-   * 續行掛在 `agent/status` 翻成 idle 上（`harness/packages/goal/goal-round-driver/src/index.ts:258-280`）。
+   * 續行掛在 `agent/status` 翻成 idle 上（`packages/goal/goal-round-driver/src/index.ts:258-280`）。
    */
   #noteStatus(): void {
     const running = this.agentRunning;
@@ -2002,7 +2002,7 @@ export class ThreadPump {
    * 但排在 `next-turn` 的**頭**（見下面的偏離）。
    *
    * **偏離（登記）**：dsh 把收尾中、閒著時到的插話照樣放 `next-step` 並叫醒迴圈，下一輪開頭 `claim` 先領整條 `next-step`、
-   * 再領一件 `next-turn`，一起送進同一輪（`harness/packages/core/agent-loop/src/agent.ts:154-169`、`inbox.ts:109-114`，
+   * 再領一件 `next-turn`，一起送進同一輪（`packages/core/agent-loop/src/agent.ts:154-169`、`inbox.ts:109-114`，
    * `477b4f4`）。我們的一輪一定由一件 `next-turn` 開頭：那件的文字記在 `turn/start`（`session-log.ts` 登記過的偏離，
    * 授權的判別欄），只有插話開不出一顆 `turn/start`。所以退成排隊、**插在頭上**：佇列裡排著幾句時它仍是下一輪，不排到
    * 它們後面。跟 dsh 的差別只在「收尾中或閒著時插話、而佇列裡還排著別的」那一刻：dsh 兩件同一輪，我們分兩輪。
@@ -3573,7 +3573,7 @@ export class ThreadPump {
         );
       } catch (error: unknown) {
         // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
-        // `settle`，被拒就 abandon 再重拋（`harness/packages/core/agent-loop/src/assistant-stream.ts:83-88`；串流中途失敗那一支在
+        // `settle`，被拒就 abandon 再重拋（`packages/core/agent-loop/src/assistant-stream.ts:83-88`；串流中途失敗那一支在
         // `agent.ts:489-500`，重打前作廢那一支在 `:506-510`，`687f282e`）。
         // 我們這一格在 pump、在圖外，從這裡拋停不住圖：`@langchain/langgraph@1.4.19` 的 `streamEvents` v3 由
         // `createGraphRunStream` 在背景抽圖（`dist/stream/run-stream.js:428` 的 `pump(source, mux)`），上面那個 `for await` 只是
@@ -3600,7 +3600,7 @@ export class ThreadPump {
    * （#265 的 Q11）。一個字都沒送出就不寫——同 dsh，沒有看得見的內容就不算一則回覆。
    *
    * **推理也是看得見的內容**（#561），照 dsh 跟正文一起留（`packages/core/agent-loop/src/agent.ts:404`
-   * 取 `harness/packages/llm/llm/src/assembler.ts:169` 的 `interruptedBlocks`，`ddefc45`）：逐塊判，只有空白的
+   * 取 `packages/llm/llm/src/assembler.ts:169` 的 `interruptedBlocks`，`ddefc45`）：逐塊判，只有空白的
    * 那塊不留，一塊都不剩就整則不寫。所以停在推理階段的那則也會留下來，只是正文是空的。
    * - 它送回模型時是 `{"role":"assistant","content":[]}`：`ChatOpenAI` 會丟掉推理區塊。NVIDIA 閘道收這種
    *   訊息，#561 用真的 `ChatOpenAI` 量過。
@@ -3608,7 +3608,7 @@ export class ThreadPump {
    * - 沒有推理時 content 照舊是字串。
    *
    * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。同 dsh：被中止那一支直接重拋，不經
-   * `throwError`、不發 `agent/error`，這一輪記 aborted（`harness/packages/core/agent-loop/src/agent.ts:370-373`、`:387`，`687f282e`），
+   * `throwError`、不發 `agent/error`，這一輪記 aborted（`packages/core/agent-loop/src/agent.ts:370-373`、`:387`，`687f282e`），
    * 錯在 driver 邊界由 `kick()` 收掉（`:252-265`）。**日誌不收就連對話也不寫**（#1665）：
    * 兩邊一起少這一則，不分岔；並經 `warn` 大聲講。
    *

@@ -2747,7 +2747,7 @@ async function verifyMigratedTemp(
 
 /**
  * 一個專案目錄在會話根底下的目錄名——照 dsh 的 `projectKey`
- * （`harness/packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
+ * （`packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
  *
  * 分隔符（`/`、`\\`、`:`）變成 `-`，連續的只留一個；不安全的 UTF-16 碼元寫成 `~XXXX`；
  * 前後包 `--`，長度封頂。**它是有損的**（分隔符與截短），dsh 明說這是刻意的：換來的是人

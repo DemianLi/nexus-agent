@@ -2,9 +2,9 @@
  * 線的 server 端：一個 `(Request) => Response` 的 handler。
  *
  * **不綁 port 是刻意的。** 這個形狀當初照的是 dsh 的
- * `harness/packages/host/apiproxy/src/fetch/handler.ts`（對讀版本 `cd5ef814`）——
+ * `packages/host/apiproxy/src/fetch/handler.ts`（對讀版本 `cd5ef814`）——
  * **那個套件在 HEAD `0a53fb55` 已經整個不見了**：dsh 的載體換成了
- * `harness/packages/host/webserver` 的 `node:http` route 註冊 ＋ WebSocket upgrade，
+ * `packages/host/webserver` 的 `node:http` route 註冊 ＋ WebSocket upgrade，
  * 沒有 fetch 形狀的 handler 了。所以底下每一條標著「照 dsh」的，指的都是那個版本。
  *
  * **不綁 port 這件事今天站的是自己的理由**，不是那份引用：這一整條線在測試裡跑得完
@@ -425,7 +425,7 @@ export interface ThreadAgent {
    * 人改目標的把手（`goal.pause`，[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）：讀目前的目標、暫停它。
    *
    * **跟續行排程器無關**——`--no-goal-driver` 的組裝也給（只要有 goal 域）。照 dsh：暫停是 goal 服務本身的 `@Remote('pause')`
-   * （`harness/packages/goal/goal/src/index.ts:351-354`），不經 `goal-round-driver`。所以 `goal.pause` 與 `/goal pause` 打到同一個服務。
+   * （`packages/goal/goal/src/index.ts:351-354`），不經 `goal-round-driver`。所以 `goal.pause` 與 `/goal pause` 打到同一個服務。
    * 缺席＝這個組裝沒有 goal 域（`goal.pause` 回 `not_supported`）。
    *
    * @param log - 讀這條 thread 的 root 日誌。
@@ -5366,7 +5366,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         state?.pump.close();
       }
       // **每條 thread 都收完，再把失敗聚合起來拒絕**（#1511，照 dsh ACP bridge 的 `quiesce`：`Promise.allSettled`，
-      // `harness/packages/acp/acp/src/index.ts:398-424`）。以前這裡 `.catch(() => undefined)` 把錯整個吞掉，
+      // `packages/acp/acp/src/index.ts:398-424`）。以前這裡 `.catch(() => undefined)` 把錯整個吞掉，
       // serve 關機時最後一次落盤失敗一行都不會印。message 嵌入每條 thread 的 id 與原因鏈：呼叫端只印 `error.message`。
       const results = await Promise.allSettled(settled.map(({ state }) => state?.dispose()));
       const failures: Error[] = [];

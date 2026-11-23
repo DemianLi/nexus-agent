@@ -31,7 +31,7 @@
  * **前半補上了**（#137）：{@link ./session-registry.ts | SessionRegistry} 就是那個服務，
  * 一次組裝一張，`observe()` 就是那兩行。installer 仍然**每一份會話各跑一次**，而那不是
  * 退讓——dsh 的配套入口也是每一份 session 各 seed 一次
- * （`harness/packages/core/session/src/invariant.ts:218-220`）。
+ * （`packages/core/session/src/invariant.ts:218-220`）。
  *
  * **後半還沒有**：投影仍然自己持在 closure 裡，沒有 `stateVersion`、沒有 `wire.view`、
  * 沒有註冊表負責的重放與 checkpoint。同 {@link ./invariants.ts | InvariantSubject}
@@ -50,7 +50,7 @@
  *
  * **兩條路對到 dsh 的同一件事，只是我們拆成兩半。** dsh 的模型工具走
  * `exec.agent.session.append(...)`，那個 `agent` 是 agent loop 派發工具時塞進去的
- * （`harness/packages/core/agent-loop/src/tool-calls.ts:78`）——**那個派發點是 dsh 自己的**，
+ * （`packages/core/agent-loop/src/tool-calls.ts:78`）——**那個派發點是 dsh 自己的**，
  * 我們的工具是 LangGraph 的 ToolNode 在跑，插不進去，所以身分改從執行期的 config 推。
  * 這個通道剩下的職責是**參與者**：一份會話上有誰在摺狀態。
  *

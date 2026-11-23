@@ -1,6 +1,6 @@
 # 發版與升級指南
 
-版號怎麼跳、Release 怎麼跑、不相容變更怎麼寫升級指南。[`AGENTS.md`](../AGENTS.md)〈發版〉只留觸發條件，細節在這裡。
+版號怎麼跳、Release 怎麼跑、不相容變更怎麼寫升級指南。[`contributing.md`](contributing.md) 只留升級指南的位置，細節在這裡。
 
 ## 發版
 
@@ -50,7 +50,7 @@
 - **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（`.github/actions/plan-checks`，純文件 PR 也跑），檢查路徑形狀、
   版本目錄是已存在的 tag、frontmatter 與段落。tag 只驗存在，不驗是不是最近一個：發版之後還寫進
   舊目錄的，gate 擋不住，要靠審查。指南裡的相對連結由 `.github/scripts/check_md_links.py` 驗（同樣跑在 `plan-checks`，
-  掃 `README.md`、`AGENTS.md`、`GLOSSARY-MAP.md`、`docs/**`、`.github/**`、`.agents/skills/**`、`harness/packages/*` 三層、
+  掃 `README.md`、`GLOSSARY-MAP.md`、`docs/**`、`.github/**`、`harness/packages/*` 三層、
   `apps/*` 兩層與兩份本地寫的 vendor README，目標檔要存在、`#片段` 要對到標題）。指到不進版控的 `references/` 的連結不查。
 
 Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這個目錄才連。升級前要備份什麼、怎麼確認、出事怎麼

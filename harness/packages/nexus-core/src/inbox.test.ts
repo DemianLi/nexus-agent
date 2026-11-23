@@ -1,6 +1,6 @@
 /**
  * 送出佇列的折疊（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。規則照 dsh 的
- * `inboxProjectionDefinition.apply`（`harness/packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：陣列的 `splice`，範圍超出或
+ * `inboxProjectionDefinition.apply`（`packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：陣列的 `splice`，範圍超出或
  * id 重複就拋。
  */
 

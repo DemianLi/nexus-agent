@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  * 前端的 import 方向（`src/` 底下的產品碼；測試檔 `*.test.ts(x)` 與 `src/test/**` 不受限，可以深層 import 與 mock 內部檔）。
  *
  * 三層：**組裝層**（`app/**`、`main.tsx`）→ **切片**（`features/<名>/**`）→ **共用層**（其餘：`shared/**`、`components/ui/**`、
- * `lib/**`、`hooks/**`、`styles/**`、`harness/vendor/**`）。
+ * `lib/**`、`hooks/**`、`styles/**`、`vendor/**`）。
  *
  * 1. **方向只往下**：共用層不 import 切片或組裝層，切片不 import 組裝層。`import type` 也算。
  * 2. **切片外面只走公開入口**：切片外的產品碼要用切片 X 的東西，指定字只能是 `@/features/X`，不能是 `@/features/X/某檔`。

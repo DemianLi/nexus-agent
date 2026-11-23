@@ -34,7 +34,7 @@ import { PROCESS_MODEL_ENTRY_NAME, processModelConfigSchema } from './settings/p
 import type { ProcessModel, ProcessModelConfig } from './settings/process-model.js';
 
 /** 產物裡監督行程的位置，相對於往上找到的那一層，同 spawner 的 `SPAWNER_PATH`。 */
-export const SUPERVISOR_PATH = 'harness/native/nexus-supervisor';
+export const SUPERVISOR_PATH = 'native/nexus-supervisor';
 
 /**
  * per-thread 時監督行程起的兩支入口，跟這個模組在同一個目錄（{@link sibling}）。產物裡要有 `lib/<名字>.js`：

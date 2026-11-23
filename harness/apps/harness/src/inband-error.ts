@@ -4,7 +4,7 @@
  * 照 dsh 的 `providerError`（`packages/llm/llm-deepseek/src/transport.ts:22-35`，`687f282e`）的梯子：每一階都是
  * 「狀態條件**或**欄位／字樣條件」，順序是 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`，
  * 都對不上才看有沒有狀態（有：`HTTP_<狀態>`；沒有：`SERVER`）。dsh 的串流內信封不帶狀態
- * （`harness/packages/llm/llm-deepseek/src/sse.ts:25`：`providerError(event, undefined)`），所以它只看 `error.type`、字串型的
+ * （`packages/llm/llm-deepseek/src/sse.ts:25`：`providerError(event, undefined)`），所以它只看 `error.type`、字串型的
  * `error.code` 與訊息。
  *
  * ## 與 dsh 的偏離（理由 1）

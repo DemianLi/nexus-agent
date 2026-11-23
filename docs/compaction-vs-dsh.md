@@ -2,7 +2,7 @@
 
 對照對象：nexus 的 `harness/packages/nexus-core/src/summarization.ts`，dsh 的 `packages/compaction/compaction-basic`，另外引到 dsh 的 `compaction`、`command-compact`、`llm/llm`、`llm/token-meter` 幾個套件。dsh 的出處都用 `git show 8bd0733:<path>` 讀過，行號以 8bd0733 為準。nexus 這邊的做法與理由以 `summarization.ts` 現行的程式碼與註解為準，出處寫符號名（函式、常數、註解小節），不寫行號；程式碼讀不出理由的，寫「理由見 #NNN」或「沒查到」。文中的「舊註解（4edd74ab）」指 base 4edd74ab 那一版 `summarization.ts` 的註解，現行碼已改掉或刪掉；它指過的 SHA（`5badb15`、`5badb150`、`687f282e`、`46a7f68`、`5719020`）與行號跟 8bd0733 不同的，逐條寫成「舊註解（4edd74ab）指 …，8bd0733 上是 …」。
 
-每個主題先判定「照 dsh」或「偏離」。照 dsh 的只寫一行出處；偏離的附比較表和一句結論，表的列用 AGENTS.md〈技術實現標準〉那一組標準：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求、現有基座做不做得到，沒有內容的格寫「—」。每條 dsh 事實後面標【核了】或【沒核到】。
+每個主題先判定「照 dsh」或「偏離」。照 dsh 的只寫一行出處；偏離的附比較表和一句結論，表的列用 contributing.md〈技術實現標準〉那一組標準：正確性、失敗與恢復、效能、維護成本、nexus 的產品需求、現有基座做不做得到，沒有內容的格寫「—」。每條 dsh 事實後面標【核了】或【沒核到】。
 
 ---
 

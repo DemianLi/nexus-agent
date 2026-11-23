@@ -32,7 +32,7 @@ export type PresetTable = Readonly<Record<string, PresetSpec>>;
 
 /**
  * 出廠的兩組：`read-only` 與 `workspace-write`，名字與值照 dsh base 出廠的前兩組
- * （`harness/packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）。名字刻意和沙箱模式同名：web 的「全開」確認認的就是
+ * （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）。名字刻意和沙箱模式同名：web 的「全開」確認認的就是
  * `danger-full-access`，部署方加回那一組時照樣作用。
  *
  * **與 dsh 的偏離：出廠不含 `danger-full-access`（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）。**

@@ -3,7 +3,7 @@
  *
  * 這是 `foldRegistry` 的 `baseToolNames` 輸入——**設定驗證用的名字宇宙**，不是「這一次
  * 會出現哪些工具」。形狀照 dsh 的 `ToolProviderResult.knownNames`
- * （`harness/packages/core/system-prompt/src/index.ts`）：宇宙由提供者貢獻，而基座是這幾個名字
+ * （`packages/core/system-prompt/src/index.ts`）：宇宙由提供者貢獻，而基座是這幾個名字
  * 唯一的提供者。所有權留在這裡，因為 `harness/apps/harness` 是唯一呼叫 `createDeepAgent` 的
  * 地方，只有它知道自己開了哪些東西。
  *

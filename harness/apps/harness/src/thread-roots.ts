@@ -19,7 +19,7 @@
  *
  * 1. **系統替每條新 thread 配根，不由人選、也不按專案共用。**
  *    dsh 是單人桌面：根是會話 header 的 `cwd`，逐次從 header 取（`packages/sandbox/sandbox-policy/src/index.ts:83`、`:164-171`，`687f282e`），
- *    子代理沿用父會話的 `cwd`（`harness/packages/subagent/subagent/src/child-agent.ts:144`），分叉照抄來源（`harness/packages/api/session-controller/src/commands.ts:281`）；
+ *    子代理沿用父會話的 `cwd`（`packages/subagent/subagent/src/child-agent.ts:144`），分叉照抄來源（`packages/api/session-controller/src/commands.ts:281`）；
  *    新會話的 `cwd` 由建立者給（`commands.ts:112-113`、`:124`）。同專案的會話共用根沒有隱私問題。nexus 一台主機多人共用，共用根就是盤點 `:64` 的失敗。
  *    機制照 dsh：根記在 header、逐次從 header 取、子代理沿用、分叉照抄。**補的是出生配根那一步**，dsh 沒有「系統替每個會話配一個目錄」。
  * 2. **`--workspace` 退成唯讀共用區，且不吃升級**（登記在掛這條路由的地方，`agent-factory.ts` 的 `sharedWorkspace`）。**這一條有兩個延伸，都併在這裡**：

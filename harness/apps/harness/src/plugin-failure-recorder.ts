@@ -42,7 +42,7 @@
  * ## 偏離登記
  *
  * 沿用 #1413 的第 2 條（變更歷史是產品需求，dsh 沒有）：這一種筆與 `rejected` 同屬它。dsh 的 `plugin-manager/changed`
- * 只帶 `reason`（`harness/packages/boot/plugin-manager/src/types.ts:244-246`），沒有「某一列為什麼掛不上」的結構化紀錄。
+ * 只帶 `reason`（`packages/boot/plugin-manager/src/types.ts:244-246`），沒有「某一列為什麼掛不上」的結構化紀錄。
  *
  * @module
  */

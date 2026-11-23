@@ -2,8 +2,8 @@
  * 人對這個會話的回饋：評分（綁在**一則回覆**上）與 `/feedback` 的一則評語。
  *
  * 形狀照 dsh 的兩個套件（`references/deepseek-harness`，SHA `c291e79`）：評分是
- * `harness/packages/feedback/message-feedback/src/types.ts`，評語與分類是
- * `harness/packages/feedback/command-feedback/src/types.ts`。規則（樂觀鎖、內容一樣就不記、備註上限）
+ * `packages/feedback/message-feedback/src/types.ts`，評語與分類是
+ * `packages/feedback/command-feedback/src/types.ts`。規則（樂觀鎖、內容一樣就不記、備註上限）
  * 住在 `@nexus/plugin-feedback`，這裡只放兩邊都要讀的詞彙。決議見
  * [#267](https://github.com/DemianLi/nexus-agent/issues/267)，落地是
  * [#278](https://github.com/DemianLi/nexus-agent/issues/278)。

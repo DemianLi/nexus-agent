@@ -712,7 +712,7 @@ const HELP_LINE_PATTERN = /^\/help(?:\s.*)?$/u;
  * （`references/deepseek-harness/packages/client/ui-commands/src/client/service.ts:142`，
  * 對讀版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`），資料來源是同一個
  * `commands.list()`；而 dsh 自己的 CLI（`apps/cli/`）**一個命令發派面都沒有**——
- * commands 那包的 README（`harness/packages/interaction/commands/README.zh.md:28`）明說：無 UI 的
+ * commands 那包的 README（`packages/interaction/commands/README.zh.md:28`）明說：無 UI 的
  * 演示主幹與 ACP 自動化不提供命令適配器，也不需要它。
  *
  * **所以這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離**——deepagents 與 LangChain

@@ -13,12 +13,12 @@
  * 不是一份 session：
  *
  * ```ts
- * // harness/packages/core/session/src/invariant.ts:218-220（SHA 0a53fb55bea101816fa226bb964ae2bed71c343b）
+ * // packages/core/session/src/invariant.ts:218-220（SHA 0a53fb55bea101816fa226bb964ae2bed71c343b）
  * for (const session of ctx.sessions.list()) seedSession(session)
  * ctx.on('session/created', (session) => { seedSession(session) }, { global: true })
  * ```
  *
- * `harness/packages/core/tools/src/invariant.ts:76-77`、`llm-retry`、`time-context`、`schedule`
+ * `packages/core/tools/src/invariant.ts:76-77`、`llm-retry`、`time-context`、`schedule`
  * 逐字同型；遙測的 coordinator 檔頭寫的是 “subscribes to the session firehose” 加
  * “sweeps already-live sessions”；投影是 `ctx.sessionProjections.register(...)` 註冊一次、
  * 讀的時候才 per session 求值。而 subagent 的 session 就是一般的 session——

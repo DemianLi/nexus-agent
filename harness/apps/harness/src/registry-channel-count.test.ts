@@ -51,7 +51,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PluginRegistry } from '@nexus/core';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /**
  * 每一條通道逐個列出來。

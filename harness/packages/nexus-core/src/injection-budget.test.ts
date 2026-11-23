@@ -60,7 +60,7 @@ describe('注入源的預算表', () => {
 
 describe('文件上的預算表', () => {
   it('`docs/operations.md` 的表跟 `INJECTION_SOURCE_BUDGETS` 逐列相同', () => {
-    const doc = readFileSync(new URL('../../../docs/operations.md', import.meta.url), 'utf8');
+    const doc = readFileSync(new URL('../../../../docs/operations.md', import.meta.url), 'utf8');
     const table =
       /<!-- injection-source-budgets:start -->([\s\S]*?)<!-- injection-source-budgets:end -->/.exec(
         doc,

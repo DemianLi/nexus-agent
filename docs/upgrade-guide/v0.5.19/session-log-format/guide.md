@@ -8,7 +8,7 @@ description: 會話日誌的格式從 14 升到 52、改成每會話一個目錄
 ## 變更
 
 v0.5.19 寫的會話日誌是格式 14，新版是 52。每一版改了什麼、讀舊檔怎樣，紀錄在
-[`packages/nexus-core/src/session-store.ts`](../../../../packages/nexus-core/src/session-store.ts) 的檔頭（格式紀錄的唯一來源）。
+[`packages/nexus-core/src/session-store.ts`](../../../../harness/packages/nexus-core/src/session-store.ts) 的檔頭（格式紀錄的唯一來源）。
 
 - **檔名佈局換了**（格式 52，[#1594](https://github.com/DemianLi/nexus-agent/issues/1594)）：v0.5.19 是三個檔並排（`<id>.header.json`、
   `<id>.jsonl`、`<id>.lock`）；新版一份會話一個目錄，`<id>/session.v52.jsonl`（第一行是 header 行）加 `<id>/session.lock`，

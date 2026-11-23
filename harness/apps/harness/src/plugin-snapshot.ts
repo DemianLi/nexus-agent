@@ -58,7 +58,7 @@
  * ## 偏離登記
  *
  * 1. **出口是主機端的檔，不是給 trusted client 的 inventory。** dsh 經 `pluginInventory/list` 給 trusted client
- *    （`harness/packages/host/plugin-inventory/src/index.ts:70-73`）。我們沒有管理員身分，表達不出 trusted；wire 的 `/threads`
+ *    （`packages/host/plugin-inventory/src/index.ts:70-73`）。我們沒有管理員身分，表達不出 trusted；wire 的 `/threads`
  *    底下每個登入的人都看得到。所以退到寫成 home 底下的檔，只有進得了主機的人讀得到，跟 `--dump-config` 同一群人。
  *    管理員身分落地後（#1385 排程第 3 步）改成走那道閘的只讀路由。
  * 2. **「執行中」不從 Loader 讀。** dsh 每次直接讀 `ctx.loader.entries()`，不留快取（`index.ts:85`）。我們的清單由變更紀錄

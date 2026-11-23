@@ -9,7 +9,7 @@ description: 會話日誌的格式升到 56，點名子代理時記下 root 手�
 
 新版的會話日誌是格式 56（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)），在
 [55](../../v0.6.0/session-log-format-55/guide.md) 之上只改一樣。每一版改了什麼，紀錄在
-[`packages/nexus-core/src/session-store.ts`](../../../../packages/nexus-core/src/session-store.ts) 裡 `SESSION_LOG_FORMAT_VERSION` 的說明。
+[`packages/nexus-core/src/session-store.ts`](../../../../harness/packages/nexus-core/src/session-store.ts) 裡 `SESSION_LOG_FORMAT_VERSION` 的說明。
 
 - **點名多記一格 `tool`**：`turn/start`（`kind: 'message'`）與佇列項（`inbox/spliced` 的 `inserted[]`）上的 `mention`
   多一格選填的 `tool`，值是 `task` 或 `subagent`，記的是收下那句話時 root 手上的委派工具。送進模型的點名提示照它組字：

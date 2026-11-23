@@ -7,7 +7,7 @@
  *
  * dsh 一輪一個 `AbortController`，每個非同步邊界 `throwIfAborted()`（`packages/core/agent-loop/src/agent.ts`，
  * SHA `c291e79`）；**工具從不丟下**——已經開始的等到靜止，結果才換成 `ABORTED`，還沒開始的補一顆
- * `ABORTED_BEFORE_DISPATCH`（`harness/packages/core/tools/src/index.ts:1518-1520`，`agent-loop/src/tool-calls.ts:238-259`）。
+ * `ABORTED_BEFORE_DISPATCH`（`packages/core/tools/src/index.ts:1518-1520`，`agent-loop/src/tool-calls.ts:238-259`）。
  * 模型串流在下一段就停。**中止只換掉成功的結果**：工具自己拋的、自己回的錯照舊
  * （`docs/subsystems/tools.zh.md:629`）。模型看到的兩句話逐字照抄。
  *

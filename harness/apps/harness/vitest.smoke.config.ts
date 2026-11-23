@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { pathsPlugin, sourceHook } from '../../vitest.shared.ts';
+import { pathsPlugin, sourceHook } from '../../../vitest.shared.ts';
 
 /**
  * 真模型冒煙回歸（#436）：只收 `src/smoke/**\/*.smoke.ts`，一般的 `vitest.config.ts` 收不到它們。

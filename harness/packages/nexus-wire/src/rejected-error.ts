@@ -10,9 +10,9 @@
  * ## 偏離（依 AGENTS.md 登記）
  *
  * dsh 沒有「HTTP 上開串流、被協定層以 200 拒絕」這條路：它的 SDK client 是 JSON-RPC over stdio，串流就是
- * 通知，沒有「開」這個動作可以被拒（`harness/packages/sdk/client/src/client.ts`）；它的 Connection 層則把失敗放進結果
- * 值（`ConnectionRpcFailure`：`code`、`message`、`details`，`harness/packages/client/connection/src/rpc.ts:19`），不拋。
- * 形狀照最近的會拋的那個：`JsonRpcResponseError`（`harness/packages/sdk/protocol/src/transport.ts:18`）——建構子參數
+ * 通知，沒有「開」這個動作可以被拒（`packages/sdk/client/src/client.ts`）；它的 Connection 層則把失敗放進結果
+ * 值（`ConnectionRpcFailure`：`code`、`message`、`details`，`packages/client/connection/src/rpc.ts:19`），不拋。
+ * 形狀照最近的會拋的那個：`JsonRpcResponseError`（`packages/sdk/protocol/src/transport.ts:18`）——建構子參數
  * 屬性保留線上的碼、設 `name`。兩處不同：
  *
  * - `message` 不是線上的原文，而是 `下行被拒：<body 原文>`，給管理者與除錯看；

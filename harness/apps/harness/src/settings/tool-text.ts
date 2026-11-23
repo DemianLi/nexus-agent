@@ -32,11 +32,11 @@
  * ## 與 dsh 的關係
  *
  * 50000 當初抄的是 dsh base bundle `spill-policy` 的 `maxInlineBytes: 50000`（`ddefc45`）。dsh 在 `477b4f4` 已改成
- * `maxInlineTokens: 12500`（`harness/packages/bundle/base/cordis.patch.yml:407-410`，對 `c1b47e4`），而那一格對應的是我們
+ * `maxInlineTokens: 12500`（`packages/bundle/base/cordis.patch.yml:407-410`，對 `c1b47e4`），而那一格對應的是我們
  * `spill-policy` 那一列，不是這一列。
  *
  * 這一列今天管的兩件事，dsh 都**不在傳輸上截**：搜尋的 `meta` 由搜尋工具在生產端自己限（`dsh-tool-fs-search` 的
- * `searchMetaMaxBytes`，預設 65536，`harness/packages/fs/tool-fs-search/src/search-core.ts:65`），讀檔與 diff 的 `meta` 沒有上限。
+ * `searchMetaMaxBytes`，預設 65536，`packages/fs/tool-fs-search/src/search-core.ts:65`），讀檔與 diff 的 `meta` 沒有上限。
  * 我們截在放上線那一刻，那條偏離登記在 `tool-result-text.ts` 的 `capToolResultMeta` 上，#736 不動它。
  *
  * ## 這一列關不掉
@@ -55,7 +55,7 @@
  *
  * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的：另外兩條分別要把協定
  * 常數變成設定、或讓 wire 反過來收 harness 注入的值，兩條都在動協定層的形狀。dsh 那側沒有
- * 先例可抄——它的歷史分頁按**則數**算（`harness/packages/api/session-controller/src/history.ts:38` 的
+ * 先例可抄——它的歷史分頁按**則數**算（`packages/api/session-controller/src/history.ts:38` 的
  * `DEFAULT_MAX_MESSAGES = 50`），組頁路徑上一個位元組預算都沒有，所以那兩個值在 dsh 沒有
  * 共同單位可以做比例。唯一偏向性的證據是 dsh 的 house style：**每個 cap 對自己負責**，沒有
  * 任何一處參照另一個 cap。

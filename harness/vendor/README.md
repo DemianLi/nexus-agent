@@ -2,16 +2,16 @@
 
 上游原始碼直接複製進 monorepo，不經 npm 相依。格式照 dsh 的 `vendor/README.md`：清單記上游 commit，本地修改逐條登記，每個套件目錄保留上游的 MIT `LICENSE`。
 
-為什麼 vendor、為什麼是上游 main，見 [`ADR 0002`](../docs/adr/0002-vendor-cordis-and-plugin-contract.md)；原文 [§3-1](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md) 逐題紀錄在 tag。探針 [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 量過可行；[#1401](https://github.com/DemianLi/nexus-agent/issues/1401) 起是正式 vendor（demian 2026-10-11）。
+為什麼 vendor、為什麼是上游 main，見 [`ADR 0001`](../../docs/adr/0001-vendor-cordis-and-plugin-contract.md)；原文 [§3-1](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md) 逐題紀錄在 tag。探針 [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 量過可行；[#1401](https://github.com/DemianLi/nexus-agent/issues/1401) 起是正式 vendor（demian 2026-10-11）。
 
 ## 清單
 
 | 目錄 | 套件名 | 上游套件名 | 版本 | 上游 | commit |
 |---|---|---|---|---|---|
-| `cordis/` | `@nexus/cordis` | `cordis` | 4.0.0-rc.12 | https://github.com/cordiverse/cordis（`harness/packages/core`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
-| `loader/` | `@nexus/cordis-plugin-loader` | `@cordisjs/plugin-loader` | 1.0.0-rc.9 | https://github.com/cordiverse/cordis（`harness/packages/loader`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
-| `include/` | `@nexus/cordis-plugin-include` | `@cordisjs/plugin-include` | 1.2.0 | https://github.com/cordiverse/cordis（`harness/packages/include`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
-| `logger-console/` | `@nexus/cordis-plugin-logger-console` | `@cordisjs/plugin-logger-console` | 1.0.0 | https://github.com/cordiverse/cordis（`harness/packages/logger-console`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
+| `cordis/` | `@nexus/cordis` | `cordis` | 4.0.0-rc.12 | https://github.com/cordiverse/cordis（`packages/core`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
+| `loader/` | `@nexus/cordis-plugin-loader` | `@cordisjs/plugin-loader` | 1.0.0-rc.9 | https://github.com/cordiverse/cordis（`packages/loader`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
+| `include/` | `@nexus/cordis-plugin-include` | `@cordisjs/plugin-include` | 1.2.0 | https://github.com/cordiverse/cordis（`packages/include`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
+| `logger-console/` | `@nexus/cordis-plugin-logger-console` | `@cordisjs/plugin-logger-console` | 1.0.0 | https://github.com/cordiverse/cordis（`packages/logger-console`） | `01b396240ce47cf2779c40af9bc445bb748fe112` |
 
 四個套件都停在上游標籤 `v4.0.0-rc.12`（`01b39624`，2026-10-21；[#1937](https://github.com/DemianLi/nexus-agent/issues/1937)）。
 
@@ -44,7 +44,7 @@
 
 ### 對照 dsh `vendor/README.md` 的逐條判斷（#1416 PR 2）
 
-dsh 對 include 的第 8、11、13、14、15 條，逐條是否跟、為什麼（上游 rc.11 `0b96d9f`，dsh `d743267`）。#1461 把基準從 rc.10 的 `c261dd2c` 換成 rc.11 時逐條重核過：上游 `harness/packages/include/src` 在兩版之間沒有任何改動，下表前四條的證據原樣成立；loader 動了三個檔（#179 讓 `disabled` 可被 eval、#196 提供者等依賴它的列卸完才收、`isolate`），只有 #179 碰到第 15 條。
+dsh 對 include 的第 8、11、13、14、15 條，逐條是否跟、為什麼（上游 rc.11 `0b96d9f`，dsh `d743267`）。#1461 把基準從 rc.10 的 `c261dd2c` 換成 rc.11 時逐條重核過：上游 `packages/include/src` 在兩版之間沒有任何改動，下表前四條的證據原樣成立；loader 動了三個檔（#179 讓 `disabled` 可被 eval、#196 提供者等依賴它的列卸完才收、`isolate`），只有 #179 碰到第 15 條。
 
 | dsh 條 | 內容 | 判斷 | 理由與證據 |
 |---|---|---|---|

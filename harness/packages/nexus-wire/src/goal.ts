@@ -110,7 +110,7 @@ export interface GoalPayload {
  * 暫停目標的專用 method（`goal.pause`，[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。
  *
  * **人按暫停鈕走這一支，不是 `slash.run` 的 `/goal pause`**（兩條入口都在，效果一樣）：斜線命令是文字，要解析、要過 `slashInFlight`，
- * 而 web 的按鈕有確切的目標 ref 可以帶。照 dsh 的 `goals.pause(ref)`（`harness/packages/goal/goal/src/service.ts`，ref 是 `{ id, revision }`）：
+ * 而 web 的按鈕有確切的目標 ref 可以帶。照 dsh 的 `goals.pause(ref)`（`packages/goal/goal/src/service.ts`，ref 是 `{ id, revision }`）：
  * 帶**看到的修訂**，修訂對不上就是過期，**回錯、不假裝成功**——兩個分頁同時改一個目標是正常情況，後到的那個不該靜靜蓋掉前一個的結果。
  *
  * **任何時候都收**：一輪跑著（續行輪或人打的那一輪）、停在核准點、閒著——不經過斜線命令那道「還在跑就擋」，理由同回饋那幾支

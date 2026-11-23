@@ -68,7 +68,7 @@ import { describe, expect, it } from 'vitest';
 
 import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /* -------------------------------------------------------------------------- */
 /* 門 B：整棵樹上唯一那顆 checkpointer，是不耐久的那一顆                          */
@@ -80,7 +80,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  * `MemorySaver` 在樹上命中二十幾個檔，**其中絕大多數是測試各自 `new` 一顆自己用的**——
  * 把它們收進來，這條絆索量的就變成「測試怎麼寫」而不是「產品組裝成什麼樣」。
  */
-const SOURCE_ROOTS = ['harness/apps/harness/src', 'packages'] as const;
+const SOURCE_ROOTS = ['harness/apps/harness/src', 'harness/packages'] as const;
 
 /** 遞迴列出 `.ts`，跳過測試、fixture 與建置產物。 */
 function sourceFiles(dir: string): string[] {

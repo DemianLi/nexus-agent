@@ -215,7 +215,7 @@ if (changed.length + added.length + removed.length > 0) {
     [
       '### 這張 PR 合併後，測試頁的畫面跟上一個 commit 不一樣',
       '',
-      '**作者請確認**：下面列的是不是都在這張 PR 打算改的範圍裡。是的話回一句「畫面變動符合預期」；不是就當成 bug 處理。開下一張 PR 之前先回（`docs/agents/collab-mode.md`「合併與撤回」）。',
+      '**作者請確認**：下面列的是不是都在這張 PR 打算改的範圍裡。是的話回一句「畫面變動符合預期」；不是就當成 bug 處理。開下一張 PR 之前先回。',
       '',
       ...lines.slice(2),
     ].join('\n'),

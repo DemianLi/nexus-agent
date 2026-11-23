@@ -78,18 +78,59 @@ describe('formatSandboxStatus', () => {
 });
 
 describe('findSpawnerBinary', () => {
-  it('從模組往上找產物裡的 harness/native/ 目錄', () => {
+  it('從模組往上找產物裡的 native/ 目錄', () => {
     const root = mkdtempSync(join(tmpdir(), 'nexus-find-spawner-'));
     try {
       expect(findSpawnerBinary(join(root, 'harness/apps/harness/dist/a.js'))).toBeUndefined();
       mkdirSync(join(root, 'native'));
-      writeFileSync(join(root, 'harness/native/nexus-sandbox-spawner'), '');
+      writeFileSync(join(root, 'native/nexus-sandbox-spawner'), '');
       expect(findSpawnerBinary(join(root, 'harness/apps/harness/dist/a.js'))).toBe(
-        join(root, 'harness/native/nexus-sandbox-spawner'),
+        join(root, 'native/nexus-sandbox-spawner'),
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  describe('原始碼樹：只認 harness/native，repo 根的舊位置報錯', () => {
+    const from = (root: string): string => join(root, 'harness/apps/harness/src/a.js');
+    const place = (root: string, ...segments: string[]): void => {
+      mkdirSync(join(root, ...segments.slice(0, -1)), { recursive: true });
+      writeFileSync(join(root, ...segments), '');
+    };
+    const inRepo = (body: (root: string) => void): void => {
+      const root = mkdtempSync(join(tmpdir(), 'nexus-find-spawner-src-'));
+      try {
+        place(root, 'pnpm-workspace.yaml');
+        body(root);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    it('只在舊位置放一支：拋錯，指名舊路徑與新位置，不回傳它', () => {
+      inRepo((root) => {
+        place(root, 'native', 'nexus-sandbox-spawner');
+        expect(() => findSpawnerBinary(from(root))).toThrow(join(root, 'native/nexus-sandbox-spawner'));
+        expect(() => findSpawnerBinary(from(root))).toThrow(
+          join(root, 'harness/native/nexus-sandbox-spawner'),
+        );
+      });
+    });
+
+    it('新位置有就用新位置，舊位置還在也不報錯', () => {
+      inRepo((root) => {
+        place(root, 'native', 'nexus-sandbox-spawner');
+        place(root, 'harness', 'native', 'nexus-sandbox-spawner');
+        expect(findSpawnerBinary(from(root))).toBe(join(root, 'harness/native/nexus-sandbox-spawner'));
+      });
+    });
+
+    it('兩處都沒有：找不到', () => {
+      inRepo((root) => {
+        expect(findSpawnerBinary(from(root))).toBeUndefined();
+      });
+    });
   });
 });
 

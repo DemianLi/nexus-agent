@@ -1,6 +1,6 @@
 /**
  * 瀏覽器記住的那一條 thread——照 dsh `ClientSessions` 的 `dsh.sessions.current`
- * （`harness/packages/api/session-controller/src/client/sessions/service.ts`，本地 clone `a305303`；
+ * （`packages/api/session-controller/src/client/sessions/service.ts`，本地 clone `a305303`；
  * 這條路徑與 `c291e79` 之間沒有差異）。
  *
  * **形狀照抄**：一個 `localStorage` 鍵、整個值一份 JSON、裡面一個 id。**失敗的約定也照抄**

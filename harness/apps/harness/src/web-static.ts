@@ -3,7 +3,7 @@
  *
  * **照 dsh 的形狀**：dsh 的網頁從來不由 Vite 服務（它的 `apps/web/vite.config.ts` 用
  * `rejectStandaloneServe` 擋掉 `vite` 與 `vite preview`），而由 host 的 `frontend-static` 服務
- * `dist`。這裡逐條照 `harness/packages/host/frontend-static/src/index.ts` 的 `serveStatic` 與 fallback
+ * `dist`。這裡逐條照 `packages/host/frontend-static/src/index.ts` 的 `serveStatic` 與 fallback
  * （`ddefc45`）：
  *
  * - 不是 `GET`／`HEAD` 回 405；

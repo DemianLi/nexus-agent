@@ -284,7 +284,7 @@ describe('規則要在模型動手之前就講給它聽：系統提示詞的 sec
    * **這幾句是機制的一部分，不是文件。**
    *
    * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要價值。dsh 把同一件事寫在系統提示詞的 section
-   * （`harness/packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，工具在場才寫），這裡一樣由 `observation.ts` 的 `wrapModelCall` 接在系統提示後面。
+   * （`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，工具在場才寫），這裡一樣由 `observation.ts` 的 `wrapModelCall` 接在系統提示後面。
    */
   async function modelSees(options: { observationPolicy?: false }): Promise<{
     descriptions: Record<string, string>;

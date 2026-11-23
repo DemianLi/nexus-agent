@@ -118,7 +118,7 @@ export function channelOfMethod(method: string): WireChannel | undefined {
 
 /**
  * 送出的那一句怎麼進收件匣（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），照 dsh `prompt` 的 `mode`
- * （`harness/packages/api/session-controller/src/commands.ts:364`，`477b4f4`）：
+ * （`packages/api/session-controller/src/commands.ts:364`，`477b4f4`）：
  *
  * - `queue`（省略就是它）：排進 `next-turn`，等這一輪收掉再開新的一輪。
  * - `steer`：插話，排進 `next-step`，跑著的這一輪下一步就送進模型、不停。這一輪已經不收插話時（閒著、按了停止、
@@ -234,7 +234,7 @@ export function streamPath(threadId: string): string {
  * 指的也是上行封包的錯誤。再用一次就分不出誰是誰。
  *
  * 端點形狀照 dsh：Remote 的正規端點是 `<namespace>/<method>`
- * （`harness/packages/api/gateway/src/index.ts:134`），事件流是同一條傳輸上的兄弟端點。
+ * （`packages/api/gateway/src/index.ts:134`），事件流是同一條傳輸上的兄弟端點。
  * 我們的 SSE ＋ 這條 RPC family 已經是那個形狀，**所以這裡沒有偏離要標**。
  */
 export const SLASH_METHODS = ['slash.list', 'slash.run'] as const;
@@ -271,7 +271,7 @@ export function isSkillMethod(value: unknown): value is SkillMethod {
  * **這是我們加在自己 wire 上的命令**：`@langchain/protocol@0.0.18` 的 `Command` 沒有任何取消類的
  * method（見 {@link SLASH_METHODS} 那段的清單），所以它跟斜線命令一樣不進 {@link UPLINK_METHODS}。
  * 形狀照 dsh 的 `session.cancel({ sessionId })` → `{ accepted: true }`
- * （`harness/packages/api/session-controller/src/commands.ts:497-510`，`c291e79`）：不查是哪個分頁送的
+ * （`packages/api/session-controller/src/commands.ts:497-510`，`c291e79`）：不查是哪個分頁送的
  * （#265 的 Q3）。
  */
 export const RUN_CANCEL_METHOD = 'run.cancel';
@@ -290,7 +290,7 @@ export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_ME
  * `inbox.ts`。
  *
  * 照 dsh 的 `session.updateQueue({ sessionId, itemId, action })` → `{ accepted: true }`
- * （`harness/packages/api/session-controller/src/commands.ts:432-504`，`477b4f4`）。**thread 在路徑上**，同
+ * （`packages/api/session-controller/src/commands.ts:432-504`，`477b4f4`）。**thread 在路徑上**，同
  * {@link RUN_CANCEL_METHOD}，所以 params 裡沒有 `sessionId` 那一格。
  *
  * - `edit`：換掉文字，id 與位置不變。只收文字，空白回 `invalid_argument`（dsh 回 `gateway/bad-request`）。
@@ -440,7 +440,7 @@ export const THREAD_AT_CAPACITY = 'thread_at_capacity';
  * 這個 id 是**子代理的會話**（`<thread>/<編號>`，header 是子代理的：`origin: 'subagent'`，或 50 以前帶 `parentSession` 的），不能當一條 thread 開或驅動
  * （[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。serve 在碰日誌之前就拒絕，日誌一個位元組都不動。
  * 要對子代理說話，請從它的主對話用 `subagent.send`。對到 dsh 的 `session/agent-busy`＋`use subagent delivery`
- * （`harness/packages/api/session-controller/src/agent.ts:24-30`、`:127-133`）。**不是暫時失敗，重試沒用**。
+ * （`packages/api/session-controller/src/agent.ts:24-30`、`:127-133`）。**不是暫時失敗，重試沒用**。
  */
 export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 
@@ -568,7 +568,7 @@ export type WireErrorResponse = Extensible & {
  *
  * **四個都是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}：協定的 `Command` 沒有
  * 這一類。形狀照 dsh 的兩個 Remote——`messageFeedback.put`／`delete`／`list` 與 `sessionFeedback.record`
- * （`harness/packages/feedback/*`，`ddefc45`）——回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，
+ * （`packages/feedback/*`，`ddefc45`）——回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，
  * 業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」。
  *
  * **指名的是那則回覆的訊息 id**（`AiEntry.messageId`），同 dsh 的 `messageId`。沒有 `sessionId`：一條
@@ -1197,7 +1197,7 @@ function isStringList(value: unknown): value is readonly string[] {
  *
  * ## 照 dsh 的哪裡
  *
- * `assertSessionWireEvent`（`harness/packages/api/session-controller/src/client/session-wire-event.ts:14-46`，`687f282e`）：拒收非物件；
+ * `assertSessionWireEvent`（`packages/api/session-controller/src/client/session-wire-event.ts:14-46`，`687f282e`）：拒收非物件；
  * `seq` 不是安全非負整數（含 `-0`）；缺 `data` 或 `data` 是 `undefined`（`null` 放行）。套在 follow 的每顆與歷史頁的每筆
  * （`transport.ts:185`、`:217`、`:233`）。
  *
@@ -1307,7 +1307,7 @@ export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
  * 一條 thread 的歷史（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀），`GET`。
  *
  * 對到 dsh 的兩支：`session.follow` 開頭那份 snapshot（最後 {@link HISTORY_PAGE_MESSAGES} 則）與往前翻的
- * `session.page`（`harness/packages/api/session-controller/src/history.ts:77-111,119-240`，`c291e79`）。形狀照它：
+ * `session.page`（`packages/api/session-controller/src/history.ts:77-111,119-240`，`c291e79`）。形狀照它：
  * 一頁以**則數**切，不以事件數；往前翻帶 `beforeSeq`（上一頁的 `firstSeq`）與 `throughSeq`（第一頁定下的
  * 上界，之後每一頁讀的都是同一段日誌）。**沒有不透明的 cursor**，兩格都是日誌的位置。
  *
@@ -1431,7 +1431,7 @@ export const HISTORY_PAGE_MESSAGES = 50;
  *
  * 那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），代價寫在這裡而不是只寫在 harness 那側，是因為
  * **讀到這個數字的人會在這裡問它憑什麼是 8 MB**。dsh 那側沒有先例可抄：它的歷史分頁按則數算
- * （`harness/packages/api/session-controller/src/history.ts:38`），組頁路徑上一個位元組預算都沒有，兩個值
+ * （`packages/api/session-controller/src/history.ts:38`），組頁路徑上一個位元組預算都沒有，兩個值
  * 沒有共同單位可以做比例——這個耦合是我們自己長出來的。
  *
  * ## 它是**軟的**
