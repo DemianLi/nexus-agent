@@ -39,6 +39,7 @@ import {
 } from './persistence-schema.js';
 import {
   canonicalizeSchema,
+  inventoryWithoutSourceLines,
   reachableSchemaTypes,
   schemaDigest,
 } from './persistence-schema-model.js';
@@ -908,7 +909,7 @@ export function verifyPersistenceChanges(
     );
   }
   const committed = parsePersistenceSnapshot(JSON.parse(readFileSync(committedPath, 'utf8')));
-  if (JSON.stringify(committed) !== JSON.stringify(current)) {
+  if (JSON.stringify(committed) !== JSON.stringify(inventoryWithoutSourceLines(current))) {
     throw new PersistenceChangeFailure(
       `${PERSISTENCE_SCHEMA_PATH} is stale; regenerate it with gen-persistence-schema`,
       'stale-artifacts',

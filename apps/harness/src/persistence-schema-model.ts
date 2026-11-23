@@ -111,10 +111,10 @@ export function reachableSchemaTypes(
 }
 
 /**
- * 從根重建得出來的型別圖省掉，其他的照留。
+ * 從根重建得出來的型別圖省掉，宣告位置去掉行號，其他的照留。
  *
  * @param inventory - 完整清單，包括被正規化從根圖抹掉的型別。
- * @returns 無損的精簡清單：根圖、型別順序、宣告資訊都保留。
+ * @returns 精簡清單：根圖、型別順序、宣告名稱都保留，宣告位置只留檔。
  */
 export function persistenceSchemaSnapshot(
   inventory: PersistenceSchemaInventory,
@@ -127,7 +127,23 @@ export function persistenceSchemaSnapshot(
       digest,
       ...(isDeepStrictEqual(schema, reachable.get(digest)) ? {} : { schema }),
       names,
-      sources,
+      sources: sources.map(withoutSourceLine),
+    })),
+  };
+}
+
+export function withoutSourceLine(source: string): string {
+  return source.replace(/:\d+$/, '');
+}
+
+export function inventoryWithoutSourceLines(
+  inventory: PersistenceSchemaInventory,
+): PersistenceSchemaInventory {
+  return {
+    ...inventory,
+    types: inventory.types.map((type) => ({
+      ...type,
+      sources: type.sources.map(withoutSourceLine),
     })),
   };
 }

@@ -44,7 +44,11 @@ import {
   PERSISTENCE_SCHEMA_PATH,
   renderPersistenceSchema,
 } from './persistence-schema.js';
-import { canonicalizeSchema, schemaDigest } from './persistence-schema-model.js';
+import {
+  canonicalizeSchema,
+  inventoryWithoutSourceLines,
+  schemaDigest,
+} from './persistence-schema-model.js';
 import type {
   PersistenceRoot,
   PersistenceSchemaInventory,
@@ -248,7 +252,10 @@ function finishDocuments(root: string, id: string): void {
 }
 
 function commitCurrent(root: string, schema: PersistenceSchemaInventory): void {
-  writeFileSync(join(root, PERSISTENCE_SCHEMA_PATH), JSON.stringify(schema, null, 2) + '\n');
+  writeFileSync(
+    join(root, PERSISTENCE_SCHEMA_PATH),
+    JSON.stringify(inventoryWithoutSourceLines(schema), null, 2) + '\n',
+  );
 }
 
 function baseline(root: string, schema = inventory()): void {
@@ -380,6 +387,29 @@ describe('從基線起算的同版紀錄', () => {
     };
     commitCurrent(root, metadata);
     expect(runPersistenceChanges(['--check'], root, () => metadata)).toContain('roots match');
+  });
+
+  it('宣告位置只有行號位移不算過期；檔、個數或順序變了照樣過期', () => {
+    const root = fixture();
+    const base = inventory({ value: 'number' });
+    const type = (sources: string[]): PersistenceSchemaInventory => ({
+      ...base,
+      types: [{ ...base.roots[2]!, names: ['A#B'], sources }].map(
+        ({ schema, digest, names, sources }) => ({ digest, schema, names, sources }),
+      ),
+    });
+    baseline(root, type(['a.ts:3', 'b.ts:7']));
+    expect(runPersistenceChanges(['--check'], root, () => type(['a.ts:4', 'b.ts:70']))).toContain(
+      'roots match',
+    );
+    for (const sources of [
+      ['a.ts:3', 'c.ts:7'],
+      ['a.ts:3'],
+      ['a.ts:3', 'a.ts:9', 'b.ts:7'],
+      ['b.ts:7', 'a.ts:3'],
+    ]) {
+      expect(() => runPersistenceChanges(['--check'], root, () => type(sources))).toThrow('stale');
+    }
   });
 
   it.each(['optional field', 'ordinary event'] as const)('%s 經一筆新的同版紀錄放行', (kind) => {

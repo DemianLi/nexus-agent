@@ -513,6 +513,18 @@ interface SessionEventMap {
     expect(detail?.sources).toEqual(['packages/fixture-payload/src/detail.ts:2']);
   });
 
+  it('生成物的 sources 只記檔；宣告上方多一行註解，生成物不變，抽取結果的行號照留', () => {
+    const declaration = 'export interface Payload { a: string; b: number }';
+    const before = extractPersistenceSchema(fixture(declaration));
+    const after = extractPersistenceSchema(fixture(`/** 新增的註解。 */\n${declaration}`));
+    expect(renderPersistenceSchema(after)).toBe(renderPersistenceSchema(before));
+    const sourcesOf = (model: PersistenceSchemaInventory): string[] =>
+      model.types.flatMap((type) => type.sources).filter((source) => source.startsWith(PAYLOAD));
+    expect(sourcesOf(before)).toEqual([`${PAYLOAD}:1`]);
+    expect(sourcesOf(after)).toEqual([`${PAYLOAD}:2`]);
+    expect(renderPersistenceSchema(before)).not.toMatch(/types\.ts:\d/u);
+  });
+
   it('共用的純量只在真的別名上記宣告資訊，一般的屬性參照不記', () => {
     const root = fixture(
       [
