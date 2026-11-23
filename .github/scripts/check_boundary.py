@@ -1,3 +1,10 @@
+"""web、harness 與 `scripts/` 的邊界檢查（字串比對；`scripts/` 算 harness 一側）。
+
+只看程式碼裡的字串字面值與樣板字串的靜態片段，不做資料流分析：變數拼出來的路徑、
+`--filter '@nexus/web'` 這類參數字串、`node_modules/@nexus/web/dist` 這類安裝後的路徑都不保證抓得到，留給拆倉後的實體邊界。
+相對路徑解析到 repo 根不算越界；解析到 `apps` 本身只在 `new URL(…)` 或串起來的片段裡算。
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -13,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 WEB = 'apps/web'
 HARNESS = 'apps/harness'
+SCRIPTS = 'scripts'
 WIRE_PACKAGE = 'packages/nexus-wire'
 WIRE_SPECIFIER = '@nexus/wire'
 WEB_SPECIFIER = '@nexus/web'
@@ -41,6 +49,26 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         'apps/web/scripts/measure-frames.mjs',
         'web-path',
         '量測腳本要起真的 harness 才量得到畫格；留給 E 卡。',
+    ),
+    Exemption(
+        'scripts/gen-third-party-notices.ts',
+        'harness-path',
+        '授權彙整要讀 `apps/web` 的相依與內建字型，並真的 build 一次 web（`:450`、`:531`）；留給拆倉那張卡。',
+    ),
+    Exemption(
+        'scripts/gen-tsconfig-paths.ts',
+        'harness-path',
+        '產生 tsconfig paths 要讀 `apps/web/tsconfig.json`（`:52`）；留給拆倉那張卡。',
+    ),
+    Exemption(
+        'scripts/gen-typecheck-projects.ts',
+        'harness-path',
+        '產生 typecheck 專案清單要走過 `apps/*`（含 web）讀每個 workspace 的 manifest（`:37`、`:83`）；留給拆倉那張卡。',
+    ),
+    Exemption(
+        'scripts/release/members.ts',
+        'harness-path',
+        '發版成員清單掃整層 `apps`（`:34`），harness 的 `release-scripts.test.ts` 會呼叫它；留給拆倉那張卡。',
     ),
     Exemption(
         'apps/harness/package.json',
@@ -73,6 +101,7 @@ class Literal:
     value: str
     start: int = 0
     end: int = 0
+    template: bool = False
 
 
 def string_literals(text: str) -> list[Literal]:
@@ -175,7 +204,7 @@ def string_literals(text: str) -> list[Literal]:
             continue
         if c == '`':
             j, parts, newlines = skip_template(i)
-            out.extend(Literal(line + k, v, i, i) for k, v in parts)
+            out.extend(Literal(line + k, v, i, i, True) for k, v in parts)
             line += newlines
             i = j
             prev = c
@@ -217,25 +246,42 @@ def path_segments(text: str, literals: list[Literal], min_len: int = 2) -> list[
     runs: list[tuple[Literal, list[str]]] = []
     current: list[Literal] = []
     for lit in literals:
-        segment = lit.end > lit.start and '/' not in lit.value
+        segment = lit.end > lit.start and re.fullmatch(r'[^\s{}/]+/?', lit.value) is not None
         if segment and current and re.fullmatch(r'\s*,\s*', text[current[-1].end : lit.start]):
             current.append(lit)
             continue
         if len(current) >= min_len:
-            runs.append((current[0], [item.value for item in current]))
+            runs.append((current[0], [piece for item in current for piece in pieces(item.value)]))
         current = [lit] if segment else []
     if len(current) >= min_len:
-        runs.append((current[0], [item.value for item in current]))
+        runs.append((current[0], [piece for item in current for piece in pieces(item.value)]))
     return runs
 
 
+def pieces(value: str) -> list[str]:
+    return [piece for piece in value.split('/') if piece]
+
+
+def expand_braces(value: str) -> list[str]:
+    match = re.search(r'\{([^{}]*)\}', value)
+    if match is None or ',' not in match.group(1):
+        return [value]
+    out: list[str] = []
+    for option in match.group(1).split(','):
+        out.extend(expand_braces(value[: match.start()] + option + value[match.end() :]))
+    return out
+
+
 APPS_GLOB = re.compile(r'(^|/)apps/\*')
+APPS_TAIL = re.compile(r'(^|/)apps/?$')
 
 
 def apps_layer(text: str, literals: list[Literal], own: str, other: str) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     for lit in literals:
-        if APPS_GLOB.search(lit.value):
+        if any(APPS_GLOB.search(value) for value in expand_braces(lit.value)):
+            found.append((lit.line, lit.value))
+        elif lit.template and APPS_TAIL.search(lit.value):
             found.append((lit.line, lit.value))
     for first, segments in path_segments(text, literals, min_len=1):
         for index, segment in enumerate(segments):
@@ -266,6 +312,26 @@ def web_forbidden(path: str) -> bool:
     return under(path, 'packages') and not under(path, WIRE_PACKAGE)
 
 
+URL_POSITION = re.compile(r'\bURL\s*\(\s*$')
+
+
+def relative_paths(file: str, text: str, literals: list[Literal]) -> list[tuple[int, str, str | None, bool]]:
+    found: list[tuple[int, str, str | None, bool]] = []
+    for lit in literals:
+        if is_relative(lit.value):
+            as_path = URL_POSITION.search(text[max(0, lit.start - 20) : lit.start]) is not None
+            found.append((lit.line, lit.value, resolve(file, lit.value), as_path))
+    for first, segments in path_segments(text, literals):
+        joined = '/'.join(segments)
+        if is_relative(joined):
+            found.append((first.line, joined, resolve(file, joined), True))
+    return found
+
+
+def whole_layer(target: str) -> bool:
+    return target == 'apps'
+
+
 def web_findings(file: str, text: str) -> list[tuple[int, str, str]]:
     found: list[tuple[int, str, str]] = []
     literals = string_literals(text)
@@ -275,18 +341,20 @@ def web_findings(file: str, text: str) -> list[tuple[int, str, str]]:
             found.append((first.line, 'web-path', f'web 不准用路徑讀 wire 以外的 harness 內容：`{joined}`。'))
     for line, joined in apps_layer(text, literals, 'web', 'harness'):
         found.append((line, 'web-path', f'web 不准掃整層 `apps`（會讀到 harness）：`{joined}`。'))
+    for line, value, target, as_path in relative_paths(file, text, literals):
+        if target is not None and web_forbidden(target):
+            found.append((line, 'web-path', f'web 不准用路徑讀 wire 以外的 harness 內容：`{value}` 指到 `{target}`。'))
+        elif as_path and target is not None and whole_layer(target):
+            found.append((line, 'web-path', f'web 不准掃整層 `apps`（會讀到 harness）：`{value}` 指到 `{target}`。'))
     for lit in literals:
         value = lit.value
         if value.startswith('@nexus/') and at_import_position(text, lit) and value.split('/')[0:2] != ['@nexus', 'wire']:
             found.append((lit.line, 'web-spec', f'web 不准 import `{value}`：web 只能相依 `{WIRE_SPECIFIER}`。'))
-        elif is_relative(value):
-            target = resolve(file, value)
-            if target is not None and web_forbidden(target):
-                found.append(
-                    (lit.line, 'web-path', f'web 不准用路徑讀 wire 以外的 harness 內容：`{value}` 指到 `{target}`。')
-                )
-        elif re.search(r'(^|[/\s])apps/harness(/|$)', value):
-            found.append((lit.line, 'web-path', f'web 不准用路徑讀 harness：`{value}`。'))
+        elif not is_relative(value):
+            for variant in expand_braces(lit.value):
+                if re.search(r'(^|[/\s])apps/harness(/|$)', variant):
+                    found.append((lit.line, 'web-path', f'web 不准用路徑讀 harness：`{value}`。'))
+                    break
     return found
 
 
@@ -299,18 +367,20 @@ def harness_findings(file: str, text: str) -> list[tuple[int, str, str]]:
             found.append((first.line, 'harness-path', f'harness 不准掃或讀 web：`{joined}`。'))
     for line, joined in apps_layer(text, literals, 'harness', 'web'):
         found.append((line, 'harness-path', f'harness 不准掃整層 `apps`（會讀到 web）：`{joined}`。'))
+    for line, value, target, as_path in relative_paths(file, text, literals):
+        if target is not None and under(target, WEB):
+            found.append((line, 'harness-path', f'harness 不准掃或讀 web：`{value}` 指到 `{target}`。'))
+        elif as_path and target is not None and whole_layer(target):
+            found.append((line, 'harness-path', f'harness 不准掃整層 `apps`（會讀到 web）：`{value}` 指到 `{target}`。'))
     for lit in literals:
         value = lit.value
         if (value == WEB_SPECIFIER or value.startswith(WEB_SPECIFIER + '/')) and at_import_position(text, lit):
             found.append((lit.line, 'harness-spec', f'harness 不准 import `{value}`。'))
-        elif is_relative(value):
-            target = resolve(file, value)
-            if target is not None and under(target, WEB):
-                found.append(
-                    (lit.line, 'harness-path', f'harness 不准掃或讀 web：`{value}` 指到 `{target}`。')
-                )
-        elif re.search(r'(^|[/\s])apps/web(/|$)', value):
-            found.append((lit.line, 'harness-path', f'harness 不准掃或讀 web：`{value}`。'))
+        elif not is_relative(value):
+            for variant in expand_braces(lit.value):
+                if re.search(r'(^|[/\s])apps/web(/|$)', variant):
+                    found.append((lit.line, 'harness-path', f'harness 不准掃或讀 web：`{value}`。'))
+                    break
     return found
 
 
@@ -353,7 +423,7 @@ def exempt(file: str, rule: str) -> Exemption | None:
 def check(root: Path) -> list[str]:
     errors: list[str] = []
     used: set[Exemption] = set()
-    for base, finder in ((WEB, web_findings), (HARNESS, harness_findings)):
+    for base, finder in ((WEB, web_findings), (HARNESS, harness_findings), (SCRIPTS, harness_findings)):
         for file in files_under(root, base):
             text = (root / file).read_text(encoding='utf-8')
             findings = (
@@ -378,7 +448,7 @@ def check(root: Path) -> list[str]:
 def empty_scans(root: Path) -> list[str]:
     return [
         f'`{base}` 底下掃到 0 個程式檔：目錄搬了，WEB 與 HARNESS 的路徑要一起搬，不能少掃了還說通過。'
-        for base in (WEB, HARNESS)
+        for base in (WEB, HARNESS, SCRIPTS)
         if not files_under(root, base)
     ]
 
@@ -393,7 +463,7 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         print(f'邊界檢查：{len(errors)} 處違規。例外在 .github/scripts/check_boundary.py 的 EXEMPTIONS 逐條列出，加一條要寫理由。')
         return 1
-    print('邊界檢查：web 只相依 wire，harness 不碰 web（例外 %d 條，見 EXEMPTIONS）。' % len(EXEMPTIONS))
+    print('邊界檢查：web 只相依 wire，harness 與 scripts 不碰 web（例外 %d 條，見 EXEMPTIONS）。' % len(EXEMPTIONS))
     return 0
 
 

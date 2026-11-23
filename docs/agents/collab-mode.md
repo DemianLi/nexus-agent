@@ -219,6 +219,7 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 發版 PR 內文要有〈變更內容〉〈驗證方式〉 | gate（`check_pr.py`） |
 | 發版 PR 的〈驗證方式〉只寫實際跑過的 | 只有文件 |
 | md 相對連結連得過去 | gate（`check_md_links.py`） |
+| web 只相依 wire、harness 與 `scripts/` 不讀不 import web（字串比對，變數拼出來的路徑不保證抓到） | gate（`.github/scripts/check_boundary.py`） |
 | 升級指南的格式 | gate（`check_upgrade_guides.py`） |
 | 升級指南有沒有寫 | verifier |
 | 禁止直接 push、force push、刪 `develop`／`main` | ruleset |
