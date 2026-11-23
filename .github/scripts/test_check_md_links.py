@@ -69,8 +69,6 @@ class Scope(unittest.TestCase):
             'packages/p/README.md': BAD,
             'packages/p/docs/a.md': BAD,
             'GLOSSARY-MAP.md': BAD,
-            '.docs/a.md': BAD,
-            '.docs/x/y/z.md': BAD,
             '.github/a.md': BAD,
             '.github/ISSUE_TEMPLATE/a.md': BAD,
             'apps/web/GLOSSARY.md': BAD,
@@ -91,7 +89,6 @@ class Scope(unittest.TestCase):
             'packages/.p/README.md': BAD,
             'packages/p/a/b/c.md': BAD,
             'CONTRIBUTING.md': BAD,
-            '.docs/.hidden/a.md': BAD,
             'apps/.a/README.md': BAD,
             'apps/web/src/a/b.md': BAD,
             '.agents/notes/a.md': BAD,
@@ -139,7 +136,7 @@ class Scope(unittest.TestCase):
     def test_patterns_are_pinned(self) -> None:
         # 釘住 PATTERNS 的全集：增減時一起改檔頭與 AGENTS.md〈發版〉的掃描範圍。
         self.assertEqual(sorted(PATTERNS), sorted([
-            'README.md', 'docs/**/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md', '.docs/**/*.md', '.github/**/*.md',
+            'README.md', 'docs/**/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md', '.github/**/*.md',
             'packages/*.md', 'packages/*/*.md', 'packages/*/*/*.md',
             'harness/packages/*.md', 'harness/packages/*/*.md', 'harness/packages/*/*/*.md',
             'apps/*/*.md', 'apps/*/*/*.md', 'harness/apps/*/*.md', 'harness/apps/*/*/*.md', 'web/*.md', 'web/*/*.md',
@@ -187,8 +184,8 @@ class Floors(unittest.TestCase):
         required = [name for name, _, floor in GROUPS if floor]
         self.assertEqual(len(errors), len(required))
 
-    def test_only_the_docs_dot_group_may_be_empty(self) -> None:
-        self.assertEqual([name for name, _, floor in GROUPS if floor == 0], ['.docs'])
+    def test_no_group_may_be_empty(self) -> None:
+        self.assertEqual([name for name, _, floor in GROUPS if floor == 0], [])
         self.assertEqual(empty_groups(self.build(self.OLD)), [])
 
     def test_agents_or_skills_group_scanning_nothing_is_red(self) -> None:
