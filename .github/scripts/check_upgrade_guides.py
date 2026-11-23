@@ -43,7 +43,6 @@ GUIDE_PATH = re.compile(rf'^v{SEMVER}/[a-z0-9]+(?:-[a-z0-9]+)*/guide\.md$')
 
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
 FIELD = re.compile(r'^([A-Za-z_][\w-]*):(?:[ \t]+(.*?))?[ \t]*$')
-# 不加引號時 YAML 會讀成非字串的值（照 dsh 的 JSON_SCHEMA）。
 NON_STRING = re.compile(r'^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?)?$')
 # 不加引號時 YAML 不會讀成「整行就是這個字串」的：流式集合、錨點與別名、標籤、區塊純量、保留字元開頭，
 # 以及中間的「: 」（變成巢狀映射或語法錯）與「 #」（後面變成註解）。

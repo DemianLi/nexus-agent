@@ -2,8 +2,7 @@
 
     check_lockfile_age.py <base sha>
 
-**為什麼要這一步（偏離 dsh，理由 1：基座表達不出來）。** dsh 用 pnpm 11，年齡閘由 pnpm 自己在安裝時驗。nexus
-留在 pnpm 10.34.5：它的年齡檢查只在解析時發生（`NO_MATURE_MATCHING_VERSION`），`--frozen-lockfile` 不重新解析，
+**為什麼要這一步。** nexus 用 pnpm 10.34.5：它的年齡檢查只在解析時發生（`NO_MATURE_MATCHING_VERSION`），`--frozen-lockfile` 不重新解析，
 已經寫進 lockfile 的版本 CI 不會再查。有人在本機用 `--config.minimum-release-age=0` 或改舊版 pnpm 產生 lockfile，
 新版本就這樣進來了。退到：對 base 沒有、head 有的 `packages` 鍵逐一查 registry 的發布時間。
 

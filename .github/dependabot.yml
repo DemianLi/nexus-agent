@@ -15,7 +15,6 @@ updates:
     # dependabot 會靜默改指向，接著每張機器人 PR 都會撞上 ci.yml 的
     # 「main 只接受來自 develop 的 PR」硬失敗。一行換掉一個靜默故障模式。
     target-branch: develop
-    # 照 deepseek-harness 的做法：每天看，但只提 30 天前就發布的版本。
     # 「多久看一次」與「版本要多成熟」是兩個獨立旋鈕，monthly 會把兩者綁死 ——
     # 一年只看 12 次，卻仍可能收到當天剛發、隔天就被 yank 的版本。
     schedule:
@@ -31,7 +30,6 @@ updates:
     commit-message:
       prefix: chore
     # 併成一張：develop 開了 strict，每合一張其餘都要重 rebase 再跑一輪 gate。
-    # dsh 沒有這一段，因為它沒有這條約束。
     groups:
       github-actions:
         patterns:

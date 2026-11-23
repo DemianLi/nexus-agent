@@ -269,7 +269,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # lockfile 新帶進的版本要發布滿 `minimumReleaseAge`（#1545）：pnpm 10 的 `--frozen-lockfile` 不再查已進 lockfile 的版本，
-      # 規則與偏離理由見腳本檔頭。排在安裝之前：它只要 Python 與網路，太新的版本要紅在這一步，而不是被別的原因擋掉。
+      # 規則見腳本檔頭。排在安裝之前：它只要 Python 與網路，太新的版本要紅在這一步，而不是被別的原因擋掉。
       # lockfile 沒變就不發請求。只在 PR 上跑：main 的 push 帶的 lockfile 已經在 develop 的 PR 上查過。
       - name: lockfile 新版本的發布年齡
         if: github.event_name == 'pull_request'
@@ -361,11 +361,6 @@ jobs:
 
   # Node 相容冒煙（#1546）：主版本 24 由其他 job 全套覆蓋，這裡在 `engines` 的下限 22.19 與下一版 26 各跑一輪，
   # 只跑行為隨 Node 版本而變的那幾處（清單與每一檔測什麼見 .github/scripts/node-compat-files.txt）。
-  # 照 dsh `ci.yml:393-485`：`fail-fast: false`、`max-parallel: 1`（依序跑，同一時間只佔一個 runner）。
-  #
-  # 矩陣不收 dsh 的 24.9：dsh 釘它是為了 24.0～24.11 帶的 v1 內部 loader。nexus 的 vendor loader 只有在行程帶
-  # `--expose-internals` 或裝了 `node-addon-require-builtin` 時才碰內部 loader（`vendor/loader/src/internal.ts:99-108`），
-  # 今天兩個都沒有，24.9 那格測不到東西。哪天加了其中一個，就把 24.9 補回矩陣。
   #
   # 22.19 那一格只跑原始碼冒煙。下限上的「已安裝產物」冒煙由 packed-install 負責（它的 Node 鎖在 22.19.0），不在這裡重跑。
   node-compat:
