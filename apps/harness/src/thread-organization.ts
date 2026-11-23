@@ -32,8 +32,7 @@
  * 不是 AGENTS.md 偏離規則的理由 1 或 2。dsh 的 `storage-domain` 替 `WorkspaceRegistry` 做的事（單一寫入鏈、先落盤再換記憶體、
  * 鏈上讀改寫、open 驗證）本檔都手寫了；home 底下被讀回來的狀態檔裡，形狀是 domain 的 global／kv 的只有這一個消費者，
  * 建一層抽象沒有第二個使用者。重開條件（任一成立）：出現第二個 kv／global 形狀的耐久狀態（排程、投影快取、workspace registry）；
- * 要把釘選／封存的變更推給同一個使用者的其他分頁（dsh 靠 `domain/changed`）。理由與完整條件見
- * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md 的〈storage 為什麼不建、什麼時候重開〉。
+ * 要把釘選／封存的變更推給同一個使用者的其他分頁（dsh 靠 `domain/changed`）。
  *
  * ## 單一寫入者
  *

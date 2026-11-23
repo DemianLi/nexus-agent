@@ -27,7 +27,6 @@
  * 來源是 2026-08-29 的盤點（見 {@link SURVEY_INVENTORY_DATE}）：`GET /models` 列 83 個，
  * 逐一送一個帶 `tools` 的請求，回得出 `finish_reason: tool_calls` 的有這 16 個。
  * **前一天同一把 key 量到的是 14 個，而且成員不同** —— 集合綁在帳號上，也綁在時間上。
- * 完整結果與四類分法見 [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)。
  *
  * **入場判準是一句話一個工具，那證不了它跑得完基準任務。** 這句話 2026-08-29 那一輪
  * 294 次執行印證了：16 個過關的候選裡，**只有 8 個拿得到近乎完整的資料**，3 個資料缺
@@ -68,8 +67,7 @@
  * `--models` 排掉這五個。
  *
  * {@link SURVEY_INVENTORY_DATE} 仍然是 `2026-08-29`，因為那才是這份**清單**成立的日期。
- * 上面這五筆是複驗，不是新的盤點結果 —— 新的盤點在
- * [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md) 的「第三輪盤點」。
+ * 上面這五筆是複驗，不是新的盤點結果。
  */
 
 import type { ModelUnderTest } from './model-under-test.js';
@@ -94,7 +92,7 @@ export const SURVEY_INVENTORY_DATE = '2026-08-29';
 export const SURVEY_MODELS: readonly SurveyModel[] = [
   { label: 'ds-flash', modelId: 'deepseek-ai/deepseek-v4-flash-0731' }, // 21397ms
   { label: 'ds-pro', modelId: 'deepseek-ai/deepseek-v4-pro-0813' }, //     6405ms
-  // 盤點 620ms 過關，完整 agent 迴圈下兩輪各 21 次、0/42 評到分（`500`）。見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md
+  // 盤點 620ms 過關，完整 agent 迴圈下兩輪各 21 次、0/42 評到分（`500`）。
   { label: 'diffgemma-26b', modelId: 'google/diffusiongemma-26b-a4b-it' }, // 620ms
   { label: 'gemma-4-31b', modelId: 'google/gemma-4-31b-it' }, //          1404ms
   { label: 'llama-11b', modelId: 'meta/llama-3.2-11b-vision-instruct' }, // 916ms

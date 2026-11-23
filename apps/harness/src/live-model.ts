@@ -109,7 +109,6 @@ export const DEFAULT_LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
  * ## 邊界
  *
  * **候選集合綁在帳號上，也綁在時間上**：`GET /models` 列得出來不代表叫得動，同一把 key 幾輪盤點成員就換過。
- * 盤點方法與 2026-09-04 的完整結果見 [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)。
  *
  * 這是**預設**的 id：`cli:live` / `serve:live` 走 `live-model` 那一列（出貨值與它相同），
  * `spike:live` 直接吃 schema 預設，eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。

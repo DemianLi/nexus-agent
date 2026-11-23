@@ -3,8 +3,7 @@
  *
  * ## 為什麼要有這個檔
  *
- * 研究文件 [`rust-and-langchain-removal-2026-10-06.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/rust-and-langchain-removal-2026-10-06.md)
- * §七的接縫 1。`createDeepAgent` 只是疊在 `langchain` 的 `createAgent` 上的一層 middleware 組裝，
+ * `createDeepAgent` 只是疊在 `langchain` 的 `createAgent` 上的一層 middleware 組裝，
  * 而它在我們這側做的事裡，有一半是我們一直在擋的：
  *
  * - **按模型改寫組裝**（harness profile）：拿掉工具、改工具描述、加 middleware、換系統提示詞。
@@ -48,8 +47,7 @@
  * **放開 Anthropic／Bedrock（或任何用區塊邊界做 `cache_control` 的供應商）之前，要先決定系統訊息的區塊怎麼記。**
  * 日誌的 `request/system` 只記區塊串起來的文字、不記邊界（`request-snapshot.ts`），這是
  * [#1342](https://github.com/DemianLi/nexus-agent/issues/1342) 的決議，**條件就是產品路徑沒有那類供應商**；
- * dsh 的對照是 `SystemMessage.content` 保留 `ContentBlock[]`、`cache_control` 在供應商轉接層才加。決議全文在
- * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/log-derived-history-vs-wire-2026-10-08.md 最後一則補記。
+ * dsh 的對照是 `SystemMessage.content` 保留 `ContentBlock[]`、`cache_control` 在供應商轉接層才加。
  *
  * @module
  */

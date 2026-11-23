@@ -41,9 +41,6 @@
  * 點」與 `nexus-plugin-plan-mode/src/index.ts` 的「[#126] 加了第十四個註冊點」講的是**它們
  * 落地時排第幾**——第十五條通道出現之後，`sessions` 仍然是第十四個。把它們一起釘住，等於要求
  * 未來的人去改一句本來就對的話。
- *
- * 另有兩份舊文件（`plugin-architecture-gap-survey.md`、`development-plan.md`）寫著現況的通道數，用阿拉伯數字，
- * 不在 #195 的改動範圍內；它們已移出版本控制（留在 tag `archive/docs-2026-11`），不再需要掃。
  */
 
 import { readFileSync } from 'node:fs';

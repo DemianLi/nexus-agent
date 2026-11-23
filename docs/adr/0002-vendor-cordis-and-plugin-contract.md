@@ -12,6 +12,7 @@
 ## 現況與沒回答的
 
 - agent loop 第二段（照 dsh 的 agent-loop 自寫 loop、取代 LangGraph 那顆插件）由 [#2336](https://github.com/DemianLi/nexus-agent/issues/2336) 承接；底座遷移的地圖是 [#1385](https://github.com/DemianLi/nexus-agent/issues/1385)。
+- 插件更新今天只做到設定版本：同一列的宣告改了才分出兩版，程式碼版本（每一版一個 entry id）還沒做（`apps/harness/src/plugin-live-versions.ts` 檔頭）。
 - 核心底座要不要再換成 Rust 宿主行程，由 [#2568](https://github.com/DemianLi/nexus-agent/issues/2568) 另外設計；這份決議沒有回答它。
 - 沒有逐條核對 23 條 Cordis 缺點的處置表（原文第四節）今天各落在哪；要查原表看 tag 裡的原文。
 

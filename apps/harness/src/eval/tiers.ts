@@ -69,8 +69,7 @@
  *   恆定送出那個數字，輸出上限比它小的模型每一次呼叫都會失敗，而 512 的入場探測看不出來。
  *
  * **這份集合綁在帳號上，也綁在時間上** —— 同一把 key 三輪就掉了 5 個可用的，所以報告裡的
- * 每個數字都要帶盤點日期。完整結果見
- * [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)。
+ * 每個數字都要帶盤點日期。
  */
 
 import type { ModelUnderTest } from './model-under-test.js';
@@ -98,7 +97,7 @@ export interface MeasuredModel extends ModelUnderTest {
    * 再拿這一行的數字去比。`live-model.ts` 的 `modelGoneMessage` 是它下架時的那句話。
    */
   readonly measuredOn: string;
-  /** 那一次量到什麼。一行，完整數字在 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md。 */
+  /** 那一次量到什麼，一行。 */
   readonly note: string;
 }
 

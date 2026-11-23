@@ -11,7 +11,7 @@
  * 註冊表，不是一份 session（`packages/core/session/src/invariant.ts:218-220` 的
  * `for (const session of ctx.sessions.list())` 加 `ctx.on('session/created', …)`；遙測的
  * coordinator 檔頭寫的是 “subscribes to the session firehose”）。我們把那個結構補起來，
- * 三題就一起消失了。調研見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/subagent-session-log-survey.md。
+ * 三題就一起消失了。
  *
  * **零憑證、零外部連線**：後端是測試自己的假貨，模型是 `ScriptedChatModel`。
  */

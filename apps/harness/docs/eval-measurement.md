@@ -4,7 +4,7 @@
 量出來的數字能拿去做什麼、哪些量法**現在不建**以及哪天要建。詞彙見 [`GLOSSARY.md`](../GLOSSARY.md)；
 怎麼跑、報表怎麼讀見 [`docs/operations.md`](../../../docs/operations.md) 的 eval 一節。
 
-**這一份只記「現在不建」的決定。** 已經落地的（結果落檔並記版本、「這題成功」判準與平凡地板、
+**這一份記「現在不建」的決定，以及量任何分數之前先守的七條紀律（〈四〉）。** 已經落地的（結果落檔並記版本、「這題成功」判準與平凡地板、
 以題目為單位的區間）寫在 operations.md，不在這裡重複。
 
 來源：地圖 [#994](https://github.com/DemianLi/nexus-agent/issues/994) 與它的對談票
@@ -100,7 +100,7 @@
 
 ## 四、量測紀律七條
 
-這七條原在對話 agent 研究藍圖（`chat-agent-research/blueprint.md`）的第 3 節，量任何分數之前先守。下面每條的「怎麼落實」裡的 `T1-01`、`T7-08` 這類編號，指藍圖八個節點的決策卡，全文在 tag `archive/docs-2026-11` 的 [`blueprint.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/chat-agent-research/blueprint.md)（連結見上方〈來源〉）。
+這七條原在對話 agent 研究藍圖（`chat-agent-research/blueprint.md`）的第 3 節，量任何分數之前先守。下面每條的「怎麼落實」裡的 `T1-01`、`T7-08` 這類編號，指藍圖八個節點的決策卡，全文在 tag `archive/docs-2026-11` 的 [`blueprint.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/chat-agent-research/blueprint.md)。文中的「README 第 N 條」指同目錄 [`README.md`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/chat-agent-research/README.md)〈跨節點的主要發現〉的第 N 條，「第 5 節」指藍圖的第 5 節〈介面契約〉。
 
 ### 規則 1　每個分數旁邊並列一個不需要模型的平凡基準
 

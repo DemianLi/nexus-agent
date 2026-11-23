@@ -1,7 +1,5 @@
 //! 主機級插件樹的內核（#2569）：fiber 樹、服務、事件、時限、設定。宿主與每條對話的 Rust 組合行程共用。
 //!
-//! 設計與語意清單的逐條對照見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/rust-kernel-2569-2026-11-09.md。
-//!
 //! # 怎麼推進
 //!
 //! 單執行緒、不用 async runtime。狀態轉換一律在 [`Kernel::run`] 裡發生：[`Kernel::mount`]、[`Kernel::dispose`]、

@@ -84,7 +84,6 @@ export function summarize(
 
 /**
  * 規則寫死的回報條件：A＋B 最大值超過 3 秒；A、B、A＋B 任一 p95 超過 2 秒；有缺樣本；兩架構最大值差一倍以上。回觸發了哪幾條，空陣列就是都沒觸發。
- * 觸發後怎麼處理，見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/mcp-pool-baseline-2570-2026-11-10.md「要回報 PM、不自己調的情況」。
  */
 export function reportTriggers(summaries: readonly ArchSummary[]): string[] {
   const out: string[] = [];
