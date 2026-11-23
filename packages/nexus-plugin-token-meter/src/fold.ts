@@ -36,7 +36,7 @@
  * 「不成對」的三種形狀見 {@link markLifecycleBroken}，`unknownSteps` 看不出來（兩顆用量換掉一次沒報的，夾在 0）。
  * 快取桶缺席只讓那一格省略、不讓它變 `false`。沒有 `turn/end` 的輪不出這一格。
  *
- * 證不出的輪數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps` 在 `token-meter.ts:250-251` 就寫「token 是下限」）。
+ * 證不出的輪數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps` 的說明就寫「token 是下限」）。
  * 沒有任何嘗試的輪是「證不出」＝ `false`，數字全 0。
  *
  * ## 模型 id
