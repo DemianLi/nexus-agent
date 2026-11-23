@@ -241,7 +241,8 @@ globalThis.nexusChatMock = {
 - 劇本每送出一句話讀一次，中途改了下一句生效。型別是 `nexus-chat.d.ts` 的 `NexusChatMock`。
 - `apps/web/embed-demo` 的測試頁網址加 `?embed=/embed-mock.js` 就是模擬模式，範例劇本在它的 `main.ts`：句子裡的設備編號轉過去，說到「標」再高亮。
 - 驗得到的是宿主頁這一側的接線：宣告、事件、`respond`／`fail`、核准卡、`context`。**驗不到模型會不會在對的時機叫對的工具**：劇本不理解句子，要接真的 serve 才知道。
-- 不模擬：換票登入、斜線命令、上傳、子代理、對話清單；這些呼叫回「模擬模式不支援」。`embed-mock.js` 只給本機開發，serve 不供應它。
+- 宿主頁 30 秒內沒交回，工具卡標失敗（「宿主頁沒在期限內交回」），劇本照跑下一步，同 serve 出廠的期限；核准卡沒有期限，等人按。
+- 不模擬：斜線命令（清單是空的）、換票登入（`signIn` 一律 reject `sign_in_failed`）、上傳、子代理、對話清單（這幾個回「模擬模式不支援」）。`embed-mock.js` 只給本機開發，serve 不供應它。
 
 ## 開發時接上另一台主機的 serve
 

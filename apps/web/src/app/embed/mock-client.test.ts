@@ -1,15 +1,20 @@
 import type { Event } from '@nexus/wire';
 import { describe, expect, test } from 'vitest';
 
-import { createMockClient, MOCK_DEFAULT_REPLY, MOCK_UNSUPPORTED } from './mock-client';
+import {
+  createMockClient,
+  MOCK_DEFAULT_REPLY,
+  MOCK_HOST_TIMEOUT,
+  MOCK_UNSUPPORTED,
+} from './mock-client';
 import type { NexusChatMock } from './mock-client';
 
 /** 模擬模式的劇本 client（#3175）：照劇本推的 frame 與交回的路徑。元件畫出來的樣子在真瀏覽器裡看過（PR 的截圖）。 */
 
 type Data = Record<string, unknown>;
 
-async function open(mock: NexusChatMock | undefined) {
-  const client = createMockClient(() => mock);
+async function open(mock: NexusChatMock | undefined, hostTimeoutMs?: number) {
+  const client = createMockClient(() => mock, hostTimeoutMs);
   const events = await client.openEvents('t');
   const seen: Event[] = [];
   const next = async (predicate: (event: Event, data: Data) => boolean): Promise<Data> => {
@@ -127,5 +132,44 @@ describe('createMockClient', () => {
     expect(await client.uploadFile('t', new Blob(['x']) as File)).toMatchObject({
       message: MOCK_UNSUPPORTED,
     });
+  });
+
+  test('宿主頁沒在期限內交回：工具卡標失敗，這一輪照跑完', async () => {
+    const { client, next } = await open(
+      { turns: [[{ tool: 'focus_device', approval: false }, { say: '後面' }]] },
+      10,
+    );
+    await client.runStart('t', '轉');
+    const host = await next(isInterrupt);
+    expect(await next(isEvent('tools', 'tool-finished'))).toMatchObject({
+      failed: true,
+      message: MOCK_HOST_TIMEOUT,
+    });
+    await next(isEvent('lifecycle', 'completed'));
+    expect(
+      await client.inputRespond('t', {
+        namespace: [],
+        interrupt_id: host.interrupt_id as string,
+        response: { ok: true, result: 1 },
+      }),
+    ).toMatchObject({ type: 'error' });
+  });
+
+  test('停止：等著的工具收掉，這一輪以 aborted 收尾，不再往下走', async () => {
+    const { client, next, seen } = await open({
+      reply: () => [{ tool: 'focus_device', approval: false }, { say: '不該出現' }],
+    });
+    await client.runStart('t', '轉');
+    await next(isInterrupt);
+    await client.runCancel('t');
+    expect(await next(isEvent('lifecycle', 'completed'))).toMatchObject({ aborted: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await client.runStart('t', '再一次');
+    await next(isInterrupt);
+    expect(
+      seen.some(
+        (frame) => frame.method === 'messages' && JSON.stringify(frame.params).includes('不該出現'),
+      ),
+    ).toBe(false);
   });
 });

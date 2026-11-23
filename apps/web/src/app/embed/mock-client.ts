@@ -25,6 +25,9 @@ export type NexusChatMock = globalThis.NexusChatMock;
 export const MOCK_DEFAULT_REPLY =
   '（模擬模式）劇本用完了，見 docs/embed-chat.md 的〈本機模擬模式〉。';
 export const MOCK_UNSUPPORTED = '模擬模式不支援';
+/** 宿主頁工具沒在期限內交回時工具卡上的字；期限同 serve 出廠的 `host-tools` `timeoutMs`。 */
+export const MOCK_HOST_TIMEOUT = '宿主頁沒在期限內交回';
+const HOST_TIMEOUT_MS = 30_000;
 
 const REJECTED = { kind: 'rejected' as const, code: 'not_supported', message: MOCK_UNSUPPORTED };
 const UPLINK_REJECTED: UplinkResult = {
@@ -42,11 +45,13 @@ interface Pending {
 /** 每個元素一個；下行、排程與待決的中斷都在這裡。 */
 export function createMockClient(
   script: () => NexusChatMock | undefined = () => globalThis.nexusChatMock,
+  hostTimeoutMs = HOST_TIMEOUT_MS,
 ): WireClient {
   const listeners = new Map<string, Set<(event: Event) => void>>();
   const pending = new Map<string, Pending>();
   const turnIndex = new Map<string, number>();
   const cancelled = new Set<string>();
+  const active = new Map<string, string>();
   let seq = 1;
   let ids = 0;
 
@@ -66,8 +71,17 @@ export function createMockClient(
     emit(threadId, 'custom', [], { name: INBOX, payload });
   }
 
-  function waitFor(threadId: string, interruptId: string): Promise<unknown> {
-    return new Promise((resolve) => pending.set(`${threadId}\n${interruptId}`, { resolve }));
+  function waitFor(threadId: string, interruptId: string, timeout?: unknown): Promise<unknown> {
+    const key = `${threadId}\n${interruptId}`;
+    return new Promise((resolve) => {
+      pending.set(key, { resolve });
+      if (timeout === undefined) return;
+      setTimeout(() => {
+        if (pending.get(key)?.resolve !== resolve) return;
+        pending.delete(key);
+        resolve(timeout);
+      }, hostTimeoutMs);
+    });
   }
 
   async function stepsFor(threadId: string, input: MockTurnInput): Promise<readonly MockStep[]> {
@@ -96,6 +110,7 @@ export function createMockClient(
 
   async function callTool(
     threadId: string,
+    runId: string,
     step: Extract<MockStep, { tool: string }>,
   ): Promise<void> {
     const n = ++ids;
@@ -120,7 +135,7 @@ export function createMockClient(
       const response = (await waitFor(threadId, approvalId)) as {
         readonly decisions?: readonly { readonly type?: string }[];
       };
-      if (cancelled.has(threadId)) return;
+      if (cancelled.has(runId)) return;
       resumed(threadId);
       if (response.decisions?.[0]?.type !== 'approve') {
         emit(threadId, 'tools', [], {
@@ -138,10 +153,10 @@ export function createMockClient(
       interrupt_id: hostId,
       payload: { kind: 'host_tool', name: step.tool, args },
     });
-    const reply = (await waitFor(threadId, hostId)) as
+    const reply = (await waitFor(threadId, hostId, { ok: false, error: MOCK_HOST_TIMEOUT })) as
       | { readonly ok: true; readonly result: unknown }
       | { readonly ok: false; readonly error: string };
-    if (cancelled.has(threadId)) return;
+    if (cancelled.has(runId)) return;
     resumed(threadId);
     emit(
       threadId,
@@ -154,18 +169,18 @@ export function createMockClient(
   }
 
   async function run(threadId: string, runId: string, input: MockTurnInput): Promise<void> {
-    cancelled.delete(threadId);
+    active.set(threadId, runId);
     emit(threadId, 'lifecycle', [], { event: 'running', graph_name: 'root' });
     try {
       for (const step of await stepsFor(threadId, input)) {
-        if (cancelled.has(threadId)) return;
+        if (cancelled.has(runId)) return;
         if ('say' in step) say(threadId, runId, step.say);
-        else await callTool(threadId, step);
+        else await callTool(threadId, runId, step);
       }
     } catch (error) {
       say(threadId, runId, `（模擬模式）劇本出錯：${String(error)}`);
     }
-    if (cancelled.has(threadId)) return;
+    if (cancelled.has(runId)) return;
     emit(threadId, 'lifecycle', [], { event: 'completed', graph_name: 'root' });
   }
 
@@ -221,7 +236,8 @@ export function createMockClient(
       return OK;
     },
     runCancel: async (threadId) => {
-      cancelled.add(threadId);
+      const current = active.get(threadId);
+      if (current !== undefined) cancelled.add(current);
       for (const [key, waiting] of pending) {
         if (!key.startsWith(`${threadId}\n`)) continue;
         pending.delete(key);
