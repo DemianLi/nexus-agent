@@ -109,7 +109,7 @@ Merging your own verified PR into `develop` is reversible by a revert PR, so it 
 | Comment Sicko | `opus` | `high` |
 | Trivial mechanical subagents (run tests, grep inventories, byte compares) | `sonnet` | `medium` |
 
-Engineers and verifiers run exactly at their table row: a hook (`.github/scripts/session_hooks.py`) blocks a `start_session` whose `name` starts with `eng-` or `ver-` and does not pass that `model` and `effort`, one with no `name` whose title starts with the role's word (`engineer` or `verifier`), and a fork or cloud start of either role, so name them that way and start them fresh on this machine. Raise any other role one effort step for the hardest work and lower it for routine work. No role runs above `xhigh`.
+Engineers and verifiers run exactly at their table row: a hook (`.github/scripts/session_hooks.py`) blocks a `start_session` whose `name` starts with `eng-` or `ver-` and does not pass that `model` and `effort`, one with no `name` whose title starts with the role's word (`engineer` or `verifier`), a fork or cloud start of either role, one that passes `cwd` or `host`, one without `use_worktree: false`, and one whose prompt lacks the sentence "do not read or write the shared notes directory" (`不讀不寫 … notes`), the download rule, or the temp-file, `--force`, npx and subagent-copy rules. So name them that way, start them fresh on this machine, and open the kickoff with those sentences. It checks only that each sentence is present, and it allows the start if it errors. Raise any other role one effort step for the hardest work and lower it for routine work. No role runs above `xhigh`.
 
 You own every subagent's work. Review the diff and write your own summary.
 
@@ -121,6 +121,6 @@ Write in Chinese, in short declarative sentences. Lead with what changes for the
 
 ## Playbooks
 
-Match the task to a playbook and open its steps at `playbooks/<title>.md`, with the title in kebab case. Copy its steps into the todolist tool first. Refactoring work uses **Feature**. A task no playbook fits goes back to the PM, which asks the operator.
+Match the task to a playbook and open its steps at `playbooks/<title>.md`, with the title in kebab case. Copy its steps into the todolist tool first. Refactoring work uses **Feature**. For a task no playbook fits, write it on the issue and end the turn, with no message to the PM; the PM asks the operator.
 
 Feature, Bug fix, Opening a PR, Babysit, Shipping, Autopilot-full, Worktree cleanup.
