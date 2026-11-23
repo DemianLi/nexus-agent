@@ -34,8 +34,9 @@ function elementTypes(): Plugin {
  * - 只有一支檔（`inlineDynamicImports`）：宿主頁只放一個 `<script type="module">`。
  * - 樣式全部進 shadow root，改寫見 `embed-shadow-css.ts`。
  * - 給宿主頁的型別 `src/app/embed/nexus-chat.d.ts` 照原樣放到 `dist/nexus-chat.d.ts`，跟 `embed.js` 一起供應。
+ * - `--mode mock`（`build:mock`，#3175）：建 `dist-mock/embed-mock.js`，接瀏覽器內的劇本 client，不進 `dist`。
  */
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: './',
   plugins: [
     rejectStandaloneServe(),
@@ -47,14 +48,18 @@ export default defineConfig({
   ],
   resolve: { alias: RESOLVE_ALIAS },
   build: {
-    emptyOutDir: false,
+    ...(mode === 'mock' ? { outDir: 'dist-mock', emptyOutDir: true } : { emptyOutDir: false }),
     assetsInlineLimit: 0,
     rollupOptions: {
-      input: 'src/app/embed/index.ts',
+      input: mode === 'mock' ? 'src/app/embed/mock.ts' : 'src/app/embed/index.ts',
       preserveEntrySignatures: 'strict',
       // 切片的公開入口只有 re-export：標成沒有副作用，嵌入版沒用到的那幾個檔才不會跟著入口被打包進來。
       treeshake: { moduleSideEffects: (id) => !/\/src\/features\/[^/]+\/index\.ts$/.test(id) },
-      output: { format: 'es', entryFileNames: 'embed.js', inlineDynamicImports: true },
+      output: {
+        format: 'es',
+        entryFileNames: mode === 'mock' ? 'embed-mock.js' : 'embed.js',
+        inlineDynamicImports: true,
+      },
     },
   },
-});
+}));

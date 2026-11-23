@@ -225,6 +225,24 @@ window.addEventListener('keydown', (event) => {
 
 打開元件時會接上一次的對話（記在瀏覽器的 `nexus.embed.threads.current`，跟獨立頁面分開）；按「新對話」開一條新的。獨立頁面開的對話在元件裡打不開，元件會說明並請使用者按「新對話」。
 
+## 本機模擬模式
+
+沒有 serve 時，宿主頁的前端照樣可以開發宿主頁工具的串接（[#3175](https://github.com/DemianLi/nexus-agent/issues/3175)）：`apps/web` 跑 `pnpm run build:mock`，產物在 `apps/web/dist-mock/`，宿主頁把 `embed.js` 換成那裡的 `embed-mock.js`（連同 `assets/` 放在同一個目錄）。元件照樣畫，但不打任何網路請求，照 `globalThis.nexusChatMock` 的劇本回話與叫宿主頁工具：
+
+```ts
+globalThis.nexusChatMock = {
+  // 第 n 句話用第 n 輪；也可以改給 reply，每一句話自己決定。
+  turns: [[{ say: '先轉過去。' }, { tool: 'focus_device', args: { id: 'B-07' } }, { say: '好了。' }]],
+  reply: ({ text, context, hostTools }) => [{ say: `收到：${text}` }],
+};
+```
+
+- 每一步是 `{ say }` 或 `{ tool, args, approval }`。叫工具預設先出核准卡（同 serve 出廠），`approval: false` 直接發 `nexus-host-tool`；`respond` 的結果、`fail` 的原因畫在工具卡上，再接下一步。
+- 劇本每送出一句話讀一次，中途改了下一句生效。型別是 `nexus-chat.d.ts` 的 `NexusChatMock`。
+- `apps/web/embed-demo` 的測試頁網址加 `?embed=/embed-mock.js` 就是模擬模式，範例劇本在它的 `main.ts`：句子裡的設備編號轉過去，說到「標」再高亮。
+- 驗得到的是宿主頁這一側的接線：宣告、事件、`respond`／`fail`、核准卡、`context`。**驗不到模型會不會在對的時機叫對的工具**：劇本不理解句子，要接真的 serve 才知道。
+- 不模擬：換票登入、斜線命令、上傳、子代理、對話清單；這些呼叫回「模擬模式不支援」。`embed-mock.js` 只給本機開發，serve 不供應它。
+
 ## 開發時接上另一台主機的 serve
 
 宿主頁的工程師在自己的電腦開前端的開發伺服器（Vue CLI 或 Vite），把 `<nexus-chat>` 接到同一個區網裡另一台主機上的 serve（跑在 docker）。這只用在開發與聯調；正式部署照〈載入〉在宿主頁前面放反向代理。
