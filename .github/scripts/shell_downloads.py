@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import posixpath
 import re
 from typing import NamedTuple
 
@@ -45,6 +46,21 @@ SHELL_S_CLUSTER = re.compile(r'-[A-Za-z]*s[A-Za-z]*$')
 DELIMITER_END = ' \t\n;&|()<>'
 
 
+SHARED_TMP_ROOTS = ('/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', '/var/folders', '/private/var/folders')
+SCRATCHPAD = re.compile(r'^(?:/private)?/tmp/claude-\d+/[^/]+/([^/]+)/scratchpad(?:/|$)')
+TMP_WRITERS = frozenset({'cp', 'mv', 'tee', 'rm', 'rmdir', 'mkdir', 'touch'})
+TMP_TARGET_OPTIONS = ('-t', '--target-directory')
+NPX_LAUNCHERS = frozenset({'npx', 'pnpx', 'bunx'})
+NPX_ADVICE = '不設放行路：已安裝的用 `pnpm exec <指令>`，沒裝的把套件與用途寫在卡上，需要時由 operator 在終端跑'
+FORCE_ADVICE = '不加 `--force`／`-f`；拆不掉就把原因寫在卡上、停下，要強制移除由 operator 在終端自己跑'
+TMP_ADVICE = '暫存的寫入、覆寫、刪除只在自己 session 的 scratchpad（系統提示裡列的那個絕對路徑）'
+
+
+class Block(NamedTuple):
+    kind: str
+    text: str
+
+
 class Word(NamedTuple):
     text: str
     quoted: bool = False
@@ -53,6 +69,7 @@ class Word(NamedTuple):
 class Parsed(NamedTuple):
     segments: list[list[Word]]
     heredocs: list[str]
+    redirects: list[str]
 
 
 class Scanner:
@@ -62,10 +79,12 @@ class Scanner:
         self.i = 0
         self.segments: list[list[Word]] = []
         self.heredocs: list[str] = []
+        self.redirects: list[str] = []
 
     def absorb(self, other: Scanner) -> None:
         self.segments += other.segments
         self.heredocs += other.heredocs
+        self.redirects += other.redirects
 
     def match_paren(self, start: int) -> int:
         depth = 0
@@ -254,7 +273,7 @@ class Scanner:
     def scan_list(self, end: str | None) -> None:
         cur: list[Word] = []
         buf: list[str] = []
-        state = {'quoted': False, 'in_word': False, 'skip': False}
+        state = {'quoted': False, 'in_word': False, 'skip': False, 'redirect': False}
         pending: list[tuple[str, bool, bool]] = []
         depth = 0
         case = {'open': 0, 'pattern': False}
@@ -263,6 +282,9 @@ class Scanner:
             if state['in_word']:
                 if state['skip']:
                     state['skip'] = False
+                    if state['redirect']:
+                        self.redirects.append(''.join(buf))
+                    state['redirect'] = False
                 else:
                     word = Word(''.join(buf), state['quoted'])
                     cur.append(word)
@@ -383,6 +405,7 @@ class Scanner:
                     pending.append((delimiter, quoted, op == '<<-'))
                 else:
                     state['skip'] = True
+                    state['redirect'] = '>' in op
             else:
                 piece(c, False)
                 self.i += 1
@@ -395,10 +418,10 @@ class Scanner:
 def parse(command: str) -> Parsed:
     scanner = Scanner(command)
     scanner.scan_list(None)
-    return Parsed(scanner.segments, scanner.heredocs)
+    return Parsed(scanner.segments, scanner.heredocs, scanner.redirects)
 
 
-def _strip_prefix(words: list[Word]) -> list[Word]:
+def _strip_prefix(words: list[Word], seen: list[str]) -> list[Word]:
     i = 0
     while i < len(words):
         w = words[i].text
@@ -409,11 +432,12 @@ def _strip_prefix(words: list[Word]) -> list[Word]:
             i += 2
         elif name in WRAPPER_VALUE_OPTIONS:
             values = WRAPPER_VALUE_OPTIONS[name]
+            seen.append(name)
             i += 1
             while i < len(words) and words[i].text.startswith('-') and words[i].text != '-':
                 if name == 'env' and words[i].text in ('-S', '--split-string') and i + 1 < len(words):
                     inner = [Word(t) for t in words[i + 1].text.split()]
-                    return _strip_prefix(inner + words[i + 2:])
+                    return _strip_prefix(inner + words[i + 2:], seen)
                 i += 2 if words[i].text in values else 1
             if name == 'timeout' and i < len(words) and re.fullmatch(r'[\d.]+[smhd]?', words[i].text):
                 i += 1
@@ -448,18 +472,29 @@ def _remote_config_override(before: list[str]) -> bool:
     return False
 
 
-def _check_git(args: list[str]) -> str | None:
+def _forced(args: list[str]) -> bool:
+    for a in args:
+        if a == '--':
+            return False
+        if a == '--force' or re.fullmatch(r'-[A-Za-z]*f[A-Za-z]*', a):
+            return True
+    return False
+
+
+def _check_git(args: list[str]) -> Block | None:
     sub, rest, before = _subcommand(args, GIT_VALUE_OPTIONS)
+    if sub == 'worktree' and rest[:1] == ['remove'] and _forced(rest[1:]):
+        return Block('force', f'`git worktree remove --force`／`-f` 會連未提交的內容一起丟掉：{FORCE_ADVICE}')
     if sub == 'pull':
-        return '`git pull` 會下載：改成開分支前一次 `git fetch origin develop`，其他情況先申請核可'
+        return Block('download', '`git pull` 會下載：改成開分支前一次 `git fetch origin develop`，其他情況先申請核可')
     if sub == 'fetch':
         options = [a for a in rest if a.startswith('-')]
         positional = [a for a in rest if not a.startswith('-')]
         if tuple(positional) == FETCH_OK_ARGS and all(o in FETCH_OK_OPTIONS for o in options) and not _remote_config_override(before):
             return None
-        return '`git fetch` 只放行 `git fetch origin develop`（只這個 remote、這個 ref）'
+        return Block('download', '`git fetch` 只放行 `git fetch origin develop`（只這個 remote、這個 ref）')
     if sub == 'remote' and rest[:1] == ['update']:
-        return '`git remote update` 會抓所有 remote'
+        return Block('download', '`git remote update` 會抓所有 remote')
     return None
 
 
@@ -473,10 +508,74 @@ def _offline(args: list[str]) -> bool:
     return state
 
 
-def _check_pnpm(args: list[str]) -> str | None:
+def _check_pnpm(args: list[str]) -> Block | None:
     sub, _, _ = _subcommand(args, PNPM_VALUE_OPTIONS)
     if sub in ('install', 'i', 'deploy') and not _offline(args):
-        return f'`pnpm {sub}` 要加 `--offline`，跑不起來交給 CI'
+        return Block('download', f'`pnpm {sub}` 要加 `--offline`，跑不起來交給 CI')
+    if sub == 'dlx':
+        return Block('npx', f'`pnpm dlx` 會下載套件再執行：{NPX_ADVICE}')
+    return None
+
+
+def _check_npm_like(head: str, args: list[str]) -> Block | None:
+    sub, _, _ = _subcommand(args, frozenset())
+    if (head == 'npm' and sub in ('exec', 'x')) or (head == 'yarn' and sub == 'dlx'):
+        return Block('npx', f'`{head} {sub}` 會下載套件再執行：{NPX_ADVICE}')
+    return None
+
+
+def _positionals(args: list[str]) -> list[str]:
+    out: list[str] = []
+    after_dashes = False
+    for a in args:
+        if after_dashes or not a.startswith('-') or a == '-':
+            out.append(a)
+        elif a == '--':
+            after_dashes = True
+    return out
+
+
+def _target_directory(args: list[str]) -> list[str]:
+    out: list[str] = []
+    for i, a in enumerate(args):
+        if a in TMP_TARGET_OPTIONS and i + 1 < len(args):
+            out.append(args[i + 1])
+        elif a.startswith('--target-directory='):
+            out.append(a.split('=', 1)[1])
+        elif re.fullmatch(r'-t.+', a) and not a.startswith('--'):
+            out.append(a[2:])
+    return out
+
+
+def _scratchpad_owner(path: str) -> str | None:
+    m = SCRATCHPAD.match(path)
+    return m.group(1) if m else None
+
+
+def shared_tmp_target(path: str, session_id: str | None) -> bool:
+    if PLACEHOLDER in path:
+        return False
+    if not path.startswith('/'):
+        return False
+    path = posixpath.normpath(path)
+    if not any(path == root or path.startswith(root + '/') for root in SHARED_TMP_ROOTS):
+        return False
+    owner = _scratchpad_owner(path)
+    return owner is None or (session_id is not None and owner != session_id)
+
+
+def _check_tmp_writer(head: str, args: list[str], session_id: str | None) -> Block | None:
+    positional = _positionals(args)
+    via_option = _target_directory(args)
+    if head == 'cp':
+        targets = via_option or positional[-1:]
+    elif head == 'mv':
+        targets = via_option + positional
+    else:
+        targets = positional
+    for path in targets:
+        if shared_tmp_target(path, session_id):
+            return Block('tmp', f'`{head}` 會動到共用暫存區 `{path}`：{TMP_ADVICE}')
     return None
 
 
@@ -504,46 +603,58 @@ def _shell_script(args: list[str]) -> tuple[str | None, bool]:
     return None, s_mode or i >= len(args) or args[i] == '-'
 
 
-def _check_segment(words: list[Word], depth: int) -> tuple[str | None, bool]:
-    words = _strip_prefix(words)
+def _check_segment(words: list[Word], depth: int, session_id: str | None) -> tuple[Block | None, bool]:
+    seen: list[str] = []
+    words = _strip_prefix(words, seen)
+    if 'npx' in seen:
+        return Block('npx', f'`npx` 會下載套件再執行：{NPX_ADVICE}'), False
     if not words:
         return None, False
     head = words[0].text.rsplit('/', 1)[-1]
     args = [w.text for w in words[1:]]
+    if head in NPX_LAUNCHERS:
+        return Block('npx', f'`{head}` 會下載套件再執行：{NPX_ADVICE}'), False
     if head == 'git':
         return _check_git(args), False
     if head == 'pnpm':
         return _check_pnpm(args), False
+    if head in ('npm', 'yarn'):
+        return _check_npm_like(head, args), False
+    if head in TMP_WRITERS:
+        return _check_tmp_writer(head, args, session_id), False
     if head in SHELLS:
         script, reads_stdin = _shell_script(args)
         if script is not None:
-            return check_command(script, depth + 1), False
+            return check_command(script, depth + 1, session_id), False
         return None, reads_stdin
     if head == 'eval' and args:
-        return check_command(' '.join(args), depth + 1), False
+        return check_command(' '.join(args), depth + 1, session_id), False
     return None, False
 
 
-def check_command(command: str, depth: int = 0) -> str | None:
+def check_command(command: str, depth: int = 0, session_id: str | None = None) -> Block | None:
     if depth > MAX_DEPTH:
-        return TOO_DEEP
+        return Block('download', TOO_DEEP)
     try:
         parsed = parse(command)
     except RecursionError:
-        return TOO_DEEP
+        return Block('download', TOO_DEEP)
     except ValueError:
         if depth == 0:
             raise
         return None
     stdin_shell = False
     for segment in parsed.segments:
-        reason, reads_stdin = _check_segment(segment, depth)
+        reason, reads_stdin = _check_segment(segment, depth, session_id)
         if reason:
             return reason
         stdin_shell = stdin_shell or reads_stdin
+    for path in parsed.redirects:
+        if shared_tmp_target(path, session_id):
+            return Block('tmp', f'導向會寫到共用暫存區 `{path}`：{TMP_ADVICE}')
     if stdin_shell:
         for body in parsed.heredocs:
-            reason = check_command(body, depth + 1)
+            reason = check_command(body, depth + 1, session_id)
             if reason:
                 return reason
     return None

@@ -43,6 +43,8 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
 不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA。不讀不寫 app 給的共用 notes 目錄。
 下載只有開分支前一次 `git fetch origin develop`；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
+暫存的寫入、覆寫、刪除只在你自己的 scratchpad，不寫 `/tmp`；`git worktree remove` 不加 `--force`／`-f`；不 npx，用 `pnpm exec` 跑已安裝的。
+開子代理時，把上面暫存、`--force`、下載、npx 這幾條原文寫進它的 prompt。
 ```
 
 verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
@@ -53,11 +55,13 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
 不傳訊息給 PM：判定貼在 PR 上，收尾第一行帶判定與 PR 號碼。不讀不寫 app 給的共用 notes 目錄。
 下載只有開分支前一次 `git fetch origin develop`（verifier 不 fetch）；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
+暫存的寫入、覆寫、刪除只在你自己的 scratchpad，不寫 `/tmp`；`git worktree remove` 不加 `--force`／`-f`；不 npx，用 `pnpm exec` 跑已安裝的。
+開子代理時，把上面暫存、`--force`、下載、npx 這幾條原文寫進它的 prompt。
 ```
 
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
 
-- PM 直接開 engineer 與 verifier，不先問 operator（operator 在開場一次授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表。開 session 不帶 `cwd`、`host`，`use_worktree: false`，子 session 因此從 PM 所在的主 checkout 起跑；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合（`model`、`effort`、`cwd`、`host`、`use_worktree`）、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，prompt 沒有「不讀不寫共用 notes 目錄」或下載規則那一句的也擋（重送提案卡、沒有 prompt 時不查），出錯就放行。
+- PM 直接開 engineer 與 verifier，不先問 operator（operator 在開場一次授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表。開 session 不帶 `cwd`、`host`，`use_worktree: false`，子 session 因此從 PM 所在的主 checkout 起跑；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合（`model`、`effort`、`cwd`、`host`、`use_worktree`）、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，prompt 沒有「不讀不寫共用 notes 目錄」、下載規則、暫存與 `--force` 與 npx 與「規則原文傳給子代理」那幾句的也擋（重送提案卡、沒有 prompt 時不查），出錯就放行。
 - **開 session 的回合，要不要成功跟那一回合的來源有關，不是保證。** 2026-11-21～22 四個 session（PM 三個、顧問一個，`user_asked`、不帶 `cwd`／`host`）的紀錄：
 
   | 回合 | operator 最後一句來自 | 結果 |
@@ -106,6 +110,20 @@ agent 做的下載都要 operator 核可。常設核可只有一個形狀：`git
 - `gh pr update-branch` 之後 verifier 要在本機檢出新 head：抓 PR head 的 `git fetch` 會被 hook 擋，`gh pr checkout` 擋不到但同樣要核可；兩者核可後都由 operator 在終端跑；operator 不在電腦前，這張卡就等。
 - engineer 解衝突：`git fetch origin develop` 的形狀 hook 放行，所以先申請核可這一條只有文件；核可後由 engineer 自己跑。
 - 跑 `worktree-audit.sh`（`:46` 會自己 fetch develop）：hook 看不到腳本裡的指令，跑它之前先申請核可，只有文件；核可後由 PM 跑。
+
+## 指令護欄
+
+同一支 `PreToolUse` hook（`session_hooks.py pre-download`，指令形狀在 `shell_downloads.py`，掃描器與〈下載〉共用）也擋下面三類，只看工具名、不分角色，對 PM、engineer、verifier 一律生效（子代理見下），**沒有放行路**：需要時由 operator 在終端自己跑。hook 出錯就放行。
+
+- **`npx` 與等價指令**：`npx`、`pnpx`、`bunx`、`npm exec`／`npm x`、`pnpm dlx`、`yarn dlx`，包在 `env`、`timeout`、`bash -c` 之類裡面也擋。已安裝的用 `pnpm exec`，沒裝的寫在卡上。
+- **`git worktree remove` 帶 `--force` 或 `-f`**（含 `-ff`）：不帶 force 拆不掉，就把原因寫在卡上、停下。
+- **對共用暫存區的寫入與刪除**：導向（`>`、`>>`、`&>`、`>|`）的目標，以及 `cp`（目的地）、`mv`（來源與目的地）、`tee`、`rm`、`rmdir`、`mkdir`、`touch` 的路徑，落在 `/tmp`、`/private/tmp`、`/var/tmp`、`/var/folders`（含 `/private` 開頭）底下就擋，`..` 先算掉。例外只有自己 session 的 scratchpad（`/private/tmp/claude-<uid>/<專案>/<session_id>/scratchpad`，`session_id` 用 hook 事件裡的值；事件沒給時，任何 session 的 scratchpad 都放行）；別的 session 的 scratchpad 算共用。
+
+**只防堵一部分**：相對路徑、含變數或指令替換的路徑（`$TMPDIR/x`、`"$(mktemp)"/x`）算不出來，一律放行；腳本或別的程式裡的寫檔（`python`、`node`、`sed -i`、`dd of=`、`find -delete`、`pnpm exec` 之後的子指令）、`cd /tmp` 之後的相對路徑看不到；`mktemp` 不擋。這些只有文件，由開場範本與 worker.md 那幾句規則把關。
+
+兩份開場範本帶這幾句，`start_session` 對這幾句只查有沒有，不判讀前後文（下載那一句另外會擋「不用核可」這類否定說法）。子代理是否吃到 hook 以合併後的實測為準，結果記在卡 #3168。
+
+**為什麼用 hook、不用 sandbox**：Claude Code 的 sandbox 能從作業系統層限制可寫路徑（本機 2.1.330 的程式裡有 `allowWrite`、`denyWrite`，沒實測），補得上上面看不到的腳本寫檔。但它會影響 git、gh、worktree 與測試的行為，而且是 operator 自己的安全設定，agent 不改；開不開由 operator 另外決定。
 
 ## 合併與撤回
 
@@ -227,6 +245,10 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | engineer、verifier 照角色表的 `model`、`effort` 開，不帶 `cwd`、`host`，`use_worktree: false`，開場有「不讀不寫共用 notes 目錄」 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到；沒有 prompt 時不查最後一項） |
 | 下載：不 pull、只 `git fetch origin develop`、`pnpm install`／`deploy` 帶 `--offline`，其餘先核可 | `PreToolUse` hook（`session_hooks.py pre-download`，管 Bash、Monitor 與 `run_in_terminal`）擋這幾個指令形狀；git 與 pnpm 以外的下載指令、〈下載〉列的擋不到的寫法、腳本裡的下載、指向別的 remote 的 `git -C`、是否在開分支前、解衝突與跑 `worktree-audit.sh` 前先申請核可：只有文件 |
 | engineer、verifier 的開場有下載規則那一句 | `PreToolUse` hook（`session_hooks.py pre-start-session`，沒有 prompt 時不查） |
+| 不 npx（含 `npm exec`、`pnpm dlx`），沒有放行路 | `PreToolUse` hook（同 `pre-download`；包在 `env`、`bash -c` 裡也擋，腳本裡的看不到，出錯放行） |
+| `git worktree remove` 不加 `--force`／`-f` | `PreToolUse` hook（同上） |
+| 共用暫存區（`/tmp`、`/var/folders` 等）不寫不刪，只寫自己 session 的 scratchpad | `PreToolUse` hook（同上，只防堵一部分：導向與 `cp`、`mv`、`tee`、`rm` 等的明確路徑；腳本裡的寫檔、算不出來的路徑只有文件） |
+| 開場有暫存、`--force`、npx 與「規則原文傳給每個子代理」那幾句；子代理的 prompt 帶這些規則 | `PreToolUse` hook（`pre-start-session`，只查開場有沒有那幾句）；子代理的 prompt 只有文件（hook 看不到子代理的 prompt） |
 | 子 session 不傳訊息給 PM、PM 開在主 checkout | 只有文件（hook 看不到訊息與 PM 所在的資料夾） |
 | 開 session 被 app 拒絕時先用備案、再提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
 | 備案的 verifier 一位只判一次 | 只有文件 |

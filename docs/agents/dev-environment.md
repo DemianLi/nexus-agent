@@ -181,18 +181,18 @@ $ echo '{"stop_hook_active":false}' | bash ~/.claude/stop-hook-git-check.sh; ech
 
 ```bash
 cd apps/harness
-rtk proxy pnpm exec vitest run > /tmp/harness-all.txt 2>&1; echo EXIT=$?
-grep -E "Test Files|Tests " /tmp/harness-all.txt || echo "沒有摘要：沒跑完"
+rtk proxy pnpm exec vitest run > <scratchpad>/harness-all.txt 2>&1; echo EXIT=$?
+grep -E "Test Files|Tests " <scratchpad>/harness-all.txt || echo "沒有摘要：沒跑完"
 ```
 
 如果連 `EXIT=` 都沒印出來，表示外層 shell 也被殺了（群組訊號的特徵）。要讓這種情況看得見，把全套放進**自己的 session**，外層就殺不到：
 
 ```bash
 perl -MPOSIX -e 'my $p = fork(); if ($p == 0) { POSIX::setsid(); exec @ARGV or die } waitpid($p, 0); my $s = $? & 127; exit($s ? 128 + $s : $? >> 8);' \
-  rtk proxy pnpm exec vitest run > /tmp/harness-all.txt 2>&1; echo EXIT=$?
+  rtk proxy pnpm exec vitest run > <scratchpad>/harness-all.txt 2>&1; echo EXIT=$?
 ```
 
-（兩段都用 `rtk proxy` 是為了拿到原始輸出；沒裝 rtk 的環境把 `rtk proxy ` 拿掉即可。）被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。
+（兩段都用 `rtk proxy` 是為了拿到原始輸出；沒裝 rtk 的環境把 `rtk proxy ` 拿掉即可。`<scratchpad>` 換成自己 session 的 scratchpad 絕對路徑，不寫 `/tmp`：共用暫存區的寫入會被 hook 擋，見 [collab-mode](collab-mode.md#指令護欄)。）被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。
 
 ## 本機跑 spawner 的 fmt 與 clippy（#2620）
 
