@@ -33,13 +33,11 @@
  * 所以另用 `openCallAtEnd` 記「收尾時有開著的呼叫」。
  *
  * `tokensProven`（只有收尾了的輪才有）＝ 至少有一次嘗試 ∧ `unknownSteps === 0` ∧ 收尾時沒有開著的呼叫 ∧ 起訖與用量沒有不成對過 ∧ 四桶加總是安全整數。
- * 「不成對」是 dsh 生命週期驗證器的形狀（`turn-usage.ts:196-270`）：`model/start` 時上一次還開著、`model/usage` 時沒有開著的呼叫或這次呼叫已經有一顆用量、
- * `model/end` 時沒有開著的呼叫。這些形狀 `unknownSteps` 看不出來（兩顆用量換掉一次沒報的，夾在 0）。條件照 dsh
- * `deriveTurnTokenUsage`（`turn-usage.ts:178-274`）；快取桶缺席只讓那一格省略、不讓它變 `false`（dsh `:133-138`）。
- * 沒有 `turn/end` 的輪不出這一格（dsh `!sawEnd`，`:273`）。
+ * 「不成對」的三種形狀見 {@link markLifecycleBroken}，`unknownSteps` 看不出來（兩顆用量換掉一次沒報的，夾在 0）。
+ * 快取桶缺席只讓那一格省略、不讓它變 `false`。沒有 `turn/end` 的輪不出這一格。
  *
- * **偏離 dsh（理由 2：產品需求超出 dsh）**：dsh 證不出的輪整輪不交數字；我們數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps`
- * 在 `token-meter.ts:250-251` 就寫「token 是下限」）。沒有任何嘗試的輪照 dsh `aggregateAttempts:127` 是「證不出」＝ `false`，數字全 0，不是偏離。
+ * 證不出的輪數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps` 在 `token-meter.ts:250-251` 就寫「token 是下限」）。
+ * 沒有任何嘗試的輪是「證不出」＝ `false`，數字全 0。
  *
  * ## 模型 id
  *
@@ -364,8 +362,8 @@ interface Row {
   readonly openCallAtEnd?: boolean;
   /**
    * 這一輪的模型呼叫起訖／用量不成對過（{@link markLifecycleBroken}）：`model/start` 時上一次還開著、`model/usage` 時沒有開著的呼叫或這次
-   * 呼叫已經有一顆用量、`model/end` 時沒有開著的呼叫。dsh 的 `deriveTurnTokenUsage` 本身是生命週期驗證器（`turn-usage.ts:196-270`），
-   * 這些形狀都讓整輪證不出；我們的 fold 不拒收日誌，記下來給 `tokensProven` 用。寫方（`wrapModelCall`）正常不會寫出這些形狀。
+   * 呼叫已經有一顆用量、`model/end` 時沒有開著的呼叫。
+   * 這些形狀都讓整輪證不出；fold 不拒收日誌，記下來給 `tokensProven` 用。寫方（`wrapModelCall`）正常不會寫出這些形狀。
    */
   readonly lifecycleBroken?: boolean;
   readonly sp: Sp;
@@ -442,7 +440,7 @@ function update(state: TokenMeterState, change: (sp: Sp) => Sp): TokenMeterState
 
 /**
  * 記下「這一輪的呼叫起訖或用量不成對」，給 {@link proven} 用。不在輪裡就不記（輪外沒有 `tokensProven`）。
- * 三種形狀，對應 dsh `deriveTurnTokenUsage` 的 open／settled 狀態機（`turn-usage.ts:196-270`）：
+ * 三種形狀：
  * `model/start` 時還有開著的呼叫、`model/usage` 時沒有開著的呼叫或這次呼叫已經收過用量、`model/end` 時沒有開著的呼叫。
  */
 function markLifecycleBroken(state: TokenMeterState): TokenMeterState {
@@ -521,8 +519,7 @@ function endOf(reason: unknown, paused: boolean): TokenMeterEnd {
  * 還開著的模型呼叫（`state.call`）記成一次失敗、沒報用量的呼叫，再清掉（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201）：
  * `steps` ＋1、`failedSteps` ＋1、模型時間不加（結束時刻不知道），模型列 `steps` ＋1。沒有開著的呼叫就原樣回傳同一個參照。
  *
- * 這是 dsh `deriveTurnTokenUsage` 的「收輪時還開著的嘗試」（`turn-usage.ts:262-270`、`:273`）：dsh 讓整輪證不出來，我們把它算成
- * 一次沒報用量的失敗（`unknownSteps` 加一，這一輪的數字是下限），形狀同 #1169 續接補寫的 `model/end { outcome: 'error' }`。
+ * 收輪時還開著的嘗試算成一次沒報用量的失敗（`unknownSteps` 加一，這一輪的數字是下限），形狀同 #1169 續接補寫的 `model/end { outcome: 'error' }`。
  * 去處跟著 {@link update}：輪開著就進那一輪，否則進輪外。
  */
 function abandonCall(state: TokenMeterState): TokenMeterState {
@@ -601,7 +598,7 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
         : { ...counted, call: { ...counted.call, waited: counted.call.waited + waited } };
     }
     case 'model/usage': {
-      // **未快取的輸入**（#724，照 dsh 的四桶互不重疊）：格式 36 起日誌的 `inputTokens` 本來就是它；舊日誌沒有快取兩格，
+      // **未快取的輸入**（#724，四桶互不重疊）：格式 36 起日誌的 `inputTokens` 本來就是它；舊日誌沒有快取兩格，
       // `inputTokens` 就是整個 prompt（沒記快取，也就沒有可分的）。
       const input = typeof data['inputTokens'] === 'number' ? data['inputTokens'] : 0;
       const output = typeof data['outputTokens'] === 'number' ? data['outputTokens'] : 0;
@@ -754,8 +751,7 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
           ? abandoned
           : { ...abandoned, call: null, pending: NO_PENDING };
       // 分叉繼承來的前綴到此為止（#1579）：之前收的子代理都是來源 thread 派的，`<這條>/<run>` 開不到，清掉。
-      // 同 dsh `subagentCatalog` 投影（`catalog.ts:124-126`，`seq < inheritedEventCount` 就略過）——這裡的 init
-      // 拿不到切點，但事件照 seq 順序進來，在最後一顆 inherited 標記清掉等於只留它之後的。
+      // 這裡的 init 拿不到切點，但事件照 seq 順序進來，在最後一顆 inherited 標記清掉等於只留它之後的。
       if (
         data['inherited'] !== true ||
         (settled.links.length === 0 && settled.linksOmitted === 0)
@@ -772,10 +768,10 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
 // ── view ─────────────────────────────────────────────────────────────────────────────────
 
 /**
- * 這一輪的 token 數字證不證得出是準的（Q1 (a)，條件照 dsh `deriveTurnTokenUsage`，`turn-usage.ts:178-274`）：
- * 至少有一次嘗試（dsh `aggregateAttempts:127`，零次是 undefined）、每一次嘗試都報了有效用量（`unknownSteps` 是 0）、收尾時沒有開著的呼叫、
- * 呼叫的起訖與用量沒有不成對過（`lifecycleBroken`，dsh `:196-270`）、加總沒超過安全整數。
- * 快取桶缺席**不算**（dsh `:133-138` 缺桶只讓那一格省略；`:108-109` 的「沒有 total 又缺桶」在 nexus 走不到，`validateUsage` 的 total 必填）。
+ * 這一輪的 token 數字證不證得出是準的（Q1 (a)）：
+ * 至少有一次嘗試、每一次嘗試都報了有效用量（`unknownSteps` 是 0）、收尾時沒有開著的呼叫、
+ * 呼叫的起訖與用量沒有不成對過（`lifecycleBroken`）、加總沒超過安全整數。
+ * 快取桶缺席**不算**（缺桶只讓那一格省略）。
  */
 function proven(row: Row, span: TokenMeterSpan): boolean {
   const { n } = row.sp;
@@ -784,7 +780,7 @@ function proven(row: Row, span: TokenMeterSpan): boolean {
     span.unknownSteps === 0 &&
     row.openCallAtEnd !== true &&
     row.lifecycleBroken !== true &&
-    // dsh `safeSum`（`:63-70`、`:128-131`）：每一次的數都是安全整數，兩個各在範圍內的呼叫加起來仍可能不是。
+    // 每一次的數都是安全整數，兩個各在範圍內的呼叫加起來仍可能不是。
     Number.isSafeInteger(n.inputTokens + n.outputTokens + n.cacheReadTokens + n.cacheWriteTokens)
   );
 }
