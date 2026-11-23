@@ -1,11 +1,9 @@
 name: Smoke（真模型）
 
-# 每晚真模型冒煙回歸（#436）。照 dsh `.github/workflows/e2e.yml`，另開一份流程檔、不放進 ci.yml：帶金鑰的測試與不帶金鑰的檢查
+# 每晚真模型冒煙回歸（#436）。另開一份流程檔、不放進 ci.yml：帶金鑰的測試與不帶金鑰的檢查
 # 觸發時機與憑證都不同。**不設成必過、不列進 gate**（ci.yml 開頭的規矩管的是合併前的檢查，這份不在合併路徑上）。
 #
-# 觸發：手動、每晚、push 到 main。**不在 pull_request 上跑**——這是 dsh 文件寫的收斂退法（只拿掉合併請求，
-# 保留合進主線、每晚、手動；dsh `.agents/notes/implemented/testing/2026-06-19-real-api-e2e-ci.md:74`）。dsh 寫它是為了縮小金鑰外露的
-# 範圍；我們用的理由是額度：端點是 NVIDIA 的免費額度，不像 dsh 自己就是供應商。
+# 觸發：手動、每晚、push 到 main。**不在 pull_request 上跑**，理由是額度：端點是 NVIDIA 的免費額度。
 #
 # 安全：
 # - 觸發條件永遠不要改成 `pull_request_target`。它在 base repo 的脈絡下帶著 secret 跑，又能檢出不可信的 fork 程式碼，是金鑰外洩的標準路徑。
@@ -43,7 +41,7 @@ jobs:
       - uses: ./.github/actions/setup
 
       # 預檢：冒煙缺金鑰時會直接拋，但 secret 沒設好、或被當成空字串帶進來，要在這裡就講清楚，
-      # 不要讓人去翻測試輸出。沒設就 exit 1（dsh `e2e.yml:88-104`）。
+      # 不要讓人去翻測試輸出。
       - name: 預檢（要有 NVIDIA_API_KEY）
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
