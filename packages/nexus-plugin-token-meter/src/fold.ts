@@ -34,10 +34,9 @@
  *
  * `tokensProven`（只有收尾了的輪才有）＝ 至少有一次嘗試 ∧ `unknownSteps === 0` ∧ 收尾時沒有開著的呼叫 ∧ 起訖與用量沒有不成對過 ∧ 四桶加總是安全整數。
  * 「不成對」的三種形狀見 {@link markLifecycleBroken}，`unknownSteps` 看不出來（兩顆用量換掉一次沒報的，夾在 0）。
- * 快取桶缺席只讓那一格省略、不讓它變 `false`。沒有 `turn/end` 的輪不出這一格。
+ * 快取桶缺席只讓那一格省略、不讓它變 `false`。
  *
  * 證不出的輪數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps` 的說明就寫「token 是下限」）。
- * 沒有任何嘗試的輪是「證不出」＝ `false`，數字全 0。
  *
  * ## 模型 id
  *
@@ -771,7 +770,6 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
  * 這一輪的 token 數字證不證得出是準的（Q1 (a)）：
  * 至少有一次嘗試、每一次嘗試都報了有效用量（`unknownSteps` 是 0）、收尾時沒有開著的呼叫、
  * 呼叫的起訖與用量沒有不成對過（`lifecycleBroken`）、加總沒超過安全整數。
- * 快取桶缺席**不算**（缺桶只讓那一格省略）。
  */
 function proven(row: Row, span: TokenMeterSpan): boolean {
   const { n } = row.sp;
