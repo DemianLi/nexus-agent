@@ -42,6 +42,7 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md 與 docs/agents/collab-mode.md。
 你是 engineer，負責 #<issue>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 2 步做到合併。
 不傳訊息給 PM：結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA。不讀不寫 app 給的共用 notes 目錄。
+下載只有開分支前一次 `git fetch origin develop`；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
 ```
 
 verifier 由 PM 開，只給 issue 與 PR，不給 engineer 的對話：
@@ -51,12 +52,23 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 再讀 .agents/skills/pstack/skills/poteto-mode/SKILL.md（〈Nexus roles〉的 Verifier）與 docs/agents/collab-mode.md。
 你是 verifier，判定 #<issue> 的 PR #<pr>。照 .agents/skills/pstack/skills/poteto-mode/playbooks/autopilot-full.md 第 4 步與 shipping.md 第 1 步，在 PR 上貼 PASS、PASS+NOTES 或 FAIL。
 不傳訊息給 PM：判定貼在 PR 上，收尾第一行帶判定與 PR 號碼。不讀不寫 app 給的共用 notes 目錄。
+下載只有開分支前一次 `git fetch origin develop`（verifier 不 fetch）；其餘下載先寫在卡上、停下等 operator 核可（worker.md 與〈下載〉）。
 ```
 
 `<主 checkout>` 換成主 checkout 的絕對路徑：worker.md 要求第一行是絕對路徑，而每個 worktree 的路徑都不同。
 
-- PM 直接開 engineer 與 verifier，不先問 operator（operator 在開場一次授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表。開 session 不帶 `cwd`、`host`，`use_worktree: false`，子 session 因此從 PM 所在的主 checkout 起跑；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合（`model`、`effort`、`cwd`、`host`、`use_worktree`）、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，prompt 沒有「不讀不寫共用 notes 目錄」那一句的也擋（重送提案卡、沒有 prompt 時不查），出錯就放行。
-- **開 session 的回合，分實測過的與沒測過的。** 實測過能開的：operator 開場授權後，engineer 停下、app 叫醒 PM 的回合（code-ready 開 verifier、結卡後開下一位 engineer、FAIL 後開新 verifier），都沒有訊息從子 session 傳給 PM。判定後合併那一段只用訊息把判定轉給 engineer，不開 session。沒測過：verifier 停下的回合能不能開 session、PM 自己的背景工作叫醒的回合、子 session 傳了訊息的回合是否一定開不了、平行、連續接續的上限。被拒時先用備案：在 operator 說話的回合預開待命的 session，之後用訊息叫醒；備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
+- PM 直接開 engineer 與 verifier，不先問 operator（operator 在開場一次授權）。`name` 用 `eng-<issue>`、`ver-<pr>`，`model` 與 `effort` 照 [SKILL.md](../../.agents/skills/pstack/skills/poteto-mode/SKILL.md)〈Subagents〉的角色表。開 session 不帶 `cwd`、`host`，`use_worktree: false`，子 session 因此從 PM 所在的主 checkout 起跑；`PreToolUse` hook 擋下 `eng-`／`ver-` 開頭但參數不合（`model`、`effort`、`cwd`、`host`、`use_worktree`）、title 是 engineer／verifier 卻沒給 `name`、用 fork 或 cloud 開的，prompt 沒有「不讀不寫共用 notes 目錄」或下載規則那一句的也擋（重送提案卡、沒有 prompt 時不查），出錯就放行。
+- **開 session 的回合，要不要成功跟那一回合的來源有關，不是保證。** 2026-11-21～22 四個 session（PM 三個、顧問一個，`user_asked`、不帶 `cwd`／`host`）的紀錄：
+
+  | 回合 | operator 最後一句來自 | 結果 |
+  | --- | --- | --- |
+  | 子 session 停下、app 接續 | 桌面 app | 成功 6；被拒 2（auto mode 分類器 1、app「不是使用者本人的話」1） |
+  | 子 session 停下、app 接續 | iOS（Remote Control） | 成功 0；被拒 2 |
+  | 背景工作叫醒 | 桌面 app | 成功 0；被拒 4（其中 1 次是 Remote Control） |
+  | operator 說話 | iOS | 開得成 |
+
+  所以 operator 用桌面 app 時，engineer 停下、app 叫醒 PM 的回合通常開得成（code-ready 開 verifier、結卡後開下一位 engineer、FAIL 後開新 verifier），不能當成一定成功；用 Remote Control 時不要指望，背景工作叫醒的回合實測被拒（上表那 4 次），也不指望。engineer 帶著背景工作停下算不算這一類，沒有紀錄。app 實際的判準不明，上表只是相關。判定後合併那一段只用訊息把判定轉給 engineer，不開 session；自動接續時傳訊息給已開好的 session，在 iOS 的情況下成功過。沒測過：子 session 傳了訊息的回合是否一定開不了、平行、連續接續的上限。
+- **備案是事前做的。** operator 用 Remote Control 時，PM 在 operator 說話的回合就預開待命的 session：數量夠一張卡走完（含一次重判）並加上下一張，之後用訊息叫醒。待命的不算同時進行的 engineer，前一張收掉才叫醒下一位。備案的 verifier 一位只判一次，重判要另一位沒看過這張 PR 的。備案也不行才改成提案卡，收尾框不另放「開始」按鈕，並用一句話說是 app 擋下的。
 - 自動模式回「no verdict」且附了 hook 產生的輸入時：照那份輸入單獨重送一次；再被擋就停、回報原文，不改用別的做法繞過。
 - engineer 與 verifier 都開成 session，不開成 subagent。app 自己建 worktree 會取分支名、加前綴，跟 `<type>/<kebab-case>` 不合，所以子 session 不用 app 的 worktree，自己照 worker.md 開，之後只在那個 worktree 裡改。
 - engineer 推出 code-ready 的 head 之後，把結果寫在 PR 或卡上，收尾第一行帶 PR 號碼與完整 head SHA，然後結束這一輪，不自己合併，也不傳訊息給 PM。PM 被叫醒後核對 PR 與 SHA 再開 verifier；PM 仍用訊息把 verifier 的判定轉給 engineer，engineer 收到 `PASS` 或 `PASS+NOTES` 才進 Shipping 第 2 步，收到 `FAIL` 就照理由修。修完 `FAIL`、解衝突要重判時，同樣只寫在 PR 或卡上、收尾帶 SHA。
@@ -68,7 +80,32 @@ Read <主 checkout>/.agents/skills/pstack/skills/poteto-mode/worker.md before an
 - 一張卡一個 worktree，從 `origin/develop` 開、`--no-track`（指令見 [worker.md](../../.agents/skills/pstack/skills/poteto-mode/worker.md)）。卡合併、合併後那一輪綠了，PM 照 [Worktree cleanup](../../.agents/skills/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) 移除它。移除到一半、目錄還有殘留時：PM 派出去的 session 建的 worktree，卡已結、合併後那一輪綠、沒有人在用，而且剩下的內容都能從 commit 或建置重建（`.DS_Store` 這類系統中繼檔也算），PM 直接刪那一個路徑，刪完確認目錄不在；分支不刪。
 - **上下文只放在進版控的檔或共用的記憶目錄。** worktree 是用完即丟的工作台：不建 `.claude/settings.local.json`，`.env` 從主 checkout 讀。
 - 兩張卡會寫到同一個檔時，PM 讓它們依序跑，不同時派。
-- engineer 與 verifier 的開場第一行讀主 checkout 的檔，`.env` 也從主 checkout 讀，所以 PM 每次派工前先把主 checkout 同步到 `origin/develop`（`git -C <主 checkout> pull --ff-only`）。
+- engineer 與 verifier 的開場第一行讀主 checkout 的檔，`.env` 也從主 checkout 讀，所以 PM 每次派工前先把主 checkout 同步到 `origin/develop`：`git -C <主 checkout> fetch origin develop`，再 `git -C <主 checkout> merge --ff-only FETCH_HEAD`。不用 `pull`，也不用不帶 refspec 的 `fetch`。
+
+## 下載
+
+agent 做的下載都要 operator 核可。常設核可只有一個形狀：`git fetch origin develop`（只這個 remote、這個 ref），用在兩處：engineer **開分支前一次**，分支開了之後不再 fetch；PM 每次派工前同步主 checkout（見上）。
+
+- `pnpm install`、`pnpm deploy` 一律加 `--offline`，跑不起來交給 CI。
+- 不用 `git pull`，不用不帶 refspec 的 `git fetch`，不 pip install、不 npx、不 cargo 下載、不用 `gh api` 讀上游 repo；docker 一律 `--pull=never`。
+- 其他下載：把指令和用途寫在卡上，停下，等 operator 核可，PM 不能代核。核可後誰跑看形狀：會被下面 hook 擋的形狀（`git pull`、`git remote update`、別的 `git fetch`、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`）由 operator 在終端自己跑，agent 與 PM 不代跑，也沒有 agent 自己能開的放行路；hook 不擋的形狀（例如解衝突的 `git fetch origin develop`、`worktree-audit.sh`）核可後由原本要跑的 session 跑。
+- 「是否在開分支前」script 判不了，只有文件。
+
+`PreToolUse` hook（`.github/scripts/session_hooks.py pre-download`，指令形狀在 `.github/scripts/shell_downloads.py`）對 Bash、Monitor 與 Terminal 面板的 `run_in_terminal` 用同一套判斷，只認 git 與 pnpm 的這幾個形狀：擋 `git pull`、`git remote update`、不是 `git fetch origin develop`（只允許再加 `-q`／`--quiet`）的 `git fetch`（含 `-c remote.*`／`url.*` 改寫的）、沒帶 `--offline` 的 `pnpm install`／`pnpm deploy`。它把指令字串當 shell 語法解析：引號、註解與 heredoc 裡的字串不算指令；`$(…)`、反引號、`<(…)`／`>(…)` 裡（`$(…)` 與反引號也查出現在 `${…}`、算術與會展開的 heredoc 本文裡的；`<(…)`／`>(…)` 在不加引號的 `${…}` 裡查，算術與 heredoc 本文裡 shell 不會執行它所以不查；`${…}` 本身的字串不算指令）、`bash -c`／`bash -lc`／`eval` 的參數，都照樣查；同一條指令裡只要有不帶腳本、讀 stdin 的 shell（`bash`、`sh`、`zsh` 等），這條指令的每個 heredoc 本文都當指令查；`env`、`nice`、`timeout`、`sudo`、`taskpolicy`、`npx`、`corepack`、`rtk` 之類前綴會剝掉。它只看指令字串，環境變數與 marker 檔都不影響結果。`bash -c`、`eval`、餵給 shell 的 heredoc 疊超過 12 層、`$(…)` 巢狀深到遞迴爆掉，都判不了，一律擋。擋不到的：
+
+- 上面以外的下載指令：`pnpm add`／`update`／`dlx`／`fetch`、`npx <套件>` 本身、`pip`、`curl`、`docker pull`、`gh api`、`gh pr checkout`、`git clone`、`git submodule update --remote`、`git lfs`、`git remote prune`。上面那幾條禁令對這些只有文件。`git ls-remote` 只列 ref、不下載物件，不算下載（push 之後核對 `develop` 沒動要用它）。
+- 腳本或別的程式裡的下載、指令名來自變數（`$cmd pull`）或 alias、zsh 特有語法（`=git pull`）、`source` 進來的檔。
+- 用管線或 here-string 餵給 shell 的指令（`echo git pull | bash`、`bash <<<"git pull"`）。
+- 讓 remote 指到別處的寫法，形狀符合就放行：`git -C <別的 repo> fetch origin develop`、`GIT_DIR`／`GIT_CONFIG_*`、`-c include.path=…`、先跑 `git config remote.origin.url …`。
+- 上面沒列的包裝指令（`find -exec`、`watch`、`ssh`、`coproc` 之類）。
+- 掃描器是手寫的，認得哪些 shell 語法以 `test_session_hooks.py` 的 `CONSTRUCTS` × `PLACES` 與 `BASIC_CONSTRUCTS` × `BASIC_PLACES` 兩張表為準（算術 `$((…))`／`((…))`／`$[…]`、`${…}`、`case`、`function`、子殼、反引號、heredoc、`bash -c`／`bash -`），表外的語法可能漏。兩張表各跳過兩種 shell 結果不一致或不合法的組合：含單引號的語法放進 `bash -c '…'`，以及反引號語法放進反引號（bash 回語法錯，zsh 會跑；hook 照擋）。
+- 解析不了的指令，出錯就放行。
+
+**分支開了之後需要本機沒有的物件時，不放寬，逐次核可：**
+
+- `gh pr update-branch` 之後 verifier 要在本機檢出新 head：抓 PR head 的 `git fetch` 會被 hook 擋，`gh pr checkout` 擋不到但同樣要核可；兩者核可後都由 operator 在終端跑；operator 不在電腦前，這張卡就等。
+- engineer 解衝突：`git fetch origin develop` 的形狀 hook 放行，所以先申請核可這一條只有文件；核可後由 engineer 自己跑。
+- 跑 `worktree-audit.sh`（`:46` 會自己 fetch develop）：hook 看不到腳本裡的指令，跑它之前先申請核可，只有文件；核可後由 PM 跑。
 
 ## 合併與撤回
 
@@ -112,7 +149,9 @@ PM 在 engineer 可封存時依序做三件事：
 - 放寬 gate。
 - 第 3 次 `FAIL`，或合併後那一輪紅了、撤回被基準擋下而往前修修不出來。
 
-**沒測過**（不是保證能自動，也不是一定要人）：verifier 停下的回合能不能開 session；PM 自己的背景工作叫醒的回合；平行；連續接續的上限；解衝突後重判；撤回與往前修；開 session 被拒後接備案；Auto-fix 叫醒；PM 不在主 checkout（只寫進規則，不用 hook 擋，擋了備案就不能用）；子 session 傳了訊息是否一定開不了。
+**實測被拒**：背景工作叫醒的回合（4 次都被拒）；Remote Control 接續的回合（2 次被拒）。
+
+**沒測過**（不是保證能自動，也不是一定要人）：verifier 停下的回合能不能開 session；Remote Control 下 PM 靠預開的待命 session 走完 code-ready → 判定 → 合併；平行；連續接續的上限；解衝突後重判；撤回與往前修；開 session 被拒後接備案；Auto-fix 叫醒；PM 不在主 checkout（只寫進規則，不用 hook 擋，擋了備案就不能用）；子 session 傳了訊息是否一定開不了。
 
 ## 導正
 
@@ -186,6 +225,8 @@ engineer 遇到可逆的選擇就先做一版，把預設決定和理由列在�
 | 開完 PR 開 Auto-fix | 只有文件（工具不在或被權限檢查擋下時，在卡上記一筆，不重試；沒開成，engineer 照 [Babysit](../../.agents/skills/pstack/skills/poteto-mode/playbooks/babysit.md) 自己盯 CI） |
 | 收尾第一句寫可封存、不可封存或還在等 | `Stop` hook（`.github/scripts/session_hooks.py`；只看前綴與 `還在等：` 是否一行，擋一次、出錯放行） |
 | engineer、verifier 照角色表的 `model`、`effort` 開，不帶 `cwd`、`host`，`use_worktree: false`，開場有「不讀不寫共用 notes 目錄」 | `PreToolUse` hook（同上，看 `name` 的 `eng-`、`ver-` 與 title；沒給 `name`、title 也不像角色的就看不到；沒有 prompt 時不查最後一項） |
+| 下載：不 pull、只 `git fetch origin develop`、`pnpm install`／`deploy` 帶 `--offline`，其餘先核可 | `PreToolUse` hook（`session_hooks.py pre-download`，管 Bash、Monitor 與 `run_in_terminal`）擋這幾個指令形狀；git 與 pnpm 以外的下載指令、〈下載〉列的擋不到的寫法、腳本裡的下載、指向別的 remote 的 `git -C`、是否在開分支前、解衝突與跑 `worktree-audit.sh` 前先申請核可：只有文件 |
+| engineer、verifier 的開場有下載規則那一句 | `PreToolUse` hook（`session_hooks.py pre-start-session`，沒有 prompt 時不查） |
 | 子 session 不傳訊息給 PM、PM 開在主 checkout | 只有文件（hook 看不到訊息與 PM 所在的資料夾） |
 | 開 session 被 app 拒絕時先用備案、再提案卡、不另放開始按鈕 | 只有文件（app 行為，hook 看不到工具結果與收尾框） |
 | 備案的 verifier 一位只判一次 | 只有文件 |
