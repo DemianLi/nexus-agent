@@ -49,4 +49,4 @@ dsh 的掃描（`repair.ts:53` 的 `openTurnClosers`）只在 `turn/start`、`tu
 
 ## 六、改 `conversation-replay.ts` 的人要知道的
 
-`session-format.ts` 的 `readerBranch` 只登記讀方分支所在的檔（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷），`session-format-fixtures.test.ts` 的錨點表登記那一整行（去頭尾空白），要求它在檔內有且只有一行、而且在程式碼裡，各條邊的檔與錨點互不相同。在這個檔上面增減行、或把那一行整行搬到同檔別處，都不必改登記；錨點不見、出現在不只一行，或只剩在註解或樣板字串內容裡才紅。分支被改掉或刪掉、同一次變更又在同檔別處的程式碼加了一行一模一樣的，這支測試不會紅（#3134 核可的取捨）。
+`session-format.ts` 的 `readerBranch` 只登記讀方分支所在的檔（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷），`session-format-fixtures.test.ts` 的錨點表登記那一整行（去頭尾空白），要求它在檔內有且只有一行、而且在程式碼裡，各條邊的檔與錨點互不相同。在這個檔上面增減行、或把那一行整行搬到同檔別處，都不必改登記；錨點不見、出現在不只一行，或只剩在註解或樣板字串內容裡才紅。那一行還在、底下的分支內容被改掉，或那一行離開了分支、而同檔程式碼的別處剛好還有一行一模一樣的（同一次變更加的，或就是那一行整行搬走），這支測試不會紅（#3134 核可的取捨）。
