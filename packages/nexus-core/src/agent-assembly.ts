@@ -14,7 +14,7 @@
  *
  * ## 還走基座的東西
  *
- * 檔案工具（接縫 3）、摘要（接縫 4）、`task` 子代理（接縫 5）、skills／memory 的 middleware
+ * 檔案工具、摘要、`task` 子代理、skills／memory 的 middleware
  * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**；例外是 native 下宣告式的前景子代理：這個檔用
  * `createNativeAgent` 把它編成 `runnable`，交給基座的 `task` 照樣 `invoke`。
  * skills 與 memory 各包了一層：掃描與讀檔仍是基座的 `beforeAgent`，接進系統訊息的文字由 nexus 渲染

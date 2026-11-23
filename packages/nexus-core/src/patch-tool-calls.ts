@@ -3,8 +3,7 @@
  *
  * ## 為什麼要有這個檔
  *
- * 這顆 middleware 只有 190 行、不碰後端、不進模型看得到的
- * 工具清單。**只換載體，不改行為**：
+ * **只換載體，不改行為**：
  *
  * - 名字照舊是 `patchToolCallsMiddleware`——合併疊靠名字去重、`summarization.test.ts` 等測試按名字斷言。
  * - 補上去的那句英文逐字照舊，`thread-pump.ts` 與 `conversation-restore.test.ts` 都引用它的措辭。
