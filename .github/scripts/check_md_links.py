@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
@@ -29,22 +30,24 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
-PATTERNS = [
-    'README.md',
-    'docs/**/*.md',
-    'packages/*.md',
-    'packages/*/*.md',
-    'packages/*/*/*.md',
-    'AGENTS.md',
-    'GLOSSARY-MAP.md',
-    '.docs/**/*.md',
-    '.github/**/*.md',
-    'apps/*/*.md',
-    'apps/*/*/*.md',
-    'vendor/README.md',
-    'apps/web/src/vendor/solid-glass/README.md',
-    '.agents/skills/**/*.md',
+# 一組是「同一批文件在舊形狀與新形狀（`harness/`、`web/`）的樣子」；`floor` 是這一組在這一版至少要掃到幾份。
+# 搬目錄之後 pattern 沒跟著搬，掃到的檔會悄悄變少、一條壞連結都不報，所以掃到的數目低於 floor 就是紅的。
+# floor 是 0 的組是會搬到項目倉庫外面的（協作設定與協作文件），只在項目倉庫裡時掃不到是對的。
+GROUPS: list[tuple[str, list[str], int]] = [
+    ('README', ['README.md'], 1),
+    ('docs', ['docs/**/*.md'], 1),
+    ('packages', ['packages/*.md', 'packages/*/*.md', 'packages/*/*/*.md',
+                  'harness/packages/*.md', 'harness/packages/*/*.md', 'harness/packages/*/*/*.md'], 1),
+    ('apps', ['apps/*/*.md', 'apps/*/*/*.md', 'harness/apps/*/*.md', 'harness/apps/*/*/*.md', 'web/*.md', 'web/*/*.md'], 1),
+    ('harness-vendor', ['vendor/README.md', 'harness/vendor/README.md'], 1),
+    ('web-vendor', ['apps/web/src/vendor/solid-glass/README.md', 'web/src/vendor/solid-glass/README.md'], 1),
+    ('GLOSSARY-MAP', ['GLOSSARY-MAP.md'], 1),
+    ('.github', ['.github/**/*.md'], 1),
+    ('AGENTS', ['AGENTS.md'], 0),
+    ('.docs', ['.docs/**/*.md'], 0),
+    ('.agents', ['.agents/skills/**/*.md'], 0),
 ]
+PATTERNS = [pattern for _, patterns, _ in GROUPS for pattern in patterns]
 # 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。
 UNCHECKED_ROOT = 'references'
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
@@ -57,24 +60,38 @@ LINK_DEFINITION = re.compile(r'^ {0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s+.*)?$')
 INLINE_CODE = re.compile(r'`+[^`]*`+')
 
 
+def matches(root: Path, pattern: str) -> list[Path]:
+    """一個 pattern 在 root 底下配到的檔；萬用字元不配點開頭的段，pattern 裡寫死的段照認。"""
+    found = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
+    literal = len(pattern.split('*', 1)[0].split('/')) - 1
+    return [
+        path for path in found
+        if path.is_file() and not any(part.startswith('.') for part in path.relative_to(root).parts[literal:])
+    ]
+
+
 def source_paths(root: Path) -> list[Path]:
-    """PATTERNS 撈到的檔，照路徑排序；萬用字元不配點開頭的段，realpath 相同的只留第一個。"""
+    """PATTERNS 撈到的檔，照路徑排序；realpath 相同的只留第一個。"""
     seen: set[str] = set()
     found: list[Path] = []
     for pattern in PATTERNS:
-        matches = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
-        # pattern 裡寫死的段照認，萬用字元配到的段才不收點開頭的。
-        literal = len(pattern.split('*', 1)[0].split('/')) - 1
-        for path in matches:
-            relative = path.relative_to(root).parts
-            if any(part.startswith('.') for part in relative[literal:]) or not path.is_file():
-                continue
+        for path in matches(root, pattern):
             real = os.path.realpath(path)
             if real in seen:
                 continue
             seen.add(real)
             found.append(path)
     return sorted(found)
+
+
+def empty_groups(root: Path) -> list[str]:
+    """掃到的份數低於 floor 的組。搬目錄之後 pattern 沒跟著搬時，這裡會紅，而不是少掃了還說通過。"""
+    errors = []
+    for name, patterns, floor in GROUPS:
+        count = len({os.path.realpath(path) for pattern in patterns for path in matches(root, pattern)})
+        if count < floor:
+            errors.append(f'「{name}」這一組在 {root} 底下掃到 {count} 份，至少要 {floor} 份：{"、".join(patterns)}。')
+    return errors
 
 
 def github_slug(heading: str) -> str:
@@ -185,9 +202,9 @@ def link_violations(path: Path, root: Path) -> list[str]:
     return violations
 
 
-def collect(root: Path) -> tuple[list[Path], int, list[str]]:
-    """掃過的檔、相對連結的條數、違規（`相對路徑：說明`）。"""
-    files = source_paths(root)
+def collect(root: Path, only: list[Path] | None = None) -> tuple[list[Path], int, list[str]]:
+    """掃過的檔、相對連結的條數、違規（`相對路徑：說明`）。`only` 給了就只掃這些檔（相對於 root 或絕對路徑），不看 PATTERNS。"""
+    files = source_paths(root) if only is None else sorted(p if p.is_absolute() else root / p for p in only)
     links = 0
     violations: list[str] = []
     for path in files:
@@ -198,12 +215,19 @@ def collect(root: Path) -> tuple[list[Path], int, list[str]]:
     return files, links, violations
 
 
-def main() -> int:
-    files, links, violations = collect(ROOT)
-    for violation in violations:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description='檢查 Markdown 相對連結。')
+    parser.add_argument('--root', type=Path, default=ROOT, help='連結的根；預設是這個項目倉庫自己')
+    parser.add_argument('--files', nargs='+', type=Path, help='只掃這些檔（相對於 --root）；不給就掃 PATTERNS，並要求每一組掃到的份數不低於 floor')
+    args = parser.parse_args(argv)
+    root = args.root.resolve()
+    errors = [] if args.files else empty_groups(root)
+    missing = [f'{f}：指定要掃的檔不存在' for f in args.files or [] if not (root / f).is_file()]
+    files, links, violations = collect(root, None if missing else args.files)
+    for violation in [*errors, *missing, *violations]:
         print(f'::error::{violation}')
-    if violations:
-        print('Markdown 有壞掉的相對連結。')
+    if errors or missing or violations:
+        print('Markdown 有壞掉的相對連結，或掃到的文件比該有的少。')
         return 1
     print(f'Markdown 相對連結通過：{len(files)} 份檔、{links} 條相對連結。')
     return 0

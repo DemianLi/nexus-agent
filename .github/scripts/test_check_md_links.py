@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from check_md_links import PATTERNS, collect, github_slug
+from check_md_links import GROUPS, PATTERNS, collect, empty_groups, github_slug, main
 
 OPS = """# 操作
 
@@ -116,14 +117,93 @@ class Scope(unittest.TestCase):
         self.assertEqual(len(paths), 1)
         self.assertEqual(len(violations), 1)
 
+    def test_new_layout_is_scanned_like_the_old_one(self) -> None:
+        old = {
+            'packages/p/README.md': BAD, 'packages/p/docs/a.md': BAD, 'packages/a.md': BAD,
+            'apps/web/GLOSSARY.md': BAD, 'apps/harness/docs/a.md': BAD, 'apps/harness/README.md': BAD,
+            'vendor/README.md': BAD, 'apps/web/src/vendor/solid-glass/README.md': BAD,
+        }
+        new = {
+            'harness/packages/p/README.md': BAD, 'harness/packages/p/docs/a.md': BAD, 'harness/packages/a.md': BAD,
+            'web/GLOSSARY.md': BAD, 'harness/apps/harness/docs/a.md': BAD, 'harness/apps/harness/README.md': BAD,
+            'harness/vendor/README.md': BAD, 'web/src/vendor/solid-glass/README.md': BAD,
+        }
+        self.assertEqual(len(scan(old)[0]), len(old))
+        self.assertEqual(len(scan(new)[0]), len(new))
+        self.assertEqual(len(scan(new)[2]), len(old))
+
+    def test_new_layout_still_skips_verbatim_vendor_markdown(self) -> None:
+        files = {'harness/vendor/README.md': '# v\n', 'harness/vendor/lib/README.md': BAD, 'web/src/vendor/solid-glass/upstream/README.md': BAD}
+        self.assertEqual(scan(files), (['harness/vendor/README.md'], 0, []))
+
     def test_patterns_are_pinned(self) -> None:
         # 釘住 PATTERNS 的全集：增減時一起改檔頭與 AGENTS.md〈發版〉的掃描範圍。
-        self.assertEqual(sorted(PATTERNS), sorted(['README.md', 'docs/**/*.md', 'packages/*.md', 'packages/*/*.md',
-                                                   'packages/*/*/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md',
-                                                   '.docs/**/*.md', '.github/**/*.md', 'apps/*/*.md', 'apps/*/*/*.md',
-                                                   'vendor/README.md',
-                                                   'apps/web/src/vendor/solid-glass/README.md',
-                                                   '.agents/skills/**/*.md']))
+        self.assertEqual(sorted(PATTERNS), sorted([
+            'README.md', 'docs/**/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md', '.docs/**/*.md', '.github/**/*.md',
+            'packages/*.md', 'packages/*/*.md', 'packages/*/*/*.md',
+            'harness/packages/*.md', 'harness/packages/*/*.md', 'harness/packages/*/*/*.md',
+            'apps/*/*.md', 'apps/*/*/*.md', 'harness/apps/*/*.md', 'harness/apps/*/*/*.md', 'web/*.md', 'web/*/*.md',
+            'vendor/README.md', 'harness/vendor/README.md',
+            'apps/web/src/vendor/solid-glass/README.md', 'web/src/vendor/solid-glass/README.md',
+            '.agents/skills/**/*.md',
+        ]))
+
+
+class Floors(unittest.TestCase):
+    """搬目錄之後掃到的份數悄悄變少，要紅，不是少掃了還說通過。"""
+
+    OLD = {
+        'README.md': '', 'docs/a.md': '', 'packages/p/README.md': '', 'apps/harness/README.md': '', 'vendor/README.md': '',
+        'apps/web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',
+    }
+
+    def build(self, files: dict[str, str]) -> Path:
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for rel, text in files.items():
+            (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / rel).write_text(text, encoding='utf-8')
+        return Path(tmp)
+
+    NEW = {
+        'README.md': '', 'docs/a.md': '', 'harness/packages/p/README.md': '', 'harness/apps/harness/README.md': '',
+        'harness/vendor/README.md': '', 'web/src/vendor/solid-glass/README.md': '', 'GLOSSARY-MAP.md': '', '.github/a.md': '',
+    }
+
+    def test_complete_tree_in_either_layout_has_no_empty_group(self) -> None:
+        self.assertEqual(empty_groups(self.build(self.OLD)), [])
+        self.assertEqual(empty_groups(self.build(self.NEW)), [])
+
+    def test_a_group_whose_patterns_did_not_follow_the_move_is_red(self) -> None:
+        files = dict(self.OLD)
+        del files['packages/p/README.md']
+        files['somewhere/packages/p/README.md'] = ''
+        errors = empty_groups(self.build(files))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('packages', errors[0])
+
+    def test_scanning_nothing_is_red_for_every_required_group(self) -> None:
+        errors = empty_groups(self.build({'a.txt': ''}))
+        required = [name for name, _, floor in GROUPS if floor]
+        self.assertEqual(len(errors), len(required))
+
+    def test_groups_that_leave_the_project_may_be_empty(self) -> None:
+        files = {k: v for k, v in self.OLD.items()}
+        self.assertEqual(empty_groups(self.build(files)), [])
+        self.assertTrue(all(floor == 0 for name, _, floor in GROUPS if name in ('AGENTS', '.docs', '.agents')))
+
+    def test_command_line_takes_a_root_and_a_file_scope(self) -> None:
+        root = self.build({**self.OLD, 'docs/b.md': '[x](missing.md)\n'})
+        self.assertEqual(main(['--root', str(root)]), 1)
+        self.assertEqual(main(['--root', str(root), '--files', 'docs/a.md']), 0)
+        self.assertEqual(main(['--root', str(root), '--files', 'docs/b.md']), 1)
+        self.assertEqual(main(['--root', str(root), '--files', 'docs/none.md']), 1)
+
+    def test_files_outside_the_patterns_can_be_scoped_explicitly(self) -> None:
+        root = self.build({'outer.md': '[x](nexus/docs/a.md)\n', 'nexus/docs/a.md': ''})
+        self.assertEqual(main(['--root', str(root), '--files', 'outer.md']), 0)
+        (root / 'nexus/docs/a.md').unlink()
+        self.assertEqual(main(['--root', str(root), '--files', 'outer.md']), 1)
 
 
 class Links(unittest.TestCase):
