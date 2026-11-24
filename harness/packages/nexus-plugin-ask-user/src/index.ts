@@ -43,11 +43,11 @@
  *   呼叫當下才問它的 `current()`：列卸載之後經 `ctx` 取服務會拋（`cannot get required service … in inactive context`），
  *   抓住的那份則仍可呼叫，所以「這一列停用之後，開著的 thread 照樣問得到」。
  *
- * **不再查 `channelForThread`**（#1458 Q1 (c)）：管道今天在一個行程裡是常數（入口有沒有人在、有沒有 checkpointer），
- * 逐條 thread 的查詢一定落空。拿掉它不改行為；等出現真的逐條不同的答題者時，提供者與查詢一起加回來
+ * **不查 `channelForThread`**（#1458）：管道在一個行程裡是常數（入口有沒有人在、有沒有 checkpointer），
+ * 逐條 thread 的查詢一定落空。等出現真的逐條不同的答題者時，提供者與查詢一起加上
  * （`docs/plugin-contract.md` 的偏離表）。它也沒有放進 `inject`：選配的依賴放進 `inject` 會讓一致性套件的 `export-form` 紅。
  *
- * **舊的 `NexusPlugin` 外殼搬走了**（`harness/apps/harness/src/ask-user.fixture.ts`，同 echo、skills、feedback 的前例）：還在相容層
+ * **`NexusPlugin` 外殼在 `harness/apps/harness/src/ask-user.fixture.ts`**：還在相容層
  * 組裝的測試經它掛這顆工具，它與樹上這一列共用 {@link createAskUserTool}，所以兩邊的工具本體是同一份程式碼。
  *
  * @module
@@ -157,10 +157,7 @@ export const DELEGATED_CALLER_MESSAGE =
   '呼叫的 agent 由另一個執行中的 agent 擁有，這時無法與人互動；' +
   '把沒解決的問題或待定的決定寫進子代理的最終結果。';
 
-/**
- * 「這次組裝有沒有人可以回答」這個服務的名字。**搬到 `@nexus/core` 了**（#652：`exit_plan_mode`
- * 也要讀它），這裡轉出舊名，匯入它的人不必改。
- */
+/** 「這次組裝有沒有人可以回答」這個服務的名字，定義在 `@nexus/core`，這裡轉出。 */
 export { CHANNEL_SERVICE };
 
 /** 空的問題清單：工具本體當場擋下，不問任何人。 */
@@ -209,7 +206,7 @@ export function createAskUserTool(
         content: message,
         ...(error !== undefined && { error }),
       });
-      // **沒人提供就是沒有答題者，不是「有人在」**（#669）：以前缺席時退成 `{ kind: 'human' }`，一份不掛 host-services 的
+      // **沒人提供就是沒有答題者，不是「有人在」**（#669）：缺席時若退成 `{ kind: 'human' }`，一份不掛 host-services 的
       // 組裝會拿到一顆以為有人在答的工具，問了就停在一個沒人接的中斷上。
       const channel = channelOf(exec);
       if (channel === undefined) return failed(NO_CHANNEL_MESSAGE);

@@ -131,20 +131,17 @@ export const APPROVAL_INTERRUPT_KIND = 'approval';
 /**
  * 中斷酬載上的判別式：**這一顆是問人一組問題**。
  *
- * 生產者是 `@nexus/plugin-ask-user`。常數放在 core 是因為判別式的兩端（發的人與折的人）
- * 分屬三個 package，字串各寫一次就會有一天對不上。
+ * 生產者有三個，見 {@link QuestionInterruptItem}。常數放在 core 是因為判別式的兩端（發的人與折的人）
+ * 分屬不同 package，字串各寫一次就會有一天對不上。
  */
 export const QUESTION_INTERRUPT_KIND = 'question';
 
 /**
- * 提問中斷的**生產者有兩個**：`@nexus/plugin-ask-user`（模型自己問）與 `@nexus/plugin-plan-mode`
- * 的 `exit_plan_mode`（計劃審核，[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
- * 所以一題的形狀、回覆的形狀、判「有沒有人可以回答」的服務名都放在這裡，兩邊讀同一份。
- *
- * dsh 的對應是 `userQuestions` 這個共用服務（`packages/interaction/user-questions/src/types.ts`，
- * `477b4f4`），兩個生產者都呼叫它的 `ask()`。我們沒有那一層：LangGraph 只給一顆 `interrupt()`，
- * 生產者各自呼叫它、酬載帶 {@link QUESTION_INTERRUPT_KIND}——那是 ask-user 登記過的偏離
- * （一條通道加一個判別式）的延伸，不是新的一條。
+ * 提問中斷的**生產者有三個**：`@nexus/plugin-ask-user`（模型自己問）、`@nexus/plugin-plan-mode`
+ * 的 `exit_plan_mode`（計劃審核，[#652](https://github.com/DemianLi/nexus-agent/issues/652)），
+ * 以及 MCP server 的反問（elicitation）：`@nexus/plugin-mcp` 把工具呼叫停在自己的 `interrupt()` 上，
+ * 宿主（`harness/apps/harness/src/mcp-elicitation.ts`）把那顆酬載翻成這個形狀再廣播。
+ * 所以一題的形狀、回覆的形狀、判「有沒有人可以回答」的服務名都放在這裡，各邊讀同一份。
  */
 export interface QuestionInterruptItem {
   readonly id: string;
