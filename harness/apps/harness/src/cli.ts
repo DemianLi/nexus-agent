@@ -715,7 +715,7 @@ const HELP_LINE_PATTERN = /^\/help(?:\s.*)?$/u;
  * commands 那包的 README（`packages/interaction/commands/README.zh.md:28`）明說：無 UI 的
  * 演示主幹與 ACP 自動化不提供命令適配器，也不需要它。
  *
- * **所以這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離**——deepagents 與 LangChain
+ * **所以這不是 docs/contributing.md 那條「基礎建設表達不出來」的偏離**——deepagents 與 LangChain
  * 都沒參與這件事。準確的說法是：真相來源照抄（`list()`），呈現形式因為我們的發派面是
  * 一行一行的 `readline` 而不是 composer，換成一個命令。`readline` 的 `completer` 日後
  * 承得起選單那個形狀，要換不必推翻這裡。

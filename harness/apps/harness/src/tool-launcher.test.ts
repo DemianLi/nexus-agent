@@ -130,6 +130,38 @@ describe('findSpawnerBinary', () => {
       });
     });
 
+    it('舊檔在 repo 根之上（本地 git 在外層）：拋錯，指名舊路徑與 repo 根底下的新位置', () => {
+      const outer = mkdtempSync(join(tmpdir(), 'nexus-find-spawner-outer-'));
+      try {
+        const root = join(outer, 'nexus');
+        place(root, 'pnpm-workspace.yaml');
+        place(outer, 'native', 'nexus-sandbox-spawner');
+        expect(() => findSpawnerBinary(from(root))).toThrow(
+          join(outer, 'native/nexus-sandbox-spawner'),
+        );
+        expect(() => findSpawnerBinary(from(root))).toThrow(
+          join(root, 'harness/native/nexus-sandbox-spawner'),
+        );
+      } finally {
+        rmSync(outer, { recursive: true, force: true });
+      }
+    });
+
+    it('新位置有就用新位置，repo 根之上的舊檔也不報錯', () => {
+      const outer = mkdtempSync(join(tmpdir(), 'nexus-find-spawner-outer-'));
+      try {
+        const root = join(outer, 'nexus');
+        place(root, 'pnpm-workspace.yaml');
+        place(root, 'harness', 'native', 'nexus-sandbox-spawner');
+        place(outer, 'native', 'nexus-sandbox-spawner');
+        expect(findSpawnerBinary(from(root))).toBe(
+          join(root, 'harness/native/nexus-sandbox-spawner'),
+        );
+      } finally {
+        rmSync(outer, { recursive: true, force: true });
+      }
+    });
+
     it('兩處都沒有：找不到', () => {
       inRepo((root) => {
         expect(findSpawnerBinary(from(root))).toBeUndefined();

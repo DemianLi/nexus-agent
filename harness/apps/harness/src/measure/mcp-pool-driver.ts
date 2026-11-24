@@ -57,14 +57,14 @@ const CONSEC_KILLS = Number(E.CONSEC_KILLS ?? 4);
 const HOST_STABLE_MS = Number(E.HOST_STABLE_MS ?? 60_000);
 // session-file-exempt: 殺宿主量測的記時預載逐行寫的時間點日誌（onReady／openReady／loaded），驅動讀回來算段 A、B，不是會話檔
 const HOSTKILL_LOG = `${E.OUT ?? '/out'}/hostkill-preload.jsonl`;
-const PRELOAD = `${E.HARNESS ?? '/opt/nexus/apps/harness'}/src/measure/host-kill-preload.ts`;
+const PRELOAD = `${E.HARNESS ?? '/opt/nexus/harness/apps/harness'}/src/measure/host-kill-preload.ts`;
 for (const [k, v] of Object.entries({ N, R, T, W })) {
   if (!Number.isInteger(v) || v < 0) throw new Error(`${k} 要是非負整數：${String(E[k])}`);
 }
 for (const a of ARMS) {
   if (a !== 'single' && a !== 'per-thread') throw new Error(`ARMS 只收 single、per-thread：${a}`);
 }
-const HARNESS = E.HARNESS ?? '/opt/nexus/apps/harness';
+const HARNESS = E.HARNESS ?? '/opt/nexus/harness/apps/harness';
 const STDIO_SERVER = `${HARNESS}/src/measure/mcp-pool-stdio-server.ts`;
 const MCP_LOG_DIR = `${OUT}/mcp-log`;
 /** 假模型一輪依序叫的工具（`MODE=hostkill` 只叫 mcpa 一支），跟 patch 裡的 serverName 對上。 */

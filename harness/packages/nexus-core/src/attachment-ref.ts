@@ -12,7 +12,7 @@
  * - **檔案從不以位元組到達任何供應商**：組請求時每個檔案區塊換成確定性的一行（{@link fileHandleText}），模型要讀就用檔案工具
  *   讀存下來的唯讀副本。
  *
- * ## 偏離（依 AGENTS.md 登記）
+ * ## 偏離（依 docs/contributing.md 登記）
  *
  * 1. **區塊型別叫 `nexus-file`／`nexus-image`，不叫 `file`／`image`。** LangChain 的訊息塊自己有標準的 `file`／`image`（欄位不同），
  *    我們的區塊裝不進去，也不能讓基座或 `@langchain/openai` 把它當成它認得的那一種。形狀照 dsh（`{ type, attachment }`），

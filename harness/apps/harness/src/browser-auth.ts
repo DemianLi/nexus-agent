@@ -22,7 +22,7 @@
  *   舊的 token 配上有效的 cookie 也只轉回乾淨的 `./`；其他一律同一種最小的 401。轉址寫相對的：放在反向代理的子路徑
  *   底下（#2369）時 serve 看不到前綴，瀏覽器對著 `/nexus/?token=…` 解析才回得到 `/nexus/`。
  *
- * ## 偏離（照 AGENTS.md 的偏離規則登記）
+ * ## 偏離（照 docs/contributing.md 的偏離規則登記）
  *
  * - ~~**有效期寫死 30 天，不能設定。**~~ **這一條沒了**
  *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：有效期現在由

@@ -24,7 +24,7 @@
  * **缺 Host 不退回去讀 URL。** 真的 HTTP/1.1 請求一定帶 Host；`wire-server.ts` 的 URL 是它自己
  * 拿綁定位址拼的，跟瀏覽器以為自己在連哪裡無關。
  *
- * ## 偏離（照 AGENTS.md 的偏離規則登記）
+ * ## 偏離（照 docs/contributing.md 的偏離規則登記）
  *
  * - **沒有 TLS**（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547) 的 Q1 (a)）。`serve` 只走 HTTP、只綁 loopback；
  *   加密由前面的 SSH 隧道或終止 TLS 的反向代理負責。`serve` 若加上 `--host`，要一起處理 `wire-server.ts` 寫死的兩處

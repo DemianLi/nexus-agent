@@ -39,7 +39,7 @@
  * **這一格曾經走核准**：plan-mode 註冊一位 `approvals.gate`，對 `exit_plan_mode` 回 `ask`，理由寫的是
  * 「人批准計劃與人批准這次工具呼叫是同一件事，所以不另建評審通道」。**那正是 dsh 明文否決的那條路**
  * （`.agents/notes/archived/feature/2026-07-07-plan-mode.md` 的 Alternatives，`477b4f4`）：核准的結果
- * 詞彙刻意封閉（允許／拒絕），拒絕帶不回意見，同意也長不出選項。而我們當時沒有照 AGENTS.md 把它登記成
+ * 詞彙刻意封閉（允許／拒絕），拒絕帶不回意見，同意也長不出選項。而我們當時沒有照 docs/contributing.md 把它登記成
  * 偏離。後果是計劃變成核准卡裡的工具參數，拒絕帶不回意見。
  *
  * 現在照 dsh（`packages/plan/plan-mode/src/index.ts:278-350`）：**工具本體自己問一題**，走提問通道，

@@ -1,6 +1,6 @@
 /**
  * `@nexus/projections`：會話投影登記處這個接縫的**定義套件**（決議 §3-4 第 16 條，定義、提供者、消費者三角色分開；
- * [#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）。形狀照 {@link https://github.com/DemianLi/nexus-agent/blob/develop/packages/nexus-tools/src/index.ts | `@nexus/tools`}。
+ * [#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）。形狀照 {@link https://github.com/DemianLi/nexus-agent/blob/develop/harness/packages/nexus-tools/src/index.ts | `@nexus/tools`}。
  *
  * 一個能力接縫由三個角色組成：
  *

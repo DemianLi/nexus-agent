@@ -3375,10 +3375,10 @@ pnpm --filter @nexus/harness run cli -- --dump-config
 server、不綁 port：
 
 ```yaml
-# == /path/to/apps/harness/cordis.yml
+# == /path/to/harness/apps/harness/cordis.yml
 - id: echo
   name: '@nexus/plugin-echo'
-# == /path/to/apps/harness/cordis.yml, patched by /home/you/.nexus-agent/plugin-journal.jsonl
+# == /path/to/harness/apps/harness/cordis.yml, patched by /home/you/.nexus-agent/plugin-journal.jsonl
 - id: todo
   name: '@nexus/plugin-todo'
   disabled: true

@@ -87,7 +87,7 @@ import type { SessionEvent } from './session-log.js';
  * [#1856](https://github.com/DemianLi/nexus-agent/issues/1856) 起，不論同版還是升版，每一次持久化型別變更都在
  * `docs/persistence-changes/` 有一筆由驗證器核過的紀錄（`harness/apps/harness/src/persistence-changes.ts`，CI 擋；50 版以前
  * 同一版之內的新增寫在那裡的基線 `2026-10-23-initial.md`）。這份檔頭的段落是讀舊檔的敘事說明：營運者讀的升級指南
- * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
+ * （`docs/upgrade-guide/`，docs/release.md〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
  * **偏離 dsh，已部分撤除**（#1537 Q2 (a)，demian 2026-10-17 拍板）：dsh 的格式紀錄是機器檢查的——
  * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
  * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的

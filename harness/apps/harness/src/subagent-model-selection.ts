@@ -9,7 +9,7 @@
  *   `assertAllowedModelSelection` 用的是「有效路由」，不是「有沒有給 model」。
  * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字。
  *
- * ## 與 dsh 的偏離（照 AGENTS.md 登記）
+ * ## 與 dsh 的偏離（照 docs/contributing.md 登記）
  *
  * - **沒有 `provider`**：我們只有一個端點，路由就是型錄 id。
  * - **推理等級只實作 `off` 與 `default`**：dsh 的等級由 adapter 驗證、請求怎麼帶也是 adapter 的事；我們的 adapter 只有型錄宣告，

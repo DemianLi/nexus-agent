@@ -13,7 +13,7 @@
  * “set by the agent loop”）。我們的工具跑在 LangGraph 的 ToolNode 裡，那個派發點不是我們的，
  * 所以身分只能從執行期的 config 推出來。
  *
- * **這是 AGENTS.md 那條偏離規則的正例，不是偏好。** [#136](https://github.com/DemianLi/nexus-agent/pull/136)
+ * **這是 docs/contributing.md 那條偏離規則的正例，不是偏好。** [#136](https://github.com/DemianLi/nexus-agent/pull/136)
  * 刻意避開執行期鍵，靠組裝期把工具換成拒絕樁——那條路走得通，是因為「拒絕 subagent」
  * **無條件**：不需要知道是哪一個 subagent，也不需要知道是第幾次 spawn。這裡要的是身分
  * 本身，而身分按定義是 per-run 的；組裝期表達得出的最細粒度是 **subagent 的名字**，

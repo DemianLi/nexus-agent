@@ -139,6 +139,25 @@ class WebTest(unittest.TestCase):
 
 
 class HarnessTest(unittest.TestCase):
+    def test_bare_web_as_call_argument_fails(self) -> None:
+        for line in (
+            "walk(join(root, 'web'));",
+            "walk(resolve(ROOT, 'web'));",
+            "const p = join(\n  root,\n  'web',\n);",
+            "const p = join(root, 'web', ...rest);",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(len(run({'harness/scripts/a.ts': line + '\n'})), 1)
+
+    def test_bare_web_that_is_not_a_path_argument_is_fine(self) -> None:
+        for line in (
+            "const kind = 'web';",
+            "const o = { type: 'web' };",
+            "const k = pick(items, 'web');",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(run({'harness/scripts/a.ts': line + '\n'}), [])
+
     def test_clean_harness_passes(self) -> None:
         self.assertEqual(run({'harness/apps/harness/src/a.ts': "import { x } from '@nexus/wire';\n"}), [])
 
@@ -164,7 +183,7 @@ class HarnessTest(unittest.TestCase):
 
     def test_own_directory_and_other_harness_paths_are_fine(self) -> None:
         self.assertEqual(
-            run({'harness/apps/harness/src/a.ts': "const d = join(repo, 'harness', 'apps', 'harness', 'src');\nconst w = join(a, 'web');\n"}),
+            run({'harness/apps/harness/src/a.ts': "const d = join(repo, 'harness', 'apps', 'harness', 'src');\n"}),
             [],
         )
 

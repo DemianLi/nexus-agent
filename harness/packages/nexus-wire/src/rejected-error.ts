@@ -7,7 +7,7 @@
  * 命令路徑早就把碼結構化往上帶（`{ kind: 'rejected', code, message }`）；開串流是拋出的，所以用錯誤類別帶，
  * 呼叫端讀 {@link WireRejectedError.code} 分支，**不要解析 `message`**。
  *
- * ## 偏離（依 AGENTS.md 登記）
+ * ## 偏離（依 docs/contributing.md 登記）
  *
  * dsh 沒有「HTTP 上開串流、被協定層以 200 拒絕」這條路：它的 SDK client 是 JSON-RPC over stdio，串流就是
  * 通知，沒有「開」這個動作可以被拒（`packages/sdk/client/src/client.ts`）；它的 Connection 層則把失敗放進結果

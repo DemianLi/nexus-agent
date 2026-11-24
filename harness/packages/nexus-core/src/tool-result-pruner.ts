@@ -60,7 +60,7 @@
  *   （`.agents/notes/implemented/architecture/2026-07-10-after-call-compaction-pressure-and-overflow-recovery.zh.md`）。
  *   「低于压力的对话绝不被碰」是那一層的性質，不是剪刀自己的。
  *
- * ## 兩筆偏離登記（AGENTS.md 的規則）
+ * ## 兩筆偏離登記（docs/contributing.md 的規則）
 
 **一、剪的是請求，不是 session 的訊息節點；但決定落盤了（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)，日誌格式 46）。**
 dsh 先 append 一顆 `compaction/prune` 影子價格事件，緊接著 append 一顆替換用的 `tool/result`（`surfaceOp: replace`、`sourceEventSeqs`），

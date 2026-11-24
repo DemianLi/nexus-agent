@@ -328,12 +328,33 @@ def web_findings(file: str, text: str) -> list[tuple[int, str, str]]:
     return found
 
 
+PATH_CALL = re.compile(r'(^|[^\w$])(join|resolve|joinPath)\s*$')
+
+
+def is_call_argument(text: str, lit: Literal) -> bool:
+    """字面值是 `join`／`resolve` 的非首個引數（`join(root, 'web')` 的 `'web'`）：前面是逗號、後面是逗號或右括號。"""
+    before = text[: lit.start].rstrip()
+    after = text[lit.end :].lstrip()
+    if not before.endswith(',') or after[:1] not in (',', ')'):
+        return False
+    depth = 0
+    for index in range(len(before) - 1, -1, -1):
+        char = before[index]
+        if char in ')]}':
+            depth += 1
+        elif char in '([{':
+            if depth == 0:
+                return char == '(' and PATH_CALL.search(before[:index]) is not None
+            depth -= 1
+    return False
+
+
 def harness_findings(file: str, text: str) -> list[tuple[int, str, str]]:
     found: list[tuple[int, str, str]] = []
     literals = string_literals(text)
-    for first, segments in path_segments(text, literals):
+    for first, segments in path_segments(text, literals, min_len=1):
         joined = '/'.join(segments)
-        if WEB_RUN.search(joined) and joined != 'web':
+        if WEB_RUN.search(joined) and (joined != 'web' or is_call_argument(text, first)):
             found.append((first.line, 'harness-path', f'harness 不准掃或讀 web：`{joined}`。'))
     for line, value, target, as_path in relative_paths(file, text, literals):
         if target is not None and under(target, WEB):

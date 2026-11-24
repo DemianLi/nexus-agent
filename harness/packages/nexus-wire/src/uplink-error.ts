@@ -6,7 +6,7 @@
  * 呼叫端要分辨「不確定這一句有沒有送到」（502、504：請求可能已經到了 server、回應斷在半路）與「確定沒送出去」
  * （其他狀態碼）時，讀 {@link UplinkTransportError.status}，不要去解析 `message`。
  *
- * ## 偏離（依 AGENTS.md 登記）
+ * ## 偏離（依 docs/contributing.md 登記）
  *
  * dsh 沒有 HTTP 上行：它的 SDK client 是 JSON-RPC over stdio，沒有 HTTP 狀態碼可抄（`packages/sdk/client/src/client.ts`
  * 只有 `TransportClosedError`、`RequestTimeoutError`、`SdkProtocolError`，都不帶狀態碼）。形狀照最近的

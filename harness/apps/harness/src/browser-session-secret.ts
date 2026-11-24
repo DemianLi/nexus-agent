@@ -7,7 +7,7 @@
  * 每次重啟都換密鑰，瀏覽器在普通的重啟之後就連不回來；只讓啟動 token 每個行程換一個，已經把
  * 「印出來的網址」限定在一個行程的壽命裡。
  *
- * ## 偏離（照 AGENTS.md 的偏離規則登記）
+ * ## 偏離（照 docs/contributing.md 的偏離規則登記）
  *
  * - **沒有 credentials seam，改成 home 底下一個專用檔。** dsh 把密鑰存成 `ctx.credentials` 裡
  *   `client-connection/browser-session` 的 `grant` 記錄，由 `credentials-local` 寫進

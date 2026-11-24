@@ -667,7 +667,7 @@ export type Disposer = () => void | Promise<void>;
  * 呼叫。第一個需要它的是 `@nexus/plugin-mcp`：MCP server 是外部程序，stdio 子行程的
  * pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出。
  *
- * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的 `ctx.effect` 一個函式同時是「回滾」
+ * **與 dsh 的偏離**（docs/contributing.md 的偏離規則）：dsh 的 `ctx.effect` 一個函式同時是「回滾」
  * 與「卸載」，因為 Cordis 的 context 一收掉兩件事本來就同時發生。我們沒有 context 樹，
  * `apply` 拋錯時的回滾走的是 {@link ./load.ts} 的 undo 堆疊，而堆疊是同步的、
  * 關機清理不是。所以退到最接近的實作：**兩條路分開**——回滾期的資源釋放由 plugin 自己
@@ -781,7 +781,7 @@ export interface PluginLogger {
  * **`WIRE_CHANNELS` 那份下行白名單擋不到這條路。** 那是 web 傳輸的邊界，遙測是另一個
  * 出口——脫敏規則要自己長一份，不能靠 wire 那份代勞。
  *
- * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的脫敏是 waterfall 事件
+ * **與 dsh 的偏離**（docs/contributing.md 的偏離規則）：dsh 的脫敏是 waterfall 事件
  * `session-telemetry/record`，而**我們沒有事件匯流排**——`deepagents` / LangChain JS /
  * LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：`redact` 用依序
  * 折疊取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
@@ -817,7 +817,7 @@ export interface TelemetryRegistrationPoint {
  * 只註冊而沒有人接線時什麼都不會跑；接線在
  * {@link ./invariants.ts | createInvariantRunner}。
  *
- * **與 dsh 的偏離**（AGENTS.md 的偏離規則），四條：
+ * **與 dsh 的偏離**（docs/contributing.md 的偏離規則），四條：
  *
  * 1. **Cordis `ctx.effect` ＋子 fiber** —— dsh 的 `register()` 開一個子
  *    `ctx.plugin(installer)`、await 它的 setup、失敗原子 dispose 並收回保留。
@@ -869,7 +869,7 @@ export interface InvariantRegistrationPoint {
  * **它與十個註冊點不同軸**，理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent`
  * 的參數。命令由進入點發派，不經過模型——`@nexus/plugin-commands` 的執行器讀這裡。
  *
- * **形狀差異，不是偏離**（AGENTS.md 的偏離規則只蓋「基座表達不出來」，這兩條不是）：
+ * **形狀差異，不是偏離**（docs/contributing.md 的偏離規則只蓋「基座表達不出來」，這兩條不是）：
  *
  * 1. dsh 的命令面是 Cordis 的**可選服務**——`packages/plan/plan-mode/src/index.ts` 用
  *    `ctx.inject(['commands'], …)` 掛子節點，「命令註冊表被組進來時才啟用」。我們的

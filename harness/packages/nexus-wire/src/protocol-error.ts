@@ -3,7 +3,7 @@
  * 缺了折疊器要讀的欄位、或欄位型別不對（歷史頁的頁欄位也算）。**終止類**的錯：重連換來的還是同一份資料（歷史裡的壞事件每次都抓到同一顆），
  * 所以收到它的一側該停止自動重連、等人按立刻重連（web 那一半在 #1601）。
  *
- * ## 偏離（依 AGENTS.md 登記）
+ * ## 偏離（依 docs/contributing.md 登記）
  *
  * dsh 對同一類事沒有專屬的錯誤類別：`assertSessionWireEvent` 拋一般的 `Error`（`packages/api/session-controller/src/client/session-wire-event.ts:14-46`，
  * `687f282e`），**反過來把「載體斷了」標成專屬類別** `RemoteStreamCarrierError`（`packages/api/gateway/src/client/stream-client.ts:15`），

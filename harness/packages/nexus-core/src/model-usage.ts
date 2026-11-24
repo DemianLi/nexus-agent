@@ -16,7 +16,7 @@
  *
  * **我們的用量也不掛在 `assistant/message` 上，是一顆只帶帳目的獨立事件**（`model/usage`）。
  * 這顆事件寫下來的當時，日誌還不記訊息內容（格式 1 到 8，理由是兩條進入點拿得到的顆粒度
- * 不一樣），「沒有那顆載體」是真的，所以照 AGENTS.md 那條偏離規則退到最接近的實作。
+ * 不一樣），「沒有那顆載體」是真的，所以照 docs/contributing.md 那條偏離規則退到最接近的實作。
  * **這個理由今天縮小了，沒有整條失效**：格式 9 起 `assistant/message` 就在日誌裡（{@link ./session-log.ts}
  * 檔頭，#305，寫它的是 {@link ./model-calls.ts} 那顆同族 middleware），正常回來的呼叫有地方掛。
  * **還沒有載體的是其餘失敗的那幾次呼叫**（#1022）：dsh 把失敗嘗試的用量掛在 `assistant/attempt` 上，

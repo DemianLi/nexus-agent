@@ -30,7 +30,7 @@
  *   - 目錄 fsync 用 `atomic-file.ts` 的 `syncDirectory`：Windows 略過，POSIX 錯往外拋，`save`／`saveImage` 包成
  *     `ATTACHMENT_STORE_FAILED`（dsh 的 `ATTACHMENT_WRITE_FAILED`）。
  *
- * ## 偏離（依 AGENTS.md 登記）
+ * ## 偏離（依 docs/contributing.md 登記）
  *
  * 1. **模型讀它走虛擬前綴 {@link ATTACHMENTS_PREFIX}，不是主機絕對路徑。** 同 `tool-result-stash.ts`：路徑是 `CompositeBackend`
  *    的一條唯讀路由（根是 `<root>/files`），圍欄看不到的主機路徑不出現在模型面前，續接之後同一個路徑照讀。dsh 的 `read_file`

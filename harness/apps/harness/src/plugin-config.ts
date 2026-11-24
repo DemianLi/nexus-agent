@@ -419,7 +419,7 @@ export function parsePatchList(source: string, label: string): ConfigPatch[] {
  * **這是一個修正，不是新功能。** 沒有它的話，`name: './probe.ts'` 會被
  * {@link resolveEntryModule} 的 `import()` 解析到 **`plugin-config.ts` 自己的位置**——因為裸
  * 的相對 specifier 錨在做 import 的那個模組上，不是使用者手上那個檔。實測的訊息是
- * `Cannot find module '…/apps/harness/src/probe.ts'`，而那底下剛好有同名檔的時候，它會
+ * `Cannot find module '…/harness/apps/harness/src/probe.ts'`，而那底下剛好有同名檔的時候，它會
  * **安靜地載錯一顆**。
  *
  * 照 dsh 的 `anchorInsertedPluginNames`（`packages/boot/app-boot/src/index.ts:319`）：

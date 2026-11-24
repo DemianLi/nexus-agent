@@ -46,7 +46,7 @@
  * `tool/result` 照舊收卡。所以今天 dsh 的卡在**參數還在串流時**就出現，不再只有 `tool/call` 之後。上面第一段
  * 講的「日誌是開卡的唯一來源」因此已不是事實，仍成立的是：**定案與收卡**仍只以 `tool/call`／`tool/result` 為準。
  * 我們的卡在 `tool/call` 才開，即比 dsh 晚一段（模型還在吐參數的那段）。這不屬於這條規則管的範圍：web 的 UI／UX
- * 不以 dsh 為標準（AGENTS.md），要不要提前開由 dev-ui 以產品體驗判斷；要做的話得先讓 wire 的折疊吃工具參數的串流片段
+ * 不以 dsh 為標準（docs/contributing.md），要不要提前開由 dev-ui 以產品體驗判斷；要做的話得先讓 wire 的折疊吃工具參數的串流片段
  * （今天 `conversation.ts` 的 `content-block-delta` 分支把它們丟掉，工具只走 `tools` channel），那會動到 wire 與
  * 折疊（見 [#984](https://github.com/DemianLi/nexus-agent/issues/984)）。
  *

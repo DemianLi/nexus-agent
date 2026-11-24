@@ -135,7 +135,7 @@ export function pruneThirdPartyMaps(root: string): number {
 
 /**
  * 拿掉 `pnpm deploy` 在私有 hoist 目錄留下的、指回**原始碼樹**的自我連結（`node_modules/.pnpm/node_modules/@nexus/harness`
- * → `<repo>/apps/harness`）。產物根本身就是 harness，沒有人會從這條連結找它；留著它搬到別台機器就是一條斷的絕對路徑，
+ * → `<repo>/harness/apps/harness`）。產物根本身就是 harness，沒有人會從這條連結找它；留著它搬到別台機器就是一條斷的絕對路徑，
  * 還洩漏打包機的路徑。只拿這一條，其餘跑出產物外的連結仍由 {@link collectPayloadViolations} 擋。
  *
  * @param root - 產物根。
