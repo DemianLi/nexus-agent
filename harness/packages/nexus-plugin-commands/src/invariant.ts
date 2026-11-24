@@ -17,9 +17,6 @@
  * `command/done` 是查不出來的**（那是懸空的 run，不是懸空的 done）。序列性讓下一次
  * 執行踩到它。
  *
- * `CommandResult` 沒有 `sourceEventSeq` 那一格（見 `@nexus/core` 的
- * `commands.ts`），所以沒有檢它的合法性。
- *
  * ## 沒有檢的那一條，與為什麼
  *
  * 「每一筆 `command/run` 最後都落定」在事件流上檢不出來——最後一筆的落定永遠可能還在
