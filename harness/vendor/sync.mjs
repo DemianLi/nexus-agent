@@ -244,7 +244,7 @@ function hostResolver(source, file) {
 /**
  * 本地修改第 10 條（loader）：自我停用交給宿主，與樹拆卸時不誤認。
  *
- * - 「這棵樹正在拆卸」那一格加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader 同一格、dsh harness/vendor/README 第 15 條）。
+ * - 「這棵樹正在拆卸」那一格加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader 同一格、dsh vendor/README 第 15 條）。
  * - 自我停用那一格在 `tree.commit` 之後發一個 `loader/self-disable` 事件。`commit` 的參數與 `internal/commit`（插件 `ctx.fiber.update`）
  *   送出的一模一樣，宿主在 `commit` 那一頭分不出來，只能在呼叫點這裡區分。
  *

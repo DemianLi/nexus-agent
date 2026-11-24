@@ -35,7 +35,7 @@ export interface Manifest {
 export interface Alias {
   /** 例：`@nexus/core`、`@nexus/core/invariant`、`#settings/*`。 */
   readonly specifier: string;
-  /** 相對 repo 根的來源檔，可含一個 `*`。例：`./packages/nexus-core/src/index.ts`。 */
+  /** 相對 repo 根的來源檔，可含一個 `*`。例：`./harness/packages/nexus-core/src/index.ts`。 */
   readonly source: string;
 }
 

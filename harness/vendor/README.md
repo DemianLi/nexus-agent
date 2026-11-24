@@ -66,6 +66,6 @@ dsh 對 include 的第 8、11、13、14、15 條，逐條是否跟、為什麼�
 1. 上游 clone 停在要同步的標籤或 commit（rc.12 是 `v4.0.0-rc.12^{}` = `01b39624`），記下 `git rev-parse HEAD`，對過 `git ls-remote https://github.com/cordiverse/cordis`。clone 另放（例如 `git clone --local references/cordis <暫存目錄>` 後 `git checkout <commit>`），不要動 `references/`。
 2. 看 `patches/` 裡每一份對應的上游 PR 合了沒；合了就刪掉那一份，登記表照改。
 3. `node harness/vendor/sync.mjs <上游 clone>` 重建 `cordis/{src,tests}`、`loader/src`、`include/src` 與 `logger-console/{src,tests}`；修補套不上時腳本直接失敗。`LICENSE` 有變就手動換。
-4. 更新清單與三個 `package.json` 的版本與 commit，跑 `pnpm install`（重建宣告檔；**它的 `prepare` 同時是 vendor 原始碼的型別檢查，要看輸出**）、`pnpm --filter ./vendor/cordis run test`、`pnpm --filter ./vendor/include run test` 與 `pnpm --filter @nexus/harness exec vitest run src/measure/cordis-1386`（含探針 ① `nodenext.test.ts`），最後整個工作區測試與 `pnpm -r typecheck`。**只看 typecheck 會漏掉 vendor 原始碼本身的退化**（#1461 實測：撤掉當時的第 1 條 `.ts` 副檔名修改，typecheck 與其他測試仍綠，只有 `prepare` 與探針 ① 紅）。
+4. 更新清單與三個 `package.json` 的版本與 commit，跑 `pnpm install`（重建宣告檔；**它的 `prepare` 同時是 vendor 原始碼的型別檢查，要看輸出**）、`pnpm --filter ./harness/vendor/cordis run test`、`pnpm --filter ./harness/vendor/include run test` 與 `pnpm --filter @nexus/harness exec vitest run src/measure/cordis-1386`（含探針 ① `nodenext.test.ts`），最後整個工作區測試與 `pnpm -r typecheck`。**只看 typecheck 會漏掉 vendor 原始碼本身的退化**（#1461 實測：撤掉當時的第 1 條 `.ts` 副檔名修改，typecheck 與其他測試仍綠，只有 `prepare` 與探針 ① 紅）。
 
 `node harness/vendor/sync.mjs <上游 clone> --check` 只比對不寫入：從上游加上登記的修改重建一份，與 vendor 逐檔比，有差異就列出並以 1 退出。登記表外的手改會在這裡現形。
