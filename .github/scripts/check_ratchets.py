@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE_DIR = '.github/ratchets'
 LEGACY_BASELINE = '.github/ratchets.json'
 SCRIPT = '.github/scripts/check_ratchets.py'
+FOLDER_AWARE = 'BASELINE_DIR'
+REGULAR_MODES = ('100644', '100755')
 EXTENSIONS = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.py', '.sh', '.yml', '.yaml', '.css', '.toml')
 EXCLUDED_PREFIXES = ('references/', 'vendor/', 'apps/web/src/vendor/', 'docs/')
 EXCLUDED_PARTS = ('/fixtures/', '/__snapshots__/')
@@ -99,7 +101,10 @@ def baseline_path(key: str) -> str:
 
 def key_of(path: str) -> str:
     name = path.rsplit('/', 1)[-1].removesuffix('.json')
-    return '.' if name == '_root' else name.replace('__', '/')
+    if name == '_root':
+        return '.'
+    head, sep, rest = name.partition('__')
+    return f'{head}/{rest}' if sep and rest and head in ('apps', 'packages') else name
 
 
 def parse_file(text: str, label: str) -> dict[str, int]:
@@ -129,7 +134,16 @@ def assemble(files: dict[str, str]) -> Counts:
 
 def read_baseline(root: Path) -> Counts:
     folder = root / BASELINE_DIR
-    files = {f'{BASELINE_DIR}/{p.name}': p.read_text(encoding='utf-8') for p in sorted(folder.glob('*.json'))}
+    legacy = root / LEGACY_BASELINE
+    if legacy.exists() or legacy.is_symlink():
+        raise BaselineError(f'{LEGACY_BASELINE} 是舊格式的基準，要刪掉，只留 {BASELINE_DIR}/。')
+    if folder.is_symlink():
+        raise BaselineError(f'{BASELINE_DIR} 是連結，基準只收一般資料夾。')
+    files = {}
+    for p in sorted(folder.glob('*.json')):
+        if p.is_symlink() or not p.is_file():
+            raise BaselineError(f'{BASELINE_DIR}/{p.name} 不是一般檔，基準只收一般檔。')
+        files[f'{BASELINE_DIR}/{p.name}'] = p.read_text(encoding='utf-8')
     return assemble(files)
 
 
@@ -160,32 +174,65 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(['git', *args], cwd=root, capture_output=True)
 
 
-def baseline_at(root: Path, rev: str) -> Counts | None:
-    listed = git(root, 'ls-tree', '--name-only', rev, '--', f'{BASELINE_DIR}/')
+def tree_entries(root: Path, rev: str, spec: str) -> list[tuple[str, str, str]]:
+    listed = git(root, 'ls-tree', '-z', rev, '--', spec)
     if listed.returncode != 0:
-        raise BaselineError(f'讀不到 {rev}：{listed.stderr.decode("utf-8").strip()}')
-    paths = [p for p in listed.stdout.decode('utf-8').split('\n') if p.endswith('.json')]
-    if paths:
-        files = {}
-        for path in paths:
-            shown = git(root, 'show', f'{rev}:{path}')
-            if shown.returncode != 0:
-                raise BaselineError(f'讀不到 {rev}:{path}')
-            files[path] = shown.stdout.decode('utf-8')
-        return assemble(files)
-    legacy = git(root, 'show', f'{rev}:{LEGACY_BASELINE}')
-    if legacy.returncode == 0:
-        try:
-            data = json.loads(legacy.stdout.decode('utf-8'))
-        except json.JSONDecodeError as e:
-            raise BaselineError(f'{rev}:{LEGACY_BASELINE} 不是合法的 JSON：{e}') from e
-        if not isinstance(data, dict) or not all(isinstance(data.get(rule, {}), dict) for rule in RULES):
-            raise BaselineError(f'{rev}:{LEGACY_BASELINE} 的格式不對。')
-        return {rule: dict(data.get(rule, {})) for rule in RULES}
-    if git(root, 'cat-file', '-e', f'{rev}:{SCRIPT}').returncode == 0:
-        raise BaselineError(f'{rev} 有 {SCRIPT}，但 {BASELINE_DIR}/ 與 {LEGACY_BASELINE} 都讀不到。')
+        raise BaselineError(f'讀不到 {rev}：{listed.stderr.decode("utf-8", "replace").strip()}')
+    try:
+        records = listed.stdout.decode('utf-8').split('\0')
+    except UnicodeDecodeError as e:
+        raise BaselineError(f'{rev} 的 {spec} 底下有不是 UTF-8 的檔名。') from e
+    entries = []
+    for record in records:
+        if record:
+            meta, path = record.split('\t', 1)
+            mode, kind, _ = meta.split(' ')
+            entries.append((mode, kind, path))
+    return entries
+
+
+def regular_blob(root: Path, rev: str, entry: tuple[str, str, str]) -> str:
+    mode, kind, path = entry
+    if kind != 'blob' or mode not in REGULAR_MODES:
+        raise BaselineError(f'{rev}:{path} 不是一般檔（模式 {mode}），基準只收一般檔。')
+    shown = git(root, 'show', f'{rev}:{path}')
+    if shown.returncode != 0:
+        raise BaselineError(f'讀不到 {rev}:{path}')
+    try:
+        return shown.stdout.decode('utf-8')
+    except UnicodeDecodeError as e:
+        raise BaselineError(f'{rev}:{path} 不是 UTF-8。') from e
+
+
+def baseline_at(root: Path, rev: str) -> Counts | None:
+    folder = tree_entries(root, rev, BASELINE_DIR)
+    legacy = tree_entries(root, rev, LEGACY_BASELINE)
+    script = git(root, 'show', f'{rev}:{SCRIPT}')
+    if folder and (folder[0][1] != 'tree' or folder[0][0] != '040000'):
+        raise BaselineError(f'{rev}:{BASELINE_DIR} 不是資料夾（模式 {folder[0][0]}），基準只收一般資料夾。')
+    if folder and legacy:
+        raise BaselineError(f'{rev} 的 {BASELINE_DIR}/ 與 {LEGACY_BASELINE} 並存，只能留一份。')
+    if legacy:
+        if script.returncode == 0 and FOLDER_AWARE in script.stdout.decode('utf-8', 'replace'):
+            raise BaselineError(f'{rev} 的 {SCRIPT} 讀的是 {BASELINE_DIR}/，不該還有 {LEGACY_BASELINE}。')
+        return parse_legacy(rev, regular_blob(root, rev, legacy[0]))
+    if folder:
+        entries = [e for e in tree_entries(root, rev, f'{BASELINE_DIR}/') if e[2].endswith('.json')]
+        return assemble({path: regular_blob(root, rev, (mode, kind, path)) for mode, kind, path in entries})
+    if script.returncode == 0:
+        return {rule: {} for rule in RULES}
     print(f'{rev} 還沒有 {SCRIPT}，略過「基準只能降」的比對。')
     return None
+
+
+def parse_legacy(rev: str, text: str) -> Counts:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise BaselineError(f'{rev}:{LEGACY_BASELINE} 不是合法的 JSON：{e}') from e
+    if not isinstance(data, dict) or not all(isinstance(data.get(rule, {}), dict) for rule in RULES):
+        raise BaselineError(f'{rev}:{LEGACY_BASELINE} 的格式不對。')
+    return {rule: dict(data.get(rule, {})) for rule in RULES}
 
 
 def main() -> int:
@@ -202,7 +249,11 @@ def main() -> int:
 
     try:
         baseline = read_baseline(ROOT)
-        base = baseline_at(ROOT, args.base) if args.base else None
+        base = None
+        if args.base is not None:
+            if not args.base.strip():
+                raise BaselineError('--base 是空字串，沒有可比的版本。')
+            base = baseline_at(ROOT, args.base)
     except BaselineError as e:
         print(f'::error::{e}')
         return 1
