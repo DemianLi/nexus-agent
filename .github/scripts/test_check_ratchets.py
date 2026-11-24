@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -378,7 +379,7 @@ class MainEntryTest(RepoTest):
 
     def run_main(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ['python3.12', '.github/scripts/check_ratchets.py', *args],
+            [sys.executable, '.github/scripts/check_ratchets.py', *args],
             cwd=self.root, capture_output=True, text=True,
         )
 
