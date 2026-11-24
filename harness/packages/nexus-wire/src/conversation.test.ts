@@ -577,7 +577,7 @@ describe('停下的原因（#1624）', () => {
  * `{ code: 'interrupted' }`（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），停止、失敗、收尾三條
  * 路都補——dsh 也不分關閉的原因。所以每一列多比一格碼。
  */
-describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Interrupted`）', () => {
+describe('一輪收掉時還沒有結果的工具卡（#297）', () => {
   const open = (id: string, namespace: string[] = ['tools:a']) =>
     frame('tools', namespace, {
       event: 'tool-started',
@@ -590,7 +590,7 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       entry.kind === 'tool' ? [[entry.callId, entry.status, entry.error, entry.errorCode]] : [],
     );
 
-  it('碼的值照 dsh', () => {
+  it('沒有結果的卡收成失敗時補的碼是 interrupted', () => {
     expect(UNFINISHED_TOOL_CODE).toBe('interrupted');
   });
 
@@ -628,7 +628,7 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
     ]);
   });
 
-  it('正常收尾也收：dsh 不分關閉的原因，一輪關了還沒結果就是沒有結果', () => {
+  it('正常收尾也收：不分關閉的原因，一輪關了還沒結果就是沒有結果', () => {
     const state = reduceAll(emptyConversation(), [
       open('running'),
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),

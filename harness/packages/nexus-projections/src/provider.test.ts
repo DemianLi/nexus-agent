@@ -71,7 +71,7 @@ describe('投影登記處的提供者', () => {
     expect(provider.entries().map((entry) => entry.unit.key)).toEqual(['beta']);
   });
 
-  describe('同一個 key（照 dsh：引用計數共用）', () => {
+  describe('同一個 key（引用計數共用）', () => {
     it('同 key 同 stateVersion：兩列都起來，登記處只有一份，兩列都是登記者', async () => {
       const { provider, loader, add } = await boot();
       await add('row-a', [['shared', 1]]);

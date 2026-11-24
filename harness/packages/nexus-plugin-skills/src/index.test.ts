@@ -27,7 +27,7 @@ describe('設定', () => {
     expect(() => skills.Config.parse({ sources: [] })).toThrow('空的來源清單');
   });
 
-  it('未知欄位拒收（登記的偏離：dsh 放行）', () => {
+  it('未知欄位拒收（登記的偏離）', () => {
     expect(() => skills.Config.parse({ source: ['/skills/'] })).toThrow(/source\b/);
   });
 });
