@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -267,10 +268,74 @@ class BaselineAtTest(RepoTest):
         rev = commit(self.root, {LEGACY_BASELINE: json.dumps({'dsh': {'apps/web': 3}}), SCRIPT: ''})
         self.assertEqual(baseline_at(self.root, rev), {'dsh': {'apps/web': 3}, 'narrative': {}})
 
-    def test_script_without_any_readable_baseline_is_an_error(self) -> None:
-        rev = commit(self.root, {SCRIPT: ''})
+    def test_script_with_every_baseline_at_zero_counts_as_zero(self) -> None:
+        rev = commit(self.root, {SCRIPT: 'BASELINE_DIR = 1\n'})
+        self.assertEqual(baseline_at(self.root, rev), {'dsh': {}, 'narrative': {}})
+
+    def test_leftover_legacy_file_cannot_stand_in_for_a_folder_that_reached_zero(self) -> None:
+        rev = commit(self.root, {
+            LEGACY_BASELINE: json.dumps({'dsh': {'apps/web': 99}, 'narrative': {}}),
+            SCRIPT: 'BASELINE_DIR = 1\n',
+        })
         with self.assertRaises(BaselineError):
             baseline_at(self.root, rev)
+
+    def test_folder_and_legacy_file_together_are_an_error(self) -> None:
+        rev = commit(self.root, {
+            baseline_path('apps/web'): entry(3),
+            LEGACY_BASELINE: json.dumps({'dsh': {'apps/web': 99}, 'narrative': {}}),
+            SCRIPT: '',
+        })
+        with self.assertRaises(BaselineError):
+            baseline_at(self.root, rev)
+
+    def test_non_ascii_directory_names_are_read(self) -> None:
+        rev = commit(self.root, {baseline_path('apps/測試'): entry(3), SCRIPT: ''})
+        self.assertEqual(baseline_at(self.root, rev), {'dsh': {'apps/測試': 3}, 'narrative': {}})
+
+    def test_double_underscore_inside_a_directory_name_is_kept(self) -> None:
+        self.assertEqual(key_of(baseline_path('packages/a__b')), 'packages/a__b')
+        rev = commit(self.root, {baseline_path('packages/a__b'): entry(3), SCRIPT: ''})
+        self.assertEqual(baseline_at(self.root, rev), {'dsh': {'packages/a__b': 3}, 'narrative': {}})
+
+    def test_symlinked_baseline_file_is_an_error(self) -> None:
+        commit(self.root, {SCRIPT: ''})
+        (self.root / BASELINE_DIR).mkdir(parents=True)
+        (self.root / baseline_path('apps/web')).symlink_to(entry(999))
+        git(self.root, 'add', '-A')
+        git(self.root, 'commit', '-q', '-m', 'link')
+        with self.assertRaises(BaselineError):
+            baseline_at(self.root, 'HEAD')
+
+    def test_symlinked_baseline_folder_is_an_error(self) -> None:
+        commit(self.root, {'elsewhere/apps__web.json': entry(999), SCRIPT: ''})
+        (self.root / BASELINE_DIR).symlink_to('../elsewhere')
+        git(self.root, 'add', '-A')
+        git(self.root, 'commit', '-q', '-m', 'link')
+        with self.assertRaises(BaselineError):
+            baseline_at(self.root, 'HEAD')
+
+    def test_symlinked_baseline_in_the_working_tree_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            write(root, {'target.json': entry(999)})
+            (root / BASELINE_DIR).mkdir(parents=True)
+            (root / baseline_path('apps/web')).symlink_to('../../target.json')
+            with self.assertRaises(BaselineError):
+                read_baseline(root)
+            (root / baseline_path('apps/web')).unlink()
+            write(root, {LEGACY_BASELINE: entry(1)})
+            with self.assertRaises(BaselineError):
+                read_baseline(root)
+
+    def test_symlinked_baseline_folder_in_the_working_tree_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            write(root, {'elsewhere/apps__web.json': entry(0)})
+            (root / '.github').mkdir()
+            (root / BASELINE_DIR).symlink_to('../elsewhere')
+            with self.assertRaises(BaselineError):
+                read_baseline(root)
 
     def test_broken_baseline_is_an_error(self) -> None:
         commit(self.root, {SCRIPT: ''})
@@ -310,6 +375,160 @@ class BaselineAtTest(RepoTest):
         rev = commit(self.root, {LEGACY_BASELINE: json.dumps({'dsh': {'apps/web': 3}, 'narrative': {}}), SCRIPT: ''})
         same = {'dsh': {'apps/web': 3}, 'narrative': {}}
         self.assertEqual(compare(same, same, baseline_at(self.root, rev)), [])
+
+
+class MainEntryTest(RepoTest):
+    def setUp(self) -> None:
+        super().setUp()
+        scripts = Path(__file__).resolve().parent
+        self.script = {
+            f'.github/scripts/{name}': (scripts / name).read_text(encoding='utf-8')
+            for name in ('check_ratchets.py', 'project_paths.py')
+        }
+
+    def run_main(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, '.github/scripts/check_ratchets.py', *args],
+            cwd=self.root, capture_output=True, text=True,
+        )
+
+    def land(self, files: dict[str, str | None]) -> str:
+        return commit(self.root, {**self.script, **files})
+
+    def test_equal_to_the_baseline_passes(self) -> None:
+        self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/web'): entry(1)})
+        result = self.run_main()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('只降不升的計數通過', result.stdout)
+
+    def test_more_than_the_baseline_fails(self) -> None:
+        self.land({'apps/web/a.ts': '// dsh\n// dsh\n', baseline_path('apps/web'): entry(1)})
+        result = self.run_main()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('::error::', result.stdout)
+        self.assertIn('新增的要拿掉', result.stdout)
+
+    def test_a_directory_without_a_baseline_file_counts_from_zero(self) -> None:
+        self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/harness'): entry(0)})
+        result = self.run_main()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('apps/web 有 1 處，基準是 0', result.stdout)
+
+    def test_lower_than_the_baseline_asks_to_lower_it(self) -> None:
+        self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/web'): entry(2)})
+        result = self.run_main()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('調成 1', result.stdout)
+
+    def test_broken_baseline_file_fails(self) -> None:
+        for text in ('{', '[]', '{"dsh": 1}'):
+            self.land({baseline_path('apps/web'): text})
+            result = self.run_main()
+            self.assertEqual(result.returncode, 1, text)
+            self.assertIn('::error::', result.stdout)
+
+    def test_raising_a_baseline_against_base_fails(self) -> None:
+        base = self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/web'): entry(1)})
+        self.land({'apps/web/b.ts': '// dsh\n', baseline_path('apps/web'): entry(2)})
+        self.assertEqual(self.run_main().returncode, 0)
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('基準只能降', result.stdout)
+
+    def test_a_new_directory_baseline_against_base_fails(self) -> None:
+        base = self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/web'): entry(1)})
+        self.land({'apps/harness/a.ts': '// dsh\n', baseline_path('apps/harness'): entry(1), baseline_path('apps/web'): entry(1)})
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('apps/harness 的基準從 0 調高到 1', result.stdout)
+
+    def test_lowering_against_base_passes(self) -> None:
+        base = self.land({'apps/web/a.ts': '// dsh\n// dsh\n', baseline_path('apps/web'): entry(2)})
+        self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/web'): entry(1)})
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_unknown_base_fails_instead_of_skipping(self) -> None:
+        self.land({baseline_path('apps/web'): entry(0)})
+        result = self.run_main('--base', 'no-such-rev')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('讀不到 no-such-rev', result.stdout)
+
+    def test_empty_base_fails_instead_of_skipping(self) -> None:
+        self.land({'apps/web/a.ts': '// dsh\n', baseline_path('apps/web'): entry(1)})
+        for empty in ('', '  '):
+            result = self.run_main('--base', empty)
+            self.assertEqual(result.returncode, 1, repr(empty))
+            self.assertIn('--base 是空字串', result.stdout)
+
+    def test_broken_baseline_at_base_fails(self) -> None:
+        cases = (
+            ({baseline_path('apps/web'): '{'}, False),
+            ({LEGACY_BASELINE: '{'}, True),
+            ({LEGACY_BASELINE: '[]'}, True),
+            ({LEGACY_BASELINE: json.dumps({'dsh': [['apps/web', 5]], 'narrative': {}})}, True),
+            ({LEGACY_BASELINE: json.dumps({'dsh': {}, 'narrative': 3})}, True),
+        )
+        for files, old_script in cases:
+            git(self.root, 'rm', '-rq', '--ignore-unmatch', '.github/ratchets', LEGACY_BASELINE)
+            base = commit(self.root, {**self.script, **({SCRIPT: ''} if old_script else {}), **files})
+            git(self.root, 'rm', '-rq', '--ignore-unmatch', '.github/ratchets', LEGACY_BASELINE)
+            self.land({baseline_path('apps/web'): entry(0)})
+            result = self.run_main('--base', base)
+            self.assertEqual(result.returncode, 1, files)
+            self.assertIn('::error::', result.stdout, files)
+            self.assertNotIn('Traceback', result.stderr, files)
+
+    def test_symlinked_baseline_folder_in_the_working_tree_fails(self) -> None:
+        self.land({'elsewhere/apps__web.json': entry(0)})
+        git(self.root, 'rm', '-rq', '--ignore-unmatch', '.github/ratchets')
+        (self.root / BASELINE_DIR).symlink_to('../elsewhere')
+        git(self.root, 'add', '-A')
+        git(self.root, 'commit', '-q', '-m', 'link')
+        result = self.run_main()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('是連結', result.stdout)
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_missing_baseline_object_at_base_fails(self) -> None:
+        base = self.land({baseline_path('apps/web'): entry(0)})
+        blob = git(self.root, 'rev-parse', f'{base}:{baseline_path("apps/web")}')
+        (self.root / '.git' / 'objects' / blob[:2] / blob[2:]).unlink()
+        self.assertEqual(
+            subprocess.run(['git', 'cat-file', '-e', blob], cwd=self.root).returncode, 1,
+        )
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 1)
+
+    def test_legacy_file_at_base_is_compared(self) -> None:
+        base = commit(self.root, {**self.script, SCRIPT: '', LEGACY_BASELINE: json.dumps({'dsh': {'apps/web': 1}, 'narrative': {}})})
+        self.land({
+            LEGACY_BASELINE: None, 'apps/web/a.ts': '// dsh\n// dsh\n', baseline_path('apps/web'): entry(2),
+        })
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('基準只能降', result.stdout)
+
+    def test_folder_and_legacy_file_together_at_base_fail(self) -> None:
+        base = self.land({
+            baseline_path('apps/web'): entry(0),
+            LEGACY_BASELINE: json.dumps({'dsh': {'apps/web': 99}, 'narrative': {}}),
+        })
+        self.land({LEGACY_BASELINE: None})
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('並存', result.stdout)
+
+    def test_everything_at_zero_at_base_is_not_an_error(self) -> None:
+        base = self.land({'apps/web/a.ts': '// 無\n'})
+        result = self.run_main('--base', base)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_legacy_file_in_the_tree_fails(self) -> None:
+        self.land({LEGACY_BASELINE: entry(1), baseline_path('apps/web'): entry(0)})
+        result = self.run_main()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(LEGACY_BASELINE, result.stdout)
 
 
 class ParallelMergeTest(RepoTest):
