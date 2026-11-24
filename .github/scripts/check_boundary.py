@@ -1,8 +1,8 @@
-"""web、harness 與 `scripts/` 的邊界檢查（字串比對；`scripts/` 算 harness 一側）。
+"""web 與 `harness/` 的邊界檢查（字串比對；掃 `web`、`harness/apps/harness` 與 `harness/scripts`，後兩者算 harness 一側）。
 
 只看程式碼裡的字串字面值與樣板字串的靜態片段，不做資料流分析：變數拼出來的路徑、
 `--filter '@nexus/web'` 這類參數字串、`node_modules/@nexus/web/dist` 這類安裝後的路徑都不保證抓得到，留給拆倉後的實體邊界。
-相對路徑解析到 repo 根不算越界；解析到 `apps` 本身只在 `new URL(…)` 或串起來的片段裡算。
+相對路徑解析到 repo 根不算越界。
 """
 
 from __future__ import annotations
@@ -18,17 +18,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-WEB = 'apps/web'
-HARNESS = 'apps/harness'
-SCRIPTS = 'scripts'
-WIRE_PACKAGE = 'packages/nexus-wire'
+WEB = 'web'
+HARNESS = 'harness/apps/harness'
+SCRIPTS = 'harness/scripts'
+WIRE_PACKAGE = 'harness/packages/nexus-wire'
+HARNESS_ROOT = 'harness'
 WIRE_SPECIFIER = '@nexus/wire'
 WEB_SPECIFIER = '@nexus/web'
 
 CODE_SUFFIXES = ('.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs')
 SKIPPED_DIRS = {'node_modules', 'dist', '.git', 'coverage', '.turbo'}
 
-WEB_FORBIDDEN_PREFIXES = ('apps/harness', 'docs', 'scripts', 'vendor', 'references', '.github')
+WEB_FORBIDDEN_PREFIXES = ('docs', 'references', '.github')
 
 
 @dataclass(frozen=True)
@@ -40,57 +41,52 @@ class Exemption:
 
 EXEMPTIONS: tuple[Exemption, ...] = (
     Exemption(
-        'apps/web/e2e/*',
+        'web/e2e/*',
         'web-path',
-        '端到端測試起真的 harness（`apps/harness/src/serve.ts`）與真的瀏覽器，對著它跑；那是這組測試要驗的東西。'
+        '端到端測試起真的 harness（`harness/apps/harness/src/serve.ts`）與真的瀏覽器，對著它跑；那是這組測試要驗的東西。'
         '倉庫拆開後這組測試的歸屬留給 E 卡。',
     ),
     Exemption(
-        'apps/web/scripts/measure-frames.mjs',
+        'web/scripts/measure-frames.mjs',
         'web-path',
         '量測腳本要起真的 harness 才量得到畫格；留給 E 卡。',
     ),
     Exemption(
-        'scripts/gen-third-party-notices.ts',
+        'harness/scripts/gen-third-party-notices.ts',
         'harness-path',
-        '授權彙整要讀 `apps/web` 的相依與內建字型，並真的 build 一次 web（`:450`、`:531`）；留給拆倉那張卡。',
+        '授權彙整要讀 `web` 的相依與內建字型，並真的 build 一次 web（`:450`、`:531`）；留給拆倉那張卡。',
     ),
     Exemption(
-        'scripts/gen-tsconfig-paths.ts',
+        'harness/scripts/gen-tsconfig-paths.ts',
         'harness-path',
-        '產生 tsconfig paths 要讀 `apps/web/tsconfig.json`（`:52`）；留給拆倉那張卡。',
+        '產生 tsconfig paths 要讀 `web/tsconfig.json`（`:52`）；留給拆倉那張卡。',
     ),
     Exemption(
-        'scripts/gen-typecheck-projects.ts',
-        'harness-path',
-        '產生 typecheck 專案清單要走過 `apps/*`（含 web）讀每個 workspace 的 manifest（`:37`、`:83`）；留給拆倉那張卡。',
-    ),
-    Exemption(
-        'scripts/release/members.ts',
-        'harness-path',
-        '發版成員清單掃整層 `apps`（`:34`），harness 的 `release-scripts.test.ts` 會呼叫它；留給拆倉那張卡。',
-    ),
-    Exemption(
-        'apps/harness/package.json',
+        'harness/apps/harness/package.json',
         'harness-spec',
         'harness 供應網頁 dist（`serve-run.ts` 的 `webDistDir`）：宣告對 web 的建置相依。留給 E 卡。',
     ),
     Exemption(
-        'apps/harness/src/serve-run.ts',
+        'harness/apps/harness/src/release-scripts.test.ts',
+        'harness-path',
+        '發版成員要含 web：測試核對成員清單等於 `pnpm-workspace.yaml` 的群組展開（扣掉 `harness/vendor/*`），並斷言 `web/package.json` 在內。',
+    ),
+    Exemption(
+        'harness/apps/harness/src/serve-run.ts',
         'harness-spec',
         'harness 供應網頁 dist：`require.resolve(\'@nexus/web/package.json\')` 找 dist 目錄。留給 E 卡。',
     ),
     Exemption(
-        'apps/harness/src/third-party-notices.test.ts',
+        'harness/apps/harness/src/typecheck-projects.test.ts',
         'harness-path',
-        '第三方授權彙整（卡上例外 2）：測試對真的 repo 呼叫 `render()`，`scripts/gen-third-party-notices.ts` 會讀 `apps/web` 並 build web；'
-        '檔裡另有幾處假 repo 夾具字串 `apps/web/package.json`。留給 E 卡。',
+        'typecheck 專案清單的測試把 `web` 放進要走過的目錄，讀每個 workspace 的 `package.json`（含 `web` 的相依清單），'
+        '核對 project references、並排除 web（web 單獨 `tsc --noEmit`）；讀的是 manifest，不讀 web 原始碼。',
     ),
     Exemption(
-        'apps/harness/src/typecheck-projects.test.ts',
+        'harness/apps/harness/src/third-party-notices.test.ts',
         'harness-path',
-        'typecheck 專案清單的測試走過 `packages/*`、`apps/*` 讀每個 workspace 的 `package.json`（含 `apps/web` 的相依清單），'
-        '核對 project references、並排除 web（web 單獨 `tsc --noEmit`）；讀的是 manifest，不讀 web 原始碼。',
+        '第三方授權彙整（卡上例外 2）：測試對真的 repo 呼叫 `render()`，`harness/scripts/gen-third-party-notices.ts` 會讀 `web` 並 build web；'
+        '檔裡另有幾處假 repo 夾具字串 `web/package.json`。留給 E 卡。',
     ),
 )
 
@@ -272,25 +268,6 @@ def expand_braces(value: str) -> list[str]:
     return out
 
 
-APPS_GLOB = re.compile(r'(^|/)apps/\*')
-APPS_TAIL = re.compile(r'(^|/)apps/?$')
-
-
-def apps_layer(text: str, literals: list[Literal], own: str, other: str) -> list[tuple[int, str]]:
-    found: list[tuple[int, str]] = []
-    for lit in literals:
-        if any(APPS_GLOB.search(value) for value in expand_braces(lit.value)):
-            found.append((lit.line, lit.value))
-        elif lit.template and APPS_TAIL.search(lit.value):
-            found.append((lit.line, lit.value))
-    for first, segments in path_segments(text, literals, min_len=1):
-        for index, segment in enumerate(segments):
-            following = segments[index + 1] if index + 1 < len(segments) else None
-            if segment == 'apps' and following not in (own, other):
-                found.append((first.line, '/'.join(segments)))
-    return found
-
-
 def is_relative(value: str) -> bool:
     return value == '..' or value.startswith('./') or value.startswith('../')
 
@@ -309,7 +286,7 @@ def under(path: str, prefix: str) -> bool:
 def web_forbidden(path: str) -> bool:
     if any(under(path, prefix) for prefix in WEB_FORBIDDEN_PREFIXES):
         return True
-    return under(path, 'packages') and not under(path, WIRE_PACKAGE)
+    return under(path, HARNESS_ROOT) and not under(path, WIRE_PACKAGE)
 
 
 URL_POSITION = re.compile(r'\bURL\s*\(\s*$')
@@ -328,8 +305,11 @@ def relative_paths(file: str, text: str, literals: list[Literal]) -> list[tuple[
     return found
 
 
-def whole_layer(target: str) -> bool:
-    return target == 'apps'
+HARNESS_SEGMENT = re.compile(r'(^|[/\s])harness/(apps(/|$)|packages(?!/nexus-wire(/|$))(/|$))')
+HARNESS_LITERAL = re.compile(r'(^|[/\s])harness/apps/harness(/|$)')
+WEB_CONTENT = r'(src|e2e|dist|public|guard|tokengen|scripts|package\.json|tsconfig[\w.-]*|vite\.config[\w.]*|index\.html)'
+WEB_LITERAL = re.compile(r'(^|[/\s])(?<!@nexus/)web/' + WEB_CONTENT + r'(/|$)')
+WEB_RUN = re.compile(r'(^|/)(?<!@nexus/)web(/' + WEB_CONTENT + r'(/|$)|$)')
 
 
 def web_findings(file: str, text: str) -> list[tuple[int, str, str]]:
@@ -337,48 +317,79 @@ def web_findings(file: str, text: str) -> list[tuple[int, str, str]]:
     literals = string_literals(text)
     for first, segments in path_segments(text, literals):
         joined = '/'.join(segments)
-        if re.search(r'(^|/)apps/harness(/|$)', joined) or re.search(r'(^|/)packages/(?!nexus-wire(/|$))', joined):
+        if HARNESS_SEGMENT.search(joined):
             found.append((first.line, 'web-path', f'web 不准用路徑讀 wire 以外的 harness 內容：`{joined}`。'))
-    for line, joined in apps_layer(text, literals, 'web', 'harness'):
-        found.append((line, 'web-path', f'web 不准掃整層 `apps`（會讀到 harness）：`{joined}`。'))
     for line, value, target, as_path in relative_paths(file, text, literals):
         if target is not None and web_forbidden(target):
             found.append((line, 'web-path', f'web 不准用路徑讀 wire 以外的 harness 內容：`{value}` 指到 `{target}`。'))
-        elif as_path and target is not None and whole_layer(target):
-            found.append((line, 'web-path', f'web 不准掃整層 `apps`（會讀到 harness）：`{value}` 指到 `{target}`。'))
     for lit in literals:
         value = lit.value
         if value.startswith('@nexus/') and at_import_position(text, lit) and value.split('/')[0:2] != ['@nexus', 'wire']:
             found.append((lit.line, 'web-spec', f'web 不准 import `{value}`：web 只能相依 `{WIRE_SPECIFIER}`。'))
         elif not is_relative(value):
             for variant in expand_braces(lit.value):
-                if re.search(r'(^|[/\s])apps/harness(/|$)', variant):
+                if HARNESS_LITERAL.search(variant):
                     found.append((lit.line, 'web-path', f'web 不准用路徑讀 harness：`{value}`。'))
                     break
     return found
 
 
+PATH_CALL = re.compile(r'(?:^|[^\w$.])(?:(?:path|posix|nodePath)\.)?(join|resolve|joinPath)\s*$')
+PUSH_CALL = re.compile(r'\.push\s*$')
+
+
+def is_call_argument(text: str, lit: Literal) -> bool:
+    """字面值是路徑呼叫的引數：`join(root, 'web')`、`resolve('web')`、`'web' as const`、`...['web']`、`dirs.push('web')`。
+
+    非首個引數認 `join`／`resolve`／`joinPath`（裸的或 `path.` 開頭；`arr.join(', ', 'web')`、`Promise.resolve` 不算）；
+    唯一的引數只認 `resolve` 與 `push`（`arr.join('web')` 是串字串，不是路徑）。
+    """
+    before = text[: lit.start].rstrip()
+    after = re.sub(r'^as\s+const\b', '', text[lit.end :].lstrip()).lstrip()
+    if not before.endswith((',', '(', '[')) or after[:1] not in (',', ')', ']'):
+        return False
+    only = before.endswith('(')
+    depth = 0
+    for index in range(len(before) - 1, -1, -1):
+        char = before[index]
+        if char in ')]}':
+            depth += 1
+        elif char in '([{':
+            if depth == 0:
+                if char == '[' and before[:index].rstrip().endswith('...'):
+                    continue
+                if char != '(':
+                    return False
+                callee = before[:index]
+                if PUSH_CALL.search(callee):
+                    return True
+                match = PATH_CALL.search(callee)
+                return match is not None and (not only or match.group(1) == 'resolve')
+            depth -= 1
+    return False
+
+
 def harness_findings(file: str, text: str) -> list[tuple[int, str, str]]:
     found: list[tuple[int, str, str]] = []
     literals = string_literals(text)
-    for first, segments in path_segments(text, literals):
+    for first, segments in path_segments(text, literals, min_len=1):
         joined = '/'.join(segments)
-        if re.search(r'(^|/)apps/web(/|$)', joined):
+        if WEB_RUN.search(joined) and (joined != 'web' or is_call_argument(text, first)):
             found.append((first.line, 'harness-path', f'harness 不准掃或讀 web：`{joined}`。'))
-    for line, joined in apps_layer(text, literals, 'harness', 'web'):
-        found.append((line, 'harness-path', f'harness 不准掃整層 `apps`（會讀到 web）：`{joined}`。'))
+    for lit in literals:
+        if lit.template and lit.value == 'web' and text.startswith('`web`', lit.start):
+            if is_call_argument(text, Literal(lit.line, 'web', lit.start, lit.start + 5)):
+                found.append((lit.line, 'harness-path', 'harness 不准掃或讀 web：`web`。'))
     for line, value, target, as_path in relative_paths(file, text, literals):
         if target is not None and under(target, WEB):
             found.append((line, 'harness-path', f'harness 不准掃或讀 web：`{value}` 指到 `{target}`。'))
-        elif as_path and target is not None and whole_layer(target):
-            found.append((line, 'harness-path', f'harness 不准掃整層 `apps`（會讀到 web）：`{value}` 指到 `{target}`。'))
     for lit in literals:
         value = lit.value
         if (value == WEB_SPECIFIER or value.startswith(WEB_SPECIFIER + '/')) and at_import_position(text, lit):
             found.append((lit.line, 'harness-spec', f'harness 不准 import `{value}`。'))
         elif not is_relative(value):
             for variant in expand_braces(lit.value):
-                if re.search(r'(^|[/\s])apps/web(/|$)', variant):
+                if WEB_LITERAL.search(variant):
                     found.append((lit.line, 'harness-path', f'harness 不准掃或讀 web：`{value}`。'))
                     break
     return found

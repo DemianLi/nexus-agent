@@ -1,6 +1,6 @@
 # 程式碼規範
 
-程式碼該怎麼寫。協作流程（PR 標題、分支命名、PR 內文）見 [AGENTS.md](../AGENTS.md)。
+程式碼該怎麼寫。提交規則（PR 標題、分支命名、PR 內文）見 [contributing.md](contributing.md)。
 
 這份文件只寫已經定案的條文。沒遇過的問題不先寫規範 — 憑空發明的條文與實際長出來的程式碼對不上，最後會變成沒人遵守、卻被 code review 拿來挑錯的死條文。
 
@@ -12,7 +12,7 @@
 
 - **plugin 契約的每個擴充點** — 註冊、呼叫時機、回傳值處理，各要有測試。
 - **修 bug 先寫測試** — 測試要能在修好之前重現該 bug，否則無從證明它修好了。
-- **沒有測試的套件不得通過 gate** — CI 對 `packages/*` 跑 `pnpm --filter ./packages/* run test`（功能分支 → `develop` 的 PR 只跑異動到的 plugin 套件，`develop → main` 全跑），vitest 找不到測試檔就是紅燈。不要用 `passWithNoTests`，也不要改成 `--if-present` 把它繞過去。這個 gate 的價值就在於它會因為缺測試而失敗。
+- **沒有測試的套件不得通過 gate** — CI 對 `harness/packages/*` 跑 `pnpm --filter ./packages/* run test`（功能分支 → `develop` 的 PR 只跑異動到的 plugin 套件，`develop → main` 全跑），vitest 找不到測試檔就是紅燈。不要用 `passWithNoTests`，也不要改成 `--if-present` 把它繞過去。這個 gate 的價值就在於它會因為缺測試而失敗。
 
 測試與護欄也會說謊：宣稱的比實際觀察的多、或期望值跟被測物是同一個來源，綠燈就什麼都沒證明。三條（照 dsh `docs/testing.md`「Verify the world, not the self-report」與「A guard only guards if the regression fails it」）：
 
@@ -24,7 +24,7 @@
 
 ## 註解
 
-**註解寫 HEAD 的現況：契約、不變量、理由、外部限制，以及程式碼表達不出來的事。** 變更的來龍去脈（原本怎樣、改成怎樣、審查時怎麼決定）寫在 PR 內文；squash 合併時 PR 內文會成為 develop 上的 commit 內文，那裡就是它的家。對照 dsh 的出處與取捨同理，寫在 PR 內文 Summary 的「對照 dsh」，符合條件的寫成 ADR（[collab-mode](agents/collab-mode.md#adr)），不寫進程式碼與註解；註解只用 nexus 自己的話寫這段程式碼的契約與理由。拿不準的註解就刪，刪掉的每一條列進 PR 內文。逐條的判準與審查流程見 [no-comments](../.agents/skills/pstack/skills/no-comments/SKILL.md)。
+**註解寫 HEAD 的現況：契約、不變量、理由、外部限制，以及程式碼表達不出來的事。** 變更的來龍去脈（原本怎樣、改成怎樣、審查時怎麼決定）寫在 PR 內文；squash 合併時 PR 內文會成為 develop 上的 commit 內文，那裡就是它的家。對照 dsh 的出處與取捨同理，寫在 PR 內文 Summary 的「對照 dsh」，符合條件的寫成 ADR（[contributing](contributing.md#adr)），不寫進程式碼與註解；註解只用 nexus 自己的話寫這段程式碼的契約與理由。拿不準的註解就刪，刪掉的每一條列進 PR 內文。
 
 ## 秘密與環境變數
 
@@ -36,15 +36,15 @@ GitHub 端已啟用 secret scanning 與 push protection，但它們只擋得住�
 
 ## 會話日誌格式
 
-**升 `SESSION_LOG_FORMAT_VERSION` 就要在版本邊目錄補一條邊**（`packages/nexus-core/src/session-format.ts`，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）：`additive` 或 `breaking`，讀方為舊形狀留了分支的填 `readerBranch`，並讓一份比它舊的夾具含觸發它的事件。不補邊，模組載入就拋。**要發的版本格式版本是新的**（不在 `RELEASED_SESSION_FORMAT_VERSIONS` 裡），**發版前**開一張進 `develop` 的 PR 補上：把它加進 `RELEASED_SESSION_FORMAT_VERSIONS`，在 `scripts/session-format-fixtures/generate.ts` 的 `TARGETS` 加一筆，`rev` 填當下 `develop` 的 commit（版號 PR 只改版號、不動格式，用它之前或之後的 commit 都一樣），以那一版的寫入器凍一份夾具到 `apps/harness/src/fixtures/session-format/v<N>/`。不能留到發版那一步：`develop → main` 的 PR 不另加 commit，tag 也要 Release 跑完才有。這張合進去之後到 Release 發出之前，若又升了格式版本，就照新的版本重做一次。
+**升 `SESSION_LOG_FORMAT_VERSION` 就要在版本邊目錄補一條邊**（`harness/packages/nexus-core/src/session-format.ts`，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）：`additive` 或 `breaking`，讀方為舊形狀留了分支的填 `readerBranch`，並讓一份比它舊的夾具含觸發它的事件。不補邊，模組載入就拋。**要發的版本格式版本是新的**（不在 `RELEASED_SESSION_FORMAT_VERSIONS` 裡），**發版前**開一張進 `develop` 的 PR 補上：把它加進 `RELEASED_SESSION_FORMAT_VERSIONS`，在 `harness/scripts/session-format-fixtures/generate.ts` 的 `TARGETS` 加一筆，`rev` 填當下 `develop` 的 commit（版號 PR 只改版號、不動格式，用它之前或之後的 commit 都一樣），以那一版的寫入器凍一份夾具到 `harness/apps/harness/src/fixtures/session-format/v<N>/`。不能留到發版那一步：`develop → main` 的 PR 不另加 commit，tag 也要 Release 跑完才有。這張合進去之後到 Release 發出之前，若又升了格式版本，就照新的版本重做一次。
 
 ## home 底下的狀態檔
 
-**改這幾份檔（`.credentials.yaml`、`plugin-journal.jsonl`、`browser-session.json`、`thread-organization.json`、`config-hash-key.json`、`thread-deletions.json`）的 schema 或版本，同一張 PR 要留著 `apps/harness/src/fixtures/home-state/v1/` 的夾具，並在 `home-state-v1-fixtures.test.ts` 旁邊證明 v1 怎麼處置**（[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh `session-projection-cache/README.zh.md:130`）：讀相容、照當前版本重寫，或 backup-and-skip；就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。出貨新版本時另放 `v2/`，不動 `v1/`。backup-and-skip 只給可以重建的衍生資料，這幾份都是權威狀態，沒有理由用它（`docs/operations.md` 的〈home 底下的狀態檔壞了怎麼辦〉）。夾具裡的值一律是假的（見上面〈秘密與環境變數〉：夾具不放真的 secret）。
+**改這幾份檔（`.credentials.yaml`、`plugin-journal.jsonl`、`browser-session.json`、`thread-organization.json`、`config-hash-key.json`、`thread-deletions.json`）的 schema 或版本，同一張 PR 要留著 `harness/apps/harness/src/fixtures/home-state/v1/` 的夾具，並在 `home-state-v1-fixtures.test.ts` 旁邊證明 v1 怎麼處置**（[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh `session-projection-cache/README.zh.md:130`）：讀相容、照當前版本重寫，或 backup-and-skip；就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。出貨新版本時另放 `v2/`，不動 `v1/`。backup-and-skip 只給可以重建的衍生資料，這幾份都是權威狀態，沒有理由用它（`docs/operations.md` 的〈home 底下的狀態檔壞了怎麼辦〉）。夾具裡的值一律是假的（見上面〈秘密與環境變數〉：夾具不放真的 secret）。
 
 ## 跨套件的型別收緊必須原子落地
 
-`packages/*` 的一次型別收緊會讓消費它的 `apps/*` **當場編不過**。拆成兩張 PR 的話，中間那段
+`harness/packages/*` 的一次型別收緊會讓消費它的 `apps/*` **當場編不過**。拆成兩張 PR 的話，中間那段
 時間樹是紅的，而 `develop` 要求 gate 綠燈 —— 兩張都合不進去。
 
 收緊型別的那張 PR 原則上只改自己的套件。**先確認拆不開。** 很多收緊其實拆得開，而拆開是預設：加一個必填欄位就是 —— 對方那一刀

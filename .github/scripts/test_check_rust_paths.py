@@ -8,14 +8,14 @@ from pathlib import Path
 import check_rust_paths as mod
 
 ROOT = mod.ROOT
-OLD_CRATE = 'native/sandbox-spawner'
-NEW_CRATE = 'harness/native/sandbox-spawner'
-OLD_HARNESS = 'apps/harness'
-NEW_HARNESS = 'harness/apps/harness'
+CURRENT_CRATE = 'harness/native/sandbox-spawner'
+STALE_CRATE = 'native/sandbox-spawner'
+CURRENT_HARNESS = 'harness/apps/harness'
+STALE_HARNESS = 'apps/harness'
 
 
 class Tree:
-    def __init__(self, test: unittest.TestCase, crate: str = OLD_CRATE, harness: str = OLD_HARNESS) -> None:
+    def __init__(self, test: unittest.TestCase, crate: str = CURRENT_CRATE, harness: str = CURRENT_HARNESS) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         test.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -37,12 +37,12 @@ class Tree:
         self.edit(rel, old, new)
 
 
-def moved_tree(test: unittest.TestCase) -> Tree:
-    tree = Tree(test, NEW_CRATE, NEW_HARNESS)
+def stale_tree(test: unittest.TestCase) -> Tree:
+    tree = Tree(test, STALE_CRATE, STALE_HARNESS)
     for rel in (mod.ACTION, mod.CI):
-        tree.move(rel, OLD_CRATE, NEW_CRATE)
+        tree.move(rel, CURRENT_CRATE, STALE_CRATE)
     for rel in (mod.CI, mod.POST_MERGE):
-        tree.move(rel, f'cp {OLD_HARNESS}/', f'cp {NEW_HARNESS}/')
+        tree.move(rel, f'cp {CURRENT_HARNESS}/', f'cp {STALE_HARNESS}/')
     return tree
 
 
@@ -57,61 +57,61 @@ class RealRepoTest(unittest.TestCase):
 
 
 class BothShapesTest(unittest.TestCase):
-    def test_old_shape_is_green(self) -> None:
+    def test_current_shape_is_green(self) -> None:
         self.assertEqual(mod.check(Tree(self).root), [])
 
-    def test_moving_both_sides_together_is_green(self) -> None:
-        self.assertEqual(mod.check(moved_tree(self).root), [])
+    def test_both_sides_in_the_stale_shape_together_is_green(self) -> None:
+        self.assertEqual(mod.check(stale_tree(self).root), [])
 
 
 class MutationTest(unittest.TestCase):
     def test_changing_only_the_cargo_working_directory_is_red(self) -> None:
-        tree = Tree(self, NEW_CRATE)
-        tree.edit(mod.ACTION, f'working-directory: {OLD_CRATE}\n', f'working-directory: {NEW_CRATE}\n')
+        tree = Tree(self, STALE_CRATE)
+        tree.edit(mod.ACTION, f'working-directory: {CURRENT_CRATE}\n', f'working-directory: {STALE_CRATE}\n')
         errors = mod.check(tree.root)
         self.assertTrue(any('快取的路徑' in e or '打包執行檔' in e for e in errors), errors)
 
     def test_changing_only_the_ci_cargo_working_directory_is_red(self) -> None:
-        tree = Tree(self, NEW_CRATE)
-        tree.edit(mod.CI, f'working-directory: {OLD_CRATE}\n', f'working-directory: {NEW_CRATE}\n')
+        tree = Tree(self, STALE_CRATE)
+        tree.edit(mod.CI, f'working-directory: {CURRENT_CRATE}\n', f'working-directory: {STALE_CRATE}\n')
         errors = mod.check(tree.root)
         self.assertTrue(any('cargo 步驟' in e for e in errors), errors)
 
     def test_changing_only_the_binary_paths_is_red(self) -> None:
         tree = Tree(self)
-        tree.edit(mod.CI, f'github.workspace }}}}/{OLD_CRATE}/target', f'github.workspace }}}}/{NEW_CRATE}/target')
+        tree.edit(mod.CI, f'github.workspace }}}}/{CURRENT_CRATE}/target', f'github.workspace }}}}/{STALE_CRATE}/target')
         errors = mod.check(tree.root)
         self.assertTrue(any('的路徑落在' in e for e in errors), errors)
 
     def test_changing_only_the_cache_paths_is_red(self) -> None:
         tree = Tree(self)
-        tree.edit(mod.ACTION, f'          {OLD_CRATE}/target\n', f'          {NEW_CRATE}/target\n')
+        tree.edit(mod.ACTION, f'          {CURRENT_CRATE}/target\n', f'          {STALE_CRATE}/target\n')
         errors = mod.check(tree.root)
         self.assertTrue(any('快取的路徑' in e for e in errors), errors)
 
     def test_changing_only_the_hash_files_is_red(self) -> None:
         tree = Tree(self)
-        tree.edit(mod.ACTION, f"'{OLD_CRATE}/Cargo.lock'", f"'{NEW_CRATE}/Cargo.lock'")
+        tree.edit(mod.ACTION, f"'{CURRENT_CRATE}/Cargo.lock'", f"'{STALE_CRATE}/Cargo.lock'")
         self.assertTrue(any('快取鍵讀的是' in e for e in mod.check(tree.root)))
 
     def test_changing_only_the_packaging_directory_is_red(self) -> None:
         tree = Tree(self)
-        tree.edit(mod.ACTION, f'working-directory: {OLD_CRATE}/target', f'working-directory: {NEW_CRATE}/target')
+        tree.edit(mod.ACTION, f'working-directory: {CURRENT_CRATE}/target', f'working-directory: {STALE_CRATE}/target')
         self.assertTrue(any('打包執行檔' in e for e in mod.check(tree.root)))
 
     def test_a_crate_that_is_not_on_disk_is_red(self) -> None:
-        tree = moved_tree(self)
-        shutil.rmtree(tree.root / NEW_CRATE)
+        tree = stale_tree(self)
+        shutil.rmtree(tree.root / STALE_CRATE)
         self.assertTrue(any('Cargo.toml' in e for e in mod.check(tree.root)))
 
     def test_vitest_result_path_must_follow_the_harness_package(self) -> None:
-        tree = Tree(self, harness=NEW_HARNESS)
+        tree = Tree(self, harness=STALE_HARNESS)
         errors = mod.check(tree.root)
         self.assertEqual(len([e for e in errors if 'vitest' in e]), 2, errors)
 
     def test_harness_package_missing_is_red(self) -> None:
         tree = Tree(self)
-        shutil.rmtree(tree.root / OLD_HARNESS)
+        shutil.rmtree(tree.root / CURRENT_HARNESS)
         self.assertTrue(any('@nexus/harness' in e for e in mod.check(tree.root)))
 
     def test_nothing_to_check_is_red(self) -> None:

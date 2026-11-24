@@ -1,0 +1,544 @@
+/**
+ * 圍堵：讓工具的失敗變成一則回饋，而不是讓整場 run 死掉。
+ *
+ * **這不是新功能，是修回基座自己的預設。** `ToolNode.runTool` 只要
+ * `this.wrapToolCall` 存在，就把工具自己拋的錯當成 middleware 的錯
+ * （`langchain@1.5.10`，`dist/agents/nodes/ToolNode.js:275-282`），而 `#handleError:150`
+ * 對 middleware 的錯是 `handleToolErrors !== true` 即重拋。`ReactAgent` 建 `ToolNode`
+ * 時只傳 `{ signal, wrapToolCall }`（`:174-179`），**`handleToolErrors: true` 經由
+ * `createAgent` 根本到不了**，所以那不是一個可以設回去的預設值。
+ *
+ * 而 `createDeepAgent` 永遠掛 `FilesystemMiddleware`，它**永遠帶 `wrapToolCall`**
+ * （`deepagents@1.13.1`）。兩件事湊在一起的結果是：**任何一個工具拋錯，整場 run 直接
+ * 死**——沒有 ToolMessage、沒有回饋、模型不知道發生過什麼。
+ *
+ * ## 它為什麼住在 core 而不是某個 plugin
+ *
+ * dsh 那側**不把這件事做成可選的**：它是註冊表執行管線自己的 `catch`
+ * （`packages/core/tools/src/index.ts:1494-1496` → `toolErrorResult`，SHA `4e84901`），
+ * 文件把它寫成性質而不是功能——「未知工具和抛出异常的工具都会变为结构化错误……
+ * **调用失败但不终止当前轮次**」（`docs/subsystems/tools.zh.md:404`）。
+ * 做成一個掛不掛隨人的 plugin 才是偏離。
+ *
+ * 這一版之前它確實住在 `@nexus/plugin-validation`，而那個 plugin **不在任何一份正式
+ * 清單裡**——也就是說產品路徑上的每一個工具，今天拋錯都會殺掉整場 run
+ * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)）。搬到 fold 打底之後，
+ * 「有沒有圍堵」不再是清單怎麼寫的事。plugin 那側的公開名字保留成 re-export。
+ *
+ * **一條命脈是 `isGraphBubbleUp`。** LangGraph 的中斷（`interrupt()`）是用拋例外實作的，
+ * 一個不分辨的 `try/catch` 會把 HITL 的暫停整個吃掉——實測 `__interrupt__` 消失、
+ * 換成一則假的 error ToolMessage，核准點就這樣無聲地不見了。那正好是
+ * [#71](https://github.com/DemianLi/nexus-agent/pull/71) 釘住的那些行為。搬家之後圍堵
+ * 第一次包住 root 與**每個 subagent** 的核准路徑，所以那條命脈在新位置重量過一次
+ * （`harness/apps/harness/src/interrupt.test.ts`、`validation.test.ts`）。
+ *
+ * ## 超時被單獨認出來（[#162](https://github.com/DemianLi/nexus-agent/issues/162)）
+ *
+ * 一則「執行失敗：The operation was aborted due to timeout」跟一則「執行失敗：連不上」
+ * 對模型是同一種東西。dsh 不是這樣：它把超時做成一個帶碼的結果，訊息說得出等了多久
+ * （`Error: tool call timed out after <ms>ms`）。這裡認出它、並且說出等了多久。
+ *
+ * **這是一筆載體被丟掉的偏離。** dsh 的 `guard/timeout-policy` 同時做三件事：武裝截止
+ * 時間、分類、措辭。我們**只做後兩件**，理由是前一件基座已經做了——工具上的
+ * `defaultConfig: { timeout }` 會被 `ensureConfig` 變成 `AbortSignal.timeout(ms)` 併進
+ * `signal`（`@langchain/core@1.2.9` 的 `runnables/config.js:100-120`，實測），而我們樹上
+ * 唯一有預算的 MCP 工具走的正是這條（`@nexus/tool-adapter` 把 `NexusTool.timeoutMs` 轉成 `defaultConfig: { timeout }`）。
+ * 一個只剩措辭的 plugin 沒有東西可武裝，而且照 [#159](https://github.com/DemianLi/nexus-agent/issues/159)
+ * 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。**載體丟掉，紀律照抄**：分類
+ * （它是超時，不是一般失敗）與射程（只作用在這次工具呼叫，不動整場 run）。
+ *
+ * **`TOOL_TIMEOUT` 這個碼有在發，目的地是會話日誌。** dsh 把用途寫在原始碼裡：讓 retry／
+ * sandbox plugin 與 replay 路由用，那三個用途我們今天仍然沒有。這個碼去的是另一個地方：
+ * {@link classifyThrownToolError} 標出來的碼，經 `settle` 寫進會話日誌那顆 `tool/result`
+ * 的 `error`（[#270](https://github.com/DemianLi/nexus-agent/pull/270) 起）。**2026-09-19
+ * 更正**：這一段原本寫「刻意不發」，那是 [#176](https://github.com/DemianLi/nexus-agent/pull/176)
+ * 當時的事實，#270 之後就過期了。
+ *
+ * **`tool()` 的「放生」也不修，明著登記。** abort 當下它 reject 外層 promise、把 `func`
+ * 留在背景跑完（`@langchain/core` `dist/tools/index.js:290-301`；#148 實測預算 120ms、
+ * 本體 600ms，run 結束當下工具還在跑）。dsh 是等下游靜止之後才給超時結果、絕不硬殺。
+ * 差在**載體不在紀律**：`AbortSignal` 沒有 quiescence 這個原語，要模擬得自己接一層靜止
+ * 追蹤。不模擬。
+ *
+ * ## 工具事件也在這一層記（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）
+ *
+ * `tool/call` 在進任何一層之前記，`tool/result` 在落定之後記。**只有這一層兩樣都看得到**：
+ * 內層拋出來的原始錯誤（超時、取消、參數不合）只在這裡的 `catch` 裡還是錯誤，出了這一層
+ * 就變成訊息；內層自己回的錯誤訊息（核准被拒、schema 違規、未知工具）則原樣從 `next()`
+ * 回來，碼由產生它的那一層標好（未知工具由最內層標，見 `invalid-tool-args.ts`），這裡只讀不猜。
+ * 另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
+ * ——那正是這一層要擋的東西。
+ *
+ * 時刻同 dsh：`tool/call` 在核准之前（`packages/core/agent-loop/src/tool-calls.ts:168` 在
+ * `prepare` 之前記），所以被閘門擋掉的呼叫一樣有一對。形狀與偏離見 `session-log.ts` 的
+ * `SessionEventMap`。
+ *
+ * **`tool/result` 帶模型收到的那則訊息**（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）：
+ * 內層每一層換過的都在這裡看得到，所以它就是回給外層的那一則。**外層只剩基座那幾顆**，其中
+ * `FilesystemMiddleware` 會把過大的結果換成預覽，這一層看不到——那條偏離寫在 `tool/result` 那裡。
+ */
+
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { isGraphBubbleUp } from '@langchain/langgraph';
+import { MiddlewareError, ToolInvocationError } from 'langchain';
+import type { AgentMiddleware } from './base-types.js';
+import type { EventDispatcher } from './events.js';
+import { humanInputOf, waitedSince } from './human-input.js';
+import { rawArgumentsOf } from './invalid-tool-args.js';
+import { toLoggedMessage } from './logged-message.js';
+import { closer, closerError } from './conversation-replay.js';
+import type { SessionLookup, SpawnLink } from './registry.js';
+import { spawnedSubagentRunId } from './session-address.js';
+import {
+  createToolCallStepMiddleware,
+  toolNameOfCall,
+  wrappedRequestOf,
+} from './tool-call-step.js';
+import type { SessionLog } from './session-log.js';
+import {
+  HarnessError,
+  INVALID_ARGS,
+  readInjectedMessages,
+  readToolOutcome,
+  readToolResultMessage,
+  TOOL_ABORTED,
+  TOOL_TIMEOUT,
+  toolRefusal,
+} from './tool-events.js';
+import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
+import { notifyToolResult } from './tool-pipeline.js';
+import { runInToolMetaSlot } from './tool-result-meta.js';
+import { settleTurnConclusion } from './turn-conclusion.js';
+
+/** 圍堵 middleware 的名字。錯誤訊息與排序斷言用得到。 */
+export const CONTAINMENT_MIDDLEWARE_NAME = 'nexusToolFailureContainment';
+
+/**
+ * 工具自己拋錯時給模型的那句話。
+ *
+ * 這個字串**會送進模型的 context**，所以有兩條規矩：不帶堆疊、不帶原始參數。
+ * 基座自己那條路兩樣都帶——`ToolInvocationError` 的訊息把
+ * `JSON.stringify(toolCall.args)` 與整段 `error.stack` 都塞進去（實測），那是 PR #72
+ * 那個外洩形狀掉頭往內指。參數本來就在同一輪的 AI 訊息裡，模型看得到，複誦一次
+ * 只是多一份、不是多一個資訊。
+ *
+ * @param toolName - 失敗的那顆工具。
+ * @param error - 它拋出來的東西。
+ * @returns 給模型看的那一句。
+ */
+export function formatToolFailure(toolName: string, error: unknown): string {
+  let root = error;
+  while (MiddlewareError.isInstance(root)) root = root.cause;
+  // 基座包的那層 `ToolInvocationError.message` 自己就帶堆疊與原始參數，所以改讀它包著的原錯誤。
+  if (ToolInvocationError.isInstance(root)) root = root.toolError;
+  const detail = root instanceof Error ? root.message : String(root);
+  return `工具 ${toolName} 執行失敗：${detail}`;
+}
+
+/**
+ * `AbortSignal.timeout()` 逾時的那顆 `DOMException` 的名字。
+ *
+ * **這是一個量出來的字串，不是查來的。** 探針（`langchain@1.5.10` /
+ * `@langchain/core@1.2.9`，一顆宣告 `defaultConfig: { timeout: 120 }`、本體睡 500ms 的
+ * 工具）在 `wrapToolCall` 的 `catch` 裡拿到的是 `DOMException`、`name` 為 `TimeoutError`、
+ * `message` 為 `The operation was aborted due to timeout`，而且 `instanceof Error` 為真
+ * （`getAbortSignalError` 直接把 `signal.reason` 交出來）。
+ */
+const TIMEOUT_ERROR_NAME = 'TimeoutError';
+
+/**
+ * 這顆錯誤是不是「等太久」。
+ *
+ * **用 `name` 不用訊息比對**：訊息是 Node 的，會隨版本改；`name` 是 DOM 規範定的。
+ *
+ * **而且 `name` 是唯一分得開這一輪被中止的東西。** 同一個 `catch` 也接得到這一輪被中止
+ * 的那顆，`name` 為 `AbortError`（MCP 工具由 `@nexus/plugin-mcp` 換成這個名字）。把「凡是 abort 都當超時」寫下去的話，這一輪的中止會被回報成這顆工具太慢。
+ *
+ * @param error - `catch` 到的東西。
+ * @returns 是不是逾時。
+ */
+export function isToolTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === TIMEOUT_ERROR_NAME;
+}
+
+/**
+ * 這顆工具**自己宣告**的預算，沒宣告就是 `undefined`。
+ *
+ * 載體是工具上的 `defaultConfig.timeout`（dsh 那側是工具宣告數字、policy 管時序，形狀
+ * 一樣）。**沒有統一預設是照抄來的**：dsh 的 `bash`／`read`／`write`／`edit` 都刻意不
+ * 宣告，`timeoutMs === undefined` 就不武裝任何截止時間。所以一顆沒宣告的工具跑多久都
+ * 不會被打斷，這裡也就讀不到數字。
+ *
+ * @param request - 這次呼叫的請求形狀（`wrappedRequestOf`），或 `wrapToolCall` 收到的請求。
+ * @returns 宣告的毫秒數，或沒宣告／不是正數時的 `undefined`。
+ */
+export function declaredToolTimeoutMs(request: { readonly tool?: unknown }): number | undefined {
+  // **參數型別收到 `unknown` 為止**，同 {@link resolveToolName} 的處境但更極端：
+  // `defaultConfig` 根本不在 `ClientTool | ServerTool` 這個聯集上，所以連
+  // `{ defaultConfig?: unknown }` 都接不住呼叫端傳進來的 `request`。
+  const tool: unknown = request.tool;
+  if (typeof tool !== 'object' || tool === null) return undefined;
+  const config: unknown = (tool as { defaultConfig?: unknown }).defaultConfig;
+  if (typeof config !== 'object' || config === null) return undefined;
+  const timeout: unknown = (config as { timeout?: unknown }).timeout;
+  return typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0
+    ? timeout
+    : undefined;
+}
+
+/**
+ * 計時器比量到的時間早響、取整後差 1ms 的容差。只補這一件事：預算計時器到點時，量到的 `elapsedMs` 可能是預算減 1
+ * （量測的時鐘與計時器的時鐘不同，各自取整），不容差的話「等了 99ms」會讓句子漏掉「超過 100ms 預算」。不是用來猜誰的計時器響了。
+ */
+const TIMER_EARLY_FIRE_TOLERANCE_MS = 1;
+
+/**
+ * 工具等太久時給模型的那句話。
+ *
+ * **主詞是「等了多久」，不是「預算是多少」，而那是量出來的選擇。** 卡片
+ * （[#162](https://github.com/DemianLi/nexus-agent/issues/162)）的驗收句要求文字裡有預算
+ * 數字；探針量到那個數字**可以是錯的**：一顆宣告 5000ms 的工具，在呼叫端另外給了 120ms
+ * 預算時，`catch` 一樣收到 `TimeoutError`，而 `defaultConfig.timeout` 讀出來仍是 5000
+ * ——先響的是 120 那顆。**實際等了多久則永遠是真的**，不管是誰的計時器先響。
+ *
+ * 所以：**經過時間一定講**；**宣告的預算只在 `elapsedMs >= budgetMs` 時才講**——那時候
+ * 它才是一個合理的成因。反過來（等 121ms、預算 5000ms）兩個數字擺在一起像自相矛盾，
+ * 會把模型推向「這顆工具壞了」而不是「有別的東西先把它切掉」。
+ *
+ * 今天三個入口**都沒有人往 `invoke` 的 config 傳 `timeout`**（CLI 與 `serve` 只給
+ * `configurable`，eval 給的是 `signal`），所以那個情形是留給未來呼叫端的，不是現在就會
+ * 發生的事——這個條件是便宜的保險，不是在修一個活著的缺陷。
+ *
+ * 兩條規矩同 {@link formatToolFailure}：不帶堆疊、不帶原始參數。
+ *
+ * @param toolName - 超時的那顆工具。
+ * @param elapsedMs - 從進入這一層到拋出來之間過了多久。
+ * @param budgetMs - 這顆工具自己宣告的預算，沒宣告就是 `undefined`。
+ * @returns 給模型看的那一句。
+ */
+export function formatToolTimeout(toolName: string, elapsedMs: number, budgetMs?: number): string {
+  const overBudget =
+    budgetMs !== undefined && elapsedMs >= budgetMs - TIMER_EARLY_FIRE_TOLERANCE_MS;
+  return overBudget
+    ? `工具 ${toolName} 超時：等了 ${Math.max(elapsedMs, budgetMs)}ms，超過它宣告的 ${budgetMs}ms 預算。`
+    : `工具 ${toolName} 超時：等了 ${elapsedMs}ms。`;
+}
+
+/**
+ * 這次呼叫的工具名，判法見 {@link toolNameOfCall}。
+ *
+ * @param request - 這次呼叫的請求形狀（`wrappedRequestOf`），或 `wrapToolCall` 收到的請求。
+ * @returns 工具名。
+ */
+export function resolveToolName(request: {
+  readonly tool?: { readonly name?: unknown };
+  readonly toolCall: { readonly name: string };
+}): string {
+  return toolNameOfCall({ tool: request.tool, name: request.toolCall.name });
+}
+
+/**
+ * 拋出來的那顆錯是哪一種，照 dsh 的碼；**認不出來的回 `undefined`**。
+ *
+ * 一般拋錯不給碼是照抄，見 `tool-events.ts` 檔頭。認得出來的：
+ *
+ * - `TimeoutError` → `TOOL_TIMEOUT`（dsh `guard/timeout-policy` 的 `ToolTimeoutError`）；
+ * - `AbortError` → `ABORTED`——這一輪被中止，**不是**這顆工具超時，理由見 {@link isToolTimeout}；
+ * - 參數不合工具的 schema → `INVALID_ARGS`。基座把 `ToolInputParsingException` 包成
+ *   `ToolInvocationError` 從 handler 拋出來（`langchain@1.5.10` 的 `ToolNode.js:254`），
+ *   而那顆錯的 `name` 就是 `"Error"`（實測），**只認得出品牌**。中途每經過一層 middleware
+ *   可能再包一層 `MiddlewareError`，所以先沿 `.cause` 走到底——同基座自己的
+ *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
+ *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼；
+ * - 工具拋出 {@link HarnessError} → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`
+ *   （`packages/core/tools/src/index.ts:661-668`，`477b4f4`）。`NexusTool` 回 `ok: false` 時，碼由轉接器掛在訊息上
+ *   （`@nexus/tool-adapter`），不經這裡。
+ *
+ * @param error - `catch` 到的東西。
+ * @returns 它的碼，或 `undefined`。
+ */
+export function classifyThrownToolError(error: unknown): ToolErrorInfo | undefined {
+  let root = error;
+  while (MiddlewareError.isInstance(root)) root = root.cause;
+  if (isToolTimeout(root)) return { name: 'ToolTimeoutError', code: TOOL_TIMEOUT };
+  if (root instanceof Error && root.name === 'AbortError') {
+    return { name: 'AbortError', code: TOOL_ABORTED };
+  }
+  if (ToolInvocationError.isInstance(root)) return { name: 'ToolArgsError', code: INVALID_ARGS };
+  if (root instanceof HarnessError) return { name: root.name, code: root.code };
+  return undefined;
+}
+
+/** 註冊表的 `sessions` 通道裡，記工具事件用得到的那一半。 */
+export interface ToolEventSessions {
+  forCall(config: unknown): SessionLookup;
+  /**
+   * 登記這次呼叫可能派出子代理，見 `SessionRegistrationPoint.expectSpawn`（#1023）。**選填**：只給 `forCall` 的替身照舊
+   * 記工具事件，只是不寫子代理目錄。產品組裝傳的是 `registry.sessions`，一定有。
+   */
+  expectSpawn?(runId: string, link: SpawnLink): () => void;
+}
+
+/** 這次呼叫的請求形狀（`wrappedRequestOf`）裡，記工具事件讀得到的那幾格。 */
+interface RecordableRequest {
+  readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
+  readonly runtime?: { readonly configurable?: unknown };
+}
+
+/**
+ * 記 `tool/result` 用的函式：結果、模型收到的那則、跟著結果塞進對話的那幾則，以及給畫面的
+ * `meta`（`tool-result-meta.ts`；失敗的不帶，`undefined` 就是沒有）。
+ */
+type SettleToolCall = (
+  outcome: ToolOutcome,
+  message: ToolMessage | undefined,
+  injected: readonly HumanMessage[],
+  meta?: unknown,
+) => void;
+
+/** {@link recordToolCall} 交回來的兩件事。 */
+interface RecordedToolCall {
+  readonly settle: SettleToolCall;
+  /** 退掉「可能派出子代理」的登記（#1023）與接回時補記的登記。呼叫落定之後一定要叫，拋錯與中斷也是。 */
+  readonly release: () => void;
+}
+
+/**
+ * `tool/result` 被拒之後補的那一顆：最小的錯誤結果，形狀同續接時補的（`interrupted-turn.ts`）與 dsh `repair.ts` 那顆。
+ * 這顆也寫不進去，兩個錯一起拋（同 dsh `agent.ts:353`）；寫進去了就交回，由呼叫的人拋原錯。
+ *
+ * @param log - 這次呼叫的日誌。
+ * @param callId - 配對的呼叫。
+ * @param name - 工具名（給補的那則訊息）。
+ * @param rejected - 原本那顆被拒時拋的錯。
+ */
+function recordUnknownOutcome(
+  log: SessionLog,
+  callId: string,
+  name: string,
+  rejected: unknown,
+): void {
+  try {
+    log.append('tool/result', {
+      callId,
+      isError: true,
+      error: closerError(true),
+      message: closer({ id: callId, name }, true),
+    });
+  } catch (recoveryError) {
+    throw new AggregateError(
+      [rejected, recoveryError],
+      '工具結果記不進去，補的錯誤結果也記不進去',
+      { cause: rejected },
+    );
+  }
+}
+
+/**
+ * 記下 `tool/call`，回傳記 `tool/result` 用的函式。
+ *
+ * **這次不記的時候回 `undefined`，而且是整對不記**：沒接會話、認不出屬於哪一份
+ * （`forCall` 不是 `ok`）、或沒有 `callId`（配不起來）。只寫得進結果那一半的話，日誌上會有一顆找不到呼叫的結果。
+ *
+ * **記下了就順手登記「這次呼叫可能派出子代理」**（#1023）：鑰匙是這次呼叫自己的命名空間（`spawnedSubagentRunId`），
+ * 子代理那一側算出來的 `runId` 就是它，所以不必認工具名——不是 `task` 的呼叫不會有子日誌以它出生，登記到退掉為止都用不到。
+ * 只在 `tool/call` 記成之後登記：目錄一定落在它配對的那顆呼叫後面。
+ *
+ * **跟著結果塞進對話的訊息接在 `tool/result` 後面各記一顆 `user/message`**，同它們在對話裡的位置
+ * （見 `session-log.ts`）。結果那顆沒寫成就一顆都不記：沒有結果的注入在推歷史時接不到任何地方。
+ *
+ * ## 記不進去，這一步失敗（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）
+ *
+ * 這三種都進模型歷史，照 dsh 不吞（`packages/core/agent-loop/src/tool-calls.ts:156`、`:168`，`687f282e`）。會讓它們拋的是
+ * 日誌那一關拒收（#1526 的有損值、#1661 的深度上限）：
+ *
+ * - `tool/call` 寫不進去：原錯當場拋，工具本體不跑（dsh 的 `appendToolCall` 在 `prepare` 之前）。
+ * - `tool/result` 寫不進去：先補一顆最小的錯誤結果（`TOOL_OUTCOME_UNKNOWN`，碼由 {@link closerError} 給，同 dsh `agent.ts:344-355` 用
+ *   `repair.ts` 補的那顆），再拋原錯，這一步失敗。補的那顆讓日誌上的呼叫有配對、畫面上的工具卡收成失敗
+ *   （pump 從日誌的 `tool/result` 收卡）。補的也寫不進去就兩個錯一起拋（`AggregateError`，同 dsh `:353`）。
+ *   跟著要注入的 `user/message` 不寫，同 dsh 拋在 `acceptContext`（`:157`）之前。
+ * - 注入的 `user/message` 寫不進去：原錯當場拋。
+ *
+ * 拋出去的錯走出這一步，不會被這一層翻成錯誤訊息（見 `createContainmentMiddleware` 的結構）。
+ */
+function recordToolCall(
+  sessions: ToolEventSessions | undefined,
+  request: RecordableRequest,
+  raw: string | undefined,
+): RecordedToolCall | undefined {
+  const callId = request.toolCall.id;
+  if (sessions === undefined || callId === undefined || callId === '') return undefined;
+  // `runtime.configurable` 就是 `forCall` 要的那份，包回一層 `configurable` 同 `model-usage.ts`。
+  const where = { configurable: request.runtime?.configurable };
+  const found = sessions.forCall(where);
+  if (found.kind !== 'ok') return undefined;
+  const { log } = found;
+  const call = {
+    callId,
+    name: request.toolCall.name,
+    // 解不開的那顆記模型吐的原字串（歷史裡它已經是 `{}`），見 `invalid-tool-args.ts`。
+    arguments: raw ?? JSON.stringify(request.toolCall.args ?? {}),
+  };
+  // 寫不進去原錯當場拋，見上面。
+  log.append('tool/call', call);
+  // 停在提問上的呼叫不從頭重進（等人服務，`human-input.ts`）：接回時同一顆再記一次，日誌同從頭重進的那條路，結果也才跟呼叫落在
+  // 同一輪（見 `session-log.ts` 的 `tool/call`：配對取最後那一顆）。從頭重進的那條（LangGraph 的 `interrupt()`）由上面那一行記。
+  const unlisten = humanInputOf(where)?.onResumed(() => log.append('tool/call', call));
+  const runId = spawnedSubagentRunId(where);
+  // 子代理的輸入：`task` 與前景的 `subagent`（會被改寫成 `task`）都以 `description` 當那一句話。
+  const { args } = request.toolCall;
+  const description: unknown =
+    typeof args === 'object' && args !== null
+      ? (args as Record<string, unknown>)['description']
+      : undefined;
+  const unspawn =
+    runId === undefined || sessions.expectSpawn === undefined
+      ? () => {}
+      : sessions.expectSpawn(runId, {
+          parent: log,
+          callId,
+          ...(typeof description === 'string' && {
+            input: toLoggedMessage(new HumanMessage(description)),
+          }),
+        });
+  const settle: SettleToolCall = (outcome, message, injected, meta) => {
+    try {
+      log.append('tool/result', {
+        callId,
+        isError: outcome.isError,
+        // 沒碼、沒訊息的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
+        ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
+        ...(message === undefined ? {} : { message: toLoggedMessage(message) }),
+        // 失敗的呼叫不帶，同 dsh：client 對失敗一律走 generic，不看 meta。
+        ...(outcome.isError || meta === undefined ? {} : { meta }),
+      });
+    } catch (error) {
+      // 見上面：補一顆錯誤結果再拋原錯；跟著的注入不寫。
+      recordUnknownOutcome(log, callId, request.toolCall.name, error);
+      throw error;
+    }
+    for (const extra of injected) {
+      // 寫不進去原錯當場拋，見上面。
+      log.append('user/message', {
+        message: toLoggedMessage(extra),
+        // 圍堵只知道工具，不知道工具屬於哪個 plugin，見 `session-log.ts` 的 `user/message`。
+        source: { kind: 'plugin', plugin: request.toolCall.name },
+      });
+    }
+  };
+  const release = (): void => {
+    unlisten?.();
+    unspawn();
+  };
+  return { settle, release };
+}
+
+/**
+ * 造一個把工具失敗翻成 error ToolMessage 的 middleware，**給了 `sessions` 就順便記工具事件**。
+ *
+ * **時刻：dsh 的 `tools/execute`**（環繞 waterfall：超時／重試／指標）。這一層是那個
+ * 時刻在我們樹上的**第 0 格**佔用者。同一個時刻我們還有其他佔用者（逐個列在索引裡），而它們是同一種
+ * 機制的不同陣列位置，不是三種權限——索引見 `harness/apps/harness/src/interception-index.test.ts`。
+ *
+ * 它**必須排在整份 middleware 陣列的第 0 格**（root 與每個 subagent 都是）：`wrapToolCall`
+ * 是層層相包的，越前面越外層，而圍堵的射程要涵蓋內層每一個 middleware——連核准閘門
+ * 與校驗器自己的 bug 都在裡面。基座自己那幾個 middleware 永遠排在所有這些之前，接不到，
+ * 那是 `createDeepAgent` 的組裝順序，不是這裡能決定的事。掛法見 `fold.ts`。
+ *
+ * **唯一排在它外面的 core middleware 是同一步工具呼叫的屏障**（`tool-barrier.ts`，#711 第 2 步）：等待中的呼叫通過屏障前
+ * 必須什麼都不做，不能先被這裡記一顆 `tool/call`。屏障沒有失敗路徑，只會拋不帶酬載的 `GraphInterrupt`，是控制流，不需要圍堵接。
+ *
+ * **一份實例走遍 root 與每個 subagent。** 它唯一的 closure 是 `sessions` 那個通道，而那是
+ * 查詢不是狀態：該寫進哪一份日誌，每次從那一次呼叫的 `request` 現算，同 `model-usage.ts`。
+ * `try/catch` 裡讀到的其餘一切也都來自那一次呼叫。
+ *
+ * **中斷不是落定。** 核准閘門的 `interrupt()` 從這裡往外拋，那次呼叫只留下一顆 `tool/call`；
+ * resume 之後它以同一個 `callId` 再進來一次，再記一對。見 `session-log.ts` 的 `tool/call`。
+ *
+ * ## 順便派發 `tools/result`（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）
+ *
+ * 給了 `events` 就在**記 `tool/result` 之前**派發 `tools/result`（同 dsh：`notifyResult` 先於迴圈的 `appendToolResult`）。
+ * 成功回來的、內層回的錯誤訊息、這一層接住拋錯翻出來的訊息，都走同一個出口；不管有沒有接會話、記不記得進去都派發。
+ * 監聽者的失敗全部隔離（`notifyToolResult`），不會把一次已經有結果的呼叫翻成別的。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試與相容用的 re-export
+ *   走這條；產品組裝由 `fold.ts` 傳進來。
+ * @param events - 宿主持有的派發面。**省略就不派發**，行為與沒有這一格時一樣。
+ * @param reportObserverFailure - `tools/result` 的某位監聽者壞了往哪裡講；省略即 `console.warn`。
+ * @returns 可以放進 `middleware` 陣列的 middleware。
+ */
+export function createContainmentMiddleware(
+  sessions?: ToolEventSessions,
+  events?: EventDispatcher,
+  reportObserverFailure?: (message: string) => void,
+): AgentMiddleware {
+  return createToolCallStepMiddleware(CONTAINMENT_MIDDLEWARE_NAME, async (call, next) => {
+    const request = wrappedRequestOf(call);
+    // **計時從這一層開始，不是從工具本體開始**——工具本體我們碰不到。所以這個數字是
+    // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
+    // 的東西：模型等的就是這一段。
+    const startedAt = performance.now();
+    // 停在提問上不從頭重進的那條（`human-input.ts`）不重設 `startedAt`：等人的時間扣掉，同從頭重進時只量到重跑的那一段。
+    const waited = waitedSince({ configurable: request.runtime?.configurable });
+    // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
+    const raw = rawArgumentsOf(request, sessions);
+    // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
+    const recorded = recordToolCall(sessions, request, raw);
+    const settle = recorded?.settle;
+    try {
+      // **只有本體那一段在接錯的 try 裡**：`settle` 寫日誌拋的錯（#1665）要走出這一層，不能被翻成錯誤訊息。
+      let ran;
+      try {
+        // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
+        // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
+        ran = await runInToolMetaSlot(request.toolCall.name, request.toolCall.args, () => next());
+      } catch (error) {
+        // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
+        if (isGraphBubbleUp(error)) throw error;
+        const toolName = toolNameOfCall(call);
+        // 前綴由 `toolRefusal` 加，同 dsh 的 `toolErrorResult` 渲染每一顆拋出來的錯（#318）。
+        // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
+        // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
+        const message = toolRefusal(
+          isToolTimeout(error)
+            ? formatToolTimeout(
+                toolName,
+                Math.round(performance.now() - startedAt - waited()),
+                declaredToolTimeoutMs(request),
+              )
+            : formatToolFailure(toolName, error),
+          { callId: request.toolCall.id ?? '', name: toolName },
+        );
+        const kind = classifyThrownToolError(error);
+        if (events !== undefined) {
+          notifyToolResult(events, request, message, reportObserverFailure);
+        }
+        settle?.(
+          kind === undefined ? { isError: true } : { isError: true, error: kind },
+          message,
+          [],
+        );
+        // 拋錯翻出來的訊息沒有「收這一輪」的標記（本體沒走到那一行）：`returnDirect` 工具的這一則照常回頭叫模型。
+        return settleTurnConclusion(request, message, false, sessions);
+      }
+      const { result, meta, concluded } = ran;
+      // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
+      // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
+      // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
+      if (events !== undefined) {
+        notifyToolResult(events, request, result, reportObserverFailure);
+      }
+      settle?.(
+        readToolOutcome(result, request.toolCall.id ?? ''),
+        readToolResultMessage(result, request.toolCall.id ?? ''),
+        readInjectedMessages(result),
+        meta,
+      );
+      // 日誌記的是上面那一則（帶 `name`）；交給基座的這一則，`returnDirect` 工具沒標記就拿掉 `name`（見 `turn-conclusion.ts`）。
+      return settleTurnConclusion(request, result, concluded, sessions);
+    } finally {
+      // 子代理出生在 `next()` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
+      recorded?.release();
+    }
+  });
+}

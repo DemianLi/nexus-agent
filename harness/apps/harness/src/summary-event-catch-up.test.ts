@@ -1,0 +1,418 @@
+/**
+ * **摘要生成了、請求卻失敗：下一輪從哪裡接**（[#1390](https://github.com/DemianLi/nexus-agent/issues/1390)）。
+ *
+ * 摘要之後的請求失敗（503、使用者停止）：日誌上 `compaction/summary` 已經記下（#1301），切點跟日誌同一刻落在組裝的切點表。
+ * 沒接上的話兩種壞法：
+ *
+ * 1. 下一輪不再摘要（窗口換大、或重新量過沒到門檻）：模型收到完整原文，日誌推出來的卻套用了那筆事件
+ *    —— 推導與實送對不上（#1339 的驗收條件）。
+ * 2. 下一輪又要摘要：從沒摘要過的狀態重摘，日誌讀回的段落把同一段原文疊兩份（#1389）。
+ *
+ * 切點表見 `harness/packages/nexus-core/src/summary-cutoffs.ts`。這裡走產品路徑（`ThreadPump` 管日誌、
+ * 使用者訊息也進日誌，日誌推導才有東西可比）。這條路徑不寫歷史檔，被摘掉的原文從日誌讀回（`recallHistory`），
+ * 量的是讀回的段落。零憑證、零外部連線。
+ *
+ * ## 窗口怎麼變
+ *
+ * 門檻是 token 100,000（出廠值）、窗口夾在 4,200：第 2 輪一則 2,400 字的使用者訊息把請求推過夾窗，摘要器在這一步
+ * 動手。第 3 輪把 `modelLimits` 換成大窗口（或換模型），請求量過沒到門檻、這一步不摘要。
+ */
+
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { BaseMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph';
+import {
+  ModelSelectionController,
+  recallHistory,
+  replayConversation,
+  SUMMARY_ENTRY_INSTRUCTION,
+  SUMMARY_PROMPT,
+  tagModelRoute,
+} from '@nexus/core';
+import type { ModelContextLimits, RecalledHistory } from '@nexus/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createNexusAgent } from './agent-factory.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
+import { toolResultAsSeen } from './conversation-restore.js';
+import { ScriptedChatModel } from './scripted-model.js';
+import type { ScriptedTurn } from './scripted-model.js';
+import { ThreadPump } from './thread-pump.js';
+import type { PumpAgent } from './thread-pump.js';
+
+const SMALL: ModelContextLimits = { contextWindow: 4_200, maxOutputTokens: 200 };
+const BIG: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+
+const SUMMARY_MARK = SUMMARY_PROMPT.split('\n')[0]!;
+const ENTRY_MARK = SUMMARY_ENTRY_INSTRUCTION.split('\n')[0]!;
+/** 摘要的兩次呼叫：索引條目、現況。 */
+const isSummaryCall = (prompt: readonly BaseMessage[]) =>
+  prompt.some(
+    (message) => message.text.includes(SUMMARY_MARK) || message.text.includes(ENTRY_MARK),
+  );
+
+const LONG = '長'.repeat(2_400);
+
+/**
+ * 第 1 輪的那一問一答墊長（#1396）：摘要要比被取代那段小才會提交，被取代的就是這一問一答。
+ * 之後的 `摘要一` 之類維持短字串，不然摘要本身就比被取代的大。
+ */
+const PAD = '內容'.repeat(140);
+const H1 = `第 1 句。${PAD}`;
+const A1 = `好 1${PAD}`;
+
+let dir: string;
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'nexus-catch-up-'));
+});
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+interface Round {
+  /** 這一輪使用者說的。 */
+  readonly text: string;
+  /** 這一輪用哪個窗口；省略＝沿用上一輪。 */
+  readonly limits?: ModelContextLimits;
+  /** 這一輪開始前做的事（換模型、等等）。 */
+  readonly before?: () => void;
+  /** 等到第幾次模型呼叫進來（累計）就按停止。 */
+  readonly cancelAtCall?: number;
+}
+
+interface Snapshot {
+  /** `turn/end`（正常收尾，停止是帶 `reason: aborted` 的 `turn/end`）或 `turn/failed`。 */
+  readonly end: string | undefined;
+  /** `turn/end` 的 `reason.kind`；沒有就是 `undefined`。 */
+  readonly reason: string | undefined;
+  /** 這一輪日誌上新增的 `compaction/summary` 切點。 */
+  readonly logCutoffs: number[];
+  /** 同上那幾筆的 `filePath`。 */
+  readonly filePaths: (string | null)[];
+  /** 這一輪結束後 checkpoint `files` 的鍵。 */
+  readonly files: string[];
+  /** 這一輪結束時從日誌讀回的段落（一則訊息一行，以 ` | ` 相接）。 */
+  readonly segments: string[];
+  readonly failure: RecalledHistory['failure'];
+}
+
+async function converse(options: {
+  readonly script: readonly ScriptedTurn[];
+  readonly rounds: readonly Round[];
+  readonly trigger?: readonly { type: 'tokens' | 'messages'; value: number }[];
+  readonly modelSelection?: ModelSelectionController;
+  readonly model?: ScriptedChatModel;
+  readonly limits?: (model: unknown) => ModelContextLimits | undefined;
+}) {
+  const model = options.model ?? new ScriptedChatModel({ turns: options.script });
+  let current = SMALL;
+  const built = await createNexusAgent({
+    model,
+    backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
+    checkpointer: new MemorySaver(),
+    plugins: [],
+    summarization: {
+      trigger: (options.trigger ?? [{ type: 'tokens', value: 100_000 }]).map((each) => ({
+        ...each,
+      })),
+      retainTokens: 12,
+    },
+    modelLimits: (candidate) => options.limits?.(candidate) ?? current,
+    ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
+  });
+  const pump = new ThreadPump(
+    built.agent as unknown as PumpAgent,
+    'catch-up',
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    built.stepInbox,
+  );
+  const detach = built.attachSession(pump.sessions);
+  options.modelSelection?.attach(pump.sessionLog);
+  const snapshots: Snapshot[] = [];
+  try {
+    for (const [index, round] of options.rounds.entries()) {
+      if (round.limits !== undefined) current = round.limits;
+      round.before?.();
+      const before = pump.sessionLog.events.length;
+      const submitted = pump
+        .submit({ kind: 'message', text: round.text, id: `m${index + 1}` })
+        .catch(() => undefined);
+      if (round.cancelAtCall !== undefined) {
+        // 等到那一次呼叫進來（模型在串流中間），再按停止。
+        for (
+          let waited = 0;
+          model.prompts.length < round.cancelAtCall && waited < 200;
+          waited += 1
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        pump.cancel();
+      }
+      await submitted;
+      await pump.whenIdle().catch(() => undefined);
+      const state = await (
+        built.agent as unknown as { getState(config: unknown): Promise<{ values: unknown }> }
+      ).getState({ configurable: { thread_id: 'catch-up' } });
+      const values = state.values as { files?: Record<string, unknown> };
+      const slice = pump.sessionLog.events.slice(before);
+      const end = [...slice]
+        .reverse()
+        .find((event) => event.type === 'turn/end' || event.type === 'turn/failed');
+      const summaries = slice.filter((event) => event.type === 'compaction/summary');
+      const recalled = recallHistory(pump.sessionLog.events);
+      snapshots.push({
+        end: end?.type,
+        reason: (end?.data as { reason?: { kind?: string } } | undefined)?.reason?.kind,
+        logCutoffs: summaries.map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
+        filePaths: summaries.map((event) => (event.data as { filePath: string | null }).filePath),
+        files: Object.keys(values.files ?? {}),
+        segments: recalled.segments.map((segment) => segment.text.replace(/\n\n/g, ' | ')),
+        failure: recalled.failure,
+      });
+    }
+    return { model, snapshots, events: [...pump.sessionLog.events] };
+  } finally {
+    pump.close();
+    detach();
+    await built.dispose();
+  }
+}
+
+type Run = Awaited<ReturnType<typeof converse>>;
+
+/** 每一輪：沒有歷史檔、日誌上每一筆的 `filePath` 是 `null`、日誌推得到底（段落沒有在半途斷掉）。 */
+function expectReadBackFromLog(run: Run): void {
+  for (const [index, snapshot] of run.snapshots.entries()) {
+    expect(snapshot.files, `第 ${index + 1} 輪`).toEqual([]);
+    expect(snapshot.filePaths.every((path) => path === null)).toBe(true);
+    expect(snapshot.failure, `第 ${index + 1} 輪`).toBeUndefined();
+  }
+}
+
+/** 第 2 輪那次摘要卸下的：第 1 輪的一問一答。 */
+const FIRST_SEGMENT = `User: ${H1} | Assistant: ${A1}`;
+
+/** 每一次主呼叫：從日誌推出的歷史，是不是實際送出的那一串。回逐次的結果（`'EQ'` 或差在哪）。 */
+function derivedVersusActual(run: Run): string[] {
+  const mains = run.model.prompts.filter((prompt) => !isSummaryCall(prompt));
+  const starts = run.events.filter((event) => event.type === 'model/start');
+  expect(starts).toHaveLength(mains.length);
+  return starts.map((start, index) => {
+    const replay = replayConversation(
+      run.events.filter((event) => event.seq < start.seq),
+      { toolResultAsSeen, applyPrunes: true, applyArgTruncations: true },
+    );
+    if (replay.kind !== 'replayed') return `call${index + 1}:${replay.kind}`;
+    const derived = replay.messages.map((m) => `${m.getType()}:${String(m.content)}`);
+    const actual = mains[index]!.slice(1).map((m) => `${m.getType()}:${String(m.content)}`);
+    return JSON.stringify(derived) === JSON.stringify(actual) ? 'EQ' : `call${index + 1}:DIFF`;
+  });
+}
+
+const ok = (content: string): ScriptedTurn => ({ content });
+/** 索引條目那次的假回覆：標題加一行，是合格的條目，不重叫。 */
+const ENTRY = ok('本段對話\n- 第 1 句，助手回覆');
+
+describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
+  /**
+   * 第 1 輪 → 第 2 輪（摘要＋請求 503）→ 第 3 輪（窗口換大，不摘要）。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要（條目、現況）、4 ＝ 第 2 輪的請求（503）、5 ＝ 第 3 輪。
+   */
+  it('503：下一輪不摘要時，接著日誌上那筆切點，每次呼叫推導等於實送', async () => {
+    const run = await converse({
+      script: [ok(A1), ENTRY, ok('摘要一'), { content: '', error: 'upstream 503' }, ok('好 3')],
+      rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
+    });
+
+    // 前提：第 2 輪真的摘要了（條目、現況各一次）、請求真的失敗了、第 3 輪真的沒有再摘要。
+    expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
+    expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
+    expect(run.snapshots[2]!.logCutoffs).toEqual([]);
+    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
+
+    // 日誌推導＝實送：第 3 輪那次呼叫是切點沒接上時會對不上的那一次。
+    expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
+
+    // 日誌讀回的只有第 2 輪摘要卸下的那一段。
+    expectReadBackFromLog(run);
+    expect(run.snapshots[2]!.segments).toEqual([FIRST_SEGMENT]);
+  });
+
+  /**
+   * 使用者在摘要之後、請求串流到一半按停止：失敗路徑與 503 不同（取消），切點一樣要接得上。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要（條目、現況）、4 ＝ 第 2 輪的請求（串流中被停）、5 ＝ 第 3 輪。
+   */
+  it('使用者停止：同樣接著那筆，每次呼叫推導等於實送', async () => {
+    const run = await converse({
+      script: [
+        ok(A1),
+        ENTRY,
+        ok('摘要一'),
+        { content: '好'.repeat(400), tokenDelayMs: 25 },
+        ok('好 3'),
+      ],
+      rounds: [{ text: H1 }, { text: LONG, cancelAtCall: 4 }, { text: '第 3 句。', limits: BIG }],
+    });
+
+    expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
+    // 前提：這一輪是被使用者停掉的（`turn/end` 帶 `reason: aborted`），不是正常收尾。
+    expect(run.snapshots[1]!.reason).toBe('aborted');
+    expect(run.snapshots[2]!.logCutoffs).toEqual([]);
+    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
+
+    expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
+    expectReadBackFromLog(run);
+    expect(run.snapshots[2]!.segments).toEqual([FIRST_SEGMENT]);
+  });
+
+  /**
+   * 下一輪又要摘要：切點接著提交過的那一筆，不從頭重摘。**沒接上的話第二段會把第一段的內容再讀回一遍。**
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要、4 ＝ 請求（503）、5、6 ＝ 第 3 輪的摘要、7 ＝ 第 3 輪的請求。
+   */
+  it('503 之後下一輪又摘要：日誌讀回兩段，內容互不重複', async () => {
+    const run = await converse({
+      script: [
+        ok(A1),
+        ENTRY,
+        ok('摘要一'),
+        { content: '', error: 'upstream 503' },
+        ENTRY,
+        ok('摘要二'),
+        ok('好 3'),
+      ],
+      rounds: [{ text: H1 }, { text: LONG }, { text: `${LONG}。` }],
+    });
+
+    expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
+    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(4);
+
+    expectReadBackFromLog(run);
+    const segments = run.snapshots[2]!.segments;
+    expect(segments).toHaveLength(2);
+    // 第一段：第 2 輪卸下的；第二段：第 3 輪新卸下的（第 2 輪那句長的），不含第一段的任何一則。
+    expect(segments[0]).toBe(FIRST_SEGMENT);
+    expect(segments[1]).toBe(`User: ${LONG}`);
+    expect(segments[1]).not.toContain('第 1 句');
+
+    // 第 3 輪的切點接著第 2 輪那筆（2）往後走。
+    const [first, second] = [run.snapshots[1]!.logCutoffs[0]!, run.snapshots[2]!.logCutoffs[0]!];
+    expect(second).toBeGreaterThan(first);
+    expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
+  });
+
+  /** 沒有失敗：一筆事件、讀回一段。 */
+  it('沒有失敗：一筆事件、讀回一段', async () => {
+    const run = await converse({
+      script: [ok(A1), ENTRY, ok('摘要一'), ok('好 2'), ok('好 3')],
+      rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
+    });
+
+    expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/end', 'turn/end']);
+    expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
+    expect(run.snapshots[2]!.logCutoffs).toEqual([]);
+    expectReadBackFromLog(run);
+    expect(run.snapshots[2]!.segments).toEqual([FIRST_SEGMENT]);
+    expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
+  });
+
+  /**
+   * 換模型：第 2 輪在小窗口那顆上摘要、請求失敗；第 3 輪選到大窗口那顆。切點跟著呼叫的身分，不看 `request.model`，
+   * 這一條走真的 `modelSelection`（不是改 `modelLimits` 的回傳）。
+   */
+  it('換模型：第 3 輪換到大窗口那顆，切點不看這一步選中的模型', async () => {
+    const defaultModel = tagModelRoute(
+      new ScriptedChatModel({
+        turns: [ok(A1), ENTRY, ok('摘要一'), { content: '', error: '503' }],
+      }),
+      { model: 'default' },
+    );
+    const bigModel = tagModelRoute(new ScriptedChatModel({ turns: [ok('好 3')] }), {
+      model: 'big',
+    });
+    const controller = new ModelSelectionController({
+      defaultRoute: { model: 'default' },
+      instanceFor: (route) => (route.model === 'big' ? bigModel : undefined),
+    });
+    const run = await converse({
+      model: defaultModel,
+      script: [],
+      modelSelection: controller,
+      limits: (candidate) =>
+        candidate === bigModel ? BIG : candidate === defaultModel ? SMALL : undefined,
+      rounds: [
+        { text: H1 },
+        { text: LONG },
+        { text: '第 3 句。', before: () => controller.select({ model: 'big' }) },
+      ],
+    });
+
+    // 前提：第 3 輪那次請求真的走在換上去那顆，而且沒有再摘要。
+    expect(bigModel.prompts).toHaveLength(1);
+    expect(isSummaryCall(bigModel.prompts[0]!)).toBe(false);
+    expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
+
+    // 日誌推導＝實送：第 3 輪的請求在 `bigModel.prompts` 裡，前兩次在 `defaultModel.prompts` 裡。
+    const mains = [
+      ...defaultModel.prompts.filter((prompt) => !isSummaryCall(prompt)),
+      ...bigModel.prompts,
+    ];
+    const starts = run.events.filter((event) => event.type === 'model/start');
+    expect(starts).toHaveLength(mains.length);
+    for (const [index, start] of starts.entries()) {
+      const replay = replayConversation(
+        run.events.filter((event) => event.seq < start.seq),
+        { toolResultAsSeen, applyPrunes: true, applyArgTruncations: true },
+      );
+      expect(replay.kind).toBe('replayed');
+      if (replay.kind !== 'replayed') continue;
+      expect(
+        replay.messages.map((m) => `${m.getType()}:${String(m.content)}`),
+        `第 ${index + 1} 次主呼叫`,
+      ).toEqual(mains[index]!.slice(1).map((m) => `${m.getType()}:${String(m.content)}`));
+    }
+  });
+
+  /**
+   * 子代理查的是自己的切點：root 上有切點，子代理（一份全新的 state）的請求**不能**套上 root 的切點。
+   *
+   * 切點取 1（訊息數門檻 3、保留量 12 token；只有第 1 句墊長，尾巴那兩則維持短，切點才仍是 1），子代理 state 只有一則（任務描述）：切點 ≤ 長度，
+   * 「切點落在訊息串之外就不算」那一道擋不住——能擋住的是切點表的鍵（呼叫的身分）與錨點那則訊息的 id。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ root 摘要（條目、現況）、4 ＝ root 請求（叫 task）、5 ＝ 子代理、6、7 ＝ root 收尾（又摘要一次）、8 ＝ 收工。
+   */
+  it('子代理：請求前不會被補上 root 日誌上的事件', async () => {
+    const run = await converse({
+      script: [
+        ok('好 1'),
+        ENTRY,
+        ok('摘要一'),
+        {
+          content: '',
+          toolCalls: [
+            { name: 'task', args: { description: '去做。', subagent_type: 'general-purpose' } },
+          ],
+        },
+        ok('子代理做完了。'),
+        ENTRY,
+        ok('摘要二'),
+        ok('收工。'),
+      ],
+      trigger: [{ type: 'messages', value: 3 }],
+      rounds: [{ text: H1 }, { text: '第 2 句。' }],
+    });
+
+    // 前提：root 日誌上先有一筆摘要，切點 1。
+    expect(run.snapshots[1]!.logCutoffs[0]).toBe(1);
+    // 子代理的請求：只有它自己的 system 與任務描述，沒有 root 的摘要。
+    const subagentPrompt = run.model.prompts.find((prompt) =>
+      prompt.some((message) => message.getType() === 'human' && message.text === '去做。'),
+    );
+    expect(subagentPrompt).toBeDefined();
+    expect(subagentPrompt!.map((message) => message.getType())).toEqual(['system', 'human']);
+    expect(subagentPrompt!.some((message) => message.text.includes('摘要一'))).toBe(false);
+  });
+});

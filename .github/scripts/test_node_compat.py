@@ -8,8 +8,8 @@ from pathlib import Path
 
 from node_compat import ROOT, check_report, group_by_app, read_list
 
-A = 'apps/harness/src/a.test.ts'
-B = 'apps/harness/src/b.test.ts'
+A = 'harness/apps/harness/src/a.test.ts'
+B = 'harness/apps/harness/src/b.test.ts'
 
 
 def report(files: dict[str, int], success: bool = True) -> dict:
@@ -31,10 +31,17 @@ class ReadList(unittest.TestCase):
             self.assertEqual(read_list(path), [A, B])
 
     def test_groups_by_app(self) -> None:
-        web = 'apps/web/src/x.test.tsx'
-        self.assertEqual(group_by_app([A, web, B]), {'apps/harness': [A, B], 'apps/web': [web]})
+        web = 'web/src/x.test.tsx'
+        self.assertEqual(group_by_app([A, web, B]), {'harness/apps/harness': [A, B], 'web': [web]})
         with self.assertRaises(ValueError):
-            group_by_app(['packages/x/src/y.test.ts'])
+            group_by_app(['harness/packages/x/src/y.test.ts'])
+
+
+class ListFile(unittest.TestCase):
+    def test_every_listed_file_exists_and_groups(self) -> None:
+        files = read_list()
+        self.assertEqual([f for f in files if not (ROOT / f).is_file()], [])
+        group_by_app(files)
 
 
 class CheckReport(unittest.TestCase):

@@ -1,0 +1,766 @@
+/**
+ * 圍堵自己的邏輯——直接餵它一個假的 `handler`，看它把什麼交回來。
+ *
+ * 這一份跟著實作從 `@nexus/plugin-validation` 搬過來
+ * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)）。**它掛在哪、順序排第幾**
+ * 由 [`fold.test.ts`](./fold.test.ts) 釘；**掛進真的 agent 之後行為對不對**在
+ * `harness/apps/harness/src/validation.test.ts`，那一層才碰得到基座那條「工具拋錯就整場死」的路。
+ */
+
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { ToolInputParsingException } from '@langchain/core/tools';
+import { Command, GraphInterrupt } from '@langchain/langgraph';
+import { MiddlewareError, ToolInvocationError } from 'langchain';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  classifyThrownToolError,
+  createContainmentMiddleware,
+  declaredToolTimeoutMs,
+  formatToolTimeout,
+  isToolTimeout,
+} from './containment.js';
+import { pastLogDepthCap } from './fixtures.js';
+import { fromLoggedMessage } from './logged-message.js';
+import type { SessionLookup } from './registry.js';
+import { SessionLog } from './session-log.js';
+import type { SessionEventMap } from './session-log.js';
+import {
+  HarnessError,
+  INVALID_TOOL_OUTPUT,
+  markToolError,
+  TOOL_OUTCOME_UNKNOWN,
+  UNKNOWN_TOOL,
+} from './tool-events.js';
+
+/** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
+type Wrapper = (
+  request: unknown,
+  handler: (request: unknown) => Promise<unknown>,
+) => Promise<unknown>;
+
+/** 從 middleware 上取出 `wrapToolCall`，沒有就當場失敗。 */
+function wrapperOf(middleware: unknown): Wrapper {
+  const wrap = (middleware as { wrapToolCall?: Wrapper }).wrapToolCall;
+  if (wrap === undefined) throw new Error('這個 middleware 沒有 wrapToolCall');
+  return wrap;
+}
+
+/** 一次工具呼叫的假請求。`budgetMs` 給了就當這顆工具宣告了預算。 */
+function requestFor(toolName: string, budgetMs?: number): unknown {
+  return {
+    toolCall: { name: toolName, args: {}, id: 'call-1' },
+    tool:
+      budgetMs === undefined ? undefined : { name: toolName, defaultConfig: { timeout: budgetMs } },
+    state: {},
+    runtime: {},
+  };
+}
+
+/**
+ * `AbortSignal.timeout()` 逾時時真正拋出來的那顆。
+ *
+ * **用真的 `DOMException` 而不是 `Object.assign(new Error(), { name })`**：分類靠的是
+ * `instanceof Error` 與 `name` 兩件事同時成立，而 `DOMException` 在 Node 上兩件都成立
+ * 這一點正是要釘住的（`getAbortSignalError` 直接把 `signal.reason` 交出來）。
+ */
+function abortException(name: 'TimeoutError' | 'AbortError'): unknown {
+  return new DOMException(
+    name === 'TimeoutError'
+      ? 'The operation was aborted due to timeout'
+      : 'This operation was aborted',
+    name,
+  );
+}
+
+describe('圍堵', () => {
+  const wrap = wrapperOf(createContainmentMiddleware());
+
+  it('工具拋錯 → 一則 status error 的 ToolMessage，不再往外拋', async () => {
+    const result = (await wrap(requestFor('probe'), () => {
+      throw new Error('磁碟滿了');
+    })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.status).toBe('error');
+    expect(String(result.content)).toContain('probe');
+    expect(String(result.content)).toContain('磁碟滿了');
+    expect(result.tool_call_id).toBe('call-1');
+  });
+
+  it('訊息裡不帶堆疊、也不帶原始參數', async () => {
+    const boom = new Error('炸了');
+    boom.stack = 'Error: 炸了\n    at /Users/someone/secret/path.ts:1:1';
+    const result = (await wrap(
+      { toolCall: { name: 'probe', args: { key: 'sk-機密值' }, id: 'c' } },
+      () => {
+        throw boom;
+      },
+    )) as ToolMessage;
+    expect(String(result.content)).not.toContain('/Users/someone/secret/path.ts');
+    expect(String(result.content)).not.toContain('sk-機密值');
+  });
+
+  it('基座包的參數驗證失敗：只剩原因，不帶堆疊、原始參數、主機路徑（直接拋與被 middleware 再包一層）', async () => {
+    const cause = new ToolInputParsingException(
+      'Received tool input did not match expected schema\n\n✖ 缺 file_path',
+    );
+    cause.stack =
+      'Error: 缺\n    at DynamicStructuredTool.call (file:///Users/someone/secret/tool.js:1:1)';
+    const toolCall = { name: 'read_file', args: { path: 'sk-機密值' }, id: 'c' };
+    const invocation = new ToolInvocationError(cause, toolCall);
+    // 前提：基座那層的訊息真的帶了這些，下面的「沒有」才有東西可擋。
+    expect(invocation.message).toContain('/Users/someone/secret/tool.js');
+    expect(invocation.message).toContain('sk-機密值');
+    for (const thrown of [invocation, MiddlewareError.wrap(invocation, 'outer')]) {
+      const result = (await wrap({ toolCall }, () => {
+        throw thrown;
+      })) as ToolMessage;
+      const text = String(result.content);
+      expect(text).toContain('缺 file_path');
+      expect(text).not.toContain('/Users/someone/secret/tool.js');
+      expect(text).not.toContain('    at ');
+      expect(text).not.toContain('sk-機密值');
+      expect(text).not.toContain('kwargs');
+    }
+  });
+
+  it('**中斷放行**——GraphBubbleUp 原樣往外拋', async () => {
+    const interrupt = new GraphInterrupt([{ value: '要核准嗎', id: 'i1' }]);
+    await expect(
+      wrap(requestFor('probe'), () => {
+        throw interrupt;
+      }),
+    ).rejects.toBe(interrupt);
+  });
+
+  it('沒出錯就原樣交回去', async () => {
+    const message = new ToolMessage({ content: '好了', tool_call_id: 'call-1', name: 'probe' });
+    expect(await wrap(requestFor('probe'), async () => message)).toBe(message);
+  });
+
+  it('超時被單獨認出來，訊息說得出等了多久', async () => {
+    const result = (await wrap(requestFor('slow', 40), async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      throw abortException('TimeoutError');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    const text = String(result.content);
+    expect(text).toContain('工具 slow 超時');
+    expect(text).toContain('40ms 預算');
+    // **數字要接近真的等待時間，不是「有一個數字」。** 只斷言「含有數字」的話，回報 0
+    // 或回報整場 run 的牆鐘都會過。
+    const elapsed = Number(/等了 (\d+)ms/.exec(text)?.[1]);
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(elapsed).toBeLessThan(2000);
+    // 原始的英文訊息不該再出現——它就是這張卡要換掉的東西。
+    expect(text).not.toContain('The operation was aborted');
+  });
+
+  it('**使用者取消不是超時**——同一個 catch，不同的 name', async () => {
+    const result = (await wrap(requestFor('cancelled', 40), async () => {
+      throw abortException('AbortError');
+    })) as ToolMessage;
+    const text = String(result.content);
+    expect(text).toContain('工具 cancelled 執行失敗');
+    expect(text).not.toContain('超時');
+  });
+
+  it('一般拋錯不被誤標成超時', async () => {
+    const result = (await wrap(requestFor('boom', 5000), async () => {
+      throw new Error('連不上');
+    })) as ToolMessage;
+    expect(String(result.content)).toBe('Error: 工具 boom 執行失敗：連不上');
+  });
+
+  it('沒宣告預算的工具超時了，只講等了多久', async () => {
+    const result = (await wrap(requestFor('nobudget'), async () => {
+      throw abortException('TimeoutError');
+    })) as ToolMessage;
+    const text = String(result.content);
+    expect(text).toContain('工具 nobudget 超時：等了');
+    expect(text).not.toContain('預算');
+  });
+
+  it('**沒有 closure 狀態**——所以 root 與每個 subagent 共用同一份實例是安全的', async () => {
+    // fold 只建一次就掛遍 root 與所有 subagent（見 `fold.ts`）。這一條擋的是「哪天有人
+    // 往這裡加一個跨呼叫的累計器」——那會讓兩個 agent 的狀態悄悄混在一起。
+    const shared = wrapperOf(createContainmentMiddleware());
+    const first = (await shared(requestFor('a'), () => {
+      throw new Error('第一個');
+    })) as ToolMessage;
+    const second = (await shared(requestFor('b'), () => {
+      throw new Error('第二個');
+    })) as ToolMessage;
+    expect(String(first.content)).toContain('工具 a 執行失敗：第一個');
+    expect(String(second.content)).toContain('工具 b 執行失敗：第二個');
+  });
+});
+
+/**
+ * **工具事件**（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）：圍堵自己的那一半
+ * ——一次呼叫落下什麼、碼從哪裡來、什麼時候整對不記。
+ *
+ * 掛進真的 agent 之後落在哪一份日誌（root／subagent）、兩條路都產不產得出來，由
+ * `harness/apps/harness/src/tool-events.test.ts` 量。
+ */
+describe('工具事件', () => {
+  /** 一顆會把事件記進 `log` 的圍堵。`lookup` 給了就用它，不給就是找到 `log`。 */
+  function recorder(log: SessionLog, lookup?: SessionLookup): Wrapper {
+    return wrapperOf(
+      createContainmentMiddleware({
+        forCall: () => lookup ?? { kind: 'ok', address: { kind: 'root' }, log },
+      }),
+    );
+  }
+
+  /** 一次帶參數、帶身分的請求。`tool` 省略就是一顆存在的工具。 */
+  function call(options: { id?: string; tool?: unknown; args?: unknown } = {}): unknown {
+    return {
+      toolCall: {
+        name: 'probe',
+        args: options.args ?? { path: '/a', n: 1 },
+        ...('id' in options ? { id: options.id } : { id: 'call-1' }),
+      },
+      tool: 'tool' in options ? options.tool : { name: 'probe' },
+      state: {},
+      runtime: { configurable: { checkpoint_ns: 'tools:x' } },
+    };
+  }
+
+  /**
+   * 日誌裡的工具事件，只留型別與酬載。**`tool/result` 的 `message` 剝掉**：那是內容（#305），
+   * 由下面「帶模型收到的那一則」那一組另外驗；這裡的斷言照舊逐 key 比判別那幾格。
+   */
+  function toolEvents(log: SessionLog): { type: string; data: unknown }[] {
+    return log.events
+      .filter((event) => event.type === 'tool/call' || event.type === 'tool/result')
+      .map((event) => {
+        if (event.type !== 'tool/result') return { type: event.type, data: event.data };
+        const { message: _message, ...verdict } = event.data;
+        return { type: event.type, data: verdict };
+      });
+  }
+
+  /** 最後一顆 `tool/result` 帶的那則訊息，推回 `BaseMessage`。 */
+  function lastResultMessage(log: SessionLog): ToolMessage {
+    const found = log.events.filter((event) => event.type === 'tool/result').at(-1);
+    const message = (found?.data as SessionEventMap['tool/result'] | undefined)?.message;
+    if (message === undefined) throw new Error('最後一顆 tool/result 沒帶 message');
+    return fromLoggedMessage(message) as ToolMessage;
+  }
+
+  /** 最後一顆 `tool/result` 的酬載。 */
+  function lastResult(log: SessionLog): Record<string, unknown> {
+    const found = toolEvents(log)
+      .filter((event) => event.type === 'tool/result')
+      .at(-1);
+    if (found === undefined) throw new Error('沒有 tool/result');
+    return found.data as Record<string, unknown>;
+  }
+
+  it('成功 → 一對，callId 相同，arguments 是參數物件序列化後的字串', async () => {
+    const log = new SessionLog('s');
+    const message = new ToolMessage({ content: '好了', tool_call_id: 'call-1', name: 'probe' });
+    expect(await recorder(log)(call(), async () => message)).toBe(message);
+    expect(toolEvents(log)).toEqual([
+      {
+        type: 'tool/call',
+        data: { callId: 'call-1', name: 'probe', arguments: '{"path":"/a","n":1}' },
+      },
+      { type: 'tool/result', data: { callId: 'call-1', isError: false } },
+    ]);
+  });
+
+  describe('帶模型收到的那一則（#305）', () => {
+    it('成功：推回來是同一則——同一句話、同一個 tool_call_id', async () => {
+      const log = new SessionLog('s');
+      const message = new ToolMessage({ content: '好了', tool_call_id: 'call-1', name: 'probe' });
+      await recorder(log)(call(), async () => message);
+      const back = lastResultMessage(log);
+      expect(back.text).toBe('好了');
+      expect(back.tool_call_id).toBe('call-1');
+    });
+
+    /** 失敗那一則是圍堵自己造的：記的要是回給模型的那一則，不是工具拋出來的原錯。 */
+    it('工具拋錯：記的是回給模型的那一句，status 是 error', async () => {
+      const log = new SessionLog('s');
+      const returned = (await recorder(log)(call(), async () => {
+        throw new Error('連不上');
+      })) as ToolMessage;
+      const back = lastResultMessage(log);
+      expect(back.text).toBe(returned.text);
+      expect(back.text).toContain('連不上');
+      expect(back.status).toBe('error');
+    });
+
+    /**
+     * goal 收尾那種：`Command` 裡除了結果，還有一則塞進對話的 HumanMessage。它接在 `tool/result`
+     * 後面記成 `user/message`，順序同它在對話裡的位置；結果那顆只帶屬於這次呼叫的那一則。
+     */
+    it('`Command` 夾帶的 HumanMessage 接在結果後面記成 user/message', async () => {
+      const log = new SessionLog('s');
+      await recorder(log)(
+        call(),
+        async () =>
+          new Command({
+            update: {
+              messages: [
+                new ToolMessage({ content: '收了', tool_call_id: 'call-1', name: 'probe' }),
+                new HumanMessage('收尾指示'),
+              ],
+            },
+          }),
+      );
+      expect(log.events.map((event) => event.type)).toEqual([
+        'tool/call',
+        'tool/result',
+        'user/message',
+      ]);
+      expect(lastResultMessage(log).text).toBe('收了');
+      const injected = log.events[2]!.data as SessionEventMap['user/message'];
+      expect(injected.source).toEqual({ kind: 'plugin', plugin: 'probe' });
+      expect(fromLoggedMessage(injected.message).text).toBe('收尾指示');
+    });
+
+    it('一般的 ToolMessage 不帶任何 user/message', async () => {
+      const log = new SessionLog('s');
+      await recorder(log)(
+        call(),
+        async () => new ToolMessage({ content: '好了', tool_call_id: 'call-1', name: 'probe' }),
+      );
+      expect(log.events.some((event) => event.type === 'user/message')).toBe(false);
+    });
+  });
+
+  it('**tool/call 在 handler 之前就記了**——擋在內層的呼叫一樣有', async () => {
+    const log = new SessionLog('s');
+    let seenBeforeHandler = -1;
+    await recorder(log)(call(), async () => {
+      seenBeforeHandler = toolEvents(log).length;
+      return new ToolMessage({ content: '拒絕', tool_call_id: 'call-1', status: 'error' });
+    });
+    expect(seenBeforeHandler).toBe(1);
+  });
+
+  it.each([
+    [
+      '超時',
+      () => abortException('TimeoutError'),
+      { name: 'ToolTimeoutError', code: 'TOOL_TIMEOUT' },
+    ],
+    ['取消', () => abortException('AbortError'), { name: 'AbortError', code: 'ABORTED' }],
+    [
+      '參數不合',
+      () =>
+        new ToolInvocationError(new ToolInputParsingException('n 要是數字'), {
+          name: 'probe',
+          args: {},
+          id: 'call-1',
+        }),
+      { name: 'ToolArgsError', code: 'INVALID_ARGS' },
+    ],
+  ])('%s → tool/result 帶 dsh 的碼', async (_label, thrown, expected) => {
+    const log = new SessionLog('s');
+    await recorder(log)(call(), async () => {
+      throw thrown();
+    });
+    expect(lastResult(log)).toEqual({ callId: 'call-1', isError: true, error: expected });
+  });
+
+  it('**一般拋錯照 dsh 沒有碼**——連 `error` 這個 key 都不放', async () => {
+    const log = new SessionLog('s');
+    await recorder(log)(call(), async () => {
+      throw new Error('連不上');
+    });
+    const result = lastResult(log);
+    expect(result).toEqual({ callId: 'call-1', isError: true });
+    expect('error' in result).toBe(false);
+  });
+
+  it('參數不合被包了幾層 `MiddlewareError` 也認得出來', () => {
+    const root = new ToolInvocationError(new ToolInputParsingException('壞'), {
+      name: 'probe',
+      args: {},
+      id: 'call-1',
+    });
+    const wrapped = MiddlewareError.wrap(MiddlewareError.wrap(root, 'inner'), 'outer');
+    expect(MiddlewareError.isInstance(wrapped)).toBe(true);
+    expect(classifyThrownToolError(wrapped)).toEqual({
+      name: 'ToolArgsError',
+      code: 'INVALID_ARGS',
+    });
+    // 名字叫 Error 的一般錯誤不能被當成參數不合——認的是品牌不是 name。
+    expect(classifyThrownToolError(new Error('Error'))).toBeUndefined();
+  });
+
+  it('拋出 HarnessError → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`（#615）', () => {
+    class ProbeFailedError extends HarnessError {
+      constructor() {
+        super('壞了', 'PROBE_FAILED');
+      }
+    }
+    expect(classifyThrownToolError(new ProbeFailedError())).toEqual({
+      name: 'ProbeFailedError',
+      code: 'PROBE_FAILED',
+    });
+    // 被 middleware 包過也認得。
+    expect(classifyThrownToolError(MiddlewareError.wrap(new ProbeFailedError(), 'outer'))).toEqual({
+      name: 'ProbeFailedError',
+      code: 'PROBE_FAILED',
+    });
+    // 認的是品牌：自己帶一格 `code` 的一般錯誤（例如 Node 的 `ENOENT`）照舊沒有碼，同 dsh。
+    expect(
+      classifyThrownToolError(Object.assign(new Error('沒有'), { code: 'ENOENT' })),
+    ).toBeUndefined();
+  });
+
+  it('內層標過碼的錯誤訊息 → 帶那個碼', async () => {
+    const log = new SessionLog('s');
+    const rejected = markToolError(
+      new ToolMessage({ content: '不合 schema', tool_call_id: 'call-1', status: 'error' }),
+      { name: 'ToolOutputError', code: INVALID_TOOL_OUTPUT },
+    );
+    await recorder(log)(call(), async () => rejected);
+    expect(lastResult(log)).toEqual({
+      callId: 'call-1',
+      isError: true,
+      error: { name: 'ToolOutputError', code: 'INVALID_TOOL_OUTPUT' },
+    });
+  });
+
+  it('**標了碼但結果不是錯誤就不帶**——碼只跟著 isError 走', async () => {
+    const log = new SessionLog('s');
+    const odd = markToolError(new ToolMessage({ content: '好', tool_call_id: 'call-1' }), {
+      name: 'ToolOutputError',
+      code: INVALID_TOOL_OUTPUT,
+    });
+    await recorder(log)(call(), async () => odd);
+    expect(lastResult(log)).toEqual({ callId: 'call-1', isError: false });
+  });
+
+  /**
+   * **#1024 翻過來的那一條**：這一格的 `request.tool` 是 `undefined` 不代表沒有這顆工具——動態加給模型的
+   * `subagent` 在這裡也是 `undefined`，它在外層回的合法拒絕以前就這樣被記成 `UNKNOWN_TOOL`。圍堵只讀碼。
+   */
+  it('`request.tool` 是 undefined、內層回了沒碼的錯誤 → 照樣沒碼，圍堵不猜 UNKNOWN_TOOL', async () => {
+    const log = new SessionLog('u');
+    await recorder(log)(
+      call({ tool: undefined }),
+      async () =>
+        new ToolMessage({ content: '前景不能指定', tool_call_id: 'call-1', status: 'error' }),
+    );
+    expect(lastResult(log)).toEqual({ callId: 'call-1', isError: true });
+  });
+
+  it('內層標了 UNKNOWN_TOOL（最內層替基座的「沒有這顆工具」標的）→ 帶那個碼', async () => {
+    const log = new SessionLog('u');
+    const notFound = markToolError(
+      new ToolMessage({ content: '沒這顆', tool_call_id: 'call-1', status: 'error' }),
+      { name: 'ToolNotFoundError', code: UNKNOWN_TOOL },
+    );
+    await recorder(log)(call({ tool: undefined }), async () => notFound);
+    expect(lastResult(log)).toEqual({
+      callId: 'call-1',
+      isError: true,
+      error: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+    });
+  });
+
+  it('工具回 `Command` → 讀它夾帶的那則 ToolMessage', async () => {
+    const log = new SessionLog('s');
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({ content: '別人的', tool_call_id: 'other' }),
+          new ToolMessage({ content: '壞了', tool_call_id: 'call-1', status: 'error' }),
+        ],
+      },
+    });
+    expect(await recorder(log)(call(), async () => command)).toBe(command);
+    expect(lastResult(log)).toEqual({ callId: 'call-1', isError: true });
+  });
+
+  it('**中斷不是落定**——只留一顆 tool/call，中斷原樣往外拋', async () => {
+    const log = new SessionLog('s');
+    const interrupt = new GraphInterrupt([{ value: '要核准嗎', id: 'i1' }]);
+    await expect(
+      recorder(log)(call(), () => {
+        throw interrupt;
+      }),
+    ).rejects.toBe(interrupt);
+    expect(toolEvents(log).map((event) => event.type)).toEqual(['tool/call']);
+  });
+
+  it('沒有 callId → 整對不記，結果照舊交回去', async () => {
+    const log = new SessionLog('s');
+    const message = new ToolMessage({ content: '好了', tool_call_id: '', name: 'probe' });
+    expect(await recorder(log)(call({ id: undefined }), async () => message)).toBe(message);
+    expect(toolEvents(log)).toEqual([]);
+  });
+
+  it.each([
+    ['沒接會話', { kind: 'not-attached' } as const],
+    ['認不出屬於誰', { kind: 'unknown-caller' } as const],
+    ['不只一張註冊表', { kind: 'ambiguous', count: 2 } as const],
+  ])('%s → 一顆都不記', async (_label, lookup) => {
+    const log = new SessionLog('s');
+    await recorder(log, lookup)(call(), async () => {
+      throw new Error('照樣圍堵');
+    });
+    expect(toolEvents(log)).toEqual([]);
+  });
+
+  /**
+   * 模型吐的參數是 JSON，解出來不會有 `bigint`；真的碰到就同 `tool/call` 寫不進去（#1665）：當場拋，本體不跑。
+   * 以前是整對不記、呼叫照跑，那樣模型歷史裡有這次呼叫、日誌上沒有。
+   */
+  it('參數序列化不動 → 當場拋，本體不跑，一顆都不記', async () => {
+    const log = new SessionLog('s');
+    let ran = false;
+    await expect(
+      recorder(log)(call({ args: { big: 1n } }), async () => {
+        ran = true;
+        return new ToolMessage({ content: '好', tool_call_id: 'call-1' });
+      }),
+    ).rejects.toThrow(TypeError);
+    expect(ran).toBe(false);
+    expect(toolEvents(log)).toEqual([]);
+  });
+});
+
+/**
+ * [#1665](https://github.com/DemianLi/nexus-agent/issues/1665)：這三種都進模型歷史，日誌那一關拒收就照 dsh 讓這一步失敗，
+ * 不吞（`packages/core/agent-loop/src/tool-calls.ts:156`、`agent.ts:344-355`，`687f282e`）。拋出去的錯走出 `wrapToolCall`，
+ * 不會被圍堵翻成一則錯誤訊息交給模型。
+ */
+describe('工具事件記不進去：這一步失敗', () => {
+  const recorder = (log: SessionLog): Wrapper =>
+    wrapperOf(
+      createContainmentMiddleware({
+        forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
+      }),
+    );
+
+  const call = (): unknown => ({
+    toolCall: { name: 'probe', args: { path: '/a' }, id: 'call-1' },
+    tool: { name: 'probe' },
+    state: {},
+    runtime: { configurable: { checkpoint_ns: 'tools:x' } },
+  });
+
+  /** 拿到被拒時拋出來的那顆；沒拋就是 `undefined`。 */
+  const thrownBy = (promise: Promise<unknown>): Promise<unknown> =>
+    promise.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+  /** 只讓某一種事件寫不進去，其餘照真的寫。 */
+  function rejectOnly(log: SessionLog, type: string, error: Error): void {
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((t: never, data: never, options: never) => {
+      if (t === type) throw error;
+      return real(t, data, options);
+    }) as typeof log.append);
+  }
+
+  /**
+   * `tool/call` 的欄位全是字串，日誌那一關拒不了它的值；會讓它拋的是重入防護與參數序列化（上一組）。這格用 spy 造拒收。
+   */
+  it('tool/call 寫不進去：原錯往外拋，本體不跑，一顆都不記', async () => {
+    const log = new SessionLog('s');
+    const boom = new Error('寫不進去');
+    rejectOnly(log, 'tool/call', boom);
+    let ran = false;
+    const error = await thrownBy(
+      recorder(log)(call(), async () => {
+        ran = true;
+        return new ToolMessage({ content: '好', tool_call_id: 'call-1' });
+      }),
+    );
+    expect(error).toBe(boom);
+    expect(ran).toBe(false);
+    expect(log.events).toEqual([]);
+  });
+
+  it('tool/result 被拒（真的拒收）：補一顆 TOOL_OUTCOME_UNKNOWN 的錯誤結果，再拋原錯', async () => {
+    const log = new SessionLog('s');
+    const deep = new ToolMessage({
+      content: '好了',
+      tool_call_id: 'call-1',
+      name: 'probe',
+      artifact: pastLogDepthCap(),
+    });
+    const error = await thrownBy(recorder(log)(call(), async () => deep));
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toMatch(
+      /^會話事件的 tool\/result 的 data\.message\..* 是第 601 層巢狀/,
+    );
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
+    const result = log.events[1]!.data as SessionEventMap['tool/result'];
+    expect(result).toMatchObject({
+      callId: 'call-1',
+      isError: true,
+      error: { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN },
+    });
+    // 補的那則跟續接時補的同形：錯誤狀態、配回這次呼叫。
+    const message = fromLoggedMessage(result.message!) as ToolMessage;
+    expect(message.tool_call_id).toBe('call-1');
+    expect(message.status).toBe('error');
+  });
+
+  it('工具自己拋、翻出來的錯誤結果也被拒：同樣補一顆再拋，不再翻一次', async () => {
+    const log = new SessionLog('s');
+    const boom = new Error('寫不進去');
+    let rejected = 0;
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((t: never, data: never, options: never) => {
+      // 只拒第一顆 `tool/result`（翻出來的那則），補的那顆照寫。
+      if (t === 'tool/result' && rejected++ === 0) throw boom;
+      return real(t, data, options);
+    }) as typeof log.append);
+    const error = await thrownBy(
+      recorder(log)(call(), () => {
+        throw new Error('工具壞了');
+      }),
+    );
+    expect(error).toBe(boom);
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
+    expect(log.events[1]!.data).toMatchObject({ error: { code: TOOL_OUTCOME_UNKNOWN } });
+  });
+
+  it('補的那顆也寫不進去：兩個錯一起拋（AggregateError），日誌上只有 tool/call', async () => {
+    const log = new SessionLog('s');
+    // 兩顆不同的錯：原錯（結果那顆）與補寫的錯（UNKNOWN 那顆）。順序與 cause 對調的話分得出來。
+    const original = new Error('結果寫不進去');
+    const recovery = new Error('補的也寫不進去');
+    let rejected = 0;
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((t: never, data: never, options: never) => {
+      if (t === 'tool/result') throw rejected++ === 0 ? original : recovery;
+      return real(t, data, options);
+    }) as typeof log.append);
+    const error = await thrownBy(
+      recorder(log)(call(), async () => new ToolMessage({ content: '好', tool_call_id: 'call-1' })),
+    );
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([original, recovery]);
+    expect((error as AggregateError).cause).toBe(original);
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call']);
+  });
+
+  /**
+   * 結果那顆被拒時，跟著它注入的 `user/message` 不寫：結果沒進日誌，注入接在它後面就是孤兒。同 dsh：`appendToolResult` 拋了，
+   * 同一處後面的 `acceptContext` 輪不到（`packages/core/agent-loop/src/tool-calls.ts:156-157`，`687f282e`）。
+   */
+  it('tool/result 被拒（真的拒收）：跟著的注入不寫', async () => {
+    const log = new SessionLog('s');
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({
+            content: '好了',
+            tool_call_id: 'call-1',
+            name: 'probe',
+            artifact: pastLogDepthCap(),
+          }),
+          new HumanMessage('收尾指示'),
+        ],
+      },
+    });
+    const error = await thrownBy(recorder(log)(call(), async () => command));
+    expect((error as Error).message).toMatch(/^會話事件的 tool\/result 的 data\.message\./);
+    // 補的那顆 UNKNOWN 在，注入的那句不在。
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
+    expect(log.events[1]!.data).toMatchObject({ isError: true });
+  });
+
+  it('跟著結果注入的 user/message 被拒（真的拒收）：原錯往外拋，結果那顆已經在', async () => {
+    const log = new SessionLog('s');
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({ content: '好了', tool_call_id: 'call-1' }),
+          new HumanMessage({ content: '收尾指示', additional_kwargs: { v: pastLogDepthCap() } }),
+        ],
+      },
+    });
+    const error = await thrownBy(recorder(log)(call(), async () => command));
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toMatch(
+      /^會話事件的 user\/message 的 data\.message\..* 是第 601 層巢狀/,
+    );
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
+    expect(log.events[1]!.data).toMatchObject({ callId: 'call-1', isError: false });
+  });
+
+  it('反例：收得下的照常記，結果照常交回', async () => {
+    const log = new SessionLog('s');
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({ content: '好了', tool_call_id: 'call-1' }),
+          new HumanMessage('收尾指示'),
+        ],
+      },
+    });
+    expect(await recorder(log)(call(), async () => command)).toBe(command);
+    expect(log.events.map((event) => event.type)).toEqual([
+      'tool/call',
+      'tool/result',
+      'user/message',
+    ]);
+  });
+});
+
+/**
+ * 分類與措辭的直接驗收。
+ *
+ * **`formatToolTimeout` 的條件式那一格是量出來的**：一顆宣告 5000ms 的工具，在呼叫端
+ * 另外給了 120ms 預算時，`catch` 一樣收到 `TimeoutError`，而 `defaultConfig.timeout`
+ * 讀出來仍是 5000——先響的是 120 那顆。所以「宣告的預算」只在它合理地可能是成因時才講。
+ */
+describe('超時的分類與措辭', () => {
+  it('只認 name，不比對訊息', () => {
+    expect(isToolTimeout(abortException('TimeoutError'))).toBe(true);
+    expect(isToolTimeout(abortException('AbortError'))).toBe(false);
+    expect(isToolTimeout(new Error('The operation was aborted due to timeout'))).toBe(false);
+    expect(isToolTimeout('TimeoutError')).toBe(false);
+    expect(isToolTimeout(undefined)).toBe(false);
+  });
+
+  it('宣告的預算讀得出來，讀不出來的都退回 undefined', () => {
+    expect(declaredToolTimeoutMs({ tool: { defaultConfig: { timeout: 250 } } })).toBe(250);
+    expect(declaredToolTimeoutMs({ tool: { defaultConfig: {} } })).toBeUndefined();
+    expect(declaredToolTimeoutMs({ tool: { defaultConfig: { timeout: 0 } } })).toBeUndefined();
+    expect(declaredToolTimeoutMs({ tool: { defaultConfig: { timeout: -1 } } })).toBeUndefined();
+    expect(
+      declaredToolTimeoutMs({ tool: { defaultConfig: { timeout: Number.NaN } } }),
+    ).toBeUndefined();
+    expect(declaredToolTimeoutMs({ tool: {} })).toBeUndefined();
+    expect(declaredToolTimeoutMs({})).toBeUndefined();
+  });
+
+  it('等得比預算久 → 兩個數字都講', () => {
+    expect(formatToolTimeout('t', 130, 120)).toBe(
+      '工具 t 超時：等了 130ms，超過它宣告的 120ms 預算。',
+    );
+  });
+
+  it('量到的時間比預算少 1ms（計時器早響、取整後 99）→ 仍講預算，數字不低於預算', () => {
+    expect(formatToolTimeout('t', 99, 100)).toBe(
+      '工具 t 超時：等了 100ms，超過它宣告的 100ms 預算。',
+    );
+    expect(formatToolTimeout('t', 98, 100)).toBe('工具 t 超時：等了 98ms。');
+    expect(formatToolTimeout('t', 100, 100)).toBe(
+      '工具 t 超時：等了 100ms，超過它宣告的 100ms 預算。',
+    );
+  });
+
+  it('**等得比預算短 → 不講預算**：先響的是別人的計時器，兩個數字擺一起像自相矛盾', () => {
+    expect(formatToolTimeout('t', 121, 5000)).toBe('工具 t 超時：等了 121ms。');
+  });
+
+  it('沒宣告預算 → 只講等了多久', () => {
+    expect(formatToolTimeout('t', 300)).toBe('工具 t 超時：等了 300ms。');
+  });
+});

@@ -1,0 +1,542 @@
+/**
+ * 先讀後改：沒讀過的檔不准改。
+ *
+ * 模型可以對一個**沒讀過**的檔直接 `edit_file`——盲改。失敗一次是一輪往返（工具錯誤 →
+ * 模型重讀 → 再改），成功了則可能改壞它沒看到的地方。這位監聽者記下每個 agent
+ * 這一場觀察過哪些檔，並用那份紀錄擋下每一次寫入與編輯。
+ *
+ * ## 照抄 dsh 的哪些、退了哪一條
+ *
+ * 標準是 `packages/fs/fs-observation-policy`（SHA `4e84901`，對到上游
+ * `76fda72` 時該套件除了版號沒有變動）。**三個狀態、三個錯誤碼、以及「部分讀也算」
+ * 都是照抄的**：
+ *
+ * - **未見／確認缺席／存在於某版本**。讀一個不存在的檔會把它記成**確認缺席**，
+ *   所以之後的 `write_file` 可以走受防護的新建流程重建它。
+ * - **`write_file` 也擋**，不只 `edit_file`：未見或確認缺席解析成 `createIfAbsent`
+ *   （新建可以、覆蓋既有檔不行），確認存在則要求版本仍是讀到的那個。
+ * - **任何窗口的讀都算**。dsh 明文把這寫成刻意的弱化：「授权依据是版本新鲜度，
+ *   而非视图完整性……任何窗口读取都会授权对未变文件执行全文件覆盖」。所以帶
+ *   `offset` / `limit` 的部分讀一樣讓你改整個檔。
+ * - **紀錄逐 agent 一份，而且不跨 session**。dsh 的 owner 是 `agent.session`，而那邊
+ *   agent id ≡ session id、child agent 各自一份；恢復的 session 從零觀測開始。
+ *   我們的對應是 fold **逐個 agent 建一份實例**（見 `fold.ts`）。
+ *
+ * **偏離一：新鮮度檢查不是原子的。** dsh 把防護推到 provider——`write` / `edit` 帶著
+ * expected version 下去，後端自己做 compare-and-swap。`deepagents@1.13.1` 的
+ * `BackendProtocol` 表達不出來：`write(filePath, content)` 與
+ * `edit(filePath, old, new, replaceAll)` 收不到任何 expected-version 參數。退到最接近的
+ * 實作——在 `tools/execute` 的監聽者裡、寫入之前比對版本再放行（先問 {@link FILE_VERSION}，沒有才 `readRaw`）。**殘留 TOCTOU**：比對與寫入
+ * 之間有縫。這跟 `ContainedFilesystemBackend` 已經明文接受的那條同型（policy fence，
+ * 不是 kernel boundary）。
+ *
+ * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：backend 讀的時候就把版本交上來
+ * （{@link noteReadVersion}），這裡記它，不必為了版本再問一次。沒回報的，由 `look` 問：先 {@link FILE_VERSION}，再 `readRaw`。
+ * 回報的與寫前比對的 token 必須逐字相同——`harness/apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ *
+ * **寫與改前的比對先問 stat**（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：掛了 {@link FILE_VERSION} 的 backend
+ * 用 stat 組版本、不讀內容，token 的形狀由 backend 自己決定。沒有這一格的 backend 整份 `readRaw`，算 {@link versionOf}。
+ *
+ * **規則寫在系統提示詞，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 的 `write`、`edit` 各用一個
+ * `ctx.systemPrompt.section`（`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
+ * 「Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.」、
+ * 「Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.」
+ * 工具描述本身只有一句「Create or fully replace a UTF-8 text file.」／「Edit an existing UTF-8 text file by replacing literal text.」。
+ * 這裡一樣是一段（{@link OBSERVATION_SECTION}）：{@link observationGuidance} 看這一輪送給模型的工具清單裡有沒有 `write_file`／`edit_file`，
+ * 有才接；句子用 dsh 原句，只把工具名換成我們的（`write`→`write_file`、`edit`→`edit_file`，機械對應，不算偏離）。
+ * 模型看得到這句才不會每碰一個新檔都先撞一次牆。策略沒掛（`observationPolicy: false`）就不會有這句。
+ *
+ * 以前這一段登記成「偏離二：dsh 把它寫進工具描述」，那是寫錯的說明（沒有核原始碼），已更正：規則本來就在系統提示詞的 section。
+ *
+ * **鍵的範圍：** {@link observationKey} 只看得到兩層路由，見該函式的說明。TODO(#1910)：{@link createObservationListener}
+ * 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
+ *
+ * @module
+ */
+
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { posix } from 'node:path';
+
+import { adaptBackendProtocol } from 'deepagents';
+import type { AnyBackendProtocol } from 'deepagents';
+import type { NexusPlugin } from './plugin.js';
+import { toolNameOfCall } from './tool-call-step.js';
+import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import { freshTextResult } from './tool-pipeline.js';
+import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
+import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
+
+/** 先讀後改的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
+export const OBSERVATION_POLICY_MIDDLEWARE_NAME = 'nexusFileObservationPolicy';
+
+/**
+ * 被防護的三顆基座工具。
+ *
+ * 名字是 `deepagents@1.13.1` 內建檔案系統工具的名字，**不是我們取的**——
+ * `harness/apps/harness/src/baseline.test.ts` 那條「StateBackend 下註冊的內建工具是這七個加
+ * task」已經把整組釘住了，所以基座哪天改名，那條會先紅。
+ *
+ * dsh 那側不必列名字：它的策略掛在 `fs/*` 事件上，由 fs 工具自己派發。我們的派發點是
+ * LangGraph 的 ToolNode，插不進去，所以只能按名字認。
+ */
+export const OBSERVED_READ_TOOL = 'read_file';
+/** 見 {@link OBSERVED_READ_TOOL}。 */
+export const OBSERVED_WRITE_TOOL = 'write_file';
+/** 見 {@link OBSERVED_READ_TOOL}。 */
+export const OBSERVED_EDIT_TOOL = 'edit_file';
+
+/**
+ * 先讀後改的兩句系統提示（dsh `write.ts:63-71`、`edit.ts:76-83` 的原句；工具名換成我們的）。**這兩句是機制的一部分，不是註解**：
+ * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會，而省掉那一輪往返正是這件事的主要價值。
+ *
+ * @param tools - 這一輪送給模型的工具名。`write_file`、`edit_file` 各自在場才寫各自那一句（`write` 那句在 `edit_file` 也在場時多一小段）。
+ * @returns 要接在系統提示後面的文字；兩個工具都不在場時是空字串。
+ */
+export function observationGuidance(tools: ReadonlySet<string>): string {
+  const sections: string[] = [];
+  if (tools.has(OBSERVED_WRITE_TOOL)) {
+    sections.push(
+      `Read an existing file before overwriting it with ${OBSERVED_WRITE_TOOL} (the default fs-observation-policy requires it)` +
+        (tools.has(OBSERVED_EDIT_TOOL)
+          ? ` and prefer ${OBSERVED_EDIT_TOOL} for targeted changes`
+          : '') +
+        '.',
+    );
+  }
+  if (tools.has(OBSERVED_EDIT_TOOL)) {
+    sections.push(
+      'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.',
+    );
+  }
+  return sections.join('\n\n');
+}
+
+/**
+ * 先讀後改那一段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：規則要在模型動手之前就講給它聽，理由與出處見檔頭。
+ * 照這一格看到的工具名現算（{@link observationGuidance}），兩個工具都不在場時這一次不接。由 fold 掛在核准閘門內側的 `observationPrompt` 那一格。
+ */
+export const OBSERVATION_SECTION: MiddleSection = {
+  name: 'nexus:fs-observation',
+  order: MIDDLE_SECTION_ORDERS.FS_OBSERVATION,
+  separator: '\n\n',
+  text: (context) => observationGuidance(new Set(context.tools)),
+};
+
+/**
+ * 一次權威觀測。
+ *
+ * `absent` 不是「沒觀測過」——它是**確認缺席**，授權受防護的新建，但不授權編輯。
+ * 「沒觀測過」由這張表裡沒有這個鍵表示。形狀照 dsh 的 `FsObservation`。
+ */
+type Observation =
+  { readonly kind: 'present'; readonly version: string } | { readonly kind: 'absent' };
+
+/** 錯誤碼照抄 dsh，句子中文——碼是給機器讀的，句子是給模型讀的。 */
+const NOT_OBSERVED = 'FS_NOT_OBSERVED';
+const NOT_FOUND = 'FS_NOT_FOUND';
+const STALE_VERSION = 'FS_STALE_VERSION';
+
+/**
+ * 把 `FileData` 折成一個不透明的版本 token。
+ *
+ * 給沒有 {@link FILE_VERSION} 的 backend 用。`FileData` 上只有 `modified_at`
+ * （ISO 8601，毫秒），**單靠它會在同一毫秒內的兩次寫入上撞號**，所以再併上長度與一個
+ * 便宜的內容雜湊。內容本來就在 `readRaw` 的回傳裡，不必多讀一次。
+ *
+ * 真的二進位檔（`content` 是解不開 UTF-8 的位元組）只落到 `modified_at`——那是這一格已知的弱點，
+ * 不是疏漏：模型改不動二進位檔，這條路上唯一會走到它的是 `write_file` 覆蓋。位元組若解得開（副檔名不是文字、內容是文字的檔，
+ * #1776）就照文字算，見 {@link contentText}。
+ */
+function versionOf(data: unknown): string {
+  const file = data as { readonly modified_at?: unknown; readonly content?: unknown };
+  const modified = typeof file.modified_at === 'string' ? file.modified_at : '';
+  const hasher = createVersionHasher();
+  hasher.update(contentText(file.content));
+  return hasher.version(modified);
+}
+
+/**
+ * `FileData.content` 在 v1 是行陣列、v2 是字串或位元組。認不得的一律當空字串。
+ *
+ * **位元組要解碼**（[#1776](https://github.com/DemianLi/nexus-agent/issues/1776)）：基座對非文字副檔名（`.png`…）的 `readRaw` 回位元組。
+ * 當成空字串的話，版本只剩 `modified_at`，同一毫秒內的改寫抓不到。所以位元組解碼：fatal UTF-8、開頭的 BOM 留著（`ignoreBOM: true`）；
+ * 解不開的（真的二進位檔）仍是空字串——那一格只剩 `modified_at` 的弱點，同上面 {@link versionOf} 所述。
+ */
+function contentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content) && content.every((line) => typeof line === 'string'))
+    return content.join('\n');
+  if (content instanceof Uint8Array) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+/**
+ * 版本 token 的雜湊與長度，**可以分段餵**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。
+ *
+ * djb2 本來就是逐字元累加，分段算的結果與整份一次算相同。{@link versionOf} 用它；沒有 stat 的 backend 要回報版本也得用這同一份，
+ * 兩邊才不會各算各的。
+ */
+export interface VersionHasher {
+  /** 餵下一段文字（UTF-16 單位，與整份文字的 `length`／`charCodeAt` 一致）。 */
+  update(text: string): void;
+  /**
+   * 組成版本 token：`${modified_at}:${長度}:${djb2}`。
+   *
+   * @param modifiedAt - 檔案的 `modified_at`（ISO 8601），同基座 `readRaw` 回的那個。
+   */
+  version(modifiedAt: string): string;
+}
+
+/** 造一份從空文字起算的 {@link VersionHasher}。djb2：這裡要的是「內容變了會變號」，不是密碼學強度。 */
+export function createVersionHasher(): VersionHasher {
+  let acc = 5381;
+  let length = 0;
+  return {
+    update(text) {
+      for (let i = 0; i < text.length; i += 1) acc = ((acc << 5) + acc + text.charCodeAt(i)) | 0;
+      length += text.length;
+    },
+    version: (modifiedAt) => `${modifiedAt}:${length}:${(acc >>> 0).toString(36)}`,
+  };
+}
+
+/** 一次 `read_file` 裡，backend 回報的版本（見 {@link noteReadVersion}）。 */
+interface ReadVersionSlot {
+  version?: string;
+}
+
+/**
+ * 正在跑的 `read_file` 的版本槽。**observation 自己開一顆**，不借 `read-continuation` 的：兩者的先後由 fold 決定，
+ * 自己開槽的話不論誰包誰，backend 在深處 `getStore()` 拿到的都是這一顆。
+ */
+const currentReadVersion = new AsyncLocalStorage<ReadVersionSlot>();
+
+/**
+ * backend 讀完一個檔之後回報版本（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。`read_file` 成功時
+ * 「先讀後改」直接記這一個，不必為了記版本再讀一次。不在 `read_file` 裡時什麼都不做。
+ *
+ * **只有掛了 {@link FILE_VERSION} 的 backend 才該叫它**，而且回報的要是那一格會給的同一個 token（讀內容的那個已開檔的 stat）。
+ * 沒有回報的，observation 自己問（`look`）。
+ *
+ * @param version - 版本 token。
+ */
+export function noteReadVersion(version: string): void {
+  const slot = currentReadVersion.getStore();
+  if (slot !== undefined) slot.version = version;
+}
+
+/**
+ * backend 不讀內容、只看 stat 就給得出版本的那個方法（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。
+ * 基座的 `BackendProtocol` 沒有這一格，所以掛在一個 symbol 上，不跟基座日後的方法名撞。
+ *
+ * 實作了它的 backend，寫與改前的比對只做 stat；沒實作的（例如記憶體的 `StateBackend`）整份 `readRaw` 算 {@link versionOf}。
+ * **同一個 backend 的 `read_file` 回報（{@link noteReadVersion}）必須是同一種 token**，否則讀完就改會被當成「讀過之後被改動了」。
+ * 拋錯時 observation 收成不存在（只會放行受防護的新建、擋下覆蓋）。stat token 分不出同一個時間戳粒度內的等長改寫，內容雜湊分得出；
+ * 換成 stat 就接受這個盲點。用 `Symbol.for`：同一行程裡有兩份 `@nexus/core`（`lib` 與 `./src/*` 兩條 export、外部插件自帶一份）時仍是同一個。
+ */
+export const FILE_VERSION = Symbol.for('nexus.backend.file-version');
+
+/** {@link FILE_VERSION} 的結果：`absent` 是確認缺席（不存在，或不是一般檔）；`undefined` 是「這一格回答不了」，由 observation 退回 `readRaw`。 */
+export type FileVersionLookup =
+  { readonly kind: 'present'; readonly version: string } | { readonly kind: 'absent' } | undefined;
+
+/**
+ * 掛了 {@link FILE_VERSION} 的 backend，契約見那裡。`path` 是這個 backend 自己座標系的路徑：最外層是模型給的原路徑，
+ * composite 往下轉時已剝掉路由前綴。
+ */
+export interface FileVersionSource {
+  [FILE_VERSION](path: string): Promise<FileVersionLookup>;
+}
+
+/**
+ * 問 backend 這個檔的 stat 版本；沒有這一格就是 `undefined`。`source` 拋錯原樣往上，由呼叫方決定怎麼收。
+ *
+ * @param backend - 工具實際讀寫的那個 backend。
+ * @param path - 這個 backend 座標系的路徑（從 observation 呼叫時就是模型給的原路徑）。
+ */
+export async function fileVersionOf(backend: unknown, path: string): Promise<FileVersionLookup> {
+  const source = (backend as Partial<FileVersionSource> | null | undefined)?.[FILE_VERSION];
+  if (typeof source !== 'function') return undefined;
+  return source.call(backend, path);
+}
+
+/**
+ * 一則說得出恢復辦法的拒絕：模型看到 `Error: <原因>`，**碼不進文字**
+ * （[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。照 dsh：`FsError` 拋出來由
+ * `toolErrorResult` 渲染，碼只在 `error.info`（`packages/core/tools/src/index.ts:635-641`）。
+ */
+function refusal(code: string, reason: string): PipelineExecuteResult {
+  // 碼標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
+  // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`packages/llm/llm/src/error.ts:20`）。
+  return freshTextResult('message', `${TOOL_ERROR_PREFIX}${reason}`, {
+    isError: true,
+    error: { name: 'FsError', code },
+  });
+}
+
+/** 這次呼叫的 `file_path`，不是字串就回 `undefined`（表示這一格不歸我們管）。 */
+function filePathOf(args: unknown): string | undefined {
+  const path = (args as { readonly file_path?: unknown } | undefined)?.file_path;
+  return typeof path === 'string' && path.length > 0 ? path : undefined;
+}
+
+/** 一層 backend 自己的路由前綴；不是 `CompositeBackend`（或它被轉接過的外殼）就是 `undefined`。 */
+function routePrefixesOf(level: unknown): readonly string[] | undefined {
+  if (typeof level !== 'object' || level === null) return undefined;
+  const prefixes = (level as { readonly routePrefixes?: unknown }).routePrefixes;
+  return Array.isArray(prefixes) ? prefixes.filter((each) => typeof each === 'string') : undefined;
+}
+
+/** 往下一層：`CompositeBackend` 的 `default`（執行期有、型別上是 private）。 */
+function defaultOf(level: unknown): unknown {
+  return (level as { readonly default?: unknown }).default;
+}
+
+/** 一個 `CompositeBackend` 最多往下看幾層，防壞掉的環。 */
+const MAX_ROUTE_DEPTH = 8;
+
+/**
+ * 觀測紀錄的鍵：**同一個檔的不同寫法收成同一把**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0333）。
+ *
+ * 紀錄以前直接用模型給的原字串當鍵，所以 `a.txt`、`/a.txt`、`./a.txt`、`dir//a.txt` 是四個檔：讀 `a.txt` 再改 `/a.txt` 被回 `FS_NOT_OBSERVED`。
+ * 但後端把它們解成同一個檔（virtual mode 的 `resolvePath` 前面補 `/`、`normalize`）。鍵是 `路由前綴＋'\0'＋posix.normalize('/' + 去掉前綴的部分)`：
+ *
+ * - **路由前綴用跟 `CompositeBackend.getBackendAndKey` 一樣的判準**（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:1123-1129`）：一層一層看，
+ *   最長的前綴先試，`key === prefix.slice(0, -1) || key.startsWith(prefix)`；沒中任何一層的前綴給空字串。**路由要進鍵**：`/tool-results/x` 走暫存路由，
+ *   `tool-results/x` 沒有前導斜線、落到預設的工作區，兩個是不同的檔，不能因為去掉前綴後長得一樣就撞在一起。
+ * - **只看得到一層加上它的 `default` 那一層。** 組裝點的 composite 是巢狀的（歷史、工具結果暫存、plugin 掛載各一層，`fold.ts` 的 `foldBackend`、
+ *   `agent-factory.ts`），而基座建構 `CompositeBackend` 時把 `default` 與每條路由的 backend 都包進 `adaptBackendProtocol` 的外殼，外殼只複製
+ *   `routePrefixes`、不留 `getBackendAndKey` 與 `default`，所以沒辦法用基座自己的 `getBackendAndKey` 一路走到底，也看不到第三層以後的前綴。
+ *   看不到的那幾層裡，不同路由的同名檔會被當成同一個檔：結果只會是**錯誤碼不準**（`FS_STALE_VERSION` 而不是 `FS_NOT_OBSERVED`），不會放行——
+ *   `staleness` 拿這次呼叫的原路徑問後端，版本對不上就拒絕。
+ *   TODO(#1910)：{@link createObservationListener} 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
+ *   另一個殘留：看不到的那幾層裡鍵相同的兩個不同檔，若版本 token 也撞號（同一毫秒 mtime、同長度、同 djb2），讀其中一個會讓另一個被放行；實務上可以忽略。
+ * - 含 `..` 段的路徑不收（鍵是原字串）：後端會拒絕它，`normalize` 卻會把它折成別的檔的名字，讓一次失敗的讀誤記到那個檔身上。
+ *
+ * **與 dsh 的偏離（理由 1，基座表達不出來）：不取 realpath，用字面正規化。** dsh 的 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`，
+ * `687f282e`）檔案存在時用 realpath 當 `targetKey`，不存在時取最近一個存在的祖先的 realpath 接上缺的幾段。這裡監聽者拿到的是 `BackendProtocol`，
+ * 上面沒有 `resolve`／`realpath`，主機路徑只存在於 `ContainedFilesystemBackend` 內部。經過符號連結的別名（目錄或檔案連結）因此仍是兩個檔，
+ * 但結果只會是誤擋（`FS_NOT_OBSERVED`），不會放行：別名各是一把鍵，沒讀過的那個寫法被擋；同一個寫法，`read_file` 回報的版本與
+ * `staleness`／`look` 拿**原路徑**問到的版本取自同一個位置，經另一個別名改過就對不上。`ContainedFilesystemBackend` 的 `read` 與
+ * `[FILE_VERSION]` 都經讀取面的圍堵取這個位置，根內的連結解到本尊；解不出位置時兩邊都退回字面路徑，結果仍是誤擋。
+ *
+ * @param backend - 工具實際讀寫的那個 backend。
+ * @param raw - 模型給的 `file_path`。
+ */
+export function observationKey(backend: AnyBackendProtocol, raw: string): string {
+  if (raw.split('/').includes('..')) return `raw\0${raw}`;
+  let route = '';
+  let rest = raw;
+  let level: unknown = backend;
+  for (let depth = 0; depth < MAX_ROUTE_DEPTH; depth += 1) {
+    const prefixes = routePrefixesOf(level);
+    if (prefixes === undefined) break;
+    const hit = [...prefixes]
+      .sort((a, b) => b.length - a.length)
+      .find((prefix) => raw === prefix.slice(0, -1) || raw.startsWith(prefix));
+    if (hit !== undefined) {
+      route = hit;
+      rest = raw.substring(hit.length);
+      break;
+    }
+    level = defaultOf(level);
+  }
+  return `${route}\0${posix.normalize(`/${rest}`)}`;
+}
+
+/**
+ * 造一位「先讀後改」的監聽者：`tools/execute` 的 core 內層，讀完記下版本；改之前看紀錄，沒讀過、讀到的是不存在、或版本對不上就短路成拒絕，不往內交。
+ *
+ * **一個 agent 一位，不共用。** 觀測紀錄在 closure 裡，共用會讓 root 讀過的檔變成
+ * subagent 也可以直接改——那正好把這件事要擋的東西放掉。這是與 {@link createSummarizer}
+ * 同型的理由，跟圍堵與提醒器（無狀態、共用一份）相反。
+ *
+ * @param backend - 這次組裝真正在用的那個 backend（`foldBackend` 的產物，可能是
+ *   `CompositeBackend`）。版本 token 從它身上取——**必須是工具實際讀寫的那一個**，
+ *   拿兜底那個會讓掛了路由的路徑量到別人的版本。
+ * @returns 掛在 `tools/execute` 內層的監聽者。
+ */
+export function createObservationListener(
+  backend: AnyBackendProtocol,
+): CoreToolListener<'tools/execute'> {
+  // v1 / v2 兩種 backend 的 `readRaw` 回傳形狀不同；轉接一次之後統一是 `{ data } | { error }`。
+  const fs = adaptBackendProtocol(backend);
+  /** 鍵見 {@link observationKey}；問後端時一律用模型給的原路徑。 */
+  const observed = new Map<string, Observation>();
+  const keyOf = (path: string): string => observationKey(backend, path);
+
+  /**
+   * 現在這個檔的權威狀態。先問 {@link fileVersionOf}；有答案就用，不讀內容，回 `undefined` 才走 `readRaw`。
+   *
+   * **`readRaw` 那一支的判準是 `'data' in result`**，不是比對錯誤訊息的字面——基座把措辭改一個字，靠字面
+   * 認的版本就會把「不存在」悄悄讀成「存在」。
+   *
+   * **拋錯也算不存在，而那不是偷懶。** `readRaw` 的失敗形狀在後端之間不一致：
+   * `StateBackend` 回 `{ error }`，落磁碟的那個對缺檔直接拋 `ENOENT`（實測）。
+   * 這裡任何一種失敗都收斂成「讀不到」，而讀不到只會讓策略**放行新建、擋下覆蓋**，
+   * 不會放寬任何一格。stat 那一支拋錯也一樣收斂，後果相同。
+   */
+  const look = async (path: string): Promise<Observation> => {
+    try {
+      const stated = await fileVersionOf(backend, path);
+      if (stated !== undefined) return stated;
+    } catch {
+      return { kind: 'absent' };
+    }
+    let result: unknown;
+    try {
+      result = await fs.readRaw(path);
+    } catch {
+      return { kind: 'absent' };
+    }
+    if (result !== null && typeof result === 'object' && 'data' in result) {
+      return { kind: 'present', version: versionOf((result as { data: unknown }).data) };
+    }
+    return { kind: 'absent' };
+  };
+
+  /**
+   * 記一筆權威觀測。成功的變更已經落地了，所以這裡只有副作用、不會拒絕。
+   *
+   * **讀失敗的時候只記得下「不存在」，記不下「存在」**，而那條界線是承重的：
+   *
+   * - 讀一個不存在的檔失敗 → 記成**確認缺席**。這是 dsh 明文的行為（「读取缺失文件会
+   *   把它标记为确认缺失，因此随后的 `write` 可以通过防护创建流程重新创建它」）。
+   * - 讀一個**存在**的檔卻失敗（內容被 token 上限截掉、offset 超過檔尾、解碼失敗……）
+   *   → **什麼都不記**。記下去等於讓模型握有一份它從來沒看過的內容的觀測，下一次
+   *   `write_file` 覆蓋就這樣穿過去了——那正好是這整件事要擋的盲改。
+   *
+   * dsh 沒有這個洞是因為 `fs/observed` 由 read 工具在權威成功時才發；它從反面講的是
+   * 同一條界線：「直接 `ctx.fs` 读取不会发出 `fs/observed`」。我們的判準只能是工具交回
+   * 來的那則訊息是不是錯誤——版本照樣從 backend 取，那一格沒變。
+   *
+   * @param path - 這次的目標。
+   * @param readFailed - 這次讀取的工具結果是不是錯誤。變更路徑上一律 `false`。
+   */
+  const observe = async (path: string, readFailed = false, reported?: string): Promise<void> => {
+    // 讀成功、而且 backend 已經回報版本：記它，不再問一次（#1530）。失敗的讀不會有回報。
+    if (!readFailed && reported !== undefined) {
+      observed.set(keyOf(path), { kind: 'present', version: reported });
+      return;
+    }
+    const state = await look(path);
+    if (readFailed && state.kind === 'present') return;
+    observed.set(keyOf(path), state);
+  };
+
+  const listener: CoreToolListener<'tools/execute'> = async (_exec, next, site) => {
+    const toolName = toolNameOfCall(site);
+    const path = filePathOf(site.args);
+    // 不是這三顆、或者參數根本不帶路徑（模型填壞了）→ 原樣放行，讓工具自己講。
+    if (path === undefined) return next();
+
+    if (toolName === OBSERVED_READ_TOOL) {
+      const slot: ReadVersionSlot = {};
+      const result = await currentReadVersion.run(slot, () => next());
+      // **讀完才記，而且版本記的是後端的真話不是工具的輸出**：讀一個不存在的檔會被
+      // 記成確認缺席，那正是之後受防護的新建所需要的授權。**但讀失敗時記不下「存在」**
+      // ——理由見 {@link observe}。
+      await observe(path, result.isError, slot.version);
+      return result;
+    }
+
+    if (toolName === OBSERVED_EDIT_TOOL) {
+      const prior = observed.get(keyOf(path));
+      if (prior === undefined)
+        return refusal(
+          NOT_OBSERVED,
+          `要編輯 "${path}" 得先讀過它——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`,
+        );
+      if (prior.kind === 'absent')
+        return refusal(NOT_FOUND, `不能編輯 "${path}"：讀到的時候它不存在。`);
+      const stale = await staleness(path, prior);
+      if (stale !== undefined) return refusal(STALE_VERSION, stale);
+      const result = await next();
+      await observe(path);
+      return result;
+    }
+
+    if (toolName === OBSERVED_WRITE_TOOL) {
+      const prior = observed.get(keyOf(path));
+      if (prior?.kind === 'present') {
+        const stale = await staleness(path, prior);
+        if (stale !== undefined) return refusal(STALE_VERSION, stale);
+      } else {
+        // 未見或確認缺席 ＝ 只授權新建。現在檔在那裡，就是「覆蓋一個沒讀過的檔」——
+        // 沒讀過的那次是 NOT_OBSERVED，讀到缺席之後又冒出來的那次是有人搶先建了。
+        const now = await look(path);
+        if (now.kind === 'present')
+          return refusal(
+            prior === undefined ? NOT_OBSERVED : STALE_VERSION,
+            prior === undefined
+              ? `"${path}" 已經存在，覆蓋它之前要先讀過——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`
+              : `"${path}" 在你讀到它不存在之後被建出來了——重新讀一次，再重試。`,
+          );
+      }
+      const result = await next();
+      await observe(path);
+      return result;
+    }
+
+    return next();
+  };
+  return listener;
+
+  /** 版本還是不是讀到的那個；是就回 `undefined`，不是就回那句要給模型看的話。 */
+  async function staleness(path: string, prior: Observation): Promise<string | undefined> {
+    if (prior.kind !== 'present') return undefined;
+    const now = await look(path);
+    if (now.kind === 'present' && now.version === prior.version) return undefined;
+    return now.kind === 'absent'
+      ? `"${path}" 在你讀過之後不見了——重新讀一次，再重試。`
+      : `"${path}" 在你讀過之後被改動了——重新讀一次，再重試。`;
+  }
+}
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}，所以它是「這一顆被明著關掉了」的唯一鍵。
+ * 刻意不是條目的 `id`——id 是使用者的 patch 改得動的字串
+ * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ */
+export const OBSERVATION_POLICY_PLUGIN_NAME = 'observation-policy';
+
+/**
+ * 「先讀後改」的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * **它一顆服務都不註冊，`apply` 是空的。** 這不是漏寫，是照抄 dsh：那側
+ * `fs-observation-policy` 的檔頭第一句就是「Event-only filesystem observation policy;
+ * **it registers no service**」。原因在這一顆**沒有設定**——`FoldOptions.observationPolicy`
+ * 是 `boolean` 不是物件，dsh base 那一列（`packages/bundle/base/cordis.patch.yml:264`，
+ * `ddefc45`）也沒有 `config`。
+ *
+ * 所以它跟 {@link ./repeat-reminder.ts | repeatReminderPlugin} 差一格：那邊是四態，這邊
+ * **只有三態**。「條目提供了服務」與「這次組裝沒有經過部署設定層」兩格的正確答案都是
+ * 「照預設開著」，一顆只能表達「開著」的服務因此帶不了任何資訊。真正要分的只有一件事
+ * ——**有沒有被明著關掉**，而那件事 `disabledEntries` 已經記著了。
+ *
+ * **因此這一列沒有 `config`**：沒有 Config schema，寫了也沒有作用——`parseEntryConfig` 照 dsh 原樣交給 `apply`、
+ * 不驗，產品路徑上啟動時印一句警告（見 {@link ./plugin.ts | parseEntryConfig}）。
+ *
+ * **偏離登記**同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：dsh 那側是 base 的一個
+ * 獨立套件、plugin 自己掛 middleware；我們表達不出來的是「逐個 agent 各建一份」
+ * （觀測紀錄在 closure 裡，共用等於把這件事要擋的東西放掉）與位置。偏的是載體，
+ * 建構與排位仍由 fold 決定。
+ */
+export const observationPolicyPlugin: NexusPlugin = {
+  name: OBSERVATION_POLICY_PLUGIN_NAME,
+  apply() {
+    // 空的，而且是承重的空：見上面的檔頭。這一顆唯一的作用是「在場、可以被 disabled」。
+  },
+};
+
+export default observationPolicyPlugin;

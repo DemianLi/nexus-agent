@@ -1,4 +1,4 @@
-"""決定這一輪 CI 要跑什麼。規範與取捨見 .github/workflows/ci.yml 檔頭與 AGENTS.md。
+"""決定這一輪 CI 要跑什麼。規範與取捨見 .github/workflows/ci.yml 檔頭與 docs/contributing.md。
 
 兩個子指令：
 
@@ -102,7 +102,7 @@ def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False
 # 這些異動影響每一個套件，一律全查：相依與工具鏈、根的 tsconfig（paths 也在這裡）、vendor 的 Cordis。
 TYPECHECK_ALL_RE = re.compile(r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$|^vendor/')
 
-TYPECHECK_ALL_FILTERS = ('--filter=./**/packages/*', '--filter=./**/apps/*')
+TYPECHECK_ALL_FILTERS = ('--filter=./**/packages/*', '--filter=./**/apps/*', '--filter=./web')
 # 型別檢查的範圍是 `packages/*` 與 `apps/*`，跟全跑那一層的 typecheck job 一樣。
 PROJECT_RE = re.compile(r'^((?:packages|apps)/[^/]+)/')
 # 套件裡會改變型別檢查結果的檔：原始碼、`package.json`、`tsconfig*.json`、可被 import 的 JSON。只改 README 不查。

@@ -5,28 +5,28 @@
 一致性套件，以及強制它們的 lint 與 gate（[#1420](https://github.com/DemianLi/nexus-agent/issues/1420)）。
 capabilities 的執行、版本路由與兩版並存不在這一刀，見文末。
 
-決議出處是 [`ADR 0002`](adr/0002-vendor-cordis-and-plugin-contract.md)；原文 [§3-4](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md) 逐題紀錄在 tag。程式碼在
-[`packages/nexus-sdk`](../packages/nexus-sdk)（`@nexus/sdk`）與
-[`packages/nexus-tools`](../packages/nexus-tools)（`@nexus/tools`，第一個服務定義套件）與
-[`packages/nexus-projections`](../packages/nexus-projections)（`@nexus/projections`，第二個，#1421）與
-[`packages/nexus-skills`](../packages/nexus-skills)（`@nexus/skills`，第三個，#1446）、
-[`packages/nexus-commands`](../packages/nexus-commands)（`@nexus/commands`，第四個，#1456）與
-[`packages/nexus-feedback`](../packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）、
-[`packages/nexus-approval-channel`](../packages/nexus-approval-channel)（`@nexus/approval-channel`，第六個，#1458，**宿主在建樹時給值的預設答題管道**）與
-[`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）與
-[`packages/nexus-subprocess`](../packages/nexus-subprocess)（`@nexus/subprocess`，#2544，插件起子行程要用的兩支宿主函式，**不是接縫**，只是單向轉出）與
-[`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）與
-[`packages/nexus-fs`](../packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）與
-[`packages/nexus-system-prompt`](../packages/nexus-system-prompt)（`@nexus/system-prompt`，#1477，**第二個由插件提供、宿主消費的服務**：系統提示詞的各段與變數名）與
-[`packages/nexus-goal`](../packages/nexus-goal)（`@nexus/goal`，#1486，**第三個由插件提供、宿主消費的服務**：每份 root 日誌上的 goal 域，查找時才建）與
-[`packages/nexus-permission-presets`](../packages/nexus-permission-presets)（`@nexus/permission-presets`，#1491，**第四個由插件提供、宿主消費的服務**：組一條 thread 時決定權限組合的起始值與目錄）。
+決議出處是 [`ADR 0001`](adr/0001-vendor-cordis-and-plugin-contract.md)；原文 [§3-4](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md) 逐題紀錄在 tag。程式碼在
+[`harness/packages/nexus-sdk`](../harness/packages/nexus-sdk)（`@nexus/sdk`）與
+[`harness/packages/nexus-tools`](../harness/packages/nexus-tools)（`@nexus/tools`，第一個服務定義套件）與
+[`harness/packages/nexus-projections`](../harness/packages/nexus-projections)（`@nexus/projections`，第二個，#1421）與
+[`harness/packages/nexus-skills`](../harness/packages/nexus-skills)（`@nexus/skills`，第三個，#1446）、
+[`harness/packages/nexus-commands`](../harness/packages/nexus-commands)（`@nexus/commands`，第四個，#1456）與
+[`harness/packages/nexus-feedback`](../harness/packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）、
+[`harness/packages/nexus-approval-channel`](../harness/packages/nexus-approval-channel)（`@nexus/approval-channel`，第六個，#1458，**宿主在建樹時給值的預設答題管道**）與
+[`harness/packages/nexus-tool-result`](../harness/packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）與
+[`harness/packages/nexus-subprocess`](../harness/packages/nexus-subprocess)（`@nexus/subprocess`，#2544，插件起子行程要用的兩支宿主函式，**不是接縫**，只是單向轉出）與
+[`harness/packages/nexus-session`](../harness/packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）與
+[`harness/packages/nexus-fs`](../harness/packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）與
+[`harness/packages/nexus-system-prompt`](../harness/packages/nexus-system-prompt)（`@nexus/system-prompt`，#1477，**第二個由插件提供、宿主消費的服務**：系統提示詞的各段與變數名）與
+[`harness/packages/nexus-goal`](../harness/packages/nexus-goal)（`@nexus/goal`，#1486，**第三個由插件提供、宿主消費的服務**：每份 root 日誌上的 goal 域，查找時才建）與
+[`harness/packages/nexus-permission-presets`](../harness/packages/nexus-permission-presets)（`@nexus/permission-presets`，#1491，**第四個由插件提供、宿主消費的服務**：組一條 thread 時決定權限組合的起始值與目錄）。
 
 ## 這份規範管誰
 
 **只管 Cordis 樹上的函式插件。** 樹上有相容層與入口兩列、各接縫的登記處與宿主給值的內建列（`tools`、`projections`、`skill-sources`、`commands`、
 `approval-channel`、`session-lookup`、`fs`）、`include`（讀出貨清單的那一列），加上逐顆遷出的函式插件。**哪些宿主列、哪幾顆已經遷出，以兩處為準，這一節不寫名單與數字**
-（每張遷出卡都會改，寫在這裡一定漏）：宿主列看 `apps/harness/src/startup-audit.ts` 的 `REQUIRED_TREE_ENTRY_IDS` 與下面「接進清單」的樹表；
-遷出的插件看「接進清單」開頭的順序與 `apps/harness/src/migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED`（gate 會對它量，漏一顆就紅）。
+（每張遷出卡都會改，寫在這裡一定漏）：宿主列看 `harness/apps/harness/src/startup-audit.ts` 的 `REQUIRED_TREE_ENTRY_IDS` 與下面「接進清單」的樹表；
+遷出的插件看「接進清單」開頭的順序與 `harness/apps/harness/src/migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED`（gate 會對它量，漏一顆就紅）。
 還留在相容層裡的是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
 「不能有 default」的約束。遷出一顆，它就從物件形式換成這裡的函式插件形式。載入器怎麼分辨兩種形式，見下面
 「接進清單」。
@@ -51,7 +51,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 }
 ```
 
-- **為什麼不能有 default**：Loader 的 `unwrapExports` 有 `default` 就取 `default`（`vendor/loader/src/index.ts`），
+- **為什麼不能有 default**：Loader 的 `unwrapExports` 有 `default` 就取 `default`（`harness/vendor/loader/src/index.ts`），
   具名的 `inject` 與 `Config` 會被靜靜丟掉，插件掛上去卻沒有依賴宣告。一致性套件的 `export-form` 一格專抓這個。
 - **`Config` 必須就是 `manifest.config`**：設定的 schema 只能有一個出處。
 - **`inject` 與 `manifest.consumes` 是同一份宣告的兩個面**：必要的依賴兩邊都要有、範圍要一樣；選配的依賴**不**放進
@@ -74,7 +74,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 宿主這一側：清單少一列時，`PluginTree.sync` 等那一列收完才回傳；同一個 id 刪掉又加回來，新的那一份掛上時舊的已經收完。
 收尾沒有逾時，所以 disposer 一定要會結束：永遠不 resolve 的 disposer 會讓那一次 `sync` 一直等，排在它後面的組裝也跟著等。
 需要上限（例如等一個遠端行程退出），就在自己的 disposer 裡設，宿主不替插件加。
-上面前兩條由 `packages/nexus-sdk/src/teardown-order.test.ts` 釘住，vendor 的 Cordis 改了行為會先紅。
+上面前兩條由 `harness/packages/nexus-sdk/src/teardown-order.test.ts` 釘住，vendor 的 Cordis 改了行為會先紅。
 
 ## manifest
 
@@ -108,11 +108,11 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 - **`code: 'coexist'` 今天被拒收**，訊息指名那一列與原因。兩版並存的案例要等版本路由那張卡落地才驗得到，先收下就是
   一個沒驗過的宣告（demian 2026-10-13 拍板）。案例補上之後再放行。
 - **插件只宣告自己知道的那一半。** 宿主那一半（這一列被宿主 import、自建、起動期讀）由宿主機械算出，今天是
-  `apps/harness/src/plugin-row-classes.ts`。`effectiveReload(manifest.reload, hostReload)` 每一軸取較嚴的，不是只
+  `harness/apps/harness/src/plugin-row-classes.ts`。`effectiveReload(manifest.reload, hostReload)` 每一軸取較嚴的，不是只
   看 manifest：宿主起動期就把設定讀掉了，插件再怎麼宣告 `next-thread` 也不會在下一條 thread 生效。
   預期的對映是 `startup-read` 與 `mount-restart` → `config: 'restart'`、`next-thread` → `config: 'next-thread'`，
   **那是推論；`echo` 是第一個驗它的**（#1416 PR 2）：echo 的宿主分類是 `next-thread`，它宣告 `config: 'next-thread'`，
-`apps/harness/src/echo-on-tree-edges.test.ts` 的 H 格釘住兩邊不矛盾（宿主若有一天把 echo 挪進 `startup-read`，那份宣告就是
+`harness/apps/harness/src/echo-on-tree-edges.test.ts` 的 H 格釘住兩邊不矛盾（宿主若有一天把 echo 挪進 `startup-read`，那份宣告就是
 謊話，這一條會紅），驗收 E／F 量到的行為也一樣——改前綴之後下一條 thread 是新值、開著的是舊值。`effectiveReload` 還沒有
 消費者（後台插件頁還沒做），所以「取較嚴」今天只在測試裡算。
 
@@ -188,7 +188,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     與 `@nexus/core` 的 `SessionLookup`、`SessionAddress`、`TodoItem`、`TodoStatus`、`TODO_STATUSES` 的**單向轉出**（core 放 `peerDependencies`，同前例；`todo/write` 的事件擴充搬進 core 的 `session-log.ts`，
     因為它原本寫在 `@nexus/plugin-todo` 的 `declare module`，消費者不能再 import 那個套件）。
   - **提供者**：`@nexus/session/provider` 的 `createSessionLookupProvider(lookup)`，宿主掛一列 `session-lookup`（`PluginTree.#build` 與 `mountDetached` 兩處，列在必掛名單，`startup-audit.ts`）。
-    查找函式是**行程級的**：樹那一邊是 `apps/harness/src/thread-sessions.ts` 的 `ThreadSessions`（每條活著的 thread 一張註冊表，鍵是 root 日誌 id）；沒有樹的那一邊是**那一次組裝自己的** `registry.sessions.forCall`
+    查找函式是**行程級的**：樹那一邊是 `harness/apps/harness/src/thread-sessions.ts` 的 `ThreadSessions`（每條活著的 thread 一張註冊表，鍵是 root 日誌 id）；沒有樹的那一邊是**那一次組裝自己的** `registry.sessions.forCall`
     （`bindDetached` 交給 `mountDetached`），兩份無樹組裝互不相見。
   - **挑法只有一份實作**：`@nexus/core` 的 `pickSessionForCall(bound, config)`——沒有就 `not-attached`；一張時：相容層不看 `thread_id`，樹上的行程級查找（`ThreadSessions`）**也核對**——呼叫帶了 `thread_id` 而那一張不擁有它就是 `ambiguous`（#1482，選項 `verifySingle`），沒帶 `thread_id` 的呼叫維持直接挑它；多張依 `thread_id` 挑「有一份日誌的 id 等於它」的**恰好一張**，挑不出一律 `ambiguous`（寧可明說也不猜）；
     挑到之後算不出位址是 `unknown-caller`。相容層的 `registry.sessions.forCall` 與樹上的服務**都是它**，不另寫一份。
@@ -197,7 +197,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     會重組同一個 id 的時機：(1) serve 的 thread 在 `attachSessions` 之後、`ready.set` 之前建不起來，條目被刪、下一次請求同 id 重組；舊的那份由 `wire-handler.ts` 的 catch 收掉（#1467 之前 catch 只收 `threadAgent`，舊的會話接線、落盤、標題沒人收；現在和成功路徑的 `state.dispose` 共用同一支 `release`）；
     (2) 同一棵樹上先後組同一個 id（測試、同一個行程裡 `resume` 接回同一份日誌）；(3) 行程重啟是新的一棵樹，沒有殘留。
   - **消費者**：todo 的 `inject` 只要 `need(sessionLookupToken, '^1.0.0')`，`apply` 當下 `service(ctx, token)` 把**服務**抓進閉包，`forCall` 在**呼叫當下**才問。服務方法是屬性閉包、不碰 `this.ctx`，樹上那一列卸載之後開著的 thread 照樣寫得進自己的日誌（同 #1456 的快照語意）。
-  - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/todo-on-tree.test.ts`）：CLI 與 serve 都是 `cordis-root.ts` 的 `boot` 把 `tree.threadSessions` 交進相容層（`compatLayer.create` → `createCliAgent` → `attachSession`），沒有樹的路徑走 `bindDetached` → `mountDetached`。
+  - **三個入口各自接，各有一條會紅的測試**（`harness/apps/harness/src/todo-on-tree.test.ts`）：CLI 與 serve 都是 `cordis-root.ts` 的 `boot` 把 `tree.threadSessions` 交進相容層（`compatLayer.create` → `createCliAgent` → `attachSession`），沒有樹的路徑走 `bindDetached` → `mountDetached`。
     **宿主的義務**：載入了樹上的插件、卻不經 `root.boot` 就呼叫 `createCliAgent`，todo 會回 `not-attached`（產品路徑一律 boot）。
 - **第八個接縫：fs 查找**（`@nexus/fs`，#1466 Q2 (a)、Q2-1 (a)；逐條 thread 接縫的第四段，#1418 → #1458 → #1463 → 這一張）。形狀同第七個：**值由宿主給、插件消費**，逐次呼叫才有答案。
   - **定義套件**：token（`fsToken`，服務名 `fs`，契約版本 `1.0.0`）、`FsLookupService`（只有 `forCall(invocation: unknown): FsLookup`）、`FsLookup` 四種結果（`ok` 帶 `fs` 把手與位址、`not-attached`、
@@ -210,7 +210,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **登記與撤除**：同第七個（`attachSession` 的最後一步登記、撤除掛在它回傳的 detach、同 id 重組時後者取代前者且舊的遲到的 detach 只撤自己），不另開一條。
   - **消費者**：submit-record 的 `inject` 是 `need(toolsToken, '^2.0.0')` 加 `need(fsToken, '^2.0.0')`，`apply` 當下兩個服務都抓進閉包；工具本體 `fs.forCall(invocation)`，**一律同一句話**回報三種失敗
     （`not-attached`／`unknown-caller`／`ambiguous` 全是 `SUBMIT_RECORD_NO_BACKEND_MESSAGE`，#1466 Q3 逐字不變）。
-  - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/submit-record-on-tree.test.ts` 的「三個入口各有一條」）：CLI（`boot('cli')` 的樹上內建列）、serve（`submit-record-wire.test.ts`，真的 `runServe`、真的核准卡、
+  - **三個入口各自接，各有一條會紅的測試**（`harness/apps/harness/src/submit-record-on-tree.test.ts` 的「三個入口各有一條」）：CLI（`boot('cli')` 的樹上內建列）、serve（`submit-record-wire.test.ts`，真的 `runServe`、真的核准卡、
     `--workspace` 磁碟上的檔案）、沒有樹的呼叫端（兩份無樹組裝互不相見）。多條 thread 同時活著時每一次呼叫靠 `thread_id` 認主人，另有 root、同步子代理、背景子代理、重組、組裝失敗、撤除六種形狀的紅燈（同檔「E」）。
   - **只剩一筆登記時也核對 `thread_id`（#1482）**：行程級的查找（`ThreadSessions.forCall`／`fsForCall`）在只剩一筆登記時，呼叫若帶了 `thread_id` 而那一筆不擁有它，回 `ambiguous`（數量是 1），不再把唯一剩下的那一條當成它的主人。**這是 fs 的安全邊界**：fence 是每條 thread 各一顆（`/permission` 切的就是它），一條 thread 收尾途中還在跑的工具若被挑到別人身上，會寫進別人的 backend、套用別人的 fence。核對只在帶了 `thread_id` 時做；相容層的 `registry.sessions.forCall` 與沒帶 `thread_id` 的呼叫維持「只有一筆就是它」。挑法仍只寫在 core 的 `pickBoundForCall` 一處（選項 `verifySingle`，行程級查找傳 `true`）。
     代價：`ambiguous` 的拒絕句（todo／goal 的「接了 N 份會話…」）在 N 為 1 時讀起來怪，今天不另開結果種類。
@@ -221,7 +221,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `2.1.0` 起再帶 `deferContext(text, marks?)`（成功的結果之後補一則插件來源的人話，照 dsh）與 `interrupt(payload)`（掛起等人回覆）。
   `sessionLookup.forCall`、`fs.forCall` 直接收 `ToolExec`。`parameters` 是模型可以送的形狀：寫了 `additionalProperties: false` 的物件多帶鍵就拒，
   沒寫的收下丟掉；用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉。**`parameters` 是 input 模式；送上線時，沒寫 `additionalProperties` 的物件補 `false`**，
-  與遷移前的 zod 工具逐字相同。補的是**宿主**：轉接器在 `packages/nexus-tool-adapter`（`@nexus/tool-adapter`），把 `NexusTool` 轉成 LangChain 工具，
+  與遷移前的 zod 工具逐字相同。補的是**宿主**：轉接器在 `harness/packages/nexus-tool-adapter`（`@nexus/tool-adapter`），把 `NexusTool` 轉成 LangChain 工具，
   只有宿主 import 它，SDK 的 lint 擋插件原始碼 import；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
   樹上的消費者宣告 `^2.0.0`，goal（要 `deferContext`）與 ask-user（要 `interrupt`）宣告 `^2.1.0`（升級指南 [`tools-contract-2`](upgrade-guide/v0.6.0/tools-contract-2/guide.md)）。
   一致性套件多一格 `schema-json`。
@@ -251,11 +251,11 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     - `tools/execute` 交回的結果（`message`，或帶內容的 `command`）帶 `fresh: true`，換上的那則就是新造的，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。
   - **行為改變**：
     - `tools/result` 與 `onResult`：結果是 `Command` 時，也帶這次呼叫那則的 `blocks`、`content`（`tools/result` 另帶 `shape`），沒有那則就照舊不帶；靠「沒有內容」判斷結果是 `Command` 的監聽者要改。
-    - 輸出校驗、子代理撞到輸出上限的 `task` 替換、共用區前綴改成工具事件上的 core 監聽者（`packages/nexus-core/src/fold.ts` 組裝）；插件監聽者看得到的時刻改變只有兩處：
+    - 輸出校驗、子代理撞到輸出上限的 `task` 替換、共用區前綴改成工具事件上的 core 監聽者（`harness/packages/nexus-core/src/fold.ts` 組裝）；插件監聽者看得到的時刻改變只有兩處：
       - `tools/execute`：輸出校驗改排在插件監聽者內側，`next()` 交回的就是驗過的那一份，插件監聽者自己交回的結果不再經輸出校驗；撞限替換原本就在內側，時刻不變。
-      - `tools/post-execute`：共用區前綴在插件監聽者內側，`result` 是加前綴之前的那份。要加前綴的 `read_file`、`grep`（`content` 模式）成功結果（共用區路由上、非空、不在技能來源底下，見 `packages/nexus-core/src/shared-read-mark.ts` 檔頭〈標哪些〉），這時 `next()` 交回的是 `replace`，不是 `accept`；
+      - `tools/post-execute`：共用區前綴在插件監聽者內側，`result` 是加前綴之前的那份。要加前綴的 `read_file`、`grep`（`content` 模式）成功結果（共用區路由上、非空、不在技能來源底下，見 `harness/packages/nexus-core/src/shared-read-mark.ts` 檔頭〈標哪些〉），這時 `next()` 交回的是 `replace`，不是 `accept`；
         原樣交回 `next()` 的決定，模型收到的仍帶前綴；自己回 `accept` 或 `replace`，前綴都不加。
-        例外：`content` 模式的 `grep` 超過搜尋上限、完整清單有共用區命中時，外側的搜尋上限層照樣加前綴（`packages/nexus-core/src/search-overflow.ts`）。
+        例外：`content` 模式的 `grep` 超過搜尋上限、完整清單有共用區命中時，外側的搜尋上限層照樣加前綴（`harness/packages/nexus-core/src/search-overflow.ts`）。
   - **`blocks` 認參照**（`tools/execute`；延伸 2.6.1 的規則：內層 core 監聽者造的 `blocks` 不算新的區塊，`command` 結果裡那一則同樣適用）：
     - 內層 core 監聽者換掉結果或短路時（先讀後改的拒絕、輸出校驗、`task` 撞限），交回完整的結果：`blocks` 是 `content` 那一格 `text`、`shape` 是 `text`，帶 `fresh: true`。
     - 這份 `blocks` 由 `content` 導出，生產者認的是參照：原樣交回或只換 `content`（`{ ...result, content }`），模型收到字串；給新的 `blocks`，連複製一份（`[...result.blocks]`）也算，模型收到陣列。
@@ -285,27 +285,27 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   **消費者**宣告 `^1.3.0`，並在 `apply` 裡檢查 `onResult` 存在（`1.2.0` 以前的提供者沒有它，缺就是**掛載失敗**而不是靜靜不交付，前例是 submit-record 對 `gate()`）。**折進去**：提供者記下登記者是哪一列，
   `RowVerdict.active.resultListeners` → `FoldedContributions.resultListeners` → `registerFolded` 逐位進這條 thread 的 `registry.events.on('tools/result', l)`——**派發的時機與次序仍是核心圍堵的**
   （`tool/call` → 觀察者 → `tool/result`，觀察者的失敗被隔離），這一層只決定「誰聽」。工具與觀察者是**同一次折疊進同一條 thread**，所以之後列被卸載也不拆開。
-  次版號升級：宣告 `^1.2.0` 的 `submit-record`、`echo`、`ask-user` 不呼叫它，照常（`packages/nexus-tools/src/provider.test.ts` 的 `old-120` 消費者釘住）。
+  次版號升級：宣告 `^1.2.0` 的 `submit-record`、`echo`、`ask-user` 不呼叫它，照常（`harness/packages/nexus-tools/src/provider.test.ts` 的 `old-120` 消費者釘住）。
 - **工具接縫 2.5.0：逐條 thread 的工具來源**（`@nexus/tools`，#2533）。`ToolRegistry` 多一個**選配**方法 `threadSource(source, { services? })`：登記一個來源，宿主每組一條 thread 就在那一列
   折進 thread 的位置 await 它一次，交給它這條 thread 的 `ToolThread`：`register`、`gate`、`admit`、`section`（2.6.0 起）、`onDispose`、`logger`、`services.get` 與 `shared`。**消費者**宣告 `^2.5.0`（用 `section` 的宣告 `^2.6.0`），並在 `apply` 裡檢查
-  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`packages/nexus-tool-adapter/src/thread-source.ts`；授權表在宿主的 `apps/harness/src/thread-service-grants.ts`）；
+  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`harness/packages/nexus-tool-adapter/src/thread-source.ts`；授權表在宿主的 `harness/apps/harness/src/thread-service-grants.ts`）；
   沒有樹的呼叫端走 `mountDetached` 取同一格，授權一律查出廠的表。樹上沒有來源的列，`apply` 只做 `registerFolded`、同步回傳。
   - **給誰用**：工具、閘門與隱藏規則要**每條 thread 各一份**、而且要在組 thread 當下讀宿主服務才定得出來的插件。消費者是 mcp（#2533 把它搬上樹），目前只有它用：憑證逐 thread 輪替（池鍵帶憑證指紋，#1989）、serve 用連線池而 CLI 每列自己連、
     放棄重連之後工具藏起來但呼叫得到說明（#2430），這些都要在那一條 thread 的組裝裡讀 `channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`。只需要行程級工具的插件照舊用 `register`。
-  - **最小權限**：插件在 `threadSource` 宣告要讀哪幾個服務；宿主據授權表（`apps/harness/src/thread-service-grants.ts`，鍵是模組 specifier）判斷，宣告了沒授權的，**登記當下就拋**、那一列起不來；
+  - **最小權限**：插件在 `threadSource` 宣告要讀哪幾個服務；宿主據授權表（`harness/apps/harness/src/thread-service-grants.ts`，鍵是模組 specifier）判斷，宣告了沒授權的，**登記當下就拋**、那一列起不來；
     `thread.services.get` 對沒宣告的也拋。出廠的授權表只有 `@nexus/plugin-mcp` 那五格。樹上的插件不一定是我們寫的，而這些服務裡有憑證、連線池與答題管道，所以不給「任何插件讀任何服務」。
   - **`shared`**：同一條 thread 上、**同一顆插件**（同一個模組命名空間）的各列共用一份物件，給同一顆插件的多列互相協調（例如 server 名撞名、共用一顆資源工具的 hub）；不同插件拿到不同份，下一條 thread 是新的一份。
   - **`admit`**：在這條 thread 的工具清單那一步（`createToolListStepMiddleware`）拿掉不放行的工具；一個名字都沒拿掉時請求原樣往內交。名字省略時是 `<列 id>:admit:<序號>`。
   - **`section`**（2.6.0）：在這條 thread 的系統提示詞中段登記一段，轉給這條 thread 的 `registry.prompt.section`，名字、`order`、`separator` 與重名、`order` 的檢查都跟相容層那一格相同。`text` 給函式時（2.8.0 起，用的宣告 `^2.8.0`），每次模型呼叫收 `{ call }`：這一次呼叫的身分，交給 `sessionLookup.forCall` 認出 root 還是哪一個子代理（同一段會接到 root 與每個子代理的呼叫上）。相容層那一格的段 context 另帶 `agent` 與 `tools`，橋接不轉出。形狀照 dsh：`PromptSection.text` 每次組裝收一份 `AssembleContext`（`packages/core/system-prompt/src/index.ts:66`@`8bd0733`），那裡是不透明的 `scope` 加 `signal`；這裡只交身分 `call`，不帶 `signal`。
     `text` 給函式就是每次模型呼叫現算：段的內容要等這條 thread 上所有列都掛完才定得下來的（mcp 的 server 指引與可用的資源 server，後掛的列也要算進去）用它。
   - **`on`、`join`、`provide`**（2.7.0，用的宣告 `^2.7.0`）：轉給這條 thread 的 `registry.events.on`、`registry.sessions.join`、`registry.capabilities.provide`，落在那一列在清單上的位置，跟相容層那一列直接登記的一樣。
-    範圍刻意收窄：`on` 只收 `'tools/execute'` 與 `'agent/pre-step'`（2.11.0 起，見上面）、不開 `prepend`，所以監聽者落在那一列的位置，不會跳到前面各列之前；它跟任何插件監聽者一樣在兩段 core 監聽者之間（`packages/nexus-core/src/tool-pipeline.ts` 的 `outer`／`inner`）；`provide` 只收 `'workspace'`；別的值拋 `TypeError`。
-    三個都回傳冪等的 undo；那一列掉了由 rollback 一併撤，thread 收掉時監聽者跟著清（`packages/nexus-tool-adapter/src/thread-source.test.ts`）。供 sandbox-policy 上樹用（#2533）。撤除條件見偏離表。
+    範圍刻意收窄：`on` 只收 `'tools/execute'` 與 `'agent/pre-step'`（2.11.0 起，見上面）、不開 `prepend`，所以監聽者落在那一列的位置，不會跳到前面各列之前；它跟任何插件監聽者一樣在兩段 core 監聽者之間（`harness/packages/nexus-core/src/tool-pipeline.ts` 的 `outer`／`inner`）；`provide` 只收 `'workspace'`；別的值拋 `TypeError`。
+    三個都回傳冪等的 undo；那一列掉了由 rollback 一併撤，thread 收掉時監聽者跟著清（`harness/packages/nexus-tool-adapter/src/thread-source.test.ts`）。供 sandbox-policy 上樹用（#2533）。撤除條件見偏離表。
   - **失敗**：來源 reject 等於那一列的 `apply` 拋錯，走相容層同一條路——預設模式整次組裝失敗，`perEntry` 模式那一列掉（在可少掛清單上的成了警告），訊息帶那一列的 origin。宿主多做一件事：
     **先照反序跑完這一列每個來源已登記的 `onDispose`**（含先前已 resolve 的），再原樣拋出原本的錯誤（收資源失敗不蓋掉它）；全部 resolve 之後才交給這條 thread 的收尾。
     來源結束（resolve 或 reject）之後再呼叫 `register`、`gate`、`admit`、`section`、`on`、`join`、`provide`、`onDispose` 會拋，`services.get`、`shared`、`logger.warn` 不受限。
   - **為什麼不做行程級的 `admit`**：要藏的工具是那一條 thread 自己連出去的那一份（放棄重連是逐條 thread、逐份連線的事），行程級的規則看不到是哪一條 thread 的哪一份連線，只能藏所有 thread 的同名工具。
-  - **撤除條件**：憑證與連線池改成行程級服務、mcp 能在 `apply` 裡連一次線的那一天，這一格連同 `packages/nexus-tool-adapter/src/thread-source.ts` 與授權表一起拿掉，mcp 改用 `register` 與 `gate`。
+  - **撤除條件**：憑證與連線池改成行程級服務、mcp 能在 `apply` 裡連一次線的那一天，這一格連同 `harness/packages/nexus-tool-adapter/src/thread-source.ts` 與授權表一起拿掉，mcp 改用 `register` 與 `gate`。
 - **fs 接縫 1.1.0：工作區事實跟著把手走**（`@nexus/fs`，#1469 Q2 (a)）。`FsService` 多 `hasWorkspace(): boolean`；`offWorkspacePrefixes()` 把 plugin 用 `backend.mount()` 掛的路由前綴也併進來（組裝點明著交的在前、plugin 掛的在後，重複 fold 不累加）。
   兩樣都在 **fold 填 backend 的同一處**算（`settleFsService(service, backend, facts)` 是唯一的算法，`fold.ts` 把 `registry.capabilities.has(WORKSPACE_CAPABILITY)` 與 `registry.backend.mounts()` 當 `facts` 交進去），不在別處再算一次。
   **`backend.mount()` 的前綴限制（#1775）**：外掛掛的路由前綴不得與組裝點自己的路由重疊——`/shared`、`/attachments`、`/conversation_history`、`/large_tool_results`——相同、更深、更上層（含根 `/`）一律被拒：`fold` 的 `reservedBackendPrefixes` 當場拋，訊息點名外掛與重疊的前綴。外掛的路由包在組裝點預設路由的外面，不擋的話外掛可以遮住唯讀共用區。CLI 與 serve 都生效；沒有啟用的路由（沒有附件、沒有工具結果暫存、沒有共用區）不在保留清單裡，該前綴照常可掛——沒有暫存時組裝點那一格只是記憶體墊底，被遮住沒有安全後果。
@@ -315,7 +315,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **定義套件**：`@nexus/agent-loop`（token `agentLoop`，契約 `1.1.0`；模樣同 `@nexus/tools`，提供者在 `@nexus/agent-loop/provider`）。介面只有 `preStep(name, listener)`：listener 收 `(visible, { configurable, signal? })`（`signal` 是 1.1.0 加的選填欄位，#1533：這一輪的中止訊號，對應 dsh `agent/pre-step` 參數裡的 `signal`；只加選填欄位，`^1.0.0` 的消費者照常），回 `{ content, additionalKwargs? }[]`（0 則是 `undefined` 或空陣列）。**不 import `@nexus/core`**；`visible` 是模型看得到的那一串（摘要之後是 `[summary, ...切點之後]`），摘要器的私有鍵留在宿主。
   - **1.4.0（#2777）**：listener 收的第二個參數多一格選填的 `contextWindow`：這條 thread 下一步會走的模型的窗口（token），root 與子代理拿到同一個數；型錄沒有宣告就沒有這一格。宿主從 `model-selection` 那一列問（`model-selection-host.ts` 的 `nextContextWindowOf`），每次呼叫問一次。`agent-instructions` 與 `skill-invocation` 用它算注入的上限，宣告 `^1.4.0`。
   - **提供者**：樹上一列內建列 **`pre-step`**（內建列從七列變八列；id 不能叫 `agent-loop`：`startup-audit.ts` 已經把 dsh 的 `agent-loop` 對到「組裝本身」），行程級登記處，只收 listener（名字、listener、登記者那一列的 id）、**不建 middleware**。重名當場拋，後登記的那一列掉在 `apply`；列卸載時登記自己撤。
-  - **誰建 middleware、建訊息、記日誌**：都是宿主（`apps/harness/src/pre-step-middleware.ts`）。`registerFolded` 為登記者是某一列的每一位 listener 建**一顆** `beforeAgent` middleware、名字就是登記時給的名字，經 `registry.middleware.use(mw)` 折進**這條 thread 自己的**註冊點（不帶 `prepend`／`last`，所以位置就是那一列在出貨清單上的位置，與遷移前 `useWithBackend` 的落點相同；一份實例走遍 root 與每個子代理，**listener 不能把逐 thread 的狀態放進閉包**）。建的時候不看 backend 在不在：沒有 `--workspace` 時組裝點墊 `StateBackend`，middleware 照建，輪數與 develop 一致。
+  - **誰建 middleware、建訊息、記日誌**：都是宿主（`harness/apps/harness/src/pre-step-middleware.ts`）。`registerFolded` 為登記者是某一列的每一位 listener 建**一顆** `beforeAgent` middleware、名字就是登記時給的名字，經 `registry.middleware.use(mw)` 折進**這條 thread 自己的**註冊點（不帶 `prepend`／`last`，所以位置就是那一列在出貨清單上的位置，與遷移前 `useWithBackend` 的落點相同；一份實例走遍 root 與每個子代理，**listener 不能把逐 thread 的狀態放進閉包**）。建的時候不看 backend 在不在：沒有 `--workspace` 時組裝點墊 `StateBackend`，middleware 照建，輪數與 develop 一致。
   - **兩個容易靜靜壞掉的形狀**：宿主交給 listener 的是 `{ configurable: runtime.configurable, signal? }`——原樣交給 `fs.forCall(invocation)` 才認得出這次呼叫（交裸的 `configurable` 回 `unknown-caller`，基線會靜靜消失）；日誌經**這條 thread 的** `registry.sessions.forCall` 記一筆 `user/message`（`source: { kind: 'plugin', plugin: 名字 }`），**不走**行程級的 `session-lookup`（多條 thread 時它可能 `ambiguous`），記不進去原錯往外拋、這一輪失敗（#1665，照 dsh：注入的訊息進模型歷史，吞掉的話記憶體與日誌分岔）。
   - **三個入口各自接**：`FoldedContributions`（樹上相容層）與 `DetachedContributions`（沒有樹的路徑，`mountDetached` 掛一次就卸載，所以消費者必須在 `apply` 當下把服務抓進閉包）各加 `preSteps` 欄；內建列加在四處（`#create`、`mountDetached`、`REQUIRED_TREE_ENTRY_IDS`、`cordis-root.ts` 的列表）。
   - **消費者**：`agent-instructions` 的 `inject` 是 `need(agentLoopToken, '^1.0.0')` 加 `need(fsToken, '^2.1.0')`，`apply` 裡把兩個服務抓進閉包，listener 每次呼叫 `fs.forCall(invocation)`；不是 `ok`、或 `backend()` 是 `undefined` 就不注入。**行為逐字不變**（Q4）：記號、渲染、四個候選、`maxBytes`、middleware 名字與位置、日誌 `source`、每次 invoke 一格、摘要後下一次 invoke 補回。#1533 之後改了兩件：候選檔讀整份（不再停在基座 `read` 預設的第 500 行），單檔超過 `maxSourceBytes`（預設 1 MiB）整份不讀；有 `signal` 時讀檔被停下就拋中止。宿主交的 `signal` 取自 pump 放在 `configurable` 的這一輪中止訊號（`turnCancelSignalOf`），呼叫端另給 `runtime.signal` 時兩顆任一舉起都算。
@@ -334,9 +334,9 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 - **第十一個接縫：`goals`——插件提供、宿主查找的逐份日誌 goal 域**（`@nexus/goal` 1.1.0，#1486 Q1 (a)、Q3 (a)；`onActivationChanged` 從 1.1.0 起，#1575）。形狀同第五個接縫（`feedback`），差在**服務是一張查找表，不是一顆狀態**。
   - **定義套件**：token `goals`、`GoalServices`（`serviceFor(log)`、`existingFor(log)`、`onActivationChanged(log, listener)`——訂續行授權的變化，不建服務，監聽登記在日誌上）、宿主要用的 `GoalService` 窄介面（`get`／`block`／`pause`／`disarm`），加上單向轉出的純函式與型別（`foldGoal`、`applyGoalChange`、`renderGoalRoundPrompt`、`GoalView`…，Q4 (a)）。只依賴 `@nexus/core`（`peerDependencies`）與 `@nexus/sdk`；`hasDirectHumanTurn` 留在插件裡（只有工具與命令用）。
   - **提供者**：`goal` 那一列（`@nexus/plugin-goal`）。`apply` 裡建一份 `WeakMap<SessionLog, GoalService>`（閉包內，模組層級沒有任何一格），`serviceFor` **第一次被問到才建**：建構子在同一個同步區塊裡「讀 `log.events` 重播 → `log.subscribe`」（`SessionLog.append` 先凍住監聽清單、再 push、再同步發布，所以不漏、不重）；建立時不碰 `ctx`、訂閱不掛 effect，所以列卸載之後已經建好的服務照常運作。`serviceFor` **只收 root 日誌**；工具層自己看 `address.kind`，subagent 呼叫得到「這一份會話上沒有接 goal 域，所以沒有動。」（逐字同遷移前的 `GOAL_TOOL_NO_SERVICE_MESSAGE`，常數改名為 `GOAL_TOOL_NOT_ROOT_MESSAGE`）。`existingFor(log)` 是**不建、不重播**的讀，給閒置逐出的判斷用（見下）。
-  - **宿主**：`HOST_SERVICES` 多一格（`goals`，帶 `^1.1.0` 的範圍），組 thread 時從樹上取、折進該條 thread 的 `registry.services`（與 `messageFeedback` 同一條路）。**這不是 #1477 的「活服務不折進 registry.services」那一條**：那一條防的是相容層插件拿到活服務就能呼叫 `section()`，段跨 thread 疊加；`goals` 的消費者就是相容層裡的宿主程式（續行排程器、thread-pump、wire-handler），而查找表本身以日誌為鍵，跨 thread 不會疊加。宿主的 production 碼對 `@nexus/plugin-goal` 零 import（`git grep -n "@nexus/plugin-goal" -- apps/harness/src ':!*.test.ts' ':!*.fixture.ts'`）；`apps/harness/package.json` 保留這個依賴，因為 `cordis.yml` 的 `name` 是裸 specifier。
+  - **宿主**：`HOST_SERVICES` 多一格（`goals`，帶 `^1.1.0` 的範圍），組 thread 時從樹上取、折進該條 thread 的 `registry.services`（與 `messageFeedback` 同一條路）。**這不是 #1477 的「活服務不折進 registry.services」那一條**：那一條防的是相容層插件拿到活服務就能呼叫 `section()`，段跨 thread 疊加；`goals` 的消費者就是相容層裡的宿主程式（續行排程器、thread-pump、wire-handler），而查找表本身以日誌為鍵，跨 thread 不會疊加。宿主的 production 碼對 `@nexus/plugin-goal` 零 import（`git grep -n "@nexus/plugin-goal" -- harness/apps/harness/src ':!*.test.ts' ':!*.fixture.ts'`）；`harness/apps/harness/package.json` 保留這個依賴，因為 `cordis.yml` 的 `name` 是裸 specifier。
   - **閒置逐出（#1484）怎麼讀**：`GoalDriverPort.armed?()` 走 `existingFor`（**非建立式讀**）：從沒被問過 goal 的 thread 與「沒有武裝的目標」在那個判斷上等價——授權只活在行程內（`fold.ts` 的 `activation` 不落盤），只有服務自己的 `create`／`resume` 才掛得出 `armed`，沒有服務就沒有人掛過。續行排程器的 `block`／`disarm`／`pause` 與 `goal()` 仍走 `serviceFor`（要寫的路）。服務建好卻重放失敗（`#failure`）時 `get()` 會拋，逐出判斷把拋當成「不閒置」。**重建的 thread 是未武裝的**（授權不落盤，重放回 `disarmed`），與重啟一致。
-  - **紅燈**：`packages/nexus-plugin-goal/src/tree.test.ts`（一致性、套一次服務兩條 thread、lazy 的四個方向、subagent 不建服務）、`eslint-exclusion.test.ts`；宿主端——`goal-on-tree.test.ts`（逐出判斷走非建立式讀；撤掉再開拿到新日誌新服務、查找以日誌為鍵；撤掉的日誌可回收）、`serve-idle-eviction.test.ts`（走真的 serve：撤掉再開 ＝ 重啟再開，目標從落盤的日誌折回來）、`goal-reload.test.ts`（設定中途改了：開著的 thread 不動、新的 thread 看新的；reload 後工具、`/goal`、宿主打到同一個實例）、`goal-driver-cli.test.ts` 與 `serve.test.ts`（接線：出貨清單上的 goal 列、`goalDriverPort` 打在注入的那一份、續行）。舊外殼（`NexusPlugin`、`createGoalPlugin`）搬到 `apps/harness/src/goal.fixture.ts` 與插件包內的 `goal-shell.test.helper.ts`，給還在相容層組裝的測試用；兩者共用同一份 `createGoalCore`／`mountGoal`，行為只有一個出處。
+  - **紅燈**：`harness/packages/nexus-plugin-goal/src/tree.test.ts`（一致性、套一次服務兩條 thread、lazy 的四個方向、subagent 不建服務）、`eslint-exclusion.test.ts`；宿主端——`goal-on-tree.test.ts`（逐出判斷走非建立式讀；撤掉再開拿到新日誌新服務、查找以日誌為鍵；撤掉的日誌可回收）、`serve-idle-eviction.test.ts`（走真的 serve：撤掉再開 ＝ 重啟再開，目標從落盤的日誌折回來）、`goal-reload.test.ts`（設定中途改了：開著的 thread 不動、新的 thread 看新的；reload 後工具、`/goal`、宿主打到同一個實例）、`goal-driver-cli.test.ts` 與 `serve.test.ts`（接線：出貨清單上的 goal 列、`goalDriverPort` 打在注入的那一份、續行）。舊外殼（`NexusPlugin`、`createGoalPlugin`）搬到 `harness/apps/harness/src/goal.fixture.ts` 與插件包內的 `goal-shell.test.helper.ts`，給還在相容層組裝的測試用；兩者共用同一份 `createGoalCore`／`mountGoal`，行為只有一個出處。
 - **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
@@ -352,7 +352,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 
 - **第十二個接縫：會話參與者（`sessionLookup.join`）與 `permissionPresets` 服務**（`@nexus/session` 1.1.0、`@nexus/fs` 1.2.0、`@nexus/permission-presets` 1.0.0，#1491 Q2、Q3、Q4、Q5）。
   - **會話參與者**：`sessionLookup.join(installer)` 登記一位參與者；每條 thread 的 `registry.sessions` 在組裝時把登記者是某一列的那幾位一位一位折進去，**位置就是那一列在清單上的位置**（`bindToTree` 照清單順序呼叫），所以日誌上事件的相對順序（`approval/policy` → `sandbox/mode` → `permission/preset`）靠清單順序。參與者拿到的 subject 是 `{ address, log, rootLog（唯讀的 SessionLogView）, observe }`；`rootLog` 讓子代理的參與者讀父代理當下的狀態，不必碰控制器。次版號升級：`^1.0.0` 的舊消費者照常。
-  - **兩顆旋鈕的寫入面**（#1494 起控制器跟著 root 日誌走，所以寫入面就是日誌的寫入面）：`/permission` 的 `handler` 在 `packages/nexus-plugin-permission-presets/src/index.ts` 內三處 `sessionLog.append`（`permission/preset`、`sandbox/mode`、`approval/policy`，只寫真的不同的那顆）；root 參與者在新會話釘起始組合時 `subject.log.append('permission/preset', …)`；宿主組 thread 時對控制器的靜默 `switchTo` 只改格子、不寫日誌。控制器本身不再有第二個寫入口。
+  - **兩顆旋鈕的寫入面**（#1494 起控制器跟著 root 日誌走，所以寫入面就是日誌的寫入面）：`/permission` 的 `handler` 在 `harness/packages/nexus-plugin-permission-presets/src/index.ts` 內三處 `sessionLog.append`（`permission/preset`、`sandbox/mode`、`approval/policy`，只寫真的不同的那顆）；root 參與者在新會話釘起始組合時 `subject.log.append('permission/preset', …)`；宿主組 thread 時對控制器的靜默 `switchTo` 只改格子、不寫日誌。控制器本身不再有第二個寫入口。
   - **安裝失敗只記 warn**（R3）：沿用相容層七位會話參與者本來就有的語意（偏離表）。
   - **冷復活（R2）**：背景子代理重啟後被叫醒，日誌以上一個行程的事件為 seed，結尾補 `session/end-seed`。參與者讀「這一次接上時寫的」事件要停在 `session/end-seed`——seed 裡舊的 `sandbox/mode { source: 'delegation' }` 不算數（`permission-presets` 的參與者就是這樣，單元測試與 `permission-presets-on-tree.test.ts` 各有一條紅燈）。
   - **有沒有圍堵與可寫根**（#1491 Q4 (a)，#1774 重開「可寫根」那一半）：`@nexus/fs` 2.0.0 的 `hasContainment()` 是**行程級**（沒給 `--workspace` 是 `false`），由入口建樹時交進來（`createCordisRoot({ contained })`，CLI 與 serve 都照 `resolveWorkspaceRoot(…) !== undefined`，跟組裝點是同一支函式、同一個 cwd），`permission-presets` 在 `apply` 當下據它決定掛不掛。拿掉入口那一行交接，`/permission` 整顆不註冊、有 `--workspace` 的 thread 建不起來（訊息指名 `permission-presets`）。**可寫根是逐條 thread 的**：組裝點依「thread → 根」（`assembly-root.ts` 的 `WorkspaceRootOf`）取得：serve 的新 thread 拿 `<home>/thread-roots` 底下的私有根（`--workspace` 退為 `/shared` 唯讀共用區），續接照會話 header 記的根（舊 thread 記的就是 `--workspace`），落盤關掉時新 thread 沒有磁碟上的根（記憶體，`workspaceRoot()` 回 `undefined`、`hasWorkspace()` 為 `false`）；CLI 與沒有給 thread → 根的呼叫端仍回 `--workspace` 解析出來的根（#1775）。取得之後經 host 服務 `workspaceRoot` 在 fold 當下填進這條 thread 的 `FsService.workspaceRoot()`；`/permission` 不帶引數時用 `forThread(sessionLog.sessionId)` 精確找回這條 thread 的把手再讀（不套「只剩一筆就是它」，查不到明說查不到）。1.2.0 行程級的 `workspaceRoot()` 已拿掉，所以跳 major；四個消費者（permission-presets、agent-instructions、present、submit-record）的範圍一起改 `^2.0.0`。
@@ -360,7 +360,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **宿主**：`HOST_SERVICES` 多一格（`permissionPresets`，`^1.2.0`）。組 thread 時 `createNexusAgent` 之後向它要 `start`，據回傳值靜默 `switchTo` 兩顆控制器，目錄也從回傳值拿（`wire` 的 `permission.catalog`）。兩種錯（跟 `--sandbox` 矛盾、起始值對不上任何一組）包成以 `permission-presets` 為不能少掛條目的 `AssemblyDropError`，serve 試組與逐條 thread、CLI 都照「那一列掉了」記錄與轉換；產品路徑上（CLI `cli.ts`、serve 的試組與逐條 thread 都傳 `optionalEntries`，`optionalEntriesOf` 把必掛名單排除在外）以前這兩種錯也是 `apply` 拋、經 `dropped` 變成 `AssemblyDropError`，所以**外層型別與紀錄行為沒變**；實際變的只有那一行 drop 文字，從 `load.ts` 的「`…` 的 apply 失敗，它註冊的東西已全數撤銷 — 〔原因〕」換成 `agent-factory.ts` 的 `assemblyDropErrorFor` 寫的「`…` 在組裝這條 thread 時失敗 — 〔原因〕」，原因（內層訊息）逐字不變。
   - **續接收回（`@nexus/permission-presets` 1.1.0，#1621 第 2 步）**：`PermissionStarted` 多一個選填的 `narrowed`（`PermissionNarrowing`：預設組名與兩顆旋鈕的來源、目標值）。續接的日誌記的沙箱比表裡每一組都寬時才有；`start` 回的 `sandbox`／`approval` 仍是日誌原值，**收回由會話參與者往 root 日誌寫**（`permission/preset` → `sandbox/mode` → `approval/policy`，只寫變了的），因為沙箱與核准的參與者排在前面、會把控制器釘回日誌的值，宿主在 `start` 之後切控制器會被蓋回去。宿主只用 `narrowed` 在 serve 日誌／CLI 標準錯誤留一行 `[權限]`。沒有新事件種類，日誌格式不動。寬窄序在插件裡放一份（`isSandboxWider`，不 import `@nexus/plugin-sandbox-policy`），`permission-resume-narrow.test.ts` 對 `@nexus/plugin-sandbox-policy` 的 `SANDBOX_MODE_WIDTH` 逐格釘一致。
   - **委派快照收回（`@nexus/permission-presets` 1.2.0，#1739）**：`PermissionPresetsService` 多一個純函式 `narrowDelegated(sandbox)`（只增不減，`^1.0.0`／`^1.1.0` 的舊消費者不受影響；宿主範圍抬到 `^1.2.0`）。背景子代理被叫醒時，宿主在 `SandboxModeController.delegateFromLog` 讀回自己日誌上的委派沙箱之後問它：比表裡每一組都寬就回要收到的那一格（條件與目標同 `narrowingOf`：`defaultPreset`，沒設是表裡檔案政策最寬的一組），否則 `undefined`。只收沙箱、核准不動；只看「表＋這一格快照」，不讀 root 當下的狀態、不碰日誌（子代理日誌仍記委派當時那一格）；同步子代理走 `delegate`，不過這一道。宿主在 `presets.start` 之後把它包成 `setDelegationCeiling` 交給控制器。偏離登記見偏離表與插件檔頭第 10 條。
-  - **紅燈**：`packages/nexus-plugin-permission-presets/src/index.test.ts`（一致性、套一次服務兩條 thread、參與者含 R2、`/permission`）、`packages/nexus-session/src/provider.test.ts`（登記簿）；宿主端——`permission-presets-on-tree.test.ts`（三顆事件順序、冷復活、目錄來自服務、工作區根沒交到樹上）、`permission-presets.test.ts`（`--sandbox`、續接、必掛名單、wire）、`serve-plugin-failed-record.test.ts`（矛盾時紀錄指名 `permission-presets`）、`permission-presets-audit.test.ts`（`apply` 拋 → 稽核接住，CLI 啟動、serve 起動、serve 中途換設定後組 thread 三處；換表後開著的 thread 照舊表、新 thread 用新表）。既有測試：D1 `sandbox-mode.test.ts:68`、E2 `serve-idle-eviction.test.ts:99`。
+  - **紅燈**：`harness/packages/nexus-plugin-permission-presets/src/index.test.ts`（一致性、套一次服務兩條 thread、參與者含 R2、`/permission`）、`harness/packages/nexus-session/src/provider.test.ts`（登記簿）；宿主端——`permission-presets-on-tree.test.ts`（三顆事件順序、冷復活、目錄來自服務、工作區根沒交到樹上）、`permission-presets.test.ts`（`--sandbox`、續接、必掛名單、wire）、`serve-plugin-failed-record.test.ts`（矛盾時紀錄指名 `permission-presets`）、`permission-presets-audit.test.ts`（`apply` 拋 → 稽核接住，CLI 啟動、serve 起動、serve 中途換設定後組 thread 三處；換表後開著的 thread 照舊表、新 thread 用新表）。既有測試：D1 `sandbox-mode.test.ts:68`、E2 `serve-idle-eviction.test.ts:99`。
 
 ## 契約版本走 semver
 
@@ -374,7 +374,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `ContractService`，不要自己 `ctx.provide` 一個物件。
 - **錯誤進的是提供者的 logger**，不是消費者的。要把它對回消費者那一列（啟動結算、後台插件頁），靠 `ContractError` 上的
   結構化欄位 `consumer`／`provider`／`service`／`provided`／`range`，不要解析訊息。
-- **範圍怎麼合併**（實測，`packages/nexus-sdk/src/contract.test.ts`，vendor rc.12 `01b39624`）：`check` 用
+- **範圍怎麼合併**（實測，`harness/packages/nexus-sdk/src/contract.test.ts`，vendor rc.12 `01b39624`）：`check` 用
   `Service.resolveIntercept`，插件自己的 `inject` 墊底、Loader 列的 `intercept` 疊在上面，列有寫 `range` 就以列為準（往嚴往鬆都蓋得掉）；
   列的 `inject` 由 Loader 併進插件的 `inject`，寫範圍會照它檢查，只寫名字會蓋掉插件自己的範圍（上游 #206，定案見 #1827 C2）。
   nexus 的列不接受 `inject`／`intercept`（`entrySchema` 是 `strictObject`），所以產品路徑上
@@ -409,7 +409,7 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
   再呼叫一次 `dispose()` 也只拿到單次結果而提早返回（`loader.remove` 之後的 `fiber.dispose()` 回來時仍是
   `UNLOADING`，隔一個計時器 tick 才是 `DISPOSED`，實測）。要等一列收斂得自己第一個呼叫 `fiber.dispose()`。任何「改了紀錄
   才開新 thread」的路徑都要等到收斂，不能靠碰運氣的等待時間。**經紀錄與 Loader 重掛的那條路怎麼等**（#1416 PR 2 實測，
-  `vendor/include/nexus-tests/convergence.spec.ts`）：`await entry.update({ config: { ...includeConfig, patches } })` 回來時
+  `harness/vendor/include/nexus-tests/convergence.spec.ts`）：`await entry.update({ config: { ...includeConfig, patches } })` 回來時
   Include 底下的樹已經收斂——停用的那一列已卸載、登記處已撤；啟用的已重掛；改設定的舊值已撤、新值已進；設定沒變的什麼都沒
   動。**不用輪詢，也不靠等待時間**；取工具快照在這之後。「讀清單、推給樹、等收斂、取快照」是一段臨界區
   （`plugin-tree.ts` 的 `PluginTree.run`），兩條 thread 同時組裝時各拿一份跟自己讀到的清單相符的工具。
@@ -422,7 +422,7 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
 
 ### 誰受管
 
-**遷出的插件**：模組有 `manifest` 具名匯出，判別就是 `apps/harness/src/plugin-tree.ts` 的 `isFunctionPluginModule`。
+**遷出的插件**：模組有 `manifest` 具名匯出，判別就是 `harness/apps/harness/src/plugin-tree.ts` 的 `isFunctionPluginModule`。
 Include 的 allow-list、`tool-catalog` 與 gate 用的是**同一支**（`migrated-plugin-gate.test.ts` 的 E 那組釘住：定義只有
 一份、三處都 import 並呼叫、harness 沒有第二份手寫的「有沒有 manifest」）。沒有 `manifest` 匯出的舊插件，這一節
 一概不管；它們遷出時才受管。
@@ -488,11 +488,11 @@ ctx.effect(() => {
 - 這些由審查與一致性套件的 `unload` 那一格補：副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅。真的有人繞過，
   再升級成帶型別的規則。
 
-### gate：`apps/harness/src/migrated-plugin-gate.ts`
+### gate：`harness/apps/harness/src/migrated-plugin-gate.ts`
 
 形狀照 dsh 的 verify gate（`AGENTS.md:171`），nexus 的前例是 `package-invariants.ts`：純函式，由
 `migrated-plugin-gate.test.ts` 在 `pnpm -r run test` 裡跑，CI 不必多一個 step。它依檔案路徑 import 每個
-`packages/nexus-plugin-*` 的入口（新插件不一定在 harness 的相依裡；載不進來是違規，不跳過），對遷出的每一顆查：
+`harness/packages/nexus-plugin-*` 的入口（新插件不一定在 harness 的相依裡；載不進來是違規，不跳過），對遷出的每一顆查：
 
 1. **lint 設定生效**：量解析後的設定，不 grep 字串。對 `<pkg>/src/index.ts` 問 ESLint 最後的規則，逐條比對
    `@nexus/sdk/lint` 的值。`files` 寫錯、後面蓋掉，都抓得到。
@@ -516,7 +516,7 @@ gate 檢查的是「這條測試存在」。
 
 **「有狀態」不等於閉包裡有一張表。** 要分的是這張表的壽命：present 的交付表（#1469）只放**單次呼叫內的過渡狀態**——工具本體記一筆、`tools/result` 到了取走並刪掉，不是要跨呼叫、跨 thread 保留的東西；
 工具與觀察者又被**同一次折疊進同一條 thread**、共用同一個閉包，所以列被停用或重載之後，開著的 thread 手上仍是成對的、懸著的那一次交付仍寫得進日誌。這樣的插件**不算**有狀態的插件，可以比版本路由早上樹
-（驗收見 `apps/harness/src/present-on-tree.test.ts` 的 D 組）。真正有狀態的是「表的內容要跨呼叫存活並影響下一次呼叫」那一類。
+（驗收見 `harness/apps/harness/src/present-on-tree.test.ts` 的 D 組）。真正有狀態的是「表的內容要跨呼叫存活並影響下一次呼叫」那一類。
 
 ## 逐條 thread 的東西在呼叫當下拿，狀態以日誌為準（#1418）
 
@@ -528,7 +528,7 @@ gate 檢查的是「這條測試存在」。
 
 | 規則 | 怎麼做 | 為什麼 |
 | --- | --- | --- |
-| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌，相容層的插件用 `registry.sessions.forCall(config)`、**樹上的插件用 `sessionLookupToken` 服務的 `forCall(config)`**（#1463，兩者是同一支 `pickSessionForCall`），要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
+| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌，相容層的插件用 `registry.sessions.forCall(config)`、**樹上的插件用 `sessionLookupToken` 服務的 `forCall(config)`**（#1463，兩者是同一支 `pickSessionForCall`），要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`harness/apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
 | **狀態以日誌為準，閉包裡的暫存表鍵要帶 thread** | 暫存表（例如 present 的「已呼叫、尚未落定」）的鍵是 `thread \0 位址 \0 callId`，不是 `callId` | 模型給的 `tool_call.id` 是各 thread 各自編號的，兩條 thread 同時懸著同一個 `callId` 是會發生的 |
 
 **身分三種位置**：root 與同步子代理的 `thread_id` 是 root 那一條（子代理身分靠 `checkpoint_ns`）；背景子代理的
@@ -545,7 +545,7 @@ thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread �
 這是 demian 拍板的 Q1 (c)（PM 補了兩件：沒有樹的那條路也要接、ask-user 不再查 `channelForThread`）：今天兩個進入點各是一個行程級的情境（serve 有人在、CLI headless），沒有「同一份組裝裡逐條 thread 不同」的產品需求。
 `channelForThread` 的 token 與型別留在 `@nexus/approval-channel`，等真的有第二種答題者再接。`apply` 當下把服務抓進閉包，所以**同一棵樹上多條 thread
 共用同一個答題者**；「一條有人在、一條沒人在」是兩個行程級組裝（serve 與 headless CLI）的事，各一棵樹、各自的 `channel`。
-相容層的測試夾具（`apps/harness/src/ask-user.fixture.ts`）保留舊外殼的取法（先問 `channelForThread`，沒有再用 `channel`），給手搭清單的測試用，不在產品路徑上。
+相容層的測試夾具（`harness/apps/harness/src/ask-user.fixture.ts`）保留舊外殼的取法（先問 `channelForThread`，沒有再用 `channel`），給手搭清單的測試用，不在產品路徑上。
 
 **宿主的義務：進入點建樹時要把自己的答題管道交進去。** 不交就是「沒有指定」，ask-user 在呼叫當下拒絕（`NO_CHANNEL_MESSAGE`）；
 拿掉任何一個進入點的那一行交接，`ask-user-assembly.test.ts`（`runCli`、`runServe`）與 `ask-user-on-tree.test.ts` 都會紅。
@@ -574,7 +574,7 @@ thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread �
 **已知缺口（#1484 已處理）**：被中斷又沒有 resume 的那一筆留在表裡，原本條目握著那條 thread 的 `SessionLog`，thread 收掉之後整份日誌仍被那一筆引用。閒置逐出（#1484）讓 thread 會在行程活著期間被撤，所以這一筆現在**只弱引用日誌**
 （`WeakRef<SessionLog>`，仍在 `apply` 閉包裡，不是模組層級）：日誌隨 thread 一起可回收；`onResult` 取不回日誌就丟掉那一筆，下一次寫入時順手清掉殘留鍵。
 **不需要新接縫、插件也不必知道 thread 何時被撤——鍵（日誌）自己消失**；重建的 thread 有全新的日誌，碰不到舊的那一筆（`shared-across-threads.test.ts` 的「thread 被撤掉又重建」）。
-resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/nexus-plugin-present/src/index.test.ts`）。
+resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`harness/packages/nexus-plugin-present/src/index.test.ts`）。
 
 **注入與 fs 查找（#1474 起）**：agent-instructions 是第六顆逐條 thread 的插件，也是 fs 查找的第三個消費者（讀哪一條 thread 的工作區）。它的 listener 是**一份服務所有 thread**，所以判準放在訊息的記號上（`additional_kwargs`），不放在閉包裡；fs 一律 `fs.forCall(invocation)` 呼叫當下才問。
 `agent-instructions-on-tree.test.ts` 的 E 組全部讓**第二條 thread 活著、AGENTS.md 內容不同**，再從這一條跑，兩個方向都量（對的有、錯的沒有）：認錯主人的樣子是「甲的規矩被注入乙的對話」，而兩邊各自都注入成功，沒有任何例外。
@@ -583,7 +583,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 
 | 偏離 dsh 的什麼 | 理由類別 | 說明 |
 | --- | --- | --- |
-| vitest worker 的 `execArgv` 裝 tsx 的 ESM hook，`TSX_TSCONFIG_PATH` 指 `tsconfig.runtime.json`（#1502，PM 改判 A） | 表達不出來（理由 1） | dsh 處理 workspace 裸名插件只有兩種做法：開子行程（`packages/test-support/loader-smoke/src/index.ts:100-127`），或在 `mkdtemp` 底下手寫 `node_modules`（`app-boot.spec.ts` 約 `:934-990`）。兩種都表達不出 `apps/harness` 99 個測試檔（424 檔中，#1650 在 `959e9af7` 實測）對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、ctx 服務物件）；`plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，看不到 vite 的 paths 外掛，要經 tsx 的 resolve hook。退到：只在 worker 的 `execArgv` 裝 ESM hook（dsh source-launch 筆記的機制），子行程的**啟動指令**不動；但 hook 的 `TSX_TSCONFIG_PATH` 是在 vitest 主行程設的，測試裡開的每個 `node --import tsx` 子行程（例如沒傳 `env` 的 `entry-main.test.ts`）都會繼承，實際解析因此也改走 runtime 那份 tsconfig。撤除條件：這批測試改走子行程或 `lib` 模式。不違反 `docs/testing.md:49`（那條管載入 Cordis 設定的子行程）。**已盤點、撤不掉（#1650）**：不裝 hook，99 檔會紅；分類見 #1650 的表——85 檔只靠 `plugin-tree.ts` 的 `resolveBareSpecifier`（其中 68 檔經 `runServe`／`serveClient`），4 檔自己呼叫 `import.meta.resolve`，2 檔的 `toBe(applyX)` 在先建 `lib` 之後仍紅（src／lib 各一份模組），1 檔（`migrated-plugin-gate`）在行程內載 ESLint 設定，7 檔開 `node --import tsx` 子行程。dsh 的兩種做法都套不上：`mkdtemp` 底下的 `node_modules` 只有錨在它裡面的檔看得到（實跑：`import.meta.resolve('@nexus/plugin-echo')` 從 `mkdtemp` 內的檔得到該目錄，從 `apps/harness/src` 的檔得到 `apps/harness/node_modules/@nexus/plugin-echo/lib/index.js`），而 `resolveBareSpecifier` 的錨固定在 `plugin-tree.ts`，要讓測試改錨得動產品碼；子行程做法要改子行程的啟動指令，超出 #1502 Q-C 的界線。撤除條件不變 |
+| vitest worker 的 `execArgv` 裝 tsx 的 ESM hook，`TSX_TSCONFIG_PATH` 指 `tsconfig.runtime.json`（#1502，PM 改判 A） | 表達不出來（理由 1） | dsh 處理 workspace 裸名插件只有兩種做法：開子行程（`packages/test-support/loader-smoke/src/index.ts:100-127`），或在 `mkdtemp` 底下手寫 `node_modules`（`app-boot.spec.ts` 約 `:934-990`）。兩種都表達不出 `harness/apps/harness` 99 個測試檔（424 檔中，#1650 在 `959e9af7` 實測）對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、ctx 服務物件）；`plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，看不到 vite 的 paths 外掛，要經 tsx 的 resolve hook。退到：只在 worker 的 `execArgv` 裝 ESM hook（dsh source-launch 筆記的機制），子行程的**啟動指令**不動；但 hook 的 `TSX_TSCONFIG_PATH` 是在 vitest 主行程設的，測試裡開的每個 `node --import tsx` 子行程（例如沒傳 `env` 的 `entry-main.test.ts`）都會繼承，實際解析因此也改走 runtime 那份 tsconfig。撤除條件：這批測試改走子行程或 `lib` 模式。不違反 `docs/testing.md:49`（那條管載入 Cordis 設定的子行程）。**已盤點、撤不掉（#1650）**：不裝 hook，99 檔會紅；分類見 #1650 的表——85 檔只靠 `plugin-tree.ts` 的 `resolveBareSpecifier`（其中 68 檔經 `runServe`／`serveClient`），4 檔自己呼叫 `import.meta.resolve`，2 檔的 `toBe(applyX)` 在先建 `lib` 之後仍紅（src／lib 各一份模組），1 檔（`migrated-plugin-gate`）在行程內載 ESLint 設定，7 檔開 `node --import tsx` 子行程。dsh 的兩種做法都套不上：`mkdtemp` 底下的 `node_modules` 只有錨在它裡面的檔看得到（實跑：`import.meta.resolve('@nexus/plugin-echo')` 從 `mkdtemp` 內的檔得到該目錄，從 `harness/apps/harness/src` 的檔得到 `harness/apps/harness/node_modules/@nexus/plugin-echo/lib/index.js`），而 `resolveBareSpecifier` 的錨固定在 `plugin-tree.ts`，要讓測試改錨得動產品碼；子行程做法要改子行程的啟動指令，超出 #1502 Q-C 的界線。撤除條件不變 |
 | `tsconfig.runtime.json` 第二份 tsconfig（#1502） | 表達不出來（理由 1） | dsh 只有一份 `tsconfig.base.json`（`:100-108` 把 vendor 也映到 `src`），嚴格度靠 project references 隔開，base 本身就是 `verbatimModuleSyntax: false`（`:18`）。nexus 的 base 是嚴格單檔、沒有 project references：vendor 放進去 `tsc` 多出 186 個錯，所以分兩份（base 不含 vendor、runtime 含 vendor 並關 `verbatimModuleSyntax`，後者因 cosmokit `Dict` 這類未標 `type` 的 import 在 tsx 下載入失敗），由同一支 `scripts/gen-tsconfig-paths.ts` 寫、`--check` 同查。撤除條件：改用 project references 隔開 vendor |
 | tsdown 的 `deps.neverBundle: true`（#1502） | 表達不出來（理由 1） | dsh 靠 tsdown 預設只外掛 `dependencies`／`peerDependencies`，再用 `scripts/check-workspace-constraints.ts:513-521` 強制每個套件把 cordis 同時列進 peer 與 dev。nexus 沒有那支約束檢查，devDependencies 裡的 workspace 套件（例如 `@nexus/cordis`）預設會被內嵌成第二份、單例就壞了，所以退到 `neverBundle`：效果相同（套件之間不內嵌）。撤除條件：補上那支約束檢查 |
 | manifest 必填欄位 | 產品需求超出 dsh | dsh 的身分只有 `package.json` 的 name／version 加 Loader 列 id，`dsh` 欄位沒有 id、owner、provides、consumes、capabilities、reload（`packages/util/package-manifest/src/types.ts:8-39`）。決議 §3-4 第 10 條 |
@@ -592,7 +592,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | 服務契約用 `check` 做 semver | 產品需求超出 dsh | dsh 一處都沒用（`Service.check` 在 `packages`、`apps` 為 0）；它的版本相容檢查在套件層，比整個 runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`） |
 | 共用的一致性套件 | 產品需求超出 dsh | dsh 的卸載測試是每個套件各寫一份；插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`）。決議 §3-4 第 12 條。**並由 gate 保證每顆遷出的插件都有一條呼叫它的測試**（dsh 沒有這道 gate，靠每個檔 100% 覆蓋率間接保證，`docs/testing.md:9`） |
 | 插件邊界的 lint | 產品需求超出 dsh | dsh 沒有這條 lint：`.oxlintrc.json` 唯一的 `no-restricted-properties` 禁的是 `crypto.randomUUID`，而它自己的生產碼大量在用 `ctx.root`（`packages` 非測試碼 11 處）與 `internal/*`。決議 §3-4 第 12 條、grilling Q18 (c)（#1420） |
-| 投影登記處的定義套件相依 `@nexus/core`（#1421 Q2 (a)） | 表達不出來，退到最接近的實作 | dsh 的 `dsh-session-projection` 相依 `dsh-session`，`SessionEvent` 在 `dsh-session`。我們的 `SessionEvent` 與 `isLogicalTurnStart` 在 `@nexus/core` 的 `session-log.ts`，抽一個 `@nexus/session` 定義套件是橫跨整個核心的一刀（Q2 (b)），這一張不做。所以 `ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart` 留在 core、由定義套件單向轉出，`@nexus/core` 放定義套件的 `peerDependencies`（`devDependencies` 留 `workspace:*`，不能讓安裝結果出現第二份 core）。**這是第一個相依 core 的定義套件。** #1435 Q1 (c) 之後多一個同形狀的 `@nexus/session`（`packages/nexus-session`）：只做單向轉出，轉出的是會話日誌的四個讀法（`loggedContentBlocks`、`loggedMessageId`、`toolCallIds`、`REPEAT_REMINDER_MARKER`），`@nexus/core` 同樣放 `peerDependencies`；`ProjectionDetailError` 屬於投影，由 `@nexus/projections` 轉出。**撤除條件**（兩個套件一起）：SDK 與定義套件要發布到私有 registry 之前，把日誌讀法的實作搬進 `@nexus/session`（Q2 (b)），屆時 `SessionEvent`、`isLogicalTurnStart` 也從 `@nexus/projections` 移到 `@nexus/session`，`@nexus/projections` 改成從 `@nexus/session` 轉出，讓兩個定義套件都不再相依 `@nexus/core` |
+| 投影登記處的定義套件相依 `@nexus/core`（#1421 Q2 (a)） | 表達不出來，退到最接近的實作 | dsh 的 `dsh-session-projection` 相依 `dsh-session`，`SessionEvent` 在 `dsh-session`。我們的 `SessionEvent` 與 `isLogicalTurnStart` 在 `@nexus/core` 的 `session-log.ts`，抽一個 `@nexus/session` 定義套件是橫跨整個核心的一刀（Q2 (b)），這一張不做。所以 `ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart` 留在 core、由定義套件單向轉出，`@nexus/core` 放定義套件的 `peerDependencies`（`devDependencies` 留 `workspace:*`，不能讓安裝結果出現第二份 core）。**這是第一個相依 core 的定義套件。** #1435 Q1 (c) 之後多一個同形狀的 `@nexus/session`（`harness/packages/nexus-session`）：只做單向轉出，轉出的是會話日誌的四個讀法（`loggedContentBlocks`、`loggedMessageId`、`toolCallIds`、`REPEAT_REMINDER_MARKER`），`@nexus/core` 同樣放 `peerDependencies`；`ProjectionDetailError` 屬於投影，由 `@nexus/projections` 轉出。**撤除條件**（兩個套件一起）：SDK 與定義套件要發布到私有 registry 之前，把日誌讀法的實作搬進 `@nexus/session`（Q2 (b)），屆時 `SessionEvent`、`isLogicalTurnStart` 也從 `@nexus/projections` 移到 `@nexus/session`，`@nexus/projections` 改成從 `@nexus/session` 轉出，讓兩個定義套件都不再相依 `@nexus/core` |
 | 投影的 provider 只收定義，不負責推動（#1421，PM 決策 2） | 表達不出來，退到最接近的實作 | dsh 的 `SessionProjectionRegistry` 自己監聽 `session/created` 與 `session/event`，逐 session 推動每一格（`session-projection/src/index.ts`）。我們把推動留在 `@nexus/core` 每條 thread 的登記處（`createProjectionFold`）：推動綁在會話日誌與 wire 的投影通道上，搬過去就是 Q2 (b) 那一刀。**撤除條件**：跟 Q2 (b) 一起做 |
 | 投影：provider 這一層同 key 同 `stateVersion` 引用計數共用、`stateVersion` 不同才拒絕；每條 thread 的登記處每個 key 只收一份、重複照舊拒絕（#1421，PM 決策 1） | 照 dsh；thread 那一層是沿用的舊偏離 | provider 層照 dsh（`session-projection/src/index.ts:253-292`）：同一個套件可能掛 N 次，引用計數歸零之前一直用第一個登記者的定義，版本不同報 `refusing to share`。thread 層的重複拒絕登記在 [`session-projections-design.md:95`（封存）](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-projections-design.md#L95) 與 [`:110`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/session-projections-design.md#L110)，理由是「一次組裝一張註冊表、不熱換」——這個理由對每條 thread 的登記處仍然成立，對樹上的 provider 不成立（它是行程級的，樹會熱換；重掛時新舊兩份 fiber 可能短暫重疊）。所以兩層各自的規則不同：共用的 key 由宿主（`plugin-tree.ts` 的 `#assignProjections`）只交給**這一份清單上起來了的第一個登記者**折進 thread |
 | 技能來源接縫收**路徑**，不收 dsh 的提供者（`registerProvider(create)`）（#1446，demian Q1 (a)） | 遷移卡不改行為（暫時） | dsh 的 `SkillRegistry` 收 `SkillProvider { name, list, get }`，掃描與取回由提供者負責（`skill/src/index.ts:247-268`、`:390-424`）。我們收路徑、掃描留給基座的 `createSkillsMiddleware`。**理由不是「表達不出」**：nexus 已自己組裝、取代 `createDeepAgent`，skills 中介層也已用 `createMiddleware` 包過一層，照 dsh 的形狀做得到；做了就等於自寫 skills 中介層（掃描、prompt 那段、格式化都不能從基座重用），模型看到的 prompt 位元組會變。這張是遷移卡，驗收是行為不變，換成 provider 是行為變更。**撤除條件**：自寫 skills 中介層，或拿掉 deepagents 的時候；到時 provider 形狀升這個契約的 major，消費者的 `inject` 範圍擋下不相容的提供者 |
@@ -608,22 +608,22 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | `toolRefusal`／`toolCallIdOf`／`markToolError` 由 `@nexus/tool-result` 單向轉出 `@nexus/core`（#1458，demian Q4 (a)） | 表達不出來，退到最接近的實作 | dsh 的工具結果寫法在 `dsh-tool` 這一類定義套件裡，實作與型別同處。我們的實作在 `@nexus/core`（`markToolError` 與 `toolErrorOf` 共用一個 `WeakMap`，複製寫入端會靜默失效），抽出實作是橫跨核心的一刀。所以只做轉出，`@nexus/core` 放 `peerDependencies`。**撤除條件**：與 `@nexus/session`、`@nexus/projections` 同（Q2 (b)，SDK 與定義套件發布到私有 registry 之前把實作搬進定義套件） |
 | `scrubbedParentEnv`／`trackHostExitChild` 由 `@nexus/subprocess` 單向轉出 `@nexus/core`（#2544） | 表達不出來，退到最接近的實作 | dsh 的 `scrubbedParentEnv` 與子行程服務同住在 `packages/subprocess/subprocess`，實作與定義同處。我們的實作在 `@nexus/core`，讀寫 core 模組層的代理狀態與 host-exit 登記表，複製一份就是兩份狀態；也沒有 dsh 的 `ctx.subprocess` 服務。所以只做轉出，`@nexus/core` 放 `peerDependencies`。**撤除條件**：SDK 與定義套件發布到私有 registry 之前，改成宿主經服務把這兩支交給插件 |
 | 卡上寫「會話位址加上 thread 身分」，實作是另外加 `exec.thread` 與 `callThreadId`，`SessionAddress` 沒動 | **對卡上字面的改動，不是對 dsh 的偏離** | `SessionAddress` 是**一張 `SessionRegistry` 之內**的位址：每張註冊表就是一條 thread（根日誌 id 就是那條 thread 的 id、子代理日誌 id 是 `<root>/<runId>`，`session-registry.ts`），`sessionAddressKey` 只用來在那一張裡當 Map 鍵。thread 在「挑哪一張註冊表」那一步就用掉了，放進位址會在同一張表裡重複一份永遠相同的值。實測的足跡：24 個檔案提到 `SessionAddress`，原始碼與測試裡有 38 處 `kind: 'root'`、33 處 `kind: 'subagent'` 的字面比對、20 個檔案走 `toolCallSessionAddress`——加欄位要全部改，不加成可選欄位則又回到「沒填就挑不出」。而且背景子代理的 `thread_id` 本身就是 `<root>/<runId>`，已經含 `runId`，放進位址會有兩種寫法指同一個身分（`thread-id-reaches-handlers.test.ts` 量到）。所以 thread 走呼叫設定（`callThreadId`），在 `forCall` 與 `exec.thread` 用 |
-| `live-model` 的 `retryPolicy.mode` 只收 `normal`，`always` 拒收（#1427） | 產品需求超出 dsh | dsh 的 `retryPolicy` 有 `normal` 與 `always` 兩種模式（`packages/llm/llm/src/retry-policy.ts:37-57`），`always` 對每一次模型請求失敗無限重試到成功、取消或卸載。我們是企業內部聊天機器人：一輪沒有盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。其餘照 dsh：`mode` 寫了就必填，`maxRetries`／`retryableCodes`／`backoff` 逐條照 `resolveRetryPolicy`／`resolveBackoff` 驗（登記在 `apps/harness/src/settings/live-model.ts` 檔頭「偏離二」）。**撤除條件**：demian 提出需要無限重試的情境 |
-| `live-model` 多兩格：全機的模型請求並行上限 `maxConcurrentRequests`（預設不限）與排隊逾時 `maxWaitMs`，名額滿了**排隊**（#1505，demian 2026-10-17 全照建議拍板） | 產品需求超出 dsh | dsh 沒有任何跨 session 的模型請求並行閘或速率閘（它是一個人用自己的 key）；我們是多人共用一把 key，供應商的配額是全機共用的資源，一條失控的 thread 會讓所有人一起撞 429。形狀借 dsh 背景工作的准入（數量從現況現算、訊息寫上限與下一步、預設不限）；**排隊是 dsh 沒有的部分**，dsh 的決策紀錄明著否決過全域一桶、排隊、全域准入門控、用速率代替計數，逐條回答在 `apps/harness/src/request-gate.ts` 的檔頭（登記在 `apps/harness/src/settings/live-model.ts` 檔頭「偏離六」）。**撤除條件**：身分上線（#1428／#1429）後改成每人一桶，或 dsh 補上同類的閘 |
+| `live-model` 的 `retryPolicy.mode` 只收 `normal`，`always` 拒收（#1427） | 產品需求超出 dsh | dsh 的 `retryPolicy` 有 `normal` 與 `always` 兩種模式（`packages/llm/llm/src/retry-policy.ts:37-57`），`always` 對每一次模型請求失敗無限重試到成功、取消或卸載。我們是企業內部聊天機器人：一輪沒有盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。其餘照 dsh：`mode` 寫了就必填，`maxRetries`／`retryableCodes`／`backoff` 逐條照 `resolveRetryPolicy`／`resolveBackoff` 驗（登記在 `harness/apps/harness/src/settings/live-model.ts` 檔頭「偏離二」）。**撤除條件**：demian 提出需要無限重試的情境 |
+| `live-model` 多兩格：全機的模型請求並行上限 `maxConcurrentRequests`（預設不限）與排隊逾時 `maxWaitMs`，名額滿了**排隊**（#1505，demian 2026-10-17 全照建議拍板） | 產品需求超出 dsh | dsh 沒有任何跨 session 的模型請求並行閘或速率閘（它是一個人用自己的 key）；我們是多人共用一把 key，供應商的配額是全機共用的資源，一條失控的 thread 會讓所有人一起撞 429。形狀借 dsh 背景工作的准入（數量從現況現算、訊息寫上限與下一步、預設不限）；**排隊是 dsh 沒有的部分**，dsh 的決策紀錄明著否決過全域一桶、排隊、全域准入門控、用速率代替計數，逐條回答在 `harness/apps/harness/src/request-gate.ts` 的檔頭（登記在 `harness/apps/harness/src/settings/live-model.ts` 檔頭「偏離六」）。**撤除條件**：身分上線（#1428／#1429）後改成每人一桶，或 dsh 補上同類的閘 |
 | 插件自我停用只在行程裡停著，不改清單、不寫檔，宣告沒變就不重掛（#1424，demian Q1 (b)） | 表達不出來，退到最接近的實作 | dsh 的 Include 把樹側的變更與插件自我停用寫回根檔，持久化靠它；我們關掉了寫回（變更紀錄是唯一的寫入口，決議 §3-5 第 18 條），所以自我停用只改記憶體。dsh 在這一點上其實也是行程內的：每次開機重寫根檔（`apps/cli/src/profile-boot.ts:152-172`），任何一次協調都會把 Include 的樹重疊一遍、把停用的列蓋回啟用（未實測的推論）。我們每條 thread 都重推一次清單，照 dsh「每次協調都蓋回」就是每條 thread 重掛一次的閃動；而「每條 thread 重讀清單」源自 #1416 Q3 (a) 的快照語意，這條偏離跟著它走。所以：宿主記下停用當時的宣告（整份，簽章輸入是列 id、模組名、設定三格，序列化用 `rowKey` 同一支 `stable-stringify.ts`），**宣告沒變就替那一列推一條 `{ id, disabled: true }` 給 Include**，不論 Include 怎麼重疊都維持停用；宣告改了或重啟才重試。紀錄多一筆只記不折的 `self-disabled`。**撤除條件**：讀清單改成不是每條 thread 都推 |
-| 插件樹重組時新冒出的單列失敗不拋，那一列判成 `dropped`（#1766，PM 2026-10-26 判定 (b)） | 理由 2：產品需求超出 dsh 的射程 | **dsh 怎麼做**：重組時有新失敗就整次拋錯（`packages/boot/app-boot/src/index.ts:394-402`，`22ddee37`）；呼叫端只有 config-editor 與 HMR，config-editor 拋錯時把檔寫回原樣、重組回舊的，錯交給改設定的人（`packages/boot/config-editor/src/index.ts:141-147`），等於拒絕那一筆修改。**我們的需求**：`apps/harness/src/plugin-tree.ts` 的 `sync` 在啟動時跑，serve 每條 thread 組裝時也跑（`thread-plugin-list.ts`），不是寫入口；多人共用的 serve 上，一列可少掛的插件壞掉不能讓別人的 thread 建不起來（#1405 Q1、Q2，demian 2026-10-11）。照字面在 `sync` 拋，被拒的是無關的 thread，不是改設定的人。**跟 dsh 一致的部分**：必掛的列掉了，那一條 thread 拋 `StartupError`（`startup-audit.ts`）；樹上掉在 `requires` 的列（PENDING，等不到服務）不算失敗，提供者出現時由 Cordis 自己起來，同 dsh `:396-397`；同樣的失敗不重試：宣告（模組名與設定）沒變的列 Loader 不重掛，dsh 的 `sameFailure` 另外比 fiber 與 diagnostic。**使用者從哪裡看得到**（寫入口試掛看不到、之後某條 thread 組裝時那一列在 `apply` 掉的那一種，例如只在 serve 環境裡掉的列；`plugin-tree-new-failure.test.ts`〈serve：樹上那一列在 apply 掉〉繞過寫入口量過三者）：伺服器日誌記一次「這一列沒掛上」與原因（`thread-plugin-list.ts:399`，同一份宣告只記一次）；變更紀錄記一筆 `failed`，帶歸因到的 `seq`、`stage`、原因（`thread-plugin-list.ts:420` 交給 `plugin-failure-recorder.ts`），**只在紀錄裡有被接受的改動指到那一列時**，只被出貨設定或 `--patch` 影響的列不記（`serve-plugin-failed-record.test.ts`〈只被出貨設定或 --patch 影響的列（驗收 E）〉）；快照 `plugin-snapshot.json` 那一列的 `saved` 是 `dropped` 加 `dropStage`，不帶原因原文（`thread-plugin-list.ts:335`）。**撤除條件**：讀清單改成不是每條 thread 都推。寫入口在寫入前試掛、擋下新冒出的失敗（#2073）之後這一列照樣要在：試掛的環境不是 serve 的環境，只在 serve 環境裡掉的列照樣會在組裝時冒出來（PM 2026-10-29，#2073 issuecomment-6497939859） |
+| 插件樹重組時新冒出的單列失敗不拋，那一列判成 `dropped`（#1766，PM 2026-10-26 判定 (b)） | 理由 2：產品需求超出 dsh 的射程 | **dsh 怎麼做**：重組時有新失敗就整次拋錯（`packages/boot/app-boot/src/index.ts:394-402`，`22ddee37`）；呼叫端只有 config-editor 與 HMR，config-editor 拋錯時把檔寫回原樣、重組回舊的，錯交給改設定的人（`packages/boot/config-editor/src/index.ts:141-147`），等於拒絕那一筆修改。**我們的需求**：`harness/apps/harness/src/plugin-tree.ts` 的 `sync` 在啟動時跑，serve 每條 thread 組裝時也跑（`thread-plugin-list.ts`），不是寫入口；多人共用的 serve 上，一列可少掛的插件壞掉不能讓別人的 thread 建不起來（#1405 Q1、Q2，demian 2026-10-11）。照字面在 `sync` 拋，被拒的是無關的 thread，不是改設定的人。**跟 dsh 一致的部分**：必掛的列掉了，那一條 thread 拋 `StartupError`（`startup-audit.ts`）；樹上掉在 `requires` 的列（PENDING，等不到服務）不算失敗，提供者出現時由 Cordis 自己起來，同 dsh `:396-397`；同樣的失敗不重試：宣告（模組名與設定）沒變的列 Loader 不重掛，dsh 的 `sameFailure` 另外比 fiber 與 diagnostic。**使用者從哪裡看得到**（寫入口試掛看不到、之後某條 thread 組裝時那一列在 `apply` 掉的那一種，例如只在 serve 環境裡掉的列；`plugin-tree-new-failure.test.ts`〈serve：樹上那一列在 apply 掉〉繞過寫入口量過三者）：伺服器日誌記一次「這一列沒掛上」與原因（`thread-plugin-list.ts:399`，同一份宣告只記一次）；變更紀錄記一筆 `failed`，帶歸因到的 `seq`、`stage`、原因（`thread-plugin-list.ts:420` 交給 `plugin-failure-recorder.ts`），**只在紀錄裡有被接受的改動指到那一列時**，只被出貨設定或 `--patch` 影響的列不記（`serve-plugin-failed-record.test.ts`〈只被出貨設定或 --patch 影響的列（驗收 E）〉）；快照 `plugin-snapshot.json` 那一列的 `saved` 是 `dropped` 加 `dropStage`，不帶原因原文（`thread-plugin-list.ts:335`）。**撤除條件**：讀清單改成不是每條 thread 都推。寫入口在寫入前試掛、擋下新冒出的失敗（#2073）之後這一列照樣要在：試掛的環境不是 serve 的環境，只在 serve 環境裡掉的列照樣會在組裝時冒出來（PM 2026-10-29，#2073 issuecomment-6497939859） |
 | 會話查找是行程級的服務，工具呼叫當下依 `thread_id` 從活著的註冊表挑，不是 dsh 的 `exec.agent`（#1463，demian Q1 (a)） | 表達不出來，退到最接近的實作 | dsh 的工具拿到的 `exec` 帶著 `agent`，指到它所屬的會話（工具分發點在 dsh 自己的 pipeline）。我們的工具分發點是 LangGraph 的 `ToolNode`，handler 拿到的只有呼叫設定，沒有地方塞一個宿主算好的會話。退到最接近的：**身分隨呼叫設定傳進來**（`configurable.thread_id` 與 `checkpoint_ns`，`thread-id-reaches-handlers.test.ts` 實測三種位置都到得了），宿主在樹上提供一個查找服務，呼叫當下才問、並從那一刻的活著的註冊表挑。**撤除條件**：工具分發自己握分發點（自寫 pipeline）時，把身分放進 `exec`，這個服務與 `pickSessionForCall` 一起退場 |
 | `TodoItem`、`TodoStatus`、`TODO_STATUSES` 與 `todo/write` 事件的型別擴充留在 `@nexus/core`，由 `@nexus/session` 單向轉出（#1463，demian Q2 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`TodoItem` 定義在插件自己的套件（`packages/todo/tool-todo/src/types.ts:21`），`todo/write` 的事件擴充也在同一個檔（`:28-31`），用 `declare module '@deepseek-ai/dsh-session/types'` 補進 `SessionEventMap`——型別與事件擴充都住在插件裡，插件去擴充會話套件（對讀版本 86a40220）。**我們做不到的原因**：`SessionEventMap` 在 `@nexus/core`，而遷出的插件被 #1420 的 lint 禁止 import `@nexus/core`，所以沒辦法在插件裡對它寫 `declare module`。**退到哪裡**：事件擴充搬進 core 的 `session-log.ts`，`TodoItem`、`TodoStatus`、`TODO_STATUSES` 三個名字留在 core、由 `@nexus/session` 單向轉出（消費者不能再 import `@nexus/plugin-todo` 取型別）。**撤除條件**（理由是抽出實作橫跨核心，同 Q2 (b)，不是表達不出來的原因）：與 `@nexus/session` 的其他轉出一起——SDK 與定義套件發布到私有 registry 之前把實作搬進定義套件，屆時事件擴充可回到插件側 |
-| `@nexus/plugin-todo` 的 lint 排除 `src/invariant.ts`（#1463，demian Q3 (a)） | 產品需求超出 dsh | `invariant.ts` 是相容層的配套入口（`todo-invariant` 那一列），寫的是 `NexusPlugin`，import `@nexus/core` 並在模組層有 `new Set`，SDK 規則一條都過不了；把它改到綠不是機械改動（`PluginEntry` 是相容層的型別）。排除**只蓋到這一個檔**（`packages/nexus-plugin-todo/src/eslint-exclusion.test.ts` 量：`src/index.ts` 完整受管、暫存的違規檔照樣紅、同一份違規碼放在 `src/invariant.ts` 的路徑才不紅）。**撤除條件**：2026-11-03 配套入口重審——拿掉就連檔一起刪，留下就另開卡遷它 |
+| `@nexus/plugin-todo` 的 lint 排除 `src/invariant.ts`（#1463，demian Q3 (a)） | 產品需求超出 dsh | `invariant.ts` 是相容層的配套入口（`todo-invariant` 那一列），寫的是 `NexusPlugin`，import `@nexus/core` 並在模組層有 `new Set`，SDK 規則一條都過不了；把它改到綠不是機械改動（`PluginEntry` 是相容層的型別）。排除**只蓋到這一個檔**（`harness/packages/nexus-plugin-todo/src/eslint-exclusion.test.ts` 量：`src/index.ts` 完整受管、暫存的違規檔照樣紅、同一份違規碼放在 `src/invariant.ts` 的路徑才不紅）。**撤除條件**：2026-11-03 配套入口重審——拿掉就連檔一起刪，留下就另開卡遷它 |
 | fs 是呼叫當下依 thread 找回把手的查找服務，不是 dsh 的行程全域一份 `fs`＋每次呼叫傳進去的參數（#1466，demian Q2 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`fs` 是行程全域一份的 Cordis 服務（`packages/fs/fs/src/index.ts:45-48`、`:87-90`；提供者是 `fs-local` 與 `fs-sandbox` 兩種），工具 `inject: ['fs']`（`packages/fs/tool-fs/src/index.ts:23`）後從閉包取用；每個 agent 不同的 cwd 與沙箱政策在呼叫當下當參數傳入（cwd：`session-cwd.ts:23` 的 `ctx.workingDirectory.ensure(exec.agent, …)`；政策：`write.ts:117-124` 的 `sandbox.resolvePolicy` 結果當 `writeText` 的參數；對讀版本 86a40220）。**我們做不到的原因**：我們每條 thread 的 backend 是 deepagents 的 `CompositeBackend`，路由（會話歷史、工具結果暫存、附件、plugin 的 `backend.mount()`）與 fence 都綁在每次組裝新建的物件上，沒有「同一個 fs、換參數」的介面；拆成「全域 fs＋每次呼叫的政策參數」等於重寫整層 backend，遷移卡做不到（#1466 Q2 (c)）。**退到哪裡**：呼叫當下依 `thread_id` 從行程級的登記表找回那條 thread 自己的把手（同 #1463 的會話查找，同一張登記表、同一支挑法）。**撤除條件**：backend 改成「全域一份＋呼叫時帶政策」之後，這個服務退場，消費者改 `inject` 全域 `fs` |
 | `FsService`、`SessionAddress` 留在 `@nexus/core`，由 `@nexus/fs` 單向轉出型別（#1466，demian Q2-1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`fs` 的服務類別與型別在 `dsh-fs` 這個定義套件裡，實作與型別同處（`packages/fs/fs/src/index.ts`，對讀版本 86a40220）。**我們做不到的原因**：`createFsService`／`settleFsService` 綁著 `foldRegistry` 的 fold 與 `@nexus/core` 的 host-services（填值的那一半只在 core 模組裡，消費者手上的把手只讀不能改），抽出實作是橫跨核心的一刀（#1421 Q2 (b)）。**退到哪裡**：只轉出型別，`@nexus/core` 放 `peerDependencies`。**撤除條件**：與 `@nexus/session`、`@nexus/projections` 同（Q2 (b)） |
 | 核准閘門是 `tools` 服務上的方法 `gate(listener)`，不是 dsh 的 `ctx.on('tools/pre-execute')` 事件（#1466，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：核准是 `tools` 服務發的 waterfall 事件，任何插件 `ctx.on('tools/pre-execute', …)` 註冊，鏈底 `allow`（`packages/core/tools/src/index.ts:1512-1516`、決定三格 `PreToolDecision` 同檔；對讀版本 86a40220）。**我們做不到的原因**：樹上沒有事件匯流排的 token，而核准也不搬上匯流排（demian 2026-10-09 決議）；我們的核准是 LangGraph 中介層（`nexusApprovalGate`）從每條 thread 自己的 `registry.approvals` 讀，樹上的列拿不到那張表。**退到哪裡**：`tools` 服務 `1.2.0` 的選配方法 `gate(listener)`，宿主把那一列登記的 listener 折進每條 thread 的 `registry.approvals`（來源仍是那一列的名字）。**撤除條件**：核准搬上事件匯流排時，這個方法退場、消費者改成 `ctx.on` |
 | `tools/result` 觀察者是 `tools` 服務上的方法 `onResult(listener)`，不是 dsh 的 `ctx.on('tools/result')` 事件（#1469，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`tool-present` 用 `ctx.on('tools/result', …)` 取出等著的那一筆再寫交付（`packages/deliverables/tool-present/src/index.ts:100-108`；對讀版本 86a40220）。**我們做不到的原因**：樹上沒有事件匯流排的 token（同核准閘門那一列），而 `tools/result` 由核心圍堵在每條 thread 自己的 `registry.events` 上派發，樹上的列拿不到那張表。**退到哪裡**：`tools` 服務 `1.3.0` 的選配方法 `onResult(listener)`，宿主把那一列登記的 listener 折進每條 thread 的 `registry.events.on('tools/result', …)`，派發時機與次序不變。**撤除條件**：事件匯流排上樹時，這個方法退場、消費者改成 `ctx.on` |
 | `PresentedFile` 由 `@nexus/session` 轉出、`deliverables/presented` 的事件擴充搬進 core 的 `session-log.ts`（#1469，demian Q4 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：型別與事件擴充都在插件自己的 `src/types.ts`，用 `declare module` 補進 `SessionEventMap`（`packages/deliverables/tool-present/src/types.ts:12-17`；對讀版本 86a40220）。**我們做不到的原因**：`SessionEventMap` 在 `@nexus/core`，遷出的插件被 #1420 的 lint 禁止 import core，無法對它寫 `declare module`；宿主（wire、web 的事件讀端、`conversation-history`）又要不經插件就讀到這份型別。**退到哪裡**：同 `todo/write`——事件擴充進 core、型別由 `@nexus/session` 單向轉出，宿主那三處 `import type {} from '@nexus/plugin-present'` 拿掉。**撤除條件**：同 `todo/write` 那一列（Q2 (b)） |
 | fs 把手帶 `hasWorkspace()` 與併了 mounts 的 `offWorkspacePrefixes()`（#1469，demian Q2 (a)） | 產品需求超出 dsh | dsh 的 `tool-present` 沒有「工作區」與「掛載前綴」的概念（`src` 裡 grep `workspace\|sandbox\|mount\|capabilit`：0 筆；對讀版本 86a40220）。我們的 backend 是一顆複合 backend，會話歷史、工具結果暫存、附件與 plugin 掛的路由都不在工作區磁碟上，交付的讀端只認磁碟（#951），所以「有沒有工作區」與「哪些前綴不在磁碟」是 present 的前提。**放在 fs 把手上**（不放在插件裡自己再算一次）：算法只有一處，`settleFsService` 在 fold 填 backend 的同一處算 |
-| `@nexus/plugin-present` 的 lint 排除 `src/invariant.ts`（#1469，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`present-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`packages/nexus-plugin-present/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
-| `@nexus/plugin-sandbox-policy` 的 lint 排除 `src/invariant.ts`（#2533，PM Q1，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列。`invariant.ts` 是相容層的配套入口（`sandbox-policy-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別與 `SANDBOX_MODES`（`no-restricted-imports` 兩處），模組層沒有可變狀態；排除只蓋到這一個檔（`packages/nexus-plugin-sandbox-policy/src/eslint-exclusion.test.ts`）。**撤除條件**：`docs/adr/0003-invariant-companions-first-cut.md` 的配套入口重審 |
-| `@nexus/plugin-plan-mode` 的 lint 排除 `src/invariant.ts`（#2551，PM issuecomment-6719328351，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列，排除只蓋到這一個檔（`packages/nexus-plugin-plan-mode/src/eslint-exclusion.test.ts`）。`invariant.ts` 是相容層的配套入口（`plan-mode-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別。原本留在相容層的 `model-call-cell.ts`（`plan-mode-model-call` 那一列）在 #2358 刪掉：交出待關改由 `plan-mode` 經 `ToolThread.on('agent/pre-step')` 做，補回結果的 `name` 歸 core。**撤除條件**：`docs/adr/0003-invariant-companions-first-cut.md` 的配套入口重審 |
+| `@nexus/plugin-present` 的 lint 排除 `src/invariant.ts`（#1469，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`present-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`harness/packages/nexus-plugin-present/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
+| `@nexus/plugin-sandbox-policy` 的 lint 排除 `src/invariant.ts`（#2533，PM Q1，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列。`invariant.ts` 是相容層的配套入口（`sandbox-policy-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別與 `SANDBOX_MODES`（`no-restricted-imports` 兩處），模組層沒有可變狀態；排除只蓋到這一個檔（`harness/packages/nexus-plugin-sandbox-policy/src/eslint-exclusion.test.ts`）。**撤除條件**：`docs/adr/0002-invariant-companions-first-cut.md` 的配套入口重審 |
+| `@nexus/plugin-plan-mode` 的 lint 排除 `src/invariant.ts`（#2551，PM issuecomment-6719328351，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列，排除只蓋到這一個檔（`harness/packages/nexus-plugin-plan-mode/src/eslint-exclusion.test.ts`）。`invariant.ts` 是相容層的配套入口（`plan-mode-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別。原本留在相容層的 `model-call-cell.ts`（`plan-mode-model-call` 那一列）在 #2358 刪掉：交出待關改由 `plan-mode` 經 `ToolThread.on('agent/pre-step')` 做，補回結果的 `name` 歸 core。**撤除條件**：`docs/adr/0002-invariant-companions-first-cut.md` 的配套入口重審 |
 | `agent/pre-step` 只能追加訊息，沒有 `reject`，也沒有「留到下一步」（#1474，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：waterfall，listener 收 `next()`、拿到這一步的決定（`enter`／`reject`）後可以 splice 進批次的任何位置、可以 `reject` 整步（`packages/core/agent-loop/src/agent.ts:267-288`、`runtime-types.ts:309-320`（`agent/pre-step` 的說明與簽名；`:321` 起是 `agent/request`））；`agent-instructions` 遇到 `reject`、或第 1 步批次是空的就不 splice，把基線留在收件匣等下一步（`packages/context/agent-instructions/src/index.ts:345`）。**我們做不到的原因**：載體是 middleware 的 `beforeAgent`，只能回要追加的訊息（`interception-index.test.ts` 第 2 列 `permissionDelta`），拿不到整個批次，也沒有收件匣。**退到哪裡**：`@nexus/agent-loop` 的 `preStep` 只追加，位置由基座決定（今天落在使用者那一句之後，與 dsh 同位）。**撤除條件**：#389 重開，或 core 開了讓多個貢獻者共用一格的 pre-step 節點 |
 | `agent/pre-step` 每次 invoke 跑一次，不是每一步（#1474，沿用 #389 的拍板） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：每個 step 一次——`preStep()` 在迴圈裡每一步被叫（`packages/core/agent-loop/src/agent.ts:318` 呼叫、`:267-288` 實作；對讀版本 86a40220）。**我們做不到的原因**：每一步要 `beforeModel`，它是圖裡的節點，預設上限 100 下每輪多一格＝33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做。**退到哪裡**：`beforeAgent`，**每位 listener** 每次 invoke 一格、每輪零格（dsh 一個事件依序跑完，不按 listener 計；出貨清單三位，100 下 31 輪，有沒有 `--workspace` 都一樣；併成一格見 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)）。名字叫 `preStep` 而不叫 `beforeInvoke`：#389 重開時名字不必改。**撤除條件**：同上一列 |
 | listener 收到的是「模型看得到的那一串」與 `{ configurable, signal? }`（`signal` 是 1.1.0 加的，#1533），不是 dsh 的「這一步領出來的批次」與 `agent`（#1474，demian Q1-1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是這一步從收件匣領出來的批次（`runtime-types.ts:313`）。**我們做不到的原因**：沒有收件匣，訊息批次在圖的 state 裡；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由呼叫設定認。**退到哪裡**：`effectiveMessages`（摘要之後是 `[summary, ...切點之後]`）加 `{ configurable, signal? }`。**撤除條件**：同第一列 |
@@ -639,18 +639,18 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | goal 的持久狀態由服務自己折疊（訂閱日誌），不走 `sessionProjections` 的投影（#1486，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`goal` 登記成投影，持久狀態由註冊表的事件驅動維護，服務用 `stateOf(session, 'goal')` 讀（`packages/goal/goal/src/index.ts:258`、`:476-481`；對讀版本 86a40220）；行程內那一半（授權、等待掛上的那一格）放在 `WeakMap<Session, GoalRuntimeState>`（`:248`、`:484-493`）。**我們做不到的原因**：`@nexus/projections` 今天只有給 wire 的 `register`，沒有插件讀狀態的 `stateOf(log, key)`（`nexus-projections/src/index.ts:44-56`）；補上它是一個新接縫，這張卡是搬家，不加接縫。**退到哪裡**：保留遷移前的做法（狀態不走投影註冊表，`service.ts` 檔頭）——折疊住在服務裡，建構子重放加訂閱。行程內那一半與 dsh 同形（逐份日誌的 `WeakMap`）。**撤除條件**：投影的讀法（`stateOf`）另開卡，goal 可改走它 |
 | `GoalView`、折疊與提示詞渲染由 `@nexus/goal` 提供，事件與快照型別轉出自 `@nexus/core`（#1486，demian Q4 (a)） | 表達不出來，退到最接近的實作 | dsh 的型別與純函式住在 `goal` 定義套件（`packages/goal/goal/src/types.ts`，對讀版本 86a40220）。我們的 `goal/change` 事件與 `GoalSnapshot` 等型別在 `@nexus/core`，折疊與提示詞渲染搬進 `@nexus/goal`（宿主要用），`core` 放 `peerDependencies`。`hasDirectHumanTurn` 只有工具與命令用，留在插件 |
 | `AttachmentRef` 由 `@nexus/commands` 轉出、`SessionEventMap` 由 `@nexus/session` 轉出，`goal/change` 的事件擴充搬進 core 的 `session-log.ts`（#1486） | 表達不出來，退到最接近的實作 | 同 `PresentedFile`（#1469）那一列：`SessionEventMap` 在 `@nexus/core`，遷出的插件不能 `declare module` 補它（#1420 的 lint 擋 `@nexus/core` import）。轉出是單向的，`core` 放 `peerDependencies` |
-| `@nexus/plugin-goal` 的 lint 排除 `src/invariant.ts`（#1486，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`goal-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`packages/nexus-plugin-goal/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
+| `@nexus/plugin-goal` 的 lint 排除 `src/invariant.ts`（#1486，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`goal-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`harness/packages/nexus-plugin-goal/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
 | 命令的「忙的時候放行」是宣告出來的資料（`CommandDefinition.runWhileBusy`，字面值清單），dsh 沒有這一格（#1516，demian 經 PM 認可） | 產品需求超出 dsh | **dsh 怎麼做**：命令沒有「跑著能不能執行」的閘門，（`packages/interaction/commands/src` 裡沒有 busy／running 的判斷）。**我們的閘門是 #123 的前提**：斜線命令一定跑在兩輪之間，所以 `/plan`、`/goal <目標>` 這類會改狀態的命令跑著時被擋。dsh 的暫停鈕（`goal-round-driver/src/index.ts:302-312`）跑著時當場中止，這件事我們需要放行**一個**呼叫（`/goal pause`），但不能放寬整個閘門。**為什麼是資料**：一個函式或整個命令的布林讓「哪些呼叫放行」散在 handler 裡、`slash.list` 讀不到；字面值清單讓閘門與 web 讀同一份。**撤除條件**：dsh 日後有同義的閘門，改讀那一份 |
 | 服務是查找時才建（lazy），`/goal` 的「一份都沒接」「接了不只一份」兩句拿掉（#1486，demian Q1 (a)、Q2 (a)） | 行為改變（這張卡唯一承認的一條） | 完整說明在 PR 內文的「行為改變」一節；這裡只記來龍去脈。遷移前每份會話裝一次參與者、registry 只能接一份 root 日誌，所以 `/goal` 要先問「接了幾份」；lazy 之後命令帶來的 `sessionLog` 就是它要動的那一份，兩句失去生產者。工具層的「不是 root」那句保留（逐字不變）。同一個 registry 想接幾份日誌都行 |
 | 權限組合的目錄是逐條 thread 的，dsh 整台共用（#1491，登記第 1 列） | 遷移卡不改行為（暫時） | dsh 的 `catalog()` 預設組只從設定或行程預設推（`packages/interaction/permission-presets/src/index.ts:293-299`）；我們今天的預設組是這條 thread 的起始值推出來的（續接的 thread 沒設 `defaultPreset` 時是日誌記著的那一組），wire 的 `permission.catalog` 逐條 thread 回。照 dsh 做會讓新會話的日誌多一顆 `sandbox/mode`、續接的目錄預設組變動，都是行為改變。撤除條件：之後的權限卡定 |
-| 子代理的組名由會話參與者寫，不是委派那一側寫（#1491 Q2-1，登記第 2 列） | 遷移卡不改行為（暫時） | dsh 在委派側寫（`packages/subagent/subagent/src/child-agent.ts:248-279`）。沙箱那一格的委派快照由 `sandbox-policy` 的 `tools/execute` 監聽者在委派工具那一次拍（ALS，#2533）；組名由參與者在子代理接上會話時讀，讀到的跟委派那一刻相同，因為一輪跑著時沒有入口能切權限組合——`/permission` 沒有宣告 `runWhileBusy`（`packages/nexus-plugin-permission-presets/src/index.test.ts` 有一格守著），控制器的 `switchTo` 唯一的非測試呼叫點是 `apps/harness/src/assembly-root.ts` 組 thread 那一步。撤除條件：任何能在一輪跑著時切核准的入口落地，就改由委派那一側寫 |
+| 子代理的組名由會話參與者寫，不是委派那一側寫（#1491 Q2-1，登記第 2 列） | 遷移卡不改行為（暫時） | dsh 在委派側寫（`packages/subagent/subagent/src/child-agent.ts:248-279`）。沙箱那一格的委派快照由 `sandbox-policy` 的 `tools/execute` 監聽者在委派工具那一次拍（ALS，#2533）；組名由參與者在子代理接上會話時讀，讀到的跟委派那一刻相同，因為一輪跑著時沒有入口能切權限組合——`/permission` 沒有宣告 `runWhileBusy`（`harness/packages/nexus-plugin-permission-presets/src/index.test.ts` 有一格守著），控制器的 `switchTo` 唯一的非測試呼叫點是 `harness/apps/harness/src/assembly-root.ts` 組 thread 那一步。撤除條件：任何能在一輪跑著時切核准的入口落地，就改由委派那一側寫 |
 | 會話參與者安裝失敗只記 warn、已寫的收不回（#1491，R3，登記第 3 列） | 表達不出來，退到最接近的實作 | dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上（`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`join` 沿用。撤除條件：會話註冊表能在參與者拋錯時回滾這次接上（`registry.sessions` 與 `join` 一起改，連同相容層其餘的參與者同一天換） |
 | 起始值在宿主的組 thread 那一步算，不在參與者裡套（#1491 Q3 (a)，登記第 4 列） | 遷移卡不改行為（暫時） | dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進 `permissionPresets.start`（純函式），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名，新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變。撤除條件：兩顆控制器整個拿掉、fence 與閘門改讀日誌投影（#1491 Q1 (c)）時，宿主不再靜默切控制器，起始值就能直接由參與者往日誌套 |
 | 切換核准政策的通知排在這一輪人話之後、句子用中文（#2057，`@nexus/plugin-permission-presets` 的 `policy-notice.ts`） | 理由 1：現況做不到 | dsh 走持久的 `next-step` 收件匣，領走時排在人話之前（`packages/core/agent-loop/src/inbox.ts:108-113`，`ce7073d5`）；我們的收件匣項目加這種來源要改落盤形狀，會話格式凍結中，走 `agentLoop.preStep`。句子用中文是跟同一份系統訊息的政策句一致。撤除條件：收件匣收非人話項目 |
 | `/permission` 的回覆拿掉「這次切換沒有完整記進日誌」那一句（#1491 Q1 (a)，demian 拍板） | 行為改變（這張卡承認的一條） | 兩顆旋鈕現在以日誌為準，切換就是往 root 日誌追加，這句失去生產者（`UNRECORDED_NOTE` 拿掉）。**失敗方向反過來**：以前「日誌沒接上」時切換仍然生效、只是沒留痕跡，所以要提示；現在日誌記了切換、控制器卻沒訂閱日誌時，fence 與閘門**不動**，而且沒有任何提示（兩顆控制器訂閱 root 日誌是 #1494 守的，這張的單元測試不重複）。完整說明在 PR #1727 內文的「行為改變」一節 |
 | 續接時日誌記的沙箱比表裡每一組都寬就收回預設組（#1621 第 2 步，插件檔頭第 9 條） | 理由 2：產品需求超出 dsh 的射程 | dsh 續接照日誌裡的值，表怎麼變都不動它；我們出廠表拿掉全開（偏離 #1621 第 1 步）之後，升級前已經切到全開的會話不收就永遠留著表裡不存在的全開。收的條件只有「比每一組都寬」，目標是 `defaultPreset`，沒設是表裡檔案政策最寬的一組。冷復活的背景子代理讀回的委派快照不在這一列，見下一列。不照 dsh 的 `inferredDefault`（`permission-presets/src/index.ts:222-231`）是理由 1：參與者拿不到行程的 `--sandbox`、沒有 thread 鍵，只有 `--sandbox read-only` 起動且沒設 `defaultPreset` 那一格結果不同（dsh 收到 `read-only`，這裡收到 `workspace-write`）；dsh 對照點 `:446-455`（續接保留日誌值）、前例 `:431-436`。撤除條件：沒有 |
 | 冷復活的背景子代理讀回的委派沙箱比表裡每一組都寬，這一輪就收回預設組（#1739，插件檔頭第 10 條；`@nexus/permission-presets` 1.2.0 的 `narrowDelegated`） | 理由 2：產品需求超出 dsh 的射程（同 #1621） | dsh 的表也是部署方可設的，全開只是預設值（`permission-presets/src/index.ts:158-166`、`:183-195`），部署方拿掉全開之後既有子代理的快照一樣可以比表寬；dsh 的答案是取消再重派（`2026-07-25-subagent-policy-inheritance.md:34`「cancel-and-respawn picks up a tightening」），冷復活只重播持久化的委派政策事件（`subagent/subagent/src/manager.ts:881-882`，`687f282e`），fence 取 session 自己的 override（`sandbox/sandbox-policy/src/index.ts:164-168`）。我們共用一台主機：改表的人看不到別人的會話，改表就是要對整台生效，沒有人能逐一取消重派，所以改成讀回時收。做法：宿主在 `SandboxModeController.delegateFromLog` 讀回時過 `narrowDelegated`（純函式，條件與目標同上一列）；只收這一輪實際用的那一格，**不寫子代理日誌**（日誌仍記委派當時那一格，代價是日誌與實際行為不一致）；核准照舊釘 `never`；同步子代理不在內。不看父代理即時狀態是照 dsh。撤除條件：fence 改讀投影的時候（#2554，可改成直接寫日誌） |
-| `ToolThread` 多 `on('tools/execute')`、`join`、`provide('workspace')`，讓樹上的插件逐條 thread 掛監聽者、會話參與者與能力（#2533，`@nexus/tools` 2.7.0） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**（`05b1cae8`）：沙箱與核准是行程級服務、以會話為參數（`overrideOf(session)`）；委派快照由 subagent manager 在第一個 await 之前直接呼叫 `captureDelegatedPolicyOverrides`（`packages/subagent/subagent/src/manager.ts:404`、`packages/subagent/subagent/src/child-agent.ts:248-255`），不經工具事件；工作區能力是 fs 提供者上的 getter（`packages/fs/fs-sandbox/src/index.ts:64-67`）；`ctx.on` 依登記順序、可 `prepend`（dsh 的 `vendor/cordis/src/events.ts:113`、`:264`）。**我們做不到的原因**：兩顆控制器（沙箱模式、核准政策）今天是逐條 thread 建的，委派快照只能由 `tools/execute` 的監聽者在委派工具那一格拍，參與者與能力也只能在組 thread 時登記；樹上的插件拿不到逐條 thread 的 registry，只有 `ToolThread`。**退到哪裡**：`ToolThread` 轉出三格，範圍收到今天要的那一種（`on` 只收 `'tools/execute'`、不開 `prepend`；`provide` 只收 `'workspace'`），落點是那一列在清單上的位置；core 的 `outer`／`inner` 本來就不受插件怎麼登記影響（`packages/nexus-core/src/tool-pipeline.ts:506`），所以 d2（#2540）定的內外位置不變。別的兩種接法比過、沒選：由宿主在這條 thread 的查找那一側登記（`sessionLookup.register` 排在參與者訂閱之後，`apps/harness/src/agent-factory.ts:1335`，新 thread 的 root 參與者裝的當下查不到），或由宿主從 fsContainment 推出能力（perEntry 撤掉 sandbox-policy 那一列時會改語意）。**撤除條件**：兩顆控制器改成以會話為參數、由日誌投影提供的行程級服務（#2554）之後，三格改回各自的定義套件 |
+| `ToolThread` 多 `on('tools/execute')`、`join`、`provide('workspace')`，讓樹上的插件逐條 thread 掛監聽者、會話參與者與能力（#2533，`@nexus/tools` 2.7.0） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**（`05b1cae8`）：沙箱與核准是行程級服務、以會話為參數（`overrideOf(session)`）；委派快照由 subagent manager 在第一個 await 之前直接呼叫 `captureDelegatedPolicyOverrides`（`packages/subagent/subagent/src/manager.ts:404`、`packages/subagent/subagent/src/child-agent.ts:248-255`），不經工具事件；工作區能力是 fs 提供者上的 getter（`packages/fs/fs-sandbox/src/index.ts:64-67`）；`ctx.on` 依登記順序、可 `prepend`（dsh 的 `vendor/cordis/src/events.ts:113`、`:264`）。**我們做不到的原因**：兩顆控制器（沙箱模式、核准政策）今天是逐條 thread 建的，委派快照只能由 `tools/execute` 的監聽者在委派工具那一格拍，參與者與能力也只能在組 thread 時登記；樹上的插件拿不到逐條 thread 的 registry，只有 `ToolThread`。**退到哪裡**：`ToolThread` 轉出三格，範圍收到今天要的那一種（`on` 只收 `'tools/execute'`、不開 `prepend`；`provide` 只收 `'workspace'`），落點是那一列在清單上的位置；core 的 `outer`／`inner` 本來就不受插件怎麼登記影響（`harness/packages/nexus-core/src/tool-pipeline.ts:506`），所以 d2（#2540）定的內外位置不變。別的兩種接法比過、沒選：由宿主在這條 thread 的查找那一側登記（`sessionLookup.register` 排在參與者訂閱之後，`harness/apps/harness/src/agent-factory.ts:1335`，新 thread 的 root 參與者裝的當下查不到），或由宿主從 fsContainment 推出能力（perEntry 撤掉 sandbox-policy 那一列時會改語意）。**撤除條件**：兩顆控制器改成以會話為參數、由日誌投影提供的行程級服務（#2554）之後，三格改回各自的定義套件 |
 
 ## 接進清單（#1416 PR 2）
 
@@ -664,7 +664,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`approval-channel` 一列（預設答題管道，值是進入點在建樹時給的，#1458）、`session-lookup` 一列（會話查找，行程級的活著的 thread 註冊簿，#1463）、`fs` 一列（fs 查找，同一張登記簿帶 fs 把手，**列在必掛名單**，#1466）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
 
 - **變更紀錄怎麼到樹上**：折出來的 patch 原樣經 `entry.update({ config: { ...includeConfig, patches } })` 推給 Include（dsh
-  `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
+  `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`harness/vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
 - **兩支疊 patch 的演算法**：相容層的 `applyEntryPatches` 與上游的 `applyPatches` 對下面五種操作疊出一樣的 id／name／
   disabled／config 與順序（停用、啟用、改設定、還原設定、`--patch` 改與插入；`echo-on-tree-edges.test.ts`）。已知的差別是
   帶 `id` 的 `insert`（相容層接到尾巴，上游往群組裡塞），推給樹的 patch 把那個 `id` 拿掉，兩邊就一致。每次同步還會比一次
@@ -685,7 +685,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
   (5) 一致性套件的 `residue` 由消費者的測試指到提供者的登記筆數（`registrations()`），而且要掛上後比掛上前多。
 - **設定帶 `__jsExpr` 整份拒絕**：Loader 的 `interpolate` 會把它當 JavaScript `eval`。相容層讀清單時掃走橋接那幾列的最終
   `config`（寫入前驗證走同一條，所以寫入口當場擋下，不會把一條讓之後每次啟動都失敗的東西寫進紀錄），推上樹之前再掃一遍
-  整份 patch 當後盾。第三道在 vendor 的 Include（`vendor/README.md` 本地修改第 11 條，#1461）：它讀完出貨檔、疊完 patch、
+  整份 patch 當後盾。第三道在 vendor 的 Include（`harness/vendor/README.md` 本地修改第 11 條，#1461）：它讀完出貨檔、疊完 patch、
   交給 Loader 之前，掃那份真正會被 eval 的樹，有就整份拒絕（`PluginTree.sync` 報成 `PluginTreeError`）。rc.11 起 Loader
   連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
@@ -698,7 +698,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 
 - **插件自我停用只在行程裡停著**（[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)，demian 決議 Q1 (b)、Q2 (a)）：
   插件自己 `ctx.fiber.dispose()`，Loader 處理自我停用的那一格把那一列在樹上標成 `disabled`；Include 不寫檔，所以只改記憶體。
-  Loader 在自我停用那一格的呼叫點發 `loader/self-disable`（`vendor/README.md` 第 10 條；`ctx.fiber.update()` 走的 `internal/commit`
+  Loader 在自我停用那一格的呼叫點發 `loader/self-disable`（`harness/vendor/README.md` 第 10 條；`ctx.fiber.update()` 走的 `internal/commit`
   帶同樣的參數，所以只能在呼叫點區分），`PluginTree` 記下當時整份宣告的簽章：**宣告沒變就不再推 `epoch`、不重掛**，
   清單判成 `off`、插件列標 `disabled`（不進 `dropped`，所以沒有 `failed`），並由宿主替那一列推一條 `{ id, disabled: true }`
   給 Include——Include 每次重疊（樹上別列的設定改了、整列重建）都把每一列的 options 整份換掉，不推就會被蓋回啟用。

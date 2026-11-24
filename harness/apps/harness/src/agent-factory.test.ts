@@ -1,0 +1,853 @@
+import type { BaseMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph';
+import { loadPlugins, SessionRegistry } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
+import { describe, expect, it } from 'vitest';
+import { AssemblyDropError, createNexusAgent } from './agent-factory.js';
+import { loadDefaultPlugins } from './plugin-config.js';
+import type { NexusAgentHandle } from './agent-factory.js';
+import { LoopingChatModel } from './looping-model.js';
+import { DEFAULT_RECURSION_LIMIT, recursionLimitPlugin } from './settings/recursion-limit.js';
+import {
+  createMountPlugin,
+  createNotePlugin,
+  createToolPlugin,
+  fakeTool,
+  NOTE_TOOL_NAME,
+  virtualFilesOf,
+} from './fixtures.js';
+import { toAgentInvocation } from './messages.js';
+import { ScriptedChatModel } from './scripted-model.js';
+import type { ScriptedTurn } from './scripted-model.js';
+
+/**
+ * 兩個 plugin 的工具在**同一輪**一起被呼叫，那一輪沒有文字內容，最後回一句話。
+ *
+ * 形狀是照真模型寫的，不是隨手挑的（[#51](https://github.com/DemianLi/nexus-agent/issues/51)）：
+ * [PR #50](https://github.com/DemianLi/nexus-agent/pull/50) 第一次用真實供應商跑起來時，
+ * 兩個工具就是在同一輪一起回來的。這條是 [#29](https://github.com/DemianLi/nexus-agent/issues/29)
+ * 的正面路徑驗收，而它的證明力直接取決於假模型有多像真的——寫成「多輪、每輪一個工具」
+ * 一樣會綠，但驗到的是一個真模型不會走的形狀。
+ *
+ * 多輪各一個工具的覆蓋沒有因此消失：同一個檔案裡的呈現順序與 default backend 兩條都是多輪。
+ */
+const BOTH_TOOLS: readonly ScriptedTurn[] = [
+  {
+    content: '',
+    toolCalls: [
+      { name: ECHO_TOOL_NAME, args: { message: '嗨' } },
+      { name: NOTE_TOOL_NAME, args: { text: '兩個 plugin 都接上了' } },
+    ],
+  },
+  { content: '兩邊都跑過了。' },
+];
+
+/** 把一次 run 的所有訊息文字攤平，用來斷言工具真的回了東西。 */
+function texts(messages: readonly BaseMessage[]): string[] {
+  return messages.map((message) => message.text);
+}
+
+describe('createNexusAgent', () => {
+  it('一份清單 fold 出的 agent 兩個 plugin 的工具都呼叫得到', async () => {
+    const model = new ScriptedChatModel({ turns: BOTH_TOOLS });
+
+    const { agent } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin(), createNotePlugin()],
+    });
+
+    const result = await agent.invoke(toAgentInvocation('兩個工具都跑一次。'));
+    const all = texts(result.messages).join('\n');
+
+    // 兩個工具的回傳值都在對話裡：一個來自 harness/packages/nexus-plugin-echo（真的
+    // workspace package），一個來自本套件的 fixture。
+    expect(all).toContain('回聲：嗨');
+    expect(all).toContain('已記下：兩個 plugin 都接上了');
+
+    // 基座真的把兩個工具都交給了模型（連同它自己那些內建工具）。
+    expect(model.boundToolNames).toContain(ECHO_TOOL_NAME);
+    expect(model.boundToolNames).toContain(NOTE_TOOL_NAME);
+  });
+
+  it('plugin 註冊的工具依呈現順序交給模型，未列出的落在 rest 那一格', async () => {
+    const order = async (toolOrder?: readonly string[]): Promise<readonly string[]> => {
+      const model = new ScriptedChatModel({ turns: [{ content: '不做事。' }] });
+      const { agent } = await createNexusAgent({
+        model,
+        plugins: [createEchoPlugin(), createNotePlugin({ deny: false })],
+        ...(toolOrder !== undefined && { toolOrder }),
+      });
+      // 工具是在跑起來的時候才綁給模型的，不是建構時。
+      await agent.invoke(toAgentInvocation('不做事。'));
+      return model.boundToolNames;
+    };
+
+    // 沒給清單就是字典序：'echo' 排在 'take_note' 前面。
+    const byDefault = await order();
+    expect(byDefault.indexOf(ECHO_TOOL_NAME)).toBeLessThan(byDefault.indexOf(NOTE_TOOL_NAME));
+
+    // note 明著排到最前，echo 沒列到 —— 它落在 rest 那一格，於是換到後面。
+    const reordered = await order([NOTE_TOOL_NAME, '<unlisted-tools>']);
+    expect(reordered.indexOf(NOTE_TOOL_NAME)).toBeLessThan(reordered.indexOf(ECHO_TOOL_NAME));
+  });
+
+  it('deny 規則折出來的形狀基座收得下', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '寫兩個檔案。',
+          toolCalls: [
+            { name: 'write_file', args: { file_path: '/secrets/token', content: 'x' } },
+            { name: 'write_file', args: { file_path: '/notes.md', content: 'y' } },
+          ],
+        },
+        { content: '寫完了。' },
+      ],
+    });
+
+    // fixture 的 deny 是 `/secrets/**` 且 except `/secrets/public/**`。基座只要看到
+    // 規則就會跑 validatePermissionPaths()（非絕對路徑、含 ".." 或 "~" 一律拋錯），
+    // 那道檢查 fold 看不到，所以這條同時是「fold 的輸出真的過得了基座那關」的證據。
+    const { agent } = await createNexusAgent({ model, plugins: [createNotePlugin()] });
+
+    const result = await agent.invoke(toAgentInvocation('寫檔。'));
+    const files = Object.keys(virtualFilesOf(result));
+
+    expect(files).not.toContain('/secrets/token');
+    expect(files).toContain('/notes.md');
+  });
+
+  it('awaitsAnswer 給 true（#2360）：langgraph 沒有 checkpointer 在組裝期就拋（中斷接不回來）；native 不要 checkpointer', async () => {
+    const model = () => new ScriptedChatModel({ turns: [{ content: '好。' }] });
+    await expect(
+      createNexusAgent({ model: model(), agentLoop: 'langgraph', awaitsAnswer: true, plugins: [] }),
+    ).rejects.toThrow('awaitsAnswer 給了 true，但 langgraph 沒有 checkpointer 就接不回中斷');
+    const native = await createNexusAgent({
+      model: model(),
+      agentLoop: 'native',
+      awaitsAnswer: true,
+      plugins: [],
+    });
+    await native.dispose();
+  });
+
+  it('宣告了要核准的工具、也給了 checkpointer 時中斷得起來', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '記一筆。',
+          toolCalls: [{ name: NOTE_TOOL_NAME, args: { text: '要先核准' } }],
+        },
+      ],
+    });
+
+    const { agent } = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [
+        createNotePlugin(),
+        {
+          plugin: {
+            name: 'gatekeeper',
+            requires: ['note'],
+            apply(registry) {
+              registry.approvals.gate((exec, next) =>
+                exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '記筆記要人看過' } : next(),
+              );
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await agent.invoke(toAgentInvocation('記一筆。'), {
+      configurable: { thread_id: 'factory-interrupt' },
+    });
+
+    expect(result.__interrupt__).toBeDefined();
+  });
+
+  it('組裝點自己備著 default backend —— plugin 只掛路由也組得起來', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '寫檔。',
+          toolCalls: [{ name: 'write_file', args: { file_path: '/a.md', content: 'x' } }],
+        },
+        { content: '寫完了。' },
+      ],
+    });
+
+    // 沒給 `backend`。fold 對「有人掛了路由卻沒有兜底的那個」是報錯的，所以這一條
+    // 組得起來就等於證明了組裝點自己補上了 default backend。
+    const { agent } = await createNexusAgent({
+      model,
+      plugins: [createMountPlugin('/memories/'), createEchoPlugin()],
+    });
+
+    const result = await agent.invoke(toAgentInvocation('寫檔。'));
+
+    expect(Object.keys(virtualFilesOf(result))).toContain('/a.md');
+  });
+
+  it('組裝點給的 system prompt 到得了模型', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
+
+    const { agent } = await createNexusAgent({
+      model,
+      systemPrompt: '你是 nexus 的測試 agent。',
+      plugins: [createEchoPlugin()],
+    });
+    await agent.invoke(toAgentInvocation('嗨。'));
+
+    expect(texts(model.lastPrompt).join('\n')).toContain('你是 nexus 的測試 agent。');
+  });
+
+  it('基座自己帶的工具名認得出來 —— 標得上核准，也排得進呈現順序', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '不做事。' }] });
+
+    // `task` 由基座的 subagent middleware 註冊，不經過我們的 registry。少了
+    // `BASE_TOOL_NAMES` 那份名單，這兩件事都會被誤判成「指向不存在的工具」。
+    await expect(
+      createNexusAgent({
+        model,
+        checkpointer: new MemorySaver(),
+        toolOrder: ['task', '<unlisted-tools>'],
+        plugins: [
+          {
+            plugin: {
+              name: 'gatekeeper',
+              apply: (registry) =>
+                void registry.approvals.gate((exec, next) =>
+                  exec.name === 'task' ? { kind: 'ask', reason: '委派出去要人看過' } : next(),
+                ),
+            },
+          },
+        ],
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  describe('載入期失敗', () => {
+    it('兩個 plugin 註冊同名工具 → 報錯且指名兩個 plugin 與工具名', async () => {
+      const failure = await createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [createEchoPlugin(), createEchoPlugin({ prefix: '第二份' })],
+      }).catch((error: unknown) => (error as Error).message);
+
+      // 錯誤傳播路徑只有一條，訊息本身要指得出撞的是哪兩個 plugin 與哪個工具名 ——
+      // `feat/harness-cli` 的端到端驗收靠的就是這幾個字串沒有在半路被吞掉。
+      expect(failure).toContain('echo#0 (echo)');
+      expect(failure).toContain('echo#1 (echo)');
+      expect(failure).toContain(`"${ECHO_TOOL_NAME}"`);
+    });
+
+    it('手寫 id 那個寫法在真的工廠上成立，不只在 fixture 上', async () => {
+      // `NexusPlugin.id` 的 JSDoc 教使用者展開工廠的產物再補一個 id。**展開只對純
+      // 物件字面值成立**——哪天某個工廠改成回 class 實例、frozen 物件或 getter，
+      // `apply` 或 `name` 就會在展開時掉掉，而那份文件會變成錯的。這條測試用真的
+      // `createEchoPlugin()` 守著它；`@nexus/harness` 是唯一相依全部 plugin 的地方。
+      const failure = await createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [
+          { ...createEchoPlugin(), id: 'echo-main' },
+          { ...createEchoPlugin({ prefix: '第二份' }), id: 'echo-second' },
+        ],
+      }).catch((error: unknown) => (error as Error).message);
+
+      expect(failure).toContain('echo-main (echo)');
+      expect(failure).toContain('echo-second (echo)');
+
+      // `disabled` 走同一個展開寫法，所以綁在同一條測試上。關掉第二份，撞名就不成立了
+      // ——**那同時證明它的 `apply` 真的沒跑**：跑了就會註冊同名工具，這裡就會炸。
+      const { registry, dispose } = await loadPlugins([
+        createEchoPlugin(),
+        { ...createEchoPlugin({ prefix: '第二份' }), disabled: true },
+      ]);
+      try {
+        expect(registry.tools.resolve(ECHO_TOOL_NAME)).toBeDefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('requires 缺件 → 報錯', async () => {
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [{ plugin: { name: 'needs-mcp', requires: ['mcp'], apply: () => {} } }],
+        }),
+      ).rejects.toThrow(/需要能力 "mcp"/);
+    });
+
+    it('**掛了核准閘門但沒給 checkpointer → 照樣組得起來**（舊版在這裡是拋）', async () => {
+      // [#111](https://github.com/DemianLi/nexus-agent/issues/111) 的 (c)：缺 checkpointer
+      // 從建構期的錯誤變成執行期的確定性拒絕。這一條與下面那條「工具真的沒跑」是一對
+      // ——只驗組得起來的話，「閘門被靜靜地丟掉了」也會讓它綠。
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [
+            createNotePlugin(),
+            {
+              plugin: {
+                name: 'gatekeeper',
+                apply: (registry) =>
+                  void registry.approvals.gate((exec, next) =>
+                    exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '要人看過' } : next(),
+                  ),
+              },
+            },
+          ],
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('工具名撞到基座內建的 → 報錯且指名是誰註冊的', async () => {
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [createEchoPlugin(), createToolPlugin('write_file')],
+        }),
+      ).rejects.toThrow(/provides-write_file#0 \(provides-write_file\).*"write_file"/s);
+    });
+
+    it('註冊到 subagent 層的工具撞到基座內建的也擋 —— 基座自己不查那一層', async () => {
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [
+            {
+              plugin: {
+                name: 'researcher',
+                apply: (registry) =>
+                  void registry.subagents.register({
+                    name: 'researcher',
+                    description: '測試用的 subagent',
+                  }),
+              },
+            },
+            createToolPlugin('grep', 'researcher'),
+          ],
+        }),
+      ).rejects.toThrow(/subagent "researcher".*"grep"/s);
+    });
+
+    it('async 任務工具的名字也擋 —— 基座那道保留是無條件的', async () => {
+      // 這五個名字在目前的組裝裡不會有對應的工具（`BASE_TOOL_NAMES` 因此不收它們），
+      // 但基座的 BUILTIN_TOOL_NAMES 檢查不看有沒有 async subagent，一律拒絕。
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [createToolPlugin('start_async_task')],
+        }),
+      ).rejects.toThrow(
+        /provides-start_async_task#0 \(provides-start_async_task\).*"start_async_task"/s,
+      );
+    });
+
+    it('subagent 定義自帶的工具撞到基座內建的也擋 —— 那些工具不經過 registry', async () => {
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [
+            {
+              plugin: {
+                name: 'researcher',
+                apply: (registry) =>
+                  void registry.subagents.register({
+                    name: 'researcher',
+                    description: '測試用的 subagent',
+                    tools: [fakeTool('delete')],
+                  }),
+              },
+            },
+          ],
+        }),
+      ).rejects.toThrow(/subagent "researcher" 自帶的工具裡.*"delete"/s);
+    });
+  });
+});
+
+/**
+ * 迴圈上限 —— **基座設了一個等於沒設的值，所以組裝點必須自己設一個。**
+ *
+ * `createDeepAgent` 最後一步是 `.withConfig({ recursionLimit: 1e4 })`，換算約 5,000 輪
+ * 模型呼叫。這一組釘的是「我們真的蓋掉了它」：拿掉 `withConfig` 那一行的話，下面第一條
+ * 會跑到 4,999 輪才停，數字對不上而且會慢上兩個數量級。
+ *
+ * 為什麼不直接斷言「基座的預設是 10000」：那個值**讀不到**（`createDeepAgent` 回的是
+ * `ReactAgent`，只有一個 `options` 鍵，`config` / `kwargs` / `lc_kwargs` 全是 undefined），
+ * 唯一的驗法是真的跑到上限，而那要 20 到 35 秒。所以那個數字記在
+ * `agent-factory.ts` 的檔頭當量測結果，這裡釘的是我們自己的行為。
+ */
+describe('迴圈上限', () => {
+  it('沒傳就套預設，而且真的會擋下來', async () => {
+    const model = new LoopingChatModel();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin()],
+      // **摘要關掉是為了隔離變數，不是為了讓數字好看。** 跑滿的迴圈會累積約 98 則訊息，
+      // 越過我們打底的 `messages: 60` 那道門檻，於是摘要器自己也叫一次模型——`model.calls`
+      // 變成 50，而那一次跟迴圈上限無關。這條量的是護欄擋在哪裡，不該被另一個機制的
+      // 呼叫次數污染。**「不傳的時候恰好多那一次」由
+      // [`summarization.test.ts`](./summarization.test.ts) 正面量**，那才是它該待的地方。
+      summarization: false,
+      // **提醒器也關掉，理由同上但機制不同。** 它掛在 `beforeModel` 上，那在圖裡是一個
+      // 節點，每一輪多一個 super-step——開著的話同一個上限只跑得到 33 輪而不是 49
+      // （[#147](https://github.com/DemianLi/nexus-agent/issues/147)）。那個換算本身
+      // 由下面「提醒器把每輪的格數從兩格變三格」那條正面量，這裡要的是裸組裝的數字。
+      repeatReminder: false,
+    });
+
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+    } finally {
+      await dispose();
+    }
+
+    // 裸組裝每輪兩格，`模型輪數 = floor((上限 - 1) / 2)`，所以 100 換算是 49 輪。
+    // **這條斷言才是承重的那個**：少了 `withConfig` 的話它是 4999。
+    expect(model.calls).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 2));
+  });
+
+  it('傳進來的值蓋得掉預設', async () => {
+    const model = new LoopingChatModel();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin()],
+      recursionLimit: 8,
+      repeatReminder: false,
+    });
+
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(
+        /Recursion limit of 8/,
+      );
+    } finally {
+      await dispose();
+    }
+    expect(model.calls).toBe(3);
+  });
+
+  /**
+   * 三態：**明著傳的 > 條目提供的服務 > 內建預設**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)
+   * 的第二刀）。
+   *
+   * **三個值刻意互不相同**（旗標 30／條目 50／預設 100）：任何兩格同值，那兩態就分不開，
+   * 而分不開的測試在解析順序寫反的時候照樣綠。
+   *
+   * **觀察點是錯誤訊息裡的那個數字，不是 `model.calls`。** 後者還要換算每輪幾格，而那個換算
+   * 本身是別條測試的被測物；這裡要量的只有「哪一格贏」。
+   */
+  describe('迴圈上限的三態', () => {
+    const limitFrom = async (
+      options: Partial<Parameters<typeof createNexusAgent>[0]>,
+    ): Promise<string> => {
+      const { agent, dispose, attachSession } = await createNexusAgent({
+        model: new LoopingChatModel(),
+        plugins: [createEchoPlugin()],
+        repeatReminder: false,
+        ...options,
+      } as Parameters<typeof createNexusAgent>[0]);
+      const detach = attachSession(new SessionRegistry('recursion-limit'));
+      try {
+        await agent.invoke(toAgentInvocation('一直跑'));
+      } catch (error) {
+        return (error as Error).message;
+      } finally {
+        detach();
+        await dispose();
+      }
+      throw new Error('沒有撞到上限，這條測試的前提不成立');
+    };
+
+    it('條目講了就用條目的', async () => {
+      const message = await limitFrom({
+        plugins: [createEchoPlugin(), { plugin: recursionLimitPlugin, config: { limit: 50 } }],
+      });
+      expect(message).toMatch(/Recursion limit of 50/u);
+    });
+
+    it('明著傳的贏過條目——CLI 的 `--recursion-limit` 走的就是這一條', async () => {
+      const message = await limitFrom({
+        plugins: [createEchoPlugin(), { plugin: recursionLimitPlugin, config: { limit: 50 } }],
+        recursionLimit: 30,
+      });
+      expect(message).toMatch(/Recursion limit of 30/u);
+    });
+
+    /**
+     * **斷言寫字面的 100，不是 `DEFAULT_RECURSION_LIMIT`。** 生產端與斷言端讀同一個常數的話，
+     * 把那個常數改掉兩邊會一起動，這條測試就永遠綠——量的變成「兩處讀的是同一個變數」而不是
+     * 「沒人講的時候是 100」。
+     */
+    it('清單上沒有那一列就是內建預設', async () => {
+      const message = await limitFrom({ plugins: [createEchoPlugin()] });
+      expect(message).toMatch(/Recursion limit of 100/u);
+    });
+
+    /**
+     * 「有那一列、但沒寫 `config:`」與「連那一列都沒有」是**兩個不同的來源、同一個答案**：
+     * 前者走 schema 的 `.default()`，後者走組裝點的 `??`。兩條都要在，因為把其中一邊改壞
+     * 不會讓另一邊紅。
+     */
+    it('有那一列但沒寫 config 也是同一個預設', async () => {
+      const message = await limitFrom({
+        plugins: [createEchoPlugin(), { plugin: recursionLimitPlugin }],
+      });
+      expect(message).toMatch(/Recursion limit of 100/u);
+    });
+
+    /**
+     * **整條路，而且是這一組裡唯一一條走真的出貨清單的。**
+     *
+     * 上面四條都用手搭的 plugin 清單，所以它們證得出「服務被讀到」，證不出**出貨的
+     * `cordis.yml` 上那一列真的會產生那個服務**——那條線要經過 YAML 解析、`imports` 映射、
+     * 動態 `import()`、schema 驗證、`apply`。
+     *
+     * **而那條線用預設值量不出來**：那一列寫的 `limit: 100`、schema 的 `.default()`、以及組裝點
+     * 的 `??` 全都是 100，三個來源重合，所以「整列消失」與「整列生效」在 100 底下長得一模一樣。
+     * 這裡因此走 `--patch` 把它改成 **40**——那個數字只有經過整條線才到得了組裝點。
+     *
+     * 不傳 `env`：harness home 由 `test-home.setup.ts` 指到暫存目錄，**不碰真的
+     * `~/.nexus-agent`**；自己傳一份 `env` 會把那道安全網繞過去。
+     */
+    it('整條路：patch 改掉出貨清單那一列，組裝點當場拿到新的值', async () => {
+      const { plugins } = await loadDefaultPlugins({
+        patches: ['src/settings/settings-override.patch.yml'],
+      });
+      const message = await limitFrom({ plugins });
+      expect(message).toMatch(/Recursion limit of 40/u);
+    });
+  });
+
+  /**
+   * **提醒器把每一輪的格數從兩格變三格，而那件事只有這裡量。**
+   *
+   * `beforeModel` 在 LangGraph 裡會被展開成迴圈裡的一個節點（`langchain@1.5.10`，
+   * `dist/agents/ReactAgent.js:126-134`），所以同一個 `recursionLimit` 底下，掛著提醒器
+   * 的組裝跑得到的模型輪數比裸組裝少三分之一。這不是提醒器的功能，是它的**代價**——
+   * 上面兩條刻意關掉它來隔離變數，關掉的東西要有一個地方正面量，不然「關掉」會慢慢
+   * 變成一句沒有人驗過的話。
+   *
+   * 兩條一起看才是完整的：同一個上限、同一個模型，差別只有這一格。
+   */
+  it('提醒器把每輪的格數從兩格變三格，同一個上限少跑三分之一', async () => {
+    const rounds = async (repeatReminder: false | undefined): Promise<number> => {
+      const model = new LoopingChatModel();
+      const { agent, dispose, attachSession } = await createNexusAgent({
+        model,
+        plugins: [createEchoPlugin()],
+        recursionLimit: 8,
+        summarization: false,
+        ...(repeatReminder === false && { repeatReminder }),
+      });
+      const detach = attachSession(new SessionRegistry('reminder-rounds'));
+      try {
+        await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+      } finally {
+        detach();
+        await dispose();
+      }
+      return model.calls;
+    };
+
+    // `模型輪數 = floor((上限 - 1) / 每輪格數)`：8 底下是 3 對 2。
+    expect(await rounds(false)).toBe(3);
+    expect(await rounds(undefined)).toBe(2);
+  });
+
+  /**
+   * **插話的載體（#710）再多一格，serve 每輪四格。** 它的 `beforeModel` 是另一個節點，跟提醒器那一顆一樣每輪走一次；
+   * `afterAgent` 那一半一次執行只走一次，跑掉的迴圈走不到它。CLI 不掛（`stepInbox` 只有 serve 給），所以這一格只在 serve 上付。
+   *
+   * 量在預設上限上，因為那是 serve 真正吃到的數字。
+   */
+  it('插話的載體把每輪的格數從三格變四格，預設上限底下從 33 輪變 24 輪', async () => {
+    const rounds = async (stepInbox: boolean): Promise<number> => {
+      const model = new LoopingChatModel();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [createEchoPlugin()],
+        summarization: false,
+        stepInbox,
+      });
+      try {
+        await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+      } finally {
+        await dispose();
+      }
+      return model.calls;
+    };
+
+    expect(await rounds(false)).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3));
+    expect(await rounds(true)).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 4));
+  });
+
+  it('正常收工的對話不受影響 —— 上限擋的是跑掉，不是複雜', async () => {
+    const model = new ScriptedChatModel({ turns: BOTH_TOOLS });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin(), createNotePlugin()],
+    });
+
+    try {
+      const result = await agent.invoke(toAgentInvocation('兩個工具都用一次'));
+      const messages: BaseMessage[] = result.messages;
+      expect(messages.length).toBeGreaterThan(0);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('包上 withConfig 之後型別沒有塌成 any', () => {
+    // **這一條是型別檢查在跑，不是 vitest。** `agent-factory.ts` 檔頭已經記過同一型的坑：
+    // `ReturnType<typeof createDeepAgent>` 會讓 `result.messages` 變成 `any`。`withConfig`
+    // 回的是另一個型別，所以要重驗 —— 而 `any` 是**不會讓 typecheck 紅**的那種壞掉，
+    // 上面那條 `const messages: BaseMessage[] = result.messages` 在 `any` 底下照樣過。
+    // 塌掉的話下面這個 `= true` 會變成把 `true` 指派給 `false`，typecheck 當場紅。
+    const notAny: MessagesAreTyped = true;
+    expect(notAny).toBe(true);
+  });
+});
+
+/**
+ * 一個一律報違規的配套入口。**選擇有沒有生效只有靠它看得出來**：安靜的配套入口在
+ * 「裝了但沒違規」與「根本沒裝」之間長得一模一樣。
+ */
+function noisyInvariantPlugin(packageName: string, name = 'noisy-invariant'): PluginEntry {
+  return {
+    plugin: {
+      name,
+      apply(registry) {
+        registry.invariants.register(packageName, (subject, fail) => {
+          subject.observe((event) => fail(`看到 ${event.type}`));
+        });
+      },
+    },
+  };
+}
+
+/**
+ * 接上不變量、發一筆事件，回收到的違規。
+ *
+ * 攔 `console.error` 是因為 `attachInvariants` 沒有讓呼叫端換掉 `onViolation` 的口
+ * ——違規就是印到那裡去（同 `invariant-paths.test.ts` 的理由）。
+ */
+async function violationsUnder(
+  plugins: readonly PluginEntry[],
+  invariants?: Parameters<typeof createNexusAgent>[0]['invariants'],
+): Promise<string[] | undefined> {
+  const { attachInvariants, dispose } = await createNexusAgent({
+    model: new ScriptedChatModel({ turns: [] }),
+    plugins,
+    ...(invariants !== undefined && { invariants }),
+  });
+  const sessions = new SessionRegistry('selection');
+  const log = sessions.root;
+  const seen: string[] = [];
+  const original = console.error;
+  console.error = (message: unknown) => void seen.push(String(message));
+  try {
+    const detach = attachInvariants(sessions);
+    if (detach === undefined) return undefined;
+    log.append('turn/start', { kind: 'resume' });
+    detach();
+    return seen;
+  } finally {
+    console.error = original;
+    await dispose();
+  }
+}
+
+describe('不變量的選擇面', () => {
+  it('不給就全裝——這是預設，也是下面每一條的對照組', async () => {
+    expect(
+      await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')]),
+    ).toEqual(['invariant violated by "@nexus/noisy": 看到 turn/start']);
+  });
+
+  it('blocklist 從組裝點傳得進去，那個 package 的檢查就真的沒裝', async () => {
+    // **這條是 #104 那個落差的回歸測試**：`InvariantSelection` 早就存在，但組裝點沒有
+    // 把它接出來，所以當時的九個配套入口一個都選不動。它要走 `createNexusAgent`，core 那側
+    // 的單元測試驗不到「接沒接出來」。
+    expect(
+      await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')], {
+        packageBlocklist: ['^@nexus/noisy$'],
+      }),
+    ).toEqual([]);
+  });
+
+  it('enabled: false 是總開關，一個都不裝', async () => {
+    expect(
+      await violationsUnder(
+        [
+          createEchoPlugin(),
+          noisyInvariantPlugin('@nexus/noisy'),
+          noisyInvariantPlugin('@nexus/other', 'noisy-other'),
+        ],
+        { enabled: false },
+      ),
+    ).toEqual([]);
+  });
+
+  it('過濾成空集合照樣接線——那與「沒有人註冊」是兩件事', async () => {
+    // `attachInvariants` 的 `undefined` 意思是「沒有人註冊配套入口」。過濾掉全部是一個
+    // 有效的選擇結果，runner 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
+    expect(
+      await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')], {
+        enabled: false,
+      }),
+    ).not.toBeUndefined();
+  });
+
+  it('條目層的 disabled 才是主要那個開關——關掉配套入口 plugin 就沒有人註冊了', async () => {
+    expect(
+      await violationsUnder([
+        createEchoPlugin(),
+        { ...noisyInvariantPlugin('@nexus/noisy'), disabled: true },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it('壞掉的 pattern 在組裝時就炸，不是拖到第一輪對話', async () => {
+    // runner 是每一份會話日誌各建一個的，所以不先驗的話這個錯誤會落在第一次
+    // `attachInvariants` ——也就是使用者已經送出第一句話之後。
+    await expect(
+      createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [createEchoPlugin()],
+        invariants: { packageAllowlist: ['('] },
+      }),
+    ).rejects.toThrow(/無效的 regex/);
+  });
+});
+
+/** `T` 是不是 `any` —— `any` 會讓 `1 & T` 也是 `any`，於是 `0 extends` 成立。 */
+type IsAny<T> = 0 extends 1 & T ? true : false;
+type AgentInvokeResult = Awaited<ReturnType<NexusAgentHandle['agent']['invoke']>>;
+type MessagesAreTyped = IsAny<AgentInvokeResult['messages']> extends true ? false : true;
+
+/**
+ * **組裝時逐列掉**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：給了 `optionalEntries`，那幾個條目
+ * 自己的失敗只讓它掉；不在那份裡的條目掉了，整個組裝失敗。產品路徑上後者是組裝點自己加的外掛與必掛的列。
+ */
+describe('createNexusAgent 的可少掛條目', () => {
+  /** 一顆 `apply` 就拋的 plugin。 */
+  const throwing = (name: string): PluginEntry => ({
+    plugin: {
+      name,
+      apply: () => {
+        throw new Error(`${name} 故意壞掉`);
+      },
+    },
+  });
+
+  /** 模型綁到的工具名：跑一輪，讀假模型記下的那一份。 */
+  async function boundTools(handle: NexusAgentHandle, model: ScriptedChatModel) {
+    await handle.agent.invoke(toAgentInvocation('嗨'), { configurable: { thread_id: 'optional' } });
+    return model.boundToolNames;
+  }
+
+  /**
+   * 卡上的驗收（撞名）：一列註冊了基座保留的工具名，那一列掉了、**它註冊的東西撤乾淨**（同一顆 plugin 另一個工具
+   * 也不在），其他列照樣在。另一列 `apply` 拋錯也只讓它自己掉。
+   */
+  it('`apply` 拋錯與撞名：只有那兩列掉，註冊撤乾淨，其他列照樣在', async () => {
+    const echo = createEchoPlugin();
+    const broken = throwing('broken');
+    const colliding: PluginEntry = {
+      plugin: {
+        name: 'colliding',
+        apply(registry) {
+          registry.tools.register(fakeTool('side_tool'));
+          registry.tools.register(fakeTool('write_file'));
+        },
+      },
+    };
+    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
+    const handle = await createNexusAgent({
+      model,
+      plugins: [echo, broken, colliding],
+      optionalEntries: new Set([echo, broken, colliding]),
+    });
+    try {
+      expect(handle.dropped.map(({ entry, drop }) => [entry, drop.stage])).toEqual([
+        [broken, 'apply'],
+        [colliding, 'apply'],
+      ]);
+      expect(handle.dropped[0]?.drop.message).toMatch(/broken 故意壞掉/u);
+      expect(handle.dropped[1]?.drop.message).toMatch(/colliding.*"write_file"/su);
+      const tools = await boundTools(handle, model);
+      expect(tools).toContain(ECHO_TOOL_NAME);
+      expect(tools).not.toContain('side_tool');
+    } finally {
+      await handle.dispose();
+    }
+  });
+
+  it('`requires` 連鎖：提供服務的那一列掉了，要用它的那一列跟著掉，原因寫明缺的是什麼', async () => {
+    const provider: PluginEntry = {
+      plugin: {
+        name: 'provider',
+        apply(registry) {
+          registry.capabilities.provide('shared-thing');
+          throw new Error('提供方壞掉');
+        },
+      },
+    };
+    const consumer: PluginEntry = {
+      plugin: { name: 'consumer', requires: ['shared-thing'], apply: () => undefined },
+    };
+    const handle = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      plugins: [provider, consumer],
+      optionalEntries: new Set([provider, consumer]),
+    });
+    try {
+      expect(handle.dropped.map(({ drop }) => drop.stage)).toEqual(['apply', 'requires']);
+      expect(handle.dropped[1]?.drop.message).toMatch(/"shared-thing"，沒有人提供/u);
+    } finally {
+      await handle.dispose();
+    }
+  });
+
+  /**
+   * 卡上的驗收：**組裝點的外掛 `apply` 拋錯，整個組裝照舊失敗**，用一份混了設定檔列與組裝點外掛的清單測。可少掛的
+   * 那幾列已經掛上、開了資源，拋之前要收掉：拿到的是一個 exception，沒有第二個人知道那些東西還開著。
+   */
+  it('不在可少掛名單上的條目掉了：整個失敗（AssemblyDropError），已掛上的那幾列的資源收掉了', async () => {
+    let closed = 0;
+    const listed: PluginEntry = {
+      plugin: {
+        name: 'listed',
+        apply: (registry) => void registry.lifecycle.onDispose(() => void (closed += 1)),
+      },
+    };
+    const listedBroken = throwing('listed-broken');
+    const hostBroken = throwing('host-broken');
+    const failure = createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      plugins: [hostBroken, listed, listedBroken],
+      optionalEntries: new Set([listed, listedBroken]),
+    });
+    await expect(failure).rejects.toBeInstanceOf(AssemblyDropError);
+    const error = (await failure.catch((caught: unknown) => caught)) as AssemblyDropError;
+    expect([...error.fatal]).toEqual([hostBroken]);
+    // 可少掛的那一列掉了也一起列，呼叫端合成訊息時用得到。
+    expect(error.dropped.map(({ entry }) => entry)).toEqual([hostBroken, listedBroken]);
+    expect(error.message).toMatch(/host-broken 故意壞掉〔不能少掛〕/u);
+    expect(closed).toBe(1);
+  });
+
+  it('沒給 `optionalEntries`：照舊全有全無，一列 `apply` 拋錯就整個失敗', async () => {
+    await expect(
+      createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [createEchoPlugin(), throwing('broken')],
+      }),
+    ).rejects.toThrow(/broken 故意壞掉/u);
+  });
+});

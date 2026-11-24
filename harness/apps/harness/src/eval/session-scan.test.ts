@@ -1,0 +1,909 @@
+/**
+ * 離線掃描——[#268](https://github.com/DemianLi/nexus-agent/issues/268) 的驗收。
+ *
+ * 前半是手寫的事件，量規則；後半是**真的組裝寫出來的 jsonl**，量規則跟執行期對不對得上。手寫的
+ * fixture 只證明掃描照自己的理解數得對，證明不了那個理解就是提醒器的——鏈的邊界若跟執行期分岔，
+ * 前半照樣全綠。
+ *
+ * **零憑證、零外部連線**：模型是 `LoopingChatModel` 與 `ScriptedChatModel`。
+ */
+
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { HumanMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph';
+import { tool } from '@langchain/core/tools';
+import {
+  attachSessionPersistence,
+  generationLogFilename,
+  REPEAT_REMINDER_MARKER,
+  SESSION_LOG_FORMAT_VERSION,
+  sessionDirectoryName,
+} from '@nexus/core';
+import type { PluginEntry, RepeatReminderSettings, SessionEvent } from '@nexus/core';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '../echo.fixture.js';
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { createNexusAgent } from '../agent-factory.js';
+import {
+  createJsonlSessionStore,
+  legacyTwoFilePathsIn,
+  sessionPathsIn,
+} from '../jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionOf } from '../session-files.fixture.js';
+import { LoopingChatModel } from '../looping-model.js';
+import type { LoopingChatModelOptions } from '../looping-model.js';
+import { ScriptedChatModel } from '../scripted-model.js';
+import { ThreadPump } from '../thread-pump.js';
+import type { PumpAgent } from '../thread-pump.js';
+import {
+  formatScanReport,
+  readSessionLogs,
+  scanSessionLog,
+  UNCODED_ERROR,
+} from './session-scan.js';
+import type { SessionScan } from './session-scan.js';
+
+/** 一顆手寫的事件：種類與酬載。種類刻意是 `string`，認不得的那條要寫得出來。 */
+type Entry = readonly [type: string, data: Record<string, unknown>];
+
+/** 排好 `seq` 的一份日誌。 */
+function events(entries: readonly Entry[]): SessionEvent[] {
+  return entries.map(
+    ([type, data], seq) => ({ type, seq, time: seq, data }) as unknown as SessionEvent,
+  );
+}
+
+let nextCall = 0;
+/** 一次呼叫，`callId` 每次新的。 */
+function call(name: string, args: Record<string, unknown>, callId = `c${nextCall++}`): Entry {
+  return ['tool/call', { callId, name, arguments: JSON.stringify(args) }];
+}
+
+/** 同一個工具同一份參數，叫 n 次。 */
+function same(n: number, name = 'grep'): Entry[] {
+  return Array.from({ length: n }, () => call(name, { pattern: 'x' }));
+}
+
+const turn = (
+  kind: 'message' | 'goal' | 'resume' | 'subagent-settled' | 'agent-message',
+): Entry => ['turn/start', { kind }];
+
+function scan(
+  entries: readonly Entry[],
+  options: { version?: number; override?: Partial<RepeatReminderSettings> } = {},
+): SessionScan {
+  return scanSessionLog(
+    {
+      file: 'x.jsonl',
+      header: { id: 's', version: options.version ?? SESSION_LOG_FORMAT_VERSION },
+      events: events(entries),
+    },
+    options.override,
+  );
+}
+
+describe('疑似打轉：同工具同參數連到提醒器的第二道門檻', () => {
+  it('連叫 5 次標出來，4 次不標', () => {
+    expect(scan([turn('message'), ...same(5)])).toMatchObject({
+      looping: true,
+      longestRun: { tool: 'grep', count: 5 },
+    });
+    expect(scan([turn('message'), ...same(4)])).toMatchObject({
+      looping: false,
+      longestRun: { count: 4 },
+    });
+  });
+
+  it('同工具不同參數連叫 8 次不標', () => {
+    const different = Array.from({ length: 8 }, (_, i) => call('grep', { pattern: `第 ${i} 次` }));
+    expect(scan([turn('message'), ...different])).toMatchObject({
+      looping: false,
+      longestRun: { count: 1 },
+      toolCalls: 8,
+    });
+  });
+
+  it('門檻跟著提醒器的設定走，不是寫死的 5', () => {
+    const four = [turn('message'), ...same(4)];
+    expect(scan(four, { override: { thresholds: [3, 4, 8] } }).looping).toBe(true);
+    const five = [turn('message'), ...same(5)];
+    expect(scan(five, { override: { thresholds: [3, 6, 8] } }).looping).toBe(false);
+  });
+
+  it('只設一道門檻的設定讀不出「收過一次提醒還繼續」，當場拋', () => {
+    expect(() => scan(same(5), { override: { thresholds: [3] } })).toThrow(/只設了一道門檻/);
+  });
+
+  it('屬性順序不同算同一次——日誌上的是序列化字串，要解開再規範化', () => {
+    const run = [
+      turn('message'),
+      call('read', { path: 'a', limit: 1 }),
+      call('read', { limit: 1, path: 'a' }),
+    ];
+    expect(scan(run).longestRun).toMatchObject({ count: 2 });
+  });
+
+  it('JSON 都不合格的那顆記的是原字串：解不開照樣讀，同一個原字串照樣連成一串（#281）', () => {
+    const raw = (): Entry => [
+      'tool/call',
+      { callId: `c${nextCall++}`, name: 'grep', arguments: '{"x": 嗨}' },
+    ];
+    expect(scan([turn('message'), raw(), raw(), raw(), raw(), raw()])).toMatchObject({
+      looping: true,
+      longestRun: { tool: 'grep', count: 5 },
+      toolCalls: 5,
+    });
+  });
+
+  it('射程外的工具穿插進來，鏈不斷也不算它，但工具呼叫照數', () => {
+    const interleaved = same(5).flatMap((entry) => [entry, call('todo_write', { todos: [] })]);
+    const result = scan([turn('message'), ...interleaved], {
+      override: { exclude: ['todo_*'] },
+    });
+    expect(result).toMatchObject({ looping: true, longestRun: { count: 5 }, toolCalls: 10 });
+    // 對照：不排除的話每一次都被打斷。
+    expect(scan([turn('message'), ...interleaved]).longestRun).toMatchObject({ count: 1 });
+  });
+});
+
+describe('鏈的邊界對到提醒器的哪一條', () => {
+  it('人講話清零：跨過 message 的重複不算', () => {
+    expect(
+      scan([turn('message'), ...same(3), turn('message'), ...same(3)]).longestRun,
+    ).toMatchObject({ count: 3 });
+  });
+
+  it('續行輪次的頭不清零，同提醒器（#662）：鏈跨過它繼續數', () => {
+    expect(scan([turn('message'), ...same(3), turn('goal'), ...same(3)]).longestRun).toMatchObject({
+      count: 6,
+    });
+  });
+
+  it('結算通知與背景子代理的話也不是人講話，不清零', () => {
+    for (const kind of ['subagent-settled', 'agent-message'] as const) {
+      expect(scan([turn('message'), ...same(3), turn(kind), ...same(2)]).longestRun).toMatchObject({
+        count: 5,
+      });
+    }
+  });
+
+  it('輪中插的話（user/message 的 user 來源）清零；外掛注入的不清零', () => {
+    const injected = (source: object) => ['user/message', { message: {}, source }] as const;
+    expect(
+      scan([turn('message'), ...same(3), injected({ kind: 'user' }), ...same(3)]).longestRun,
+    ).toMatchObject({ count: 3 });
+    expect(
+      scan([turn('message'), ...same(3), injected({ kind: 'plugin', plugin: 'x' }), ...same(2)])
+        .longestRun,
+    ).toMatchObject({ count: 5 });
+  });
+
+  it('resume 不清零：回覆核准沒有新的人話', () => {
+    expect(scan([turn('message'), ...same(3), turn('resume'), ...same(2)])).toMatchObject({
+      looping: true,
+      longestRun: { count: 5 },
+    });
+  });
+
+  it('跨過 session/end-seed 的鏈斷在下一顆頭上：重開之後第一顆呼叫前面一定是人話或續行', () => {
+    // 前提由 `serve-history.test.ts` 釘著：重開之後回答舊中斷拿到 no_such_interrupt，接不出 resume 的頭。
+    // 提醒器那側同一個位置是一則素的 HumanMessage，不論續接有沒有把對話灌回去都清零。
+    const across = [
+      turn('message'),
+      ...same(3),
+      ['session/end-seed', {}] as const,
+      turn('message'),
+      ...same(3),
+    ];
+    expect(scan(across).longestRun).toMatchObject({ count: 3 });
+  });
+
+  it('寫不出來的形狀：接縫之後沒有頭就有呼叫，end-seed 照樣清零', () => {
+    const across = [turn('message'), ...same(3), ['session/end-seed', {}] as const, ...same(3)];
+    expect(scan(across).longestRun).toMatchObject({ count: 3 });
+  });
+
+  it('同一個 callId 第二次出現不推進鏈，也不多算一次呼叫', () => {
+    // 核准閘門中斷的那次：暫停那一輪留一顆，resume 那一輪以同一個 callId 再一顆。
+    const gated = [
+      turn('message'),
+      ...same(3),
+      call('grep', { pattern: 'x' }, 'gated'),
+      ['interrupt/raised', { interruptId: 'i' }] as const,
+      ['turn/end', {}] as const,
+      turn('resume'),
+      call('grep', { pattern: 'x' }, 'gated'),
+      ['tool/result', { callId: 'gated', isError: false }] as const,
+    ];
+    expect(scan(gated)).toMatchObject({ looping: false, longestRun: { count: 4 }, toolCalls: 4 });
+  });
+
+  it('subagent 那份沒有 turn/start，鏈跨整份', () => {
+    expect(scan(same(5)).looping).toBe(true);
+  });
+});
+
+describe('工具錯誤依種類', () => {
+  it('超時、拋錯、schema 違規各一顆：三個種類各 1，成功的不算', () => {
+    const result = scan([
+      turn('message'),
+      call('slow', {}, 'a'),
+      [
+        'tool/result',
+        { callId: 'a', isError: true, error: { name: 'ToolTimeoutError', code: 'TOOL_TIMEOUT' } },
+      ],
+      call('boom', {}, 'b'),
+      ['tool/result', { callId: 'b', isError: true }],
+      call('shape', {}, 'c'),
+      [
+        'tool/result',
+        {
+          callId: 'c',
+          isError: true,
+          error: { name: 'ToolOutputError', code: 'INVALID_TOOL_OUTPUT' },
+        },
+      ],
+      call('fine', {}, 'd'),
+      ['tool/result', { callId: 'd', isError: false }],
+    ]);
+    expect(result.errors).toEqual({
+      TOOL_TIMEOUT: 1,
+      [UNCODED_ERROR]: 1,
+      INVALID_TOOL_OUTPUT: 1,
+    });
+    // 卡上的原話是「報表的三個種類各 1」，所以印出來的那一行也看一次。
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain(
+      `  工具錯誤 INVALID_TOOL_OUTPUT×1 TOOL_TIMEOUT×1 ${UNCODED_ERROR}×1`,
+    );
+  });
+
+  it('碼是從檔上讀的：叫 constructor 的碼照樣數成 1，不會讀到繼承來的東西', () => {
+    const result = scan([
+      call('odd', {}, 'x'),
+      ['tool/result', { callId: 'x', isError: true, error: { name: 'E', code: 'constructor' } }],
+    ]);
+    expect(result.errors?.['constructor']).toBe(1);
+  });
+});
+
+describe('中止的輪數（#276）', () => {
+  const ABORTED: Entry = ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }];
+
+  it('數 `turn/end` 帶 aborted 的那幾輪，正常結束的不算', () => {
+    const result = scan([
+      turn('message'),
+      ABORTED,
+      turn('message'),
+      ['turn/end', {}],
+      turn('message'),
+      ABORTED,
+    ]);
+    expect(result.aborted).toBe(2);
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain(
+      '  中止 2 輪 ｜點踩 0 輪 ｜回饋 0 則',
+    );
+  });
+
+  it('v6 以前沒有中止這條路：那一格是 null，報表印「—」並講明', () => {
+    const old = scan([turn('message'), ['turn/end', {}]], { version: 6 });
+    expect(old.aborted).toBeNull();
+    const text = formatScanReport([old], [], { threshold: 5 }).join('\n');
+    expect(text).toContain('  中止 — 輪');
+    expect(text).toContain('格式版本 6：第 7 版才記中止');
+  });
+});
+
+describe('點踩與回饋（#278）', () => {
+  const put = (turnSeq: number, rating: 'positive' | 'negative'): Entry => [
+    'feedback/message-put',
+    {
+      item: {
+        turn: turnSeq,
+        rating,
+        version: `v-${turnSeq}-${rating}`,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    },
+  ];
+
+  it('每一輪取最後狀態：收回的不算、改成讚的不算；回饋則數另算', () => {
+    const result = scan([
+      turn('message'),
+      ['turn/end', {}],
+      turn('message'),
+      ['turn/end', {}],
+      turn('message'),
+      ['turn/end', {}],
+      put(0, 'negative'),
+      put(2, 'negative'),
+      put(2, 'positive'),
+      put(4, 'negative'),
+      ['feedback/message-delete', { turn: 4 }],
+      ['feedback/record', { text: '很慢' }],
+      ['feedback/record', {}],
+    ]);
+    expect(result).toMatchObject({ negativeTurns: 1, feedbackRecords: 2, unknownEvents: 0 });
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain(
+      '  中止 0 輪 ｜點踩 1 輪 ｜回饋 2 則',
+    );
+  });
+
+  it('格式 10 評的是回覆：算到它所屬那一輪（續接回來的也是）；同一輪兩則有讚有踩算點踩一輪', () => {
+    const reply = (id: string): Entry => [
+      'assistant/message',
+      { message: { type: 'ai', data: { content: '答。', id } } },
+    ];
+    const rate = (messageId: string, rating: 'positive' | 'negative'): Entry => [
+      'feedback/message-put',
+      { item: { messageId, rating, version: `v-${messageId}`, createdAt: 0, updatedAt: 0 } },
+    ];
+    const result = scan([
+      turn('message'),
+      reply('a1'),
+      ['turn/end', {}],
+      ['turn/start', { kind: 'resume' }],
+      reply('a2'),
+      ['turn/end', {}],
+      turn('message'),
+      reply('b1'),
+      ['turn/end', {}],
+      rate('a1', 'positive'),
+      rate('a2', 'negative'),
+      rate('b1', 'positive'),
+    ]);
+    expect(result.negativeTurns).toBe(1);
+  });
+
+  it('v7 以前沒有評分這條路：兩格是 null，報表印「—」並講明；v7 的檔其餘照讀', () => {
+    const old = scan([turn('message'), ['turn/end', {}]], { version: 7 });
+    expect(old).toMatchObject({ negativeTurns: null, feedbackRecords: null, aborted: 0 });
+    const text = formatScanReport([old], [], { threshold: 5 }).join('\n');
+    expect(text).toContain('點踩 — 輪 ｜回饋 — 則');
+    expect(text).toContain('格式版本 7：第 8 版才記點踩與回饋');
+  });
+});
+
+describe('照格式版本表態', () => {
+  it('認不得的事件種類不崩：略過、報數，認得的照算', () => {
+    const result = scan([turn('message'), ['future/thing', { anything: 1 }], ...same(5)]);
+    expect(result).toMatchObject({ unknownEvents: 1, looping: true, toolCalls: 5 });
+  });
+
+  it('v4 沒有工具事件、v5 沒有模型起訖：那幾格是 null 不是 0', () => {
+    expect(scan([turn('message')], { version: 4 })).toMatchObject({
+      steps: null,
+      toolCalls: null,
+      longestRun: null,
+      errors: null,
+      looping: null,
+    });
+    expect(scan([turn('message'), ...same(2)], { version: 5 })).toMatchObject({
+      steps: null,
+      toolCalls: 2,
+    });
+    expect(scan([turn('message'), ['model/start', {}], ['model/end', {}]])).toMatchObject({
+      steps: 1,
+    });
+  });
+
+  it('報表把版本講出來：比這一版新、比這一版舊，各一句', () => {
+    const newer = scan([turn('message'), ['future/thing', {}]], {
+      version: SESSION_LOG_FORMAT_VERSION + 1,
+    });
+    const older = scan([turn('message')], { version: 4 });
+    const text = formatScanReport([newer, older], [], { threshold: 5 }).join('\n');
+    expect(text).toContain(`比這一版（${SESSION_LOG_FORMAT_VERSION}）新：1 顆認不得的事件略過了`);
+    expect(text).toContain('格式版本 4：第 5 版才記工具事件、第 6 版才記模型起訖');
+    expect(text).toContain('步數 — ｜工具呼叫 — ｜最長重複 —');
+  });
+
+  /**
+   * 32 起新增純資訊性的種類不升版（#507），所以版本號不比這一版新的日誌裡也會有這一版不認得的種類。舊說法
+   * 「詞彙這一版都認得，檔案可能被別的東西寫過」在 32 起是錯的；32 以前的日誌沒有這條路，說法照舊。
+   */
+  it('版本不比這一版新但有不認得的種類：32 起講「多半是更新的程式寫的」並報幾顆標了可忽略，32 以前照舊', () => {
+    const entries: readonly Entry[] = [turn('message'), ['future/a', {}], ['future/b', {}]];
+    const marked = events(entries).map((event) =>
+      (event.type as string) === 'future/b'
+        ? ({ ...event, ignorable: true } as SessionEvent)
+        : event,
+    );
+    const at = (version: number, list: SessionEvent[]) =>
+      scanSessionLog({ file: 'x.jsonl', header: { id: 's', version }, events: list });
+
+    const current = at(SESSION_LOG_FORMAT_VERSION, marked);
+    expect(current).toMatchObject({ unknownEvents: 2, unknownIgnorableEvents: 1 });
+    const text = formatScanReport([current], [], { threshold: 5 }).join('\n');
+    expect(text).toContain('2 顆認不得的事件略過了（其中 1 顆標了可忽略');
+    expect(text).toContain('比這一版更新的程式寫的');
+    expect(text).not.toContain('詞彙這一版都認得');
+
+    const old = at(31, events(entries));
+    expect(old.unknownIgnorableEvents).toBe(0);
+    const oldText = formatScanReport([old], [], { threshold: 5 }).join('\n');
+    expect(oldText).toContain('格式版本 31 的詞彙這一版都認得，檔案可能被別的東西寫過');
+    expect(oldText).not.toContain('可忽略');
+  });
+
+  it('掃描不守「不認得的必需種類就拒讀」：整份照掃、略過並報數，不進「讀不懂的」', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-unknown-'));
+    await writeFile(
+      join(root, 's.header.json'),
+      JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id: 's', createdAt: 0 }),
+    );
+    await writeFile(
+      join(root, 's.jsonl'),
+      `${events([turn('message'), ['future/thing', {}]])
+        .map((event) => JSON.stringify(event))
+        .join('\n')}\n`,
+    );
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(unreadable).toEqual([]);
+    expect(logs.map((log) => scanSessionLog(log).unknownEvents)).toEqual([1]);
+  });
+
+  it('#273 之前的拒絕記成成功這件事，每次都印在報表底下', () => {
+    expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#273');
+    expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#293');
+  });
+
+  it('#1039 之前把 subagent 的合法拒絕記成 UNKNOWN_TOOL：修好之前寫的那份，報表底下有這一句', () => {
+    // 修前的形狀：前景帶 reasoning_effort 被拒，日誌記成 ToolNotFoundError／UNKNOWN_TOOL。
+    // header 帶 build 也照印——帶 commit 分不出修好前後（見檔頭），這句不是逐份的標記。
+    const preFix = scanSessionLog({
+      file: 'pre-1039.jsonl',
+      header: {
+        id: 'pre-1039',
+        version: SESSION_LOG_FORMAT_VERSION,
+        metadata: { build: { commit: 'ee07d29c1', dirty: false } },
+      },
+      events: events([
+        turn('message'),
+        call('subagent', { subagent_type: 'general-purpose', reasoning_effort: 'high' }, 'sa'),
+        [
+          'tool/result',
+          {
+            callId: 'sa',
+            isError: true,
+            error: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+          },
+        ],
+      ]),
+    });
+    expect(preFix.errors).toEqual({ UNKNOWN_TOOL: 1 });
+    const report = formatScanReport([preFix], [], { threshold: 5 });
+    // 逐份那幾行本來就印得出 subagent 與 UNKNOWN_TOOL，所以釘的是「注意」那一行本身。
+    const note = report.filter((line) => line.startsWith('注意：#1039'));
+    expect(note).toHaveLength(1);
+    expect(note[0]).toContain('（2026-10-04）');
+    expect(note[0]).toContain('subagent');
+    expect(note[0]).toContain('UNKNOWN_TOOL');
+    expect(note[0]).toContain('逐份分不出來');
+  });
+
+  it('base 底下的印相對路徑，外面的照印絕對路徑', () => {
+    const inside = { ...scan(same(1)), file: '/logs/run/cli.jsonl' };
+    const outside = { ...scan(same(1)), file: '/elsewhere/cli.jsonl' };
+    const text = formatScanReport([inside, outside], [], { threshold: 5, base: '/logs' }).join(
+      '\n',
+    );
+    expect(text).toContain('  run/cli.jsonl');
+    expect(text).toContain('  /elsewhere/cli.jsonl');
+    expect(text).not.toContain('../');
+  });
+
+  it('疑似打轉的排在前面', () => {
+    const quiet = { ...scan(same(1)), file: 'a.jsonl' };
+    const loud = { ...scan(same(5)), file: 'b.jsonl' };
+    const text = formatScanReport([quiet, loud], [], { threshold: 5 }).join('\n');
+    expect(text.indexOf('b.jsonl')).toBeLessThan(text.indexOf('a.jsonl'));
+    expect(text).toContain('疑似打轉 1 份');
+  });
+});
+
+/**
+ * 子代理那一份找回派它的呼叫（#1023）。兩頭都在的那條走產品組裝，在 `subagent-session-link.test.ts`；這裡釘找不到時的
+ * 「—」：**不推論成沒有人派它**，並說是哪一種沒有。
+ */
+describe('派它的呼叫：找不到一律「—」，說是哪一種沒有', () => {
+  const child = (parentSession: string): SessionScan =>
+    scanSessionLog({
+      file: 'child.jsonl',
+      header: {
+        id: `${parentSession}/tools:x`,
+        version: SESSION_LOG_FORMAT_VERSION,
+        parentSession,
+      },
+      events: events(same(1)),
+    });
+  const parent = (id: string, version: number, entries: readonly Entry[]): SessionScan =>
+    scanSessionLog({ file: `${id}.jsonl`, header: { id, version }, events: events(entries) });
+  const report = (...scans: SessionScan[]) =>
+    formatScanReport(scans, [], { threshold: 5 }).join('\n');
+
+  it('上層是 30 版：目錄是 null（沒記），印「—」與第 31 版才記', () => {
+    const old = parent('p', 30, [turn('message'), call('task', {}, 'c1')]);
+    expect(old.subagents).toBeNull();
+    expect(report(old, child('p'))).toContain(
+      '派它的 —（上層是格式版本 30：第 31 版才記子代理目錄）',
+    );
+  });
+
+  it('上層不在這次掃描裡', () => {
+    expect(report(child('gone'))).toContain('派它的 —（上層 gone 不在這次掃描裡）');
+  });
+
+  it('上層是新版、但目錄裡沒有這一份', () => {
+    const fresh = parent('p', SESSION_LOG_FORMAT_VERSION, [
+      turn('message'),
+      call('task', {}, 'c1'),
+    ]);
+    expect(fresh.subagents).toEqual([]);
+    expect(report(fresh, child('p'))).toContain('派它的 —（上層的子代理目錄沒有這一份）');
+  });
+
+  it('分叉（parentSession 加 isSeeded）不是子代理：不找派它的呼叫，前綴裡父會話派的子代理與點踩都不算（#1579）', () => {
+    const forked = scanSessionLog({
+      file: 'forked.jsonl',
+      header: {
+        id: 'f',
+        version: SESSION_LOG_FORMAT_VERSION,
+        parentSession: 'p',
+        isSeeded: true,
+      },
+      events: events([
+        turn('message'),
+        call('task', {}, 'c1'),
+        ['subagent/catalog', { childId: 'p/x', callId: 'c1', mode: 'one-shot' }],
+        ['assistant/message', { message: { type: 'ai', data: { content: '答。', id: 'a1' } } }],
+        ['turn/end', {}],
+        [
+          'feedback/message-put',
+          {
+            item: {
+              messageId: 'a1',
+              rating: 'negative',
+              version: 'v-a1',
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          },
+        ],
+        ['feedback/record', { text: '父會話的評語' }],
+        ['session/end-seed', { inherited: true }],
+        turn('message'),
+        ['feedback/record', { text: '自己的評語' }],
+        call('task', {}, 'c2'),
+        ['subagent/catalog', { childId: 'f/y', callId: 'c2', mode: 'one-shot' }],
+      ]),
+    });
+    expect(forked.subagent).toBeUndefined();
+    expect(forked.subagents?.map((link) => link.childId)).toEqual(['f/y']);
+    // 前綴裡父會話給的點踩與評語是父會話的，不算這一份的。
+    expect(forked.negativeTurns).toBe(0);
+    expect(forked.feedbackRecords).toBe(1);
+    const text = report(forked);
+    expect(text).toContain('f（分叉自 p）');
+    expect(text).not.toContain('派它的');
+    expect(child('p').subagent).toBe(true);
+  });
+});
+
+/** 在 `directory` 裡寫一份會話，照 JSONL 後端的寫法。 */
+async function writeSession(
+  root: string,
+  id: string,
+  entries: readonly Entry[],
+  extra: { parentSession?: string } = {},
+): Promise<string> {
+  const store = createJsonlSessionStore({ rootDir: root });
+  const stored = store.create({
+    version: SESSION_LOG_FORMAT_VERSION,
+    id,
+    createdAt: 0,
+    ...extra,
+  });
+  await stored.append(events(entries));
+  await stored.close();
+  return store.directory;
+}
+
+describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
+  it('往下找到每一份；壞檔報成讀不懂，撕裂的尾巴照 JSONL 後端的規則不算', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-'));
+    const runA = await writeSession(root, 'cli', [turn('message'), ...same(5)]);
+    await writeSession(root, 'cli/sub-1', same(2), { parentSession: 'cli' });
+    const runB = await writeSession(root, 'broken', [turn('message')]);
+    // 中段一行壞掉：不是當掉，是壞檔。世代檔第一行的 header 行留著，事件換掉。
+    const broken = (await sessionOf(runB, 'broken')).logPath;
+    const headerLine = (await readFile(broken, 'utf8')).split('\n')[0]!;
+    await writeFile(broken, `${headerLine}\nnot json\n{"type":"turn/end"}\n`);
+    // 尾巴寫到一半：當掉的常態。
+    const torn = (await sessionOf(runA, 'cli')).logPath;
+    const before = await readFile(torn, 'utf8');
+    await writeFile(torn, `${before}{"type":"tool/ca`);
+    // 寫的那一方自己會留鎖檔（租約），所以比的是掃描前後，不是「沒有鎖檔」。會話目錄裡的也比。
+    const listing = async () =>
+      [
+        ...(await readdir(runA, { recursive: true })),
+        ...(await readdir(runB, { recursive: true })),
+      ].sort();
+    const namesBefore = await listing();
+
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(logs.map((log) => log.header.id).sort()).toEqual(['cli', 'cli/sub-1']);
+    expect(unreadable).toHaveLength(1);
+    // 行號照檔算：第 1 行是 header 行，壞的是第 2 行。
+    expect(unreadable[0]?.reason).toContain('第 2 行不是 JSON');
+
+    const cli = logs.find((log) => log.header.id === 'cli');
+    expect(cli === undefined ? undefined : scanSessionLog(cli).looping).toBe(true);
+    const sub = logs.find((log) => log.header.id === 'cli/sub-1');
+    expect(sub === undefined ? undefined : scanSessionLog(sub).parentSession).toBe('cli');
+
+    // 唯讀：目錄裡沒多出任何東西（續接那條會留鎖、會截尾巴），撕裂的尾巴也還在。
+    expect(await listing()).toEqual(namesBefore);
+    expect(await readFile(torn, 'utf8')).toBe(`${before}{"type":"tool/ca`);
+  });
+
+  it('比這一版新的照讀，header 讀不懂的連原因報出來（header 規則是後端那一份，#665）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-versions-'));
+    // 比這一版新的寫方寫的是世代檔：舊路徑上版本 52 起的 header 是墓碑，驗不到「版本太新」。
+    const newer = { version: SESSION_LOG_FORMAT_VERSION + 1, id: 'future', createdAt: 0 };
+    await mkdir(join(root, sessionDirectoryName('future')));
+    await writeFile(
+      join(root, sessionDirectoryName('future'), generationLogFilename(newer.version)),
+      `${JSON.stringify({ type: 'session', ...newer })}\n${JSON.stringify(events([turn('message')])[0])}\n`,
+    );
+    await writeFile(
+      join(root, 'no-date.header.json'),
+      JSON.stringify({ version: 1, id: 'no-date' }),
+    );
+
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(logs.map((log) => [log.header.id, log.header.version])).toEqual([
+      ['future', SESSION_LOG_FORMAT_VERSION + 1],
+    ]);
+    expect(unreadable.map((item) => item.reason)).toEqual([
+      expect.stringContaining('header 沒有 createdAt'),
+    ]);
+  });
+
+  it('比這一版舊的：門檻照磁碟上的版號判，不是轉譯後的這一版（#1856）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-older-'));
+    const entries: Entry[] = [
+      turn('message'),
+      ...same(2),
+      ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+    ];
+    const directory = await writeSession(root, 'old', entries);
+    // 改成第 6 版寫的樣子：有工具事件與模型起訖，還沒有中止與評分。第 6 版是舊兩檔：header 行去掉 `type` 寫進
+    // `<base>.header.json`、事件寫進 `<base>.jsonl`，會話目錄拿掉。
+    const written = sessionPathsIn(directory, 'old');
+    const [headerLine, ...rest] = (await readFile(written.log, 'utf8')).split('\n');
+    const { type: _type, ...onDisk } = JSON.parse(headerLine!) as Record<string, unknown>;
+    await rm(written.sessionDirectory, { recursive: true });
+    const legacy = legacyTwoFilePathsIn(directory, 'old');
+    await writeFile(legacy.header, JSON.stringify({ ...onDisk, version: 6 }));
+    await writeFile(legacy.log, rest.join('\n'));
+
+    const { logs } = await readSessionLogs([root]);
+    expect(logs.map((log) => [log.header.id, log.header.version])).toEqual([['old', 6]]);
+    expect(scanSessionLog(logs[0]!)).toMatchObject({
+      version: 6,
+      toolCalls: 2,
+      aborted: null,
+      negativeTurns: null,
+      feedbackRecords: null,
+    });
+    // 同一份本文當成這一版掃：中止那一輪會算進去。分得出來，上面的 null 才是門檻判的。
+    expect(scan(entries).aborted).toBe(1);
+  });
+
+  /**
+   * header 的建置中繼資料（#1025）：記了的照印，舊版沒記的印「—」。**判準是那一格在不在**，所以舊檔的 `version` 被續接
+   * 蓋成這一版也一樣印「—」。
+   */
+  it('header 記了建置那幾格就印出來，沒記的（含版本被續接蓋過的舊檔）印「—」', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-metadata-'));
+    const store = createJsonlSessionStore({ rootDir: root });
+    const recorded = store.create({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'recorded',
+      createdAt: 0,
+      build: { commit: 'abcdef0123456789', dirty: false },
+      plugins: [{ name: '@nexus/plugin-todo', id: 'todo', disabled: true }],
+      configHash: 'hmac-sha256:0011223344556677',
+      modelEntryId: 'harness/vendor/model',
+    });
+    await recorded.append(events([turn('message')]));
+    await recorded.close();
+    await writeSession(root, 'resumed-old', [turn('message')]);
+
+    const { logs } = await readSessionLogs([root]);
+    expect(logs).toHaveLength(2);
+    const text = formatScanReport(
+      logs.map((log) => scanSessionLog(log)),
+      [],
+      { threshold: 5 },
+    ).join('\n');
+    expect(text).toContain(
+      '建置 abcdef012345（未提交的改動：無） ｜模型 harness/vendor/model ｜插件 1 列（停用 1） ｜' +
+        '設定雜湊 hmac-sha256:0011223344556677',
+    );
+    expect(text).toContain('建置 — ｜模型 — ｜插件 — ｜設定雜湊 —');
+  });
+
+  /**
+   * **這條才分得出唯讀與否**：上面那條的鎖檔名跟寫的那一方同名，走續接的讀法也不會多出檔案。
+   * 一個還開著的寫入把手握著租約，續接那條會拋 `SessionAlreadyOwnedError`；掃描照讀。
+   */
+  it('一個還在寫的行程握著租約，照樣讀得到，也不擋它繼續寫', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-live-writer-'));
+    const store = createJsonlSessionStore({ rootDir: root });
+    const stored = store.create({ version: SESSION_LOG_FORMAT_VERSION, id: 'cli', createdAt: 0 });
+    const written = events([turn('message'), ...same(5)]);
+    try {
+      await stored.append(written);
+      const { logs } = await readSessionLogs([root]);
+      expect(logs.map((log) => scanSessionLog(log).looping)).toEqual([true]);
+      await stored.append([
+        { type: 'turn/end', seq: written.length, time: 0, data: {} } as SessionEvent,
+      ]);
+    } finally {
+      await stored.close();
+    }
+  });
+
+  /**
+   * 評分服務讀到這種事件會拋 `FeedbackLogCorruptionError`（#1606）；離線掃描是另一種讀方，照舊讀、照舊數（卡上驗收 I）。
+   * 壞的那一顆跟 `feedback-wire.test.ts` 用的同一種：分數不是兩種之一、改的時間早於建的時間。
+   */
+  it('評分事件壞了（服務會拒的那種）：照讀不拋，也不算成點踩（#1606）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-bad-rating-'));
+    await writeSession(root, 'rated', [
+      turn('message'),
+      ['assistant/message', { message: { type: 'ai', data: { content: '答。', id: 'm1' } } }],
+      ['turn/end', {}],
+      [
+        'feedback/message-put',
+        { item: { messageId: 'm1', rating: 'meh', version: 'v', createdAt: 5, updatedAt: 1 } },
+      ],
+    ]);
+
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(unreadable).toEqual([]);
+    expect(logs.map((log) => log.header.id)).toEqual(['rated']);
+    expect(scanSessionLog(logs[0]!)).toMatchObject({ negativeTurns: 0, unknownEvents: 0 });
+  });
+
+  it('根目錄不存在就拋——打錯路徑不是一份空報表', async () => {
+    await expect(readSessionLogs([join(tmpdir(), 'nexus-scan-不存在')])).rejects.toThrow();
+  });
+});
+
+/** 一輪 prompt 裡提醒器的提醒全文。 */
+function reminderTexts(prompts: readonly (readonly BaseMessage[])[]): string[] {
+  return prompts
+    .flat()
+    .filter(
+      (message) =>
+        HumanMessage.isInstance(message) &&
+        message.additional_kwargs[REPEAT_REMINDER_MARKER] != null,
+    )
+    .map((message) => message.text);
+}
+
+/**
+ * 真的組裝接上 pump 與 JSONL 後端（serve 那條路的形狀），跑完之後掃那個目錄。
+ *
+ * @returns 掃出來的每一份，與 root 那一份原樣的事件。
+ */
+async function runAndScan(
+  model: ScriptedChatModel | LoopingChatModel,
+  plugins: readonly PluginEntry[],
+  drive: (pump: ThreadPump) => Promise<void>,
+  options: { recursionLimit?: number } = {},
+): Promise<{ scans: SessionScan[]; root: readonly SessionEvent[] }> {
+  const dir = await mkdtemp(join(tmpdir(), 'nexus-scan-live-'));
+  const store = createJsonlSessionStore({ rootDir: dir });
+  const built = await createNexusAgent({
+    model,
+    checkpointer: new MemorySaver(),
+    plugins: [...plugins],
+    summarization: false,
+    ...(options.recursionLimit !== undefined && { recursionLimit: options.recursionLimit }),
+  });
+  const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'scan-root');
+  const detach = built.attachSession(pump.sessions);
+  const persistence = attachSessionPersistence(pump.sessions, store);
+  try {
+    await drive(pump);
+  } finally {
+    await persistence.dispose();
+    detach();
+    await built.dispose();
+  }
+  const { logs, unreadable } = await readSessionLogs([store.directory]);
+  expect(unreadable).toEqual([]);
+  const root = logs.find((log) => log.header.id === 'scan-root');
+  return { scans: logs.map((log) => scanSessionLog(log)), root: root?.events ?? [] };
+}
+
+describe('跟真的組裝對得上', () => {
+  /**
+   * **判準是兩邊一起**：提醒器真的送出了第 5 次那條詳細提醒，掃描也標了這一份。只斷言掃描的話，
+   * 規則跟執行期分岔時兩邊各自綠。`recursionLimit: 20` 在預設組裝上是 6 輪（每輪三格），
+   * 夠到第二道門檻。
+   */
+  async function loop(options: LoopingChatModelOptions = {}) {
+    const model = new LoopingChatModel({ toolName: ECHO_TOOL_NAME, ...options });
+    const run = await runAndScan(
+      model,
+      [createEchoPlugin()],
+      async (pump) => {
+        await expect(pump.submit({ kind: 'message', text: '一直跑' })).rejects.toThrow(
+          /Recursion limit/,
+        );
+      },
+      { recursionLimit: 20 },
+    );
+    return { ...run, reminders: reminderTexts(model.seen) };
+  }
+
+  it('同參數迴圈：提醒器發到第二道門檻，掃描也標了', async () => {
+    const { scans, reminders } = await loop();
+    expect(reminders.some((text) => text.includes('- consecutive_calls: 5'))).toBe(true);
+    expect(scans).toHaveLength(1);
+    expect(scans[0]).toMatchObject({ looping: true, longestRun: { tool: ECHO_TOOL_NAME } });
+    expect(scans[0]?.longestRun?.count).toBeGreaterThanOrEqual(5);
+  });
+
+  it('對照：每次參數不同，提醒器一條都沒發，掃描也不標', async () => {
+    const { scans, reminders } = await loop({ argsFor: (n) => ({ message: `第 ${n} 次` }) });
+    expect(reminders).toEqual([]);
+    expect(scans[0]).toMatchObject({ looping: false, longestRun: { count: 1 } });
+  });
+
+  /**
+   * **核准那次在真的日誌上同一個 `callId` 記了兩顆**——先斷言這個前提，不然「去重」量的是一件
+   * 沒發生的事。
+   */
+  it('停在核准點再 resume：日誌上兩顆同 callId，掃描只算一次', async () => {
+    const tools: PluginEntry = {
+      plugin: {
+        name: 'scan-tools',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '做完了', { name: 'danger', description: '要核准。', schema: z.object({}) }),
+          );
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+          );
+        },
+      },
+    };
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '動手。', toolCalls: [{ name: 'danger', args: {} }] },
+        { content: '好了。' },
+      ],
+    });
+    const { scans, root } = await runAndScan(model, [tools], async (pump) => {
+      await pump.submit({ kind: 'message', text: '做危險的事' });
+      await pump.submit({
+        kind: 'resume',
+        interruptId: pump.pendings[0]?.interruptId ?? '',
+        response: { decisions: [{ type: 'approve' }] },
+      });
+    });
+    const calls = root.filter((event) => event.type === 'tool/call');
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls.map((event) => event.data.callId)).size).toBe(1);
+    expect(scans[0]).toMatchObject({ toolCalls: 1, longestRun: { count: 1 }, errors: {} });
+  });
+});

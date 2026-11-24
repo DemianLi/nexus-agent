@@ -6,8 +6,8 @@
 pnpm --filter @nexus/harness run gen-tool-catalog
 ```
 
-`apps/harness/src/tool-catalog.test.ts` 在 CI 裡驗它沒有過期；改了工具的名稱、描述或參數，重新產生並一起提交，
-review 時就看得到模型看到的字變了什麼。範圍與做法見 `apps/harness/src/tool-catalog.ts` 的檔頭（#442）。
+`harness/apps/harness/src/tool-catalog.test.ts` 在 CI 裡驗它沒有過期；改了工具的名稱、描述或參數，重新產生並一起提交，
+review 時就看得到模型看到的字變了什麼。範圍與做法見 `harness/apps/harness/src/tool-catalog.ts` 的檔頭（#442）。
 
 ## 基座（deepagents）
 
@@ -727,7 +727,7 @@ List the models a subagent may use, without changing your own. Call with no argu
 
 ## ask-user
 
-plugin，套件 packages/nexus-plugin-ask-user
+plugin，套件 harness/packages/nexus-plugin-ask-user
 
 ### `ask_user_question`
 
@@ -805,7 +805,7 @@ plugin，套件 packages/nexus-plugin-ask-user
 
 ## echo
 
-plugin，套件 packages/nexus-plugin-echo
+plugin，套件 harness/packages/nexus-plugin-echo
 
 ### `echo`
 
@@ -836,7 +836,7 @@ plugin，套件 packages/nexus-plugin-echo
 
 ## goal
 
-plugin，套件 packages/nexus-plugin-goal
+plugin，套件 harness/packages/nexus-plugin-goal
 
 ### `create_goal`
 
@@ -946,7 +946,7 @@ Update the exact current goal revision. Call get_goal first and copy its goal_id
 
 ## plan-mode
 
-plugin，套件 packages/nexus-plugin-plan-mode
+plugin，套件 harness/packages/nexus-plugin-plan-mode
 
 ### `exit_plan_mode`
 
@@ -977,7 +977,7 @@ plugin，套件 packages/nexus-plugin-plan-mode
 
 ## present
 
-plugin，套件 packages/nexus-plugin-present
+plugin，套件 harness/packages/nexus-plugin-present
 
 ### `present`
 
@@ -1025,7 +1025,7 @@ Declare existing files as final deliverables for the user. Use it when the user 
 
 ## quickjs
 
-plugin，套件 packages/nexus-plugin-quickjs
+plugin，套件 harness/packages/nexus-plugin-quickjs
 
 ### `run_javascript`
 
@@ -1056,7 +1056,7 @@ plugin，套件 packages/nexus-plugin-quickjs
 
 ## submit-record
 
-plugin，套件 packages/nexus-plugin-submit-record
+plugin，套件 harness/packages/nexus-plugin-submit-record
 
 ### `submit_record`
 
@@ -1098,7 +1098,7 @@ plugin，套件 packages/nexus-plugin-submit-record
 
 ## todo
 
-plugin，套件 packages/nexus-plugin-todo
+plugin，套件 harness/packages/nexus-plugin-todo
 
 ### `todo_write`
 

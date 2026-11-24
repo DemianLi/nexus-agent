@@ -137,7 +137,7 @@ class LightShapesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out:
             plan_ci.write_light({'typecheck': 'all', 'format': [], 'lint': {}, 'tests': {}}, Path(out))
             args = (Path(out) / 'typecheck.txt').read_text(encoding='utf-8').split()
-        self.assertEqual(args, ['--filter=./**/packages/*', '--filter=./**/apps/*'])
+        self.assertEqual(args, ['--filter=./**/packages/*', '--filter=./**/apps/*', '--filter=./web'])
 
 
 class ProjectDirsTest(unittest.TestCase):

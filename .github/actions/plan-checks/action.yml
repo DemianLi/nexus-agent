@@ -48,7 +48,7 @@ runs:
         fi
         echo "PR 來源為 develop，通過。"
 
-    # 規則與可用 type 見 AGENTS.md，實作見 .github/scripts/check_pr.py。
+    # 規則與可用 type 見 docs/contributing.md，實作見 .github/scripts/check_pr.py。
     # 標題、內文、base 從 API 讀當下的值：rerun 沿用觸發時的事件，改標題後由 pr-edited.yml 重跑這一輪，事件裡的還是舊標題。
     # 標題與內文是外部輸入，只經環境變數交給腳本，不經 shell 展開。
     - name: 檢查 PR 標題與內文
@@ -82,7 +82,7 @@ runs:
         BODY=$(jq -r '.body // ""' "$RUNNER_TEMP/pr.json") \
           python3 .github/scripts/check_dsh_cleanup.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"
 
-    # 升級指南的格式（#1537，規則見 AGENTS.md「發版」）。版本目錄要對到已存在的 tag，靠 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
+    # 升級指南的格式（#1537，規則見 docs/release.md〈升級指南〉）。版本目錄要對到已存在的 tag，靠 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
     - name: 檢查升級指南
       shell: bash
       run: python3 .github/scripts/check_upgrade_guides.py
@@ -107,6 +107,10 @@ runs:
     - name: 檢查 web 與 harness 的邊界
       shell: bash
       run: python3 .github/scripts/check_boundary.py
+
+    - name: 檢查協作用的檔與舊路徑開頭的檔
+      shell: bash
+      run: python3 .github/scripts/check_legacy_paths.py
 
     - name: 只降不升的計數
       shell: bash
