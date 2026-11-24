@@ -103,14 +103,13 @@ export interface TokenMeterSpan {
   readonly unknownSteps: number;
   /**
    * 供應商報的**未快取**輸入 token 加總，成功＋失敗，不含生摘要那一次（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，
-   * 照 dsh 四桶互不重疊）。**v1 這一格是含快取讀寫的完整 prompt**，版本升到 2；完整的 prompt 要加快取讀、快取寫。
+   * 四桶互不重疊）。**v1 這一格是含快取讀寫的完整 prompt**，版本升到 2；完整的 prompt 要加快取讀、快取寫。
    * 下面的 `failedInputTokens`、`summaryInputTokens` 與依模型的列同口徑。
    */
   readonly inputTokens: number;
   readonly outputTokens: number;
   /**
-   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
-   * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊。
+   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，四桶互不重疊。
    *
    * `uncachedInputTokens`：**永遠等於 {@link inputTokens}**，server 每次都送。留著它是因為 web 靠「有沒有這一格」分辨
    * 新舊 server（舊 server 的 `inputTokens` 含快取）；同總帳的 `uncachedInputTokens`。
@@ -201,12 +200,12 @@ export interface TokenMeterTurn extends TokenMeterSpan {
    * 這一輪的 token 數字證不證得出是準的（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201，Q1 (a)）。
    * `true` 是準數；`false` 是下限——**數字照舊交**，只是別當成總數。**缺席＝這一輪還沒收尾**（沒有 `turn/end`），還沒定案。
    *
-   * 條件照 dsh `deriveTurnTokenUsage`（`packages/llm/token-meter/src/turn-usage.ts:178-274`，`1517a4db`）：這一輪收尾了、
-   * 至少有一次嘗試（零次是 `false`，dsh `aggregateAttempts:127`）、每一次嘗試都報了有效用量（{@link TokenMeterSpan.unknownSteps} 是 0）、收尾時沒有開著的呼叫、加總沒有超過安全整數。
-   * **快取桶缺席不讓它變 `false`**（dsh `:133-138` 缺桶只讓那一格省略）：看 {@link TokenMeterSpan.cacheReadTokens} 在不在。
+   * 條件：這一輪收尾了、至少有一次嘗試（零次是 `false`）、每一次嘗試都報了有效用量（{@link TokenMeterSpan.unknownSteps} 是 0）、
+   * 收尾時沒有開著的呼叫、加總沒有超過安全整數。
+   * **快取桶缺席不讓它變 `false`**：看 {@link TokenMeterSpan.cacheReadTokens} 在不在。
    *
-   * **偏離 dsh（理由 2：產品需求超出 dsh）**：dsh 證不出的那一輪整輪不交數字；管理者估成本要下限，空白沒有用，所以我們數字照舊交。
-   * 會話總計（`session`）跟 dsh 的 `usage-projection.ts` 一樣是部分和，那一半不是偏離。
+   * 證不出的那一輪數字照舊交，旗標說它是下限：管理者估成本要下限，空白沒有用。
+   * 會話總計（`session`）的 token 在 {@link TokenMeterSpan.unknownSteps} 不是 0 時同樣是下限。
    */
   readonly tokensProven?: boolean;
   /** 最後一顆 `turn/end`／`turn/failed` 的時刻。 */
