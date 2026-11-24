@@ -77,6 +77,12 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         'harness 供應網頁 dist：`require.resolve(\'@nexus/web/package.json\')` 找 dist 目錄。留給 E 卡。',
     ),
     Exemption(
+        'harness/apps/harness/src/typecheck-projects.test.ts',
+        'harness-path',
+        'typecheck 專案清單的測試把 `web` 放進要走過的目錄，讀每個 workspace 的 `package.json`（含 `web` 的相依清單），'
+        '核對 project references、並排除 web（web 單獨 `tsc --noEmit`）；讀的是 manifest，不讀 web 原始碼。',
+    ),
+    Exemption(
         'harness/apps/harness/src/third-party-notices.test.ts',
         'harness-path',
         '第三方授權彙整（卡上例外 2）：測試對真的 repo 呼叫 `render()`，`harness/scripts/gen-third-party-notices.ts` 會讀 `web` 並 build web；'
@@ -328,15 +334,21 @@ def web_findings(file: str, text: str) -> list[tuple[int, str, str]]:
     return found
 
 
-PATH_CALL = re.compile(r'(^|[^\w$])(join|resolve|joinPath)\s*$')
+PATH_CALL = re.compile(r'(?:^|[^\w$.])(?:(?:path|posix|nodePath)\.)?(join|resolve|joinPath)\s*$')
+PUSH_CALL = re.compile(r'\.push\s*$')
 
 
 def is_call_argument(text: str, lit: Literal) -> bool:
-    """字面值是 `join`／`resolve` 的引數（`join(root, 'web')`、`resolve('web')`、`'web' as const`、`...['web']`）。"""
+    """字面值是路徑呼叫的引數：`join(root, 'web')`、`resolve('web')`、`'web' as const`、`...['web']`、`dirs.push('web')`。
+
+    非首個引數認 `join`／`resolve`／`joinPath`（裸的或 `path.` 開頭；`arr.join(', ', 'web')`、`Promise.resolve` 不算）；
+    唯一的引數只認 `resolve` 與 `push`（`arr.join('web')` 是串字串，不是路徑）。
+    """
     before = text[: lit.start].rstrip()
     after = re.sub(r'^as\s+const\b', '', text[lit.end :].lstrip()).lstrip()
     if not before.endswith((',', '(', '[')) or after[:1] not in (',', ')', ']'):
         return False
+    only = before.endswith('(')
     depth = 0
     for index in range(len(before) - 1, -1, -1):
         char = before[index]
@@ -346,7 +358,13 @@ def is_call_argument(text: str, lit: Literal) -> bool:
             if depth == 0:
                 if char == '[' and before[:index].rstrip().endswith('...'):
                     continue
-                return char == '(' and PATH_CALL.search(before[:index]) is not None
+                if char != '(':
+                    return False
+                callee = before[:index]
+                if PUSH_CALL.search(callee):
+                    return True
+                match = PATH_CALL.search(callee)
+                return match is not None and (not only or match.group(1) == 'resolve')
             depth -= 1
     return False
 

@@ -149,6 +149,8 @@ class HarnessTest(unittest.TestCase):
             "const p = resolve('web');",
             "const p = join(root, 'web' as const);",
             "const p = join(root, ...['web']);",
+            "const p = path.resolve('web');",
+            "dirs.push('web');",
         ):
             with self.subTest(line=line):
                 self.assertEqual(len(run({'harness/scripts/a.ts': line + '\n'})), 1)
@@ -158,6 +160,10 @@ class HarnessTest(unittest.TestCase):
             "const kind = 'web';",
             "const o = { type: 'web' };",
             "const k = pick(items, 'web');",
+            "const p = Promise.resolve('web');",
+            "const s = arr.join('web');",
+            "const s = x.join(', ', 'web');",
+            "const s = path.join('web');",
         ):
             with self.subTest(line=line):
                 self.assertEqual(run({'harness/scripts/a.ts': line + '\n'}), [])
