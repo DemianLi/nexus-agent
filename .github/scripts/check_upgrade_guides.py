@@ -19,8 +19,9 @@
 - 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job：純文件 PR 會跳過 `static`，只有 `plan` 每張都跑。`plan` 不裝相依，
   所以 YAML 與 Markdown 都沒有真的解析器，下面兩處是近似，各自往哪一邊偏寫在這裡：
   - frontmatter 只收單行的 `鍵: 值`。不加引號、YAML 不會讀成這一整行字串的值（流式集合、錨點、標籤、區塊純量、
-    值裡的「: 」與「 #」等）一律要求加引號：會多報一些真正的 YAML 解析器放行的寫法（例如 `說明 #註解`，YAML 讀成「說明」，仍是非空字串），
-    不會放過真正的 YAML 解析器擋的。
+    值裡的「: 」與「 #」等）一律要求加引號：會多報一些 YAML 解析器放行的寫法（例如 `說明 #註解`，YAML 讀成「說明」，仍是非空字串）。
+    非字串只認 `NON_STRING` 列的 null、布林與十進位數字：`0x10`、`+1`、`.inf`、`yes` 這類 PyYAML 預設會讀成非字串的值，
+    這裡照字串放行；`1e5` 相反，PyYAML 讀成字串，這裡當成數字報。
   - 頂層標題自己掃：跳過 fenced code、引言、HTML 註解、清單項目裡的標題；縮排程式碼、HTML 區塊這類少見形狀沒有照
     CommonMark 細分。
 """
@@ -41,7 +42,7 @@ GUIDE_PATH = re.compile(rf'^v{SEMVER}/[a-z0-9]+(?:-[a-z0-9]+)*/guide\.md$')
 
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
 FIELD = re.compile(r'^([A-Za-z_][\w-]*):(?:[ \t]+(.*?))?[ \t]*$')
-# 不加引號時 YAML 會讀成非字串的值：null、`~`、布林、十進位數字（含空值）。
+# 不加引號時 YAML 會讀成非字串的值：null（含 `~` 與空值）、布林、十進位數字。
 NON_STRING = re.compile(r'^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?)?$')
 # 不加引號時 YAML 不會讀成「整行就是這個字串」的：流式集合、錨點與別名、標籤、區塊純量、保留字元開頭，
 # 以及中間的「: 」（變成巢狀映射或語法錯）與「 #」（後面變成註解）。
