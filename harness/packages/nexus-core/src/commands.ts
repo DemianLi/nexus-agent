@@ -51,9 +51,6 @@ export interface CommandInputDescriptor {
  *
  * `success` 的 `text` 可以省略——有些命令做完就沒話說。`error` 的 `text` 是必填的：
  * 報錯而不說為什麼，等於沒報。
- *
- * 結果只帶 `text`，不指向日誌裡的事件：handler 自己把完整狀態渲染成 `text`，客戶端不必
- * 回頭讀日誌。
  */
 export type CommandResult =
   | { readonly kind: 'success'; readonly text?: string }
