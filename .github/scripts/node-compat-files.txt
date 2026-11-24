@@ -1,5 +1,4 @@
 # Node 相容冒煙清單（#1546）：ci.yml 的 node-compat job 在矩陣的每一格（22.19、26）逐檔跑這裡列的測試。
-# 照 dsh `scripts/run-gates.ts:444-460`：逐檔列、不是全套，`--no-file-parallelism --maxWorkers=1`。
 #
 # 只收「行為隨 Node 版本而變」的地方，每一行旁邊寫它測哪一處。路徑從 repo 根算、不用 glob；
 # node_compat.py 會核對每一檔都存在、都真的跑了、每一檔至少一條測試。新增碰到這幾類的測試時加進來。
