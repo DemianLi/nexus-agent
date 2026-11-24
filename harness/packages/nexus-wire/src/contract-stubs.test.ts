@@ -406,7 +406,7 @@ const RECEIPT = JSON.stringify({
   result: { receiptId: 'r1', name: 'a.txt', bytes: 3 },
 });
 
-describe('uploadFile 的進度與取消（#732，簽名照 dsh file-upload）', () => {
+describe('uploadFile 的進度與取消（#732）', () => {
   it('沒有 XHR（注入了 fetch）：送完報一次，loaded === total', async () => {
     const { client } = recording(() => Response.json(JSON.parse(RECEIPT) as object));
     const seen: UploadProgress[] = [];

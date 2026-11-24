@@ -151,7 +151,7 @@ describe('SSE 解碼：信封驗證', () => {
       { ...good(), params: { namespace: ['a', 1], data: {} } },
       'params.namespace',
     ],
-    ['缺 data（照 dsh：data 要存在）', { ...good(), params: { namespace: [] } }, 'params.data'],
+    ['缺 data（data 要存在）', { ...good(), params: { namespace: [] } }, 'params.data'],
     ['type 不是 event', { ...good(), type: 'success' }, 'type'],
     ['method 不是字串', { ...good(), method: 1 }, 'method'],
     ['event_id 不是字串', { ...good(), event_id: 7 }, 'event_id'],
@@ -161,7 +161,7 @@ describe('SSE 解碼：信封驗證', () => {
     expect((error as WireProtocolError).field).toBe(field);
   });
 
-  it('seq 是 -0：拋（JSON 的 -0 解出來是 -0，dsh 同樣拒）', async () => {
+  it('seq 是 -0：拋（JSON 的 -0 解出來是 -0，一樣拒）', async () => {
     const error = await failure(
       `data: ${JSON.stringify(good()).replace('"seq":1', '"seq":-0')}\n\n`,
     );

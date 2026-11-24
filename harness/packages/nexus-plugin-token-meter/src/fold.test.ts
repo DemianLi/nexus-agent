@@ -534,7 +534,7 @@ describe('窗口與上限：總數不因摺掉而變小', () => {
     expect(view.linksOmitted).toBe(4);
   });
 
-  it('分叉繼承來的目錄不收（#1579）：在 inherited 標記清掉之前的，同 dsh catalog.ts:124-126', () => {
+  it('分叉繼承來的目錄不收（#1579）：在 inherited 標記清掉之前的', () => {
     const view = fold(
       log(
         [0, 'subagent/catalog', { childId: 'T/x', callId: 'c1', mode: 'one-shot' }],
@@ -889,7 +889,7 @@ describe('投影通道', () => {
   });
 });
 
-describe('tokensProven：這一輪的數字證不證得出是準的（#1571 N1201，Q1 (a)，條件照 dsh turn-usage.ts）', () => {
+describe('tokensProven：這一輪的數字證不證得出是準的（#1571 N1201，Q1 (a)）', () => {
   /** 一輪、一次呼叫，用量 10／2。 */
   const cleanTurn = (extra: { usageData?: unknown } = {}): Draft[] => [
     [0, 'turn/start', { kind: 'message' }],
@@ -905,7 +905,7 @@ describe('tokensProven：這一輪的數字證不證得出是準的（#1571 N120
     expect(turn.unknownSteps).toBe(0);
   });
 
-  it('快取少一桶（只報讀、沒報寫）：仍是 true，而且那一格缺席（dsh turn-usage.ts:133-138 缺桶只省略）', () => {
+  it('快取少一桶（只報讀、沒報寫）：仍是 true，而且那一格缺席（缺桶只省略）', () => {
     const turn = fold(
       log(...cleanTurn({ usageData: { ...usage(10, 2), totalTokens: 15, cacheReadTokens: 3 } })),
     ).turns[0]!;
@@ -987,7 +987,7 @@ describe('tokensProven：這一輪的數字證不證得出是準的（#1571 N120
     expect(failed.tokensProven).toBe(true);
   });
 
-  it('加總超過安全整數：false（dsh safeSum，turn-usage.ts:63-70）', () => {
+  it('加總超過安全整數：false', () => {
     const big = Number.MAX_SAFE_INTEGER - 1;
     const turn = fold(
       log(
@@ -1006,7 +1006,7 @@ describe('tokensProven：這一輪的數字證不證得出是準的（#1571 N120
     expect(turn.tokensProven).toBe(false);
   });
 
-  it('收尾了、但一次呼叫都沒有的輪：false，數字全是 0（dsh aggregateAttempts:127 零次嘗試回 undefined＝證不出）', () => {
+  it('收尾了、但一次呼叫都沒有的輪：false，數字全是 0（零次嘗試回 undefined＝證不出）', () => {
     const turn = fold(log([0, 'turn/start', { kind: 'message' }], [1, 'turn/end', {}])).turns[0]!;
     expect(turn.steps).toBe(0);
     expect(turn.end).toBe('completed');

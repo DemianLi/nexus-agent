@@ -180,7 +180,7 @@ describe('每一輪收尾時的最後一則 root 回覆', () => {
     expect(tailIds(withdrawn)).toEqual(['a']);
   });
 
-  it('正文只有空白的那則不是收尾，收尾落在前面最近一則有字的（#572，同 dsh 的 hasText）', () => {
+  it('正文只有空白的那則不是收尾，收尾落在前面最近一則有字的（#572）', () => {
     const state = walk([
       human('跑。'),
       ...events([running(), ...reply('a', '收工。'), ...reply('b', '\n\n'), completed()]),
@@ -192,7 +192,7 @@ describe('每一輪收尾時的最後一則 root 回覆', () => {
     expect(tailIds(state)).toEqual(['a']);
   });
 
-  it('只有推理的那則不是收尾：推理不算有文字（#572，同 dsh 的 hasText）', () => {
+  it('只有推理的那則不是收尾：推理不算有文字（#572）', () => {
     const state = walk([
       human('跑。'),
       ...events([

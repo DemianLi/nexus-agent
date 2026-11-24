@@ -46,7 +46,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
   });
 });
 
-describe('手勢：逐字照 dsh 的 SKILL_GESTURE', () => {
+describe('手勢：SKILL_GESTURE 認哪些寫法', () => {
   const names = (text: string) => [...text.matchAll(SKILL_GESTURE)].map((match) => match[2]);
 
   it('行首、行尾、前後空白才算；名字是小寫英數以 - 連接', () => {
