@@ -9,7 +9,7 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、介面、契約版本、`SECTION_ORDERS`、嚴格插值與前後段的組法 | 只有 `@nexus/sdk`，**不 import `@nexus/core`**，也不碰訊息型別 |
- * | 提供者 | `@nexus/plugin-system-prompt` 那一列：`apply` 裡 `new` 一個 `ContractService`（同 #1456 的 `feedback`） | 這個套件、`@nexus/sdk` |
+ * | 提供者 | `@nexus/plugin-system-prompt` 那一列：`apply` 裡 `new` 一個 `ContractService`（同 #1456 的 `feedback`） | 這個套件、`@nexus/sdk`、`@nexus/cordis`、`zod` |
  * | 消費者 | 宿主（`harness/apps/harness`）：組 thread 時取一次快照，之後每次模型呼叫只代入變數、渲染成請求；以及日後要加段的插件 | 這個套件 |
  *
  * ## 快照是資料（決議 §3-2 第 6 條）
