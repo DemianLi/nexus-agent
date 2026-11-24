@@ -10,8 +10,8 @@
  * 前兩條：`command/run` 的 `commandId` 在同一份
  * 日誌裡不得重複、`command/done` 必須配得到前面某一筆 `command/run`。
  *
- * **第三條：序列性。** 一個 `CommandExecutor` 一個 REPL、`execute` 回來之前不會有
- * 第二次，所以「上一個還沒落定就來了下一個」是一個**真的**關係——形狀跟 `@nexus/core` 那條 `turn/start` 撞上還開著的輪一模一樣。
+ * **第三條：序列性。** 宿主保證一個執行器一次只跑一個斜線命令（`apps/harness` 的
+ * `wire-handler.ts` 用 `slashInFlight` 擋住 `execute` 回來之前的第二次），所以「上一個還沒落定就來了下一個」是一個**真的**關係——形狀跟 `@nexus/core` 那條 `turn/start` 撞上還開著的輪一模一樣。
  *
  * 它同時補上了一個盲點：**只檢「done 配得到 run」的話，漏掉一次
  * `command/done` 是查不出來的**（那是懸空的 run，不是懸空的 done）。序列性讓下一次
