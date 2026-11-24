@@ -325,7 +325,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
       sessionLog.append('command/run', {
         commandId,
         name: parsed.name,
-        // 命令自己的 domain 事件帶著這段輸入時不再記一次（`session-log.ts` 的 `command/run`）。
+        // 命令自己的 domain 事件帶著這段輸入時不再記一次（本檔 `SessionEventMap` 裡 `command/run` 的宣告）。
         ...(definition.recordInput === false ? {} : { args: parsed.rawInput }),
         source: { kind: 'user' },
       });
@@ -430,7 +430,7 @@ declare module '@nexus/core' {
      * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
      *
      * 與 `command/done` 靠 `commandId` 配對，形狀同 `tool/call`↔`tool/result`
-     * （那一對在下面，模型的工具呼叫記在那裡）。
+     * （那一對宣告在 `@nexus/core` 的 `session-log.ts`，模型的工具呼叫記在那裡）。
      * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
      * 所以讀日誌的人不必再解析一次。
      *
