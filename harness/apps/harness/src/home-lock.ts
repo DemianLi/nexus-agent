@@ -18,7 +18,7 @@
  * **鎖檔是空的，不寫 PID**（Q2 (a)，同 dsh 的鎖檔不帶內容）：PID 只是拿到鎖那一刻的事實，`lsof <鎖檔>` 查的是
  * kernel 現在的答案，不會被 PID 回收誤導。也因此開檔方式能和會話租約共用（`'w'` 會把內容截掉）。
  *
- * ## 偏離（照 docs/contributing.md「技術實現標準」登記）
+ * ## 偏離（照 docs/plugin-contract.md〈偏離〉登記）
  *
  * - **偏離 1（基座表達不出來）**：dsh 的行程級獨佔是 Desktop 的 Electron `requestSingleInstanceLock()`
  *   （`apps/desktop/src/single-instance.ts:16-26`，在碰 profile 之前拿、握一整個行程、拿不到就 `quit()`；

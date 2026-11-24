@@ -1,7 +1,7 @@
 /**
  * 載入：把一份 plugin 清單跑進一個 registry。
  *
- * **與 dsh 的偏離**（docs/contributing.md 的偏離規則）：dsh 的撤銷靠 Cordis 的
+ * **與 dsh 的偏離**（docs/plugin-contract.md〈偏離〉 的偏離規則）：dsh 的撤銷靠 Cordis 的
  * `ctx.effect`——每次註冊的 undo 掛在註冊者的 context 上，context 一收掉就整批
  * 回收。deepagents / LangChain JS / LangGraph JS 沒有 context 樹這種東西，表達
  * 不出來，所以退到最接近的實作：**registry 內、以註冊者為單位的 undo 堆疊，出錯時逆序排掉**。

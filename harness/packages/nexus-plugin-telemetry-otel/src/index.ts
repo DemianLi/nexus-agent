@@ -16,7 +16,7 @@
  * `@nexus/plugin-quickjs` 與 `@nexus/plugin-mcp` 的先例：**重的相依歸 plugin 自己，
  * `@nexus/core` 保持輕**。
  *
- * ## 偏離（docs/contributing.md 的偏離規則；原本四條，第三條已撤，編號不重排）
+ * ## 偏離（docs/plugin-contract.md〈偏離〉 的偏離規則；原本四條，第三條已撤，編號不重排）
  *
  * **一、預設是 `disabled`。**
  * （[#279](https://github.com/DemianLi/nexus-agent/issues/279) 拍板）往少送那一邊偏，同偏離二；

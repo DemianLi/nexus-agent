@@ -12,7 +12,7 @@
  * - **只放過 `read`**（我們叫 `read_file`；`:135`）：讀出來的東西再外溢，模型永遠讀不完。
  * - 排在外層：**日誌與畫面看到的是換過的那一則**（dsh `tool-calls.ts:152-156`），見 {@link ./containment.ts}。
  *
- * ## 偏離（依 docs/contributing.md 登記：哪一條、為什麼、退到什麼）
+ * ## 偏離（依 docs/plugin-contract.md〈偏離〉 登記：哪一條、為什麼、退到什麼）
  *
  * 1. **只處理純文字結果。** dsh 的預算圖文共用，圖片整張保留或整張略過（`retention.ts`）。這一版只做文字：內容裡有任何
  *    非文字區塊就原樣交出。工具結果裡沒有圖片的生產者：[#731 的判定](https://github.com/DemianLi/nexus-agent/issues/731#issuecomment-6059782432)

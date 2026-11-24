@@ -36,7 +36,7 @@
  * 讀數排在 AGENTS.md 基線與 `/名字` 叫用的技能說明之後，是最後一則——同 dsh 以 `{ prepend: true }` 登記、當 waterfall 的最外層
  * （`src/index.ts:225`，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) 核過）。逐欄的差與頻率量在 `harness/apps/harness/src/interception-index.test.ts` 第 2 列。
  *
- * ## 偏離登記（docs/contributing.md 的偏離規則；dsh 以 `687f282e` 為準）
+ * ## 偏離登記（docs/plugin-contract.md〈偏離〉 的偏離規則；dsh 以 `687f282e` 為準）
  *
  * 五條都是理由 (1)「基座表達不出來」。前三條是 pre-step 接縫（`@nexus/agent-loop`）已登記的偏離，這顆插件繼承下來；第四條同 goal 的前例；
  * 第五條是出貨層的限制。

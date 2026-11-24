@@ -70,7 +70,7 @@ export interface SessionTelemetryRecord {
  * 是協調器自己的深拷貝，就地改動不會污染正典日誌——但下一條規則拿到的是你**回傳**的
  * 那個，就地改會讓「誰改了什麼」無從追。
  *
- * **與 dsh 的偏離**（docs/contributing.md 的偏離規則）：dsh 用 Cordis 的 waterfall 事件
+ * **與 dsh 的偏離**（docs/plugin-contract.md〈偏離〉 的偏離規則）：dsh 用 Cordis 的 waterfall 事件
  * `session-telemetry/record`，listener 簽章是 `(record, next) => record`，**不呼叫
  * `next()` 就能截斷底下所有規則**。`NexusPlugin.apply(registry)` 沒有事件匯流排，
  * deepagents / LangChain JS / LangGraph JS 也都沒有可掛任意具名事件的 waterfall

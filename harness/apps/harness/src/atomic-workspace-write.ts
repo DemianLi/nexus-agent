@@ -16,7 +16,7 @@
  *   所以實際上是行程層級；這裡每條 thread 一個 backend 實例，多人共用的 serve 好幾條 thread 會指向同一個工作區，
  *   所以鎖放在模組層才跟它等價。**
  *
- * ## 偏離 dsh（docs/contributing.md「技術實現標準」，#1531 卡上登記）
+ * ## 偏離 dsh（docs/plugin-contract.md〈偏離〉，#1531 卡上登記）
  *
  * 1. **理由 1（基座表達不出來）：`write_file` 不走 `createIfAbsent` 的 hard link 發佈。** 那個意圖要從「先讀後改」的政策傳到寫入這一層，
  *    基座的 `write(filePath, content)` 沒有參數可以帶它（`harness/packages/nexus-core/src/observation.ts` 的偏離一已登記同一個

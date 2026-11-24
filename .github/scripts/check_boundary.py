@@ -59,7 +59,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     Exemption(
         'harness/scripts/gen-tsconfig-paths.ts',
         'harness-path',
-        '產生 tsconfig paths 要讀 `apps/web/tsconfig.json`（`:52`）；留給拆倉那張卡。',
+        '產生 tsconfig paths 要讀 `web/tsconfig.json`（`:52`）；留給拆倉那張卡。',
     ),
     Exemption(
         'harness/apps/harness/package.json',
@@ -332,10 +332,10 @@ PATH_CALL = re.compile(r'(^|[^\w$])(join|resolve|joinPath)\s*$')
 
 
 def is_call_argument(text: str, lit: Literal) -> bool:
-    """字面值是 `join`／`resolve` 的非首個引數（`join(root, 'web')` 的 `'web'`）：前面是逗號、後面是逗號或右括號。"""
+    """字面值是 `join`／`resolve` 的引數（`join(root, 'web')`、`resolve('web')`、`'web' as const`、`...['web']`）。"""
     before = text[: lit.start].rstrip()
-    after = text[lit.end :].lstrip()
-    if not before.endswith(',') or after[:1] not in (',', ')'):
+    after = re.sub(r'^as\s+const\b', '', text[lit.end :].lstrip()).lstrip()
+    if not before.endswith((',', '(', '[')) or after[:1] not in (',', ')', ']'):
         return False
     depth = 0
     for index in range(len(before) - 1, -1, -1):
@@ -344,6 +344,8 @@ def is_call_argument(text: str, lit: Literal) -> bool:
             depth += 1
         elif char in '([{':
             if depth == 0:
+                if char == '[' and before[:index].rstrip().endswith('...'):
+                    continue
                 return char == '(' and PATH_CALL.search(before[:index]) is not None
             depth -= 1
     return False
@@ -356,6 +358,10 @@ def harness_findings(file: str, text: str) -> list[tuple[int, str, str]]:
         joined = '/'.join(segments)
         if WEB_RUN.search(joined) and (joined != 'web' or is_call_argument(text, first)):
             found.append((first.line, 'harness-path', f'harness 不准掃或讀 web：`{joined}`。'))
+    for lit in literals:
+        if lit.template and lit.value == 'web' and text.startswith('`web`', lit.start):
+            if is_call_argument(text, Literal(lit.line, 'web', lit.start, lit.start + 5)):
+                found.append((lit.line, 'harness-path', 'harness 不准掃或讀 web：`web`。'))
     for line, value, target, as_path in relative_paths(file, text, literals):
         if target is not None and under(target, WEB):
             found.append((line, 'harness-path', f'harness 不准掃或讀 web：`{value}` 指到 `{target}`。'))

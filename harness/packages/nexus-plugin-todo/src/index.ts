@@ -18,7 +18,7 @@
  * ## 為什麼是會話事件，不是 middleware 的 `stateSchema`
  *
  * langchain 1.x 的主進入點匯得出 `todoListMiddleware`，掛上去一行就有一顆 `write_todos`
- * ——狀態活在 graph state。**那條路我們不走，而且它按 docs/contributing.md 標註不了偏離**：偏離條款
+ * ——狀態活在 graph state。**那條路我們不走，而且它按 docs/plugin-contract.md〈偏離〉 標註不了偏離**：偏離條款
  * 要求「現有基礎建設表達不出來」，但事件路我們表達得出來（`@nexus/plugin-goal` 就走這條）。
  *
  * 真正的判準是**誰看得見**。走 graph state 的狀態不進日誌，所以不變量配套入口看不到、

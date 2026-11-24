@@ -71,7 +71,7 @@
  * #588 驗收用同一套量法重跑 20 組情境（含預算觸發摘要、截參數寫檔），這個檔的算法：第 2 次以後最大 nemotron
  * 5.1%、`gpt-oss-20b` 0.6%；借錨的第一次 1.8%／0.0%；例外那一次 −25.2%／+22.2%。
  *
- * ## 與 dsh 的偏離（docs/contributing.md 的規則）
+ * ## 與 dsh 的偏離（docs/plugin-contract.md〈偏離〉 的規則）
  *
  * **錨照 dsh**：`packages/llm/token-meter/src/index.ts` 的 `measure()`（`46a7f68`）也是「上一次成功呼叫的供應商
  * 用量當錨、加估算的增量」。偏的是兩格，理由都是 demian 的要求（每一次 ≤10%）dsh 那套做不到——它的形狀在同一批

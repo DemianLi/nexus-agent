@@ -17,7 +17,7 @@
  * nexus 的 vendor 在 #1403 搬進了 `@nexus` scope，版號仍是上游的（`@nexus/cordis` 4.0.0-rc.12 之類），所以用名單把它們排出去；
  * 名單由 `plugin-compatibility.test.ts` 對照 `harness/vendor/` 底下每一份 `package.json` 的 `name` 釘住，多一個少一個都會紅。劃出來的是同一個家族。
  *
- * **與 dsh 的偏離（docs/contributing.md 的偏離規則）：**
+ * **與 dsh 的偏離（docs/plugin-contract.md〈偏離〉 的偏離規則）：**
  *
  * - dsh 在 `plugin-manager` 於 pnpm 安裝之前判（`pnpm view` 或讀 path spec 的 manifest）；我們沒有安裝流程，判在載入器
  *   （{@link ./plugin-config.ts | resolveEntryModule}）import 之前。表達得出來，只是時機晚到「讀設定」，而不是「安裝」。

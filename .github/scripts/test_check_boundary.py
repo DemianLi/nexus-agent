@@ -145,6 +145,10 @@ class HarnessTest(unittest.TestCase):
             "walk(resolve(ROOT, 'web'));",
             "const p = join(\n  root,\n  'web',\n);",
             "const p = join(root, 'web', ...rest);",
+            "const p = join(root, `web`);",
+            "const p = resolve('web');",
+            "const p = join(root, 'web' as const);",
+            "const p = join(root, ...['web']);",
         ):
             with self.subTest(line=line):
                 self.assertEqual(len(run({'harness/scripts/a.ts': line + '\n'})), 1)
