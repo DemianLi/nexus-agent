@@ -328,6 +328,15 @@ class BaselineAtTest(RepoTest):
             with self.assertRaises(BaselineError):
                 read_baseline(root)
 
+    def test_symlinked_baseline_folder_in_the_working_tree_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            write(root, {'elsewhere/apps__web.json': entry(0)})
+            (root / '.github').mkdir()
+            (root / BASELINE_DIR).symlink_to('../elsewhere')
+            with self.assertRaises(BaselineError):
+                read_baseline(root)
+
     def test_broken_baseline_is_an_error(self) -> None:
         commit(self.root, {SCRIPT: ''})
         for files in ({baseline_path('apps/web'): '{'}, {LEGACY_BASELINE: '{'}):
@@ -453,13 +462,33 @@ class MainEntryTest(RepoTest):
             self.assertIn('--base 是空字串', result.stdout)
 
     def test_broken_baseline_at_base_fails(self) -> None:
-        for files in ({baseline_path('apps/web'): '{'}, {LEGACY_BASELINE: '{'}, {LEGACY_BASELINE: '[]'}):
+        cases = (
+            ({baseline_path('apps/web'): '{'}, False),
+            ({LEGACY_BASELINE: '{'}, True),
+            ({LEGACY_BASELINE: '[]'}, True),
+            ({LEGACY_BASELINE: json.dumps({'dsh': [['apps/web', 5]], 'narrative': {}})}, True),
+            ({LEGACY_BASELINE: json.dumps({'dsh': {}, 'narrative': 3})}, True),
+        )
+        for files, old_script in cases:
             git(self.root, 'rm', '-rq', '--ignore-unmatch', '.github/ratchets', LEGACY_BASELINE)
-            base = self.land(files)
+            base = commit(self.root, {**self.script, **({SCRIPT: ''} if old_script else {}), **files})
             git(self.root, 'rm', '-rq', '--ignore-unmatch', '.github/ratchets', LEGACY_BASELINE)
             self.land({baseline_path('apps/web'): entry(0)})
             result = self.run_main('--base', base)
             self.assertEqual(result.returncode, 1, files)
+            self.assertIn('::error::', result.stdout, files)
+            self.assertNotIn('Traceback', result.stderr, files)
+
+    def test_symlinked_baseline_folder_in_the_working_tree_fails(self) -> None:
+        self.land({'elsewhere/apps__web.json': entry(0)})
+        git(self.root, 'rm', '-rq', '--ignore-unmatch', '.github/ratchets')
+        (self.root / BASELINE_DIR).symlink_to('../elsewhere')
+        git(self.root, 'add', '-A')
+        git(self.root, 'commit', '-q', '-m', 'link')
+        result = self.run_main()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('是連結', result.stdout)
+        self.assertNotIn('Traceback', result.stderr)
 
     def test_missing_baseline_object_at_base_fails(self) -> None:
         base = self.land({baseline_path('apps/web'): entry(0)})
