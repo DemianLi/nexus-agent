@@ -1,0 +1,42 @@
+name: 排隊合併
+
+on:
+  pull_request_target:
+    branches: [develop]
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 只處理這一張 PR（空白：處理所有掛著 queue、base 是 develop 的 PR，號碼小的先）
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    name: 排隊合併
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'queue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: queue-merge
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: develop
+          persist-credentials: false
+
+      - name: 處理排隊的 PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ONLY_PR: ${{ github.event.inputs.pr }}
+        run: python3 .github/scripts/queue_merge.py ${ONLY_PR:+"$ONLY_PR"}
