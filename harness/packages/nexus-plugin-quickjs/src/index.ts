@@ -399,11 +399,11 @@ function fail(detail: unknown, run: Run): never {
 }
 
 /**
- * 完成值的最後一關：在 VM 裡**邊驗邊組出 JSON 文字，只讀一次**，host 只拿那份文字去 `JSON.parse` 再渲染。
+ * 完成值的最後一關：在 VM 裡**邊驗邊組出 JSON 文字，每個出現的位置各讀一次**，host 只拿那份文字去 `JSON.parse` 再渲染。
  *
  * **為什麼不是「先檢查、再 dump 原本的 handle」。** 那樣檢查與輸出各讀一次活的值：`Object.prototype.toJSON`、`Array.prototype.toJSON`、
- * 說謊的 `Proxy` 都能讓兩次讀到的不一樣，錯的值就被當成功回去（#1842 審查實測）。現在輸出就是檢查時讀到的那一份，
- * 原本的 handle 不再 dump。
+ * 說謊的 `Proxy` 都能讓兩次讀到的不一樣，錯的值就被當成功回去（#1842 審查實測）。所以輸出就是檢查時讀到的那一份，
+ * 原本的 handle 不 dump。
  *
  * **檢查一定在 VM 裡做。** `QuickJSContext#dump` 對物件是在 VM 裡先 `JSON.stringify` 才交出來（`quickjs-emscripten-core@0.32.0`
  * 實測），host 拿到的時候 `NaN` 已經是 `null`、`Map` 已經是 `{}`、`undefined` 欄位已經不見——在 host 端檢查看不到。
