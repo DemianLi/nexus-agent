@@ -201,11 +201,10 @@ export interface TokenMeterTurn extends TokenMeterSpan {
    * `true` 是準數；`false` 是下限——**數字照舊交**，只是別當成總數。**缺席＝這一輪還沒收尾**（沒有 `turn/end`），還沒定案。
    *
    * 條件：這一輪收尾了、至少有一次嘗試（零次是 `false`）、每一次嘗試都報了有效用量（{@link TokenMeterSpan.unknownSteps} 是 0）、
-   * 收尾時沒有開著的呼叫、加總沒有超過安全整數。
+   * 收尾時沒有開著的呼叫、呼叫的起訖與用量沒有不成對過、加總沒有超過安全整數。
    * **快取桶缺席不讓它變 `false`**：看 {@link TokenMeterSpan.cacheReadTokens} 在不在。
    *
-   * 證不出的那一輪數字照舊交，旗標說它是下限：管理者估成本要下限，空白沒有用。
-   * 會話總計（`session`）的 token 在 {@link TokenMeterSpan.unknownSteps} 不是 0 時同樣是下限。
+   * 證不出的那一輪數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps` 的說明就寫「token 是下限」）。
    */
   readonly tokensProven?: boolean;
   /** 最後一顆 `turn/end`／`turn/failed` 的時刻。 */
