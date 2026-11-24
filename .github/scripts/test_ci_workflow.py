@@ -1,4 +1,4 @@
-"""CI 形狀測試（#1546）：釘住 ci.yml 裡改錯了也不會紅的那幾處。照 dsh `scripts/ci-workflow.spec.ts:16-42`。
+"""CI 形狀測試（#1546）：釘住 ci.yml 裡改錯了也不會紅的那幾處。
 
 在 static 與輕的模式的 plan 裡跑（`python3 -m unittest discover -s .github/scripts`）。需要 PyYAML。
 

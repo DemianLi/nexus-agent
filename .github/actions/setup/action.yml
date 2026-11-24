@@ -4,7 +4,7 @@ description: 每個要跑 TypeScript 檢查的 job 共用的前置：Node、pnpm
 inputs:
   node-version:
     description: >-
-      Node 版本。預設是主版本 24，照 dsh `ci.yml:9` 的 `PRIMARY_NODE_VERSION: '24'`（#1546 Q1 (a)）。
+      Node 版本。預設是主版本 24（#1546 Q1 (a)）。
       相容矩陣與下限冒煙才傳別的版本。
     required: false
     default: '24'

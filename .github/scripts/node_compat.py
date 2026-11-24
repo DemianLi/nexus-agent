@@ -2,7 +2,7 @@
 
     node_compat.py smoke    逐檔跑 node-compat-files.txt 列的測試，核對每一檔都真的跑了
 
-清單、為什麼是這幾檔，見 node-compat-files.txt 檔頭。照 dsh `scripts/run-gates.ts:444-460`：逐檔、串行。
+清單、為什麼是這幾檔，見 node-compat-files.txt 檔頭。
 
 **不能交給 vitest 自己判斷「有沒有跑到」**：vitest 的位置參數是子字串過濾，不是路徑。清單裡寫錯一個檔名，
 其他檔照跑、以 0 結束，job 是綠的。所以這裡先核對每一檔都存在，跑完再讀 JSON 報告，核對「實際跑了的檔」
