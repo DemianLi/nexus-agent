@@ -16,7 +16,7 @@
  * 2. **`allowed-tools` frontmatter 零強制。** 基座解析它、把它印進 prompt，就這樣——
  *    全套件 7 個出現點沒有一個是強制點。**不能當權限用**，權限只有 `permissions`。
  * 3. **`module` frontmatter 只印一行 `await import("@/skills/<name>")`，沒有東西實作
- *    那個 import。** 那是懸空的 seam；同一件事在 `@nexus/plugin-quickjs` 已經記過一次。
+ *    那個 import。** 那是懸空的 seam。
  * 4. **目錄載到就凍住。** `loadedSkills` 是 middleware 工廠的閉包變數，一旦載到東西就
  *    永不重載，跨 thread 也一樣；agent 建好之後新增的 skill 看不見。**但空的不算**——
  *    載到空清單時每一輪 `beforeAgent` 都會重掃整個 backend。

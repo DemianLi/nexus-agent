@@ -136,8 +136,8 @@ describe('失敗種類由 host 判定', () => {
 });
 
 /**
- * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
- * 模型拿到錯的值，照著告訴使用者。
+ * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672）。`0/0`、`new Map()`、`{a: undefined}` 這類 JSON 表達不出來的值回 `invalid-output`，
+ * 不默默變成 `null`、`{}` 或少一格——否則模型拿到錯的值，照著告訴使用者。
  */
 describe('完成值必須是無損的 JSON', () => {
   const LOSSLESS = 'program completion must be lossless JSON';
@@ -234,7 +234,7 @@ describe('完成值必須是無損的 JSON', () => {
   });
 
   // 快照一邊驗一邊抄：輸出就是驗過的那一份，不再去讀活的值。
-  // 以前驗完再 dump 原本的 handle，原型上的 `toJSON` 與說謊的 Proxy 讓兩次讀到的不一樣，錯的值當成功回去（#1842 審查）。
+  // 驗完再 dump 原本的 handle 的話，原型上的 `toJSON` 與說謊的 Proxy 讓兩次讀到的不一樣，錯的值會當成功回去（#1842 審查）。
   describe('驗過的就是輸出的：活的值動不了手腳', () => {
     it('Object.prototype.toJSON 改不了輸出', async () => {
       expect(

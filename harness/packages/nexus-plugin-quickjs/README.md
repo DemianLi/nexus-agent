@@ -1,38 +1,28 @@
 # @nexus/plugin-quickjs
 
 在一個沒有外界的 [QuickJS](https://bellard.org/quickjs/) 直譯器（WASM）裡求值一段
-JavaScript，以 `run_javascript` 註冊到 `registry.tools`。
+JavaScript，以 `run_javascript` 登記進 `tools` 服務（`@nexus/tools` `^2.0.0`）。
 
 ## 用法
 
-```ts
-import { createQuickJsPlugin } from '@nexus/plugin-quickjs';
+不在出廠清單上，部署方在 patch 檔用 `insert` 加一列才會掛：
 
-export default [
-  createQuickJsPlugin({
-    timeoutMs: 1_000,
-    memoryLimitBytes: 16 * 1024 * 1024,
-    maxStackSizeBytes: 128 * 1024,
-  }),
-];
+```yaml
+- insert:
+    - id: quickjs
+      name: '@nexus/plugin-quickjs'
+      config:
+        timeoutMs: 1000
+        memoryLimitBytes: 16777216
+        maxStackSizeBytes: 131072
 ```
 
-三個都可以省略，預設值就是上面那組（`DEFAULT_TIMEOUT_MS`、
+`config` 的三個欄位都可以省略，預設值就是上面那組（`DEFAULT_TIMEOUT_MS`、
 `DEFAULT_MEMORY_LIMIT_BYTES`、`DEFAULT_MAX_STACK_SIZE_BYTES`），而且**預設值寫在
-`quickJsConfigSchema` 裡**，不寫在 `apply` 裡。
+`quickJsConfigSchema` 裡**，不寫在 `apply` 裡。設定在載入的時候由套件匯出的 `Config` 驗。
 
-`createQuickJsPlugin()` 只是薄薄一層，回的是一個**條目**
-（[#453](https://github.com/DemianLi/nexus-agent/issues/453)）。設定不在工廠裡驗，驗在
-載入的時候——那時候才有 id 可以指名。同一份設定也可以不經過工廠直接寫：
-
-```ts
-import { quickJsPlugin } from '@nexus/plugin-quickjs';
-
-export default [{ id: 'js', plugin: quickJsPlugin, config: { timeoutMs: 1_000 } }];
-```
-
-`apply` 是 async 的，唯一的理由是在**載入期**把 WASM 模組拉起來——載不起來就讓整份
-plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串。
+`apply` 是 async 的，唯一的理由是在**載入期**把 WASM 模組拉起來——載不起來就讓這一列掛不上，
+而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串。
 
 ## 邊界有多寬
 
@@ -79,16 +69,16 @@ interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「�
 promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變的狀態，算失敗（見下一段）。
 
 **程式失敗是工具失敗。** 程式拋例外、回傳的 promise 被 reject、逾時中斷、回傳一個永遠不會
-完成的 promise、**回傳值不是無損的 JSON**，工具都拋 `CodeRunFailedError`（`code: 'CODE_RUN_FAILED'`，照 dsh `run_code`
+完成的 promise、**回傳值不是無損的 JSON**，求值那一層都拋 `CodeRunFailedError`（`code: 'CODE_RUN_FAILED'`，照 dsh `run_code`
 的同名錯誤），訊息是 `code run failed (<kind>): <原因>`，`kind` 是 `exception`、`timeout` 或 `invalid-output`。
-接住它的是 `@nexus/core` 的圍堵：模型拿到 `status: 'error'` 的工具訊息、會話日誌記
+工具本體接住它，回 `ok: false` 與 `error: { name, code }`：模型拿到 `status: 'error'` 的工具訊息、會話日誌記
 `isError: true`，web 的工具卡是失敗狀態（[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。
 
 **回傳值只收無損的 JSON**（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)，照 dsh 的 `prepareCompletion`）。
 `NaN`、`Infinity`、`-0`、`Map`、函式、值為 `undefined` 的欄位、稀疏陣列、循環參照這些 JSON 表達不出來的東西，以前會默默變成
 `null`、`{}` 或少一格，模型照著講給使用者聽；現在拋 `invalid-output`。檢查**在 VM 裡**跑（純 JS、不 bridge 任何 host
 function），因為 `dump()` 交到 host 的時候值已經被 VM 的 `JSON.stringify` 改掉了。驗證與輸出是**同一趟**：快照一邊驗一邊把 JSON 文字組出來、
-每個值只讀一次，host 只拿那份文字去解析，不再回頭讀原本的值——所以 `Object.prototype.toJSON`、說謊的 `Proxy` 都改不了結果（dsh 的
+每個出現的位置各讀一次，host 只拿那份文字去解析，不再回頭讀原本的值——所以 `Object.prototype.toJSON`、說謊的 `Proxy` 都改不了結果（dsh 的
 `snapshotPtcJsonValue` 同樣是一趟）。走訪是迭代的，幾萬層的巢狀也回得來。非字串的結果用 dsh `renderJsonValue` 的格式：
 兩個空白縮排，總縮排超過 10 個字元的子樹改緊湊；字串原樣、沒有回傳值是「（沒有回傳值）」。
 

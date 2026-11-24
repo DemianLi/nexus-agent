@@ -46,8 +46,9 @@ pnpm workspace，Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，�
 | 交付宣告 | 模型指名這一輪交付了哪些檔 | `nexus-plugin-present` |
 | 評分與回饋 | `/feedback` | `nexus-plugin-feedback` |
 
-**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、記憶、OpenTelemetry 遙測。每個套件的
-`src/index.ts` 檔頭寫著它自己的完整規格與偏離標註。人打的斜線命令不經過模型，由進入點解析發派。
+**要自己疊一層 patch 才掛**：MCP、QuickJS 直譯器、記憶、OpenTelemetry 遙測。每個套件的
+`src/index.ts` 檔頭寫著它自己的完整規格；QuickJS 與 dsh 的偏離寫在它的
+[README](harness/packages/nexus-plugin-quickjs/README.md)。人打的斜線命令不經過模型，由進入點解析發派。
 
 ## 跑起來
 
