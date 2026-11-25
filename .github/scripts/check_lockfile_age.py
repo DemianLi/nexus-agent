@@ -8,7 +8,7 @@
 
 規則與 pnpm 對齊：
 - 門檻與例外讀 `pnpm-workspace.yaml` 的 `minimumReleaseAge`（分鐘）與 `minimumReleaseAgeExclude`；
-- 例外只收精確版本（`name@1.2.3`，或 dsh 用的 `name@1.2.3||1.2.4`）。只寫套件名的條目等於整個套件永遠免檢，
+- 例外只收精確版本（`name@1.2.3`，或 `name@1.2.3||1.2.4`）。只寫套件名的條目等於整個套件永遠免檢，
   這裡當成設定錯誤直接紅（政策寫在 `pnpm-workspace.yaml` 的註解）。
 
 **查不到就紅（fail-closed）**：網路錯、404、packument 沒有那個版本的 `time`，一律當成不合格，訊息寫明原因。
