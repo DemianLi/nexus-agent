@@ -165,7 +165,7 @@ describe('對照：寫得進去就照常摘要', () => {
   });
 });
 
-describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () => {
+describe('摘要記不進去：門檻觸發（pressure 路徑）', () => {
   it('warn 一條、照原請求送出：模型收到沒壓縮的、切點表沒有切點、歷史檔丟掉', async () => {
     const r = rig(TOKEN_TRIGGER, true);
     const out = await r.call(conversation());
@@ -217,7 +217,7 @@ describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () =>
   });
 });
 
-describe('摘要記不進去：端點真的回超窗（dsh 的 overflow 路徑）', () => {
+describe('摘要記不進去：端點真的回超窗（overflow 路徑）', () => {
   it('保留原本的請求錯誤（同一個物件）、warn 一條、不再送、摘要只試一次', async () => {
     // 門檻開很大：我們自己的預算不會合成超窗，是端點回的。
     const r = rig({ trigger: [{ type: 'tokens', value: 900_000 }] }, true);

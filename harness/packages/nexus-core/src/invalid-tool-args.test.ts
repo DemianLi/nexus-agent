@@ -157,7 +157,7 @@ describe('拒絕：照常派發，工具換成同名的樁', () => {
   /** ToolNode 執行時 `request.state` 的樣子：改寫過的那則 AI 訊息在尾巴。 */
   const badState = () => ({ messages: [repairInvalidToolCalls(cliShape())] });
 
-  it('訊息上有記號的那顆：回 dsh 那句、碼 INVALID_ARGS，本體零次', async () => {
+  it('訊息上有記號的那顆：回那句固定的話、碼 INVALID_ARGS，本體零次', async () => {
     const { echo, calls } = countingEcho();
     const { wrapToolCall } = wrap();
     const result = await wrapToolCall(

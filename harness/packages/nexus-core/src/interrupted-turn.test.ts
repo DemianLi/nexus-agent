@@ -173,7 +173,7 @@ describe('interruptedTurnClosers', () => {
     expect(interruptedTurnClosers(log.events)).toEqual([]);
   });
 
-  it('舊檔尾巴「開著的輪＋end-seed、之後沒有新輪」：掃描不在 end-seed 重設，補結接在 end-seed 後面（照 dsh）', () => {
+  it('舊檔尾巴「開著的輪＋end-seed、之後沒有新輪」：掃描不在 end-seed 重設，補結接在 end-seed 後面', () => {
     const log = new SessionLog('crash', { seed: crashed().events });
     const last = log.events.at(-1)!;
     expect(last.type).toBe('session/end-seed');

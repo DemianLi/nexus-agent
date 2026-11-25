@@ -180,7 +180,7 @@ describe('工具動手之前', () => {
     expect((result as ToolMessage).content).toBe('寫好了');
   });
 
-  it('子代理裡的工具呼叫排空的是子代理那一份，不是 root（#722）：dsh 只跳過帶 `exec.parent` 的 PTC 內層分派', async () => {
+  it('子代理裡的工具呼叫排空的是子代理那一份，不是 root（#722）：只跳過帶 `exec.parent` 的 PTC 內層分派', async () => {
     const { sessions, handles, hooks } = await assemble();
     sessions.root.append('turn/start', { kind: 'message', text: 'p' });
     const child = sessions.open({ kind: 'subagent', runId: 'tools:t1' });

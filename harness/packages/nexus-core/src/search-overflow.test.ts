@@ -150,7 +150,7 @@ describe('backend 包裝', () => {
   });
 });
 
-describe('previewLine：切在 UTF-8 字元邊界上（#1605，dsh `previewLine`）', () => {
+describe('previewLine：切在 UTF-8 字元邊界上（#1605）', () => {
   it('沒超過上限原樣；剛好等於上限也原樣', () => {
     expect(previewLine('abc', 3)).toBe('abc');
     expect(previewLine('一二', 6)).toBe('一二');

@@ -117,7 +117,7 @@ describe('filesystemToolDescriptions：grep 講正規式（#1605）', () => {
     ).not.toHaveProperty('grep');
   });
 
-  it('在場 → 只換開頭講字面的那兩段：第一句是 dsh 的，後面基座講輸出與 /large_tool_results/ 的原樣留著', () => {
+  it('在場 → 只換開頭講字面的那兩段：第一句換掉，後面基座講輸出與 /large_tool_results/ 的原樣留著', () => {
     const descriptions = filesystemToolDescriptions({
       readContinuation: false,
       searchDescriptions: true,
@@ -160,7 +160,7 @@ describe('filesystemToolDescriptions：glob 講 rg 的語意（#1605）', () => 
     ).not.toHaveProperty('glob');
   });
 
-  it('在場 → 只換第一句（dsh 原句：不含目錄、含隱藏與被 ignore 的檔、照修改時間），基座講 `*`／`**`／`?` 的一段原樣留著', () => {
+  it('在場 → 只換第一句（新的第一句：不含目錄、含隱藏與被 ignore 的檔、照修改時間），基座講 `*`／`**`／`?` 的一段原樣留著', () => {
     const glob =
       filesystemToolDescriptions({ readContinuation: false, searchDescriptions: true })?.glob ?? '';
     expect(

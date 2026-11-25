@@ -2152,7 +2152,7 @@ describe('先讀後改的條目', () => {
     expect(() => foldRegistry(registry, { summarization: false })).toThrow(/先讀後改/);
   });
 
-  it('它一顆服務都不註冊——照 dsh 的 `fs-observation-policy`', async () => {
+  it('它一顆服務都不註冊', async () => {
     // `apply` 是空的是承重的，不是漏寫：留下的唯一痕跡是 `disabledEntries`。
     const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin }]);
     expect(registry.services.names()).toEqual([]);
@@ -2160,7 +2160,7 @@ describe('先讀後改的條目', () => {
     expect(off.registry.disabledEntries.names()).toEqual(['observation-policy']);
   });
 
-  it('它沒有 config——給了也照樣掛，先讀後改照樣在（#751 拍板照 dsh）', async () => {
+  it('它沒有 config——給了也照樣掛，先讀後改照樣在（#751 拍板）', async () => {
     // 這一顆沒有 Config schema，`parseEntryConfig` 照 dsh 原樣交下去、不驗。**多寫一行 `config:` 不能讓它掉**：
     // 掉了就是沒讀過的檔改得動，那是 dsh 沒有的「設定寫壞反而放行」。警告只在產品路徑上印。
     const { registry } = await loadPlugins([
@@ -2267,7 +2267,7 @@ describe('用量記錄器的條目', () => {
     expect(off.registry.disabledEntries.names()).toEqual(['model-usage']);
   });
 
-  it('它沒有 config——給了也照樣掛（#751 拍板照 dsh）', async () => {
+  it('它沒有 config——給了也照樣掛（#751 拍板）', async () => {
     const { registry } = await loadPlugins([
       { plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry,
     ]);

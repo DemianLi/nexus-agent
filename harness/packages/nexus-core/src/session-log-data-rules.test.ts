@@ -95,7 +95,7 @@ describe('N0785 資料規則', () => {
   });
 });
 
-describe('seed 的信封（照 dsh 的 assertSessionEventEnvelope）', () => {
+describe('seed 的信封', () => {
   it.each([
     ['time 是小數', { time: 1.5 }, /time/],
     ['少了 data', { data: undefined }, /data/],

@@ -282,7 +282,7 @@ describe('不必問人就確定的拒絕，圖內寫一對 approval/*（#1029）
     ]);
   });
 
-  it('listener 直接 deny 不寫（沒有問任何人，同 dsh）', async () => {
+  it('listener 直接 deny 不寫（沒有問任何人）', async () => {
     const { sessions, appended } = recording();
     await wrapperOf(
       [entry(() => ({ kind: 'deny', reason: '不准' }))],

@@ -54,7 +54,7 @@ describe('會話總帳', () => {
         ...(write === undefined ? {} : { cacheWriteTokens: write }),
       });
 
-    it('inputTokens 只是未快取那一桶（照 dsh），兩個快取桶各自累計', () => {
+    it('inputTokens 只是未快取那一桶，兩個快取桶各自累計', () => {
       expect(deriveTokenUsage([cached(100, 10, 900, 0), cached(50, 5, 450, 200)])).toEqual({
         inputTokens: 100 + 50,
         outputTokens: 15,

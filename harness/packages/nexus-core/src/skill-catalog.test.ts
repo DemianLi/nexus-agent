@@ -60,7 +60,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('parseSkillInvocation：值表照 dsh', () => {
+describe('parseSkillInvocation：值表', () => {
   it('沒寫旗標：模型與人都叫得到', () => {
     expect(parseSkillInvocation({ name: 'a', description: 'b' })).toEqual({
       modelInvocable: true,
@@ -157,7 +157,7 @@ describe('scanSkills', () => {
   });
 });
 
-describe('renderSkillInvocation：逐字照 dsh renderSkillContent', () => {
+describe('renderSkillInvocation：逐字輸出', () => {
   it('directory 形狀的資源說明、正文原樣、名字與路徑跳脫', () => {
     expect(
       renderSkillInvocation({

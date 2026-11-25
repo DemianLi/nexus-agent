@@ -60,7 +60,7 @@ describe('inheritedEventCount', () => {
 });
 
 describe('buildForkSeed', () => {
-  it('前綴原樣、seq 不改，接一顆 inherited 標記：seq 是 boundary + 1、time 抄切點那一顆（同 dsh fork.ts:21-30）', () => {
+  it('前綴原樣、seq 不改，接一顆 inherited 標記：seq 是 boundary + 1、time 抄切點那一顆', () => {
     const source = parentLog().events;
     const seed = buildForkSeed(source, 5);
     expect(seed.slice(0, 6)).toEqual(source);
@@ -145,7 +145,7 @@ describe('從日誌折「我擁有的狀態」不算前綴（驗收 5）', () =>
     return log;
   }
 
-  it('子代理目錄：父會話派的不列，自己派的照列（同 dsh catalog.ts:121-126）', () => {
+  it('子代理目錄：父會話派的不列，自己派的照列', () => {
     const log = forked();
     expect(subagentLinks(log.events).map((link) => link.childId)).toEqual(['parent/x', 'child/y']);
     expect(subagentLinks(log.events, log.inheritedEventCount).map((link) => link.childId)).toEqual([
