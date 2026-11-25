@@ -220,7 +220,7 @@ describe('標準化的持久化型別圖', () => {
     expect(() => canonicalizeSchema([{ kind: 'union', types: [0] }], 0)).toThrow('union cycle');
   });
 
-  it('指紋是 nexus 自己的領域前綴加上圖的 JSON，不跟 dsh 共用摘要空間', () => {
+  it('指紋是 nexus 自己的領域前綴加上圖的 JSON', () => {
     const schema = canonicalizeSchema([string], 0);
     const digest = (prefix: string): string =>
       createHash('sha256').update(prefix).update(JSON.stringify(schema)).digest('hex');

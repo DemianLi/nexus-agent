@@ -1238,7 +1238,7 @@ describe('封存的會話（#633）', () => {
     await stop();
   });
 
-  it('停在核准點的那一輪收到答覆時已經封存：核准過的工具照跑（dsh 的閘門在步前），下一次叫模型才被擋，這一輪以 blocked 收', async () => {
+  it('停在核准點的那一輪收到答覆時已經封存：核准過的工具照跑，下一次叫模型才被擋，這一輪以 blocked 收', async () => {
     let archived = false;
     const { pump, state, stop } = await build({
       turns: [

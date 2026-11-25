@@ -109,7 +109,7 @@ describe('只有啟動環境能設的名字', () => {
   });
 
   it.each(['NEXUS_AGENT_HOME', 'NEXUS_AGENT_ANYTHING', 'XDG_CONFIG_HOME', 'DYLD_LIBRARY_PATH'])(
-    '前綴 %s 兩份都拒絕（dsh 的 DSH_ 換成 NEXUS_AGENT_）',
+    '前綴 %s 兩份都拒絕',
     (name) => {
       env(home, `${name}=x\n`);
       expect(() => load({})).toThrow(`"${name}"`);

@@ -314,7 +314,7 @@ function versionedEvent(
 }
 
 describe('嚴格解析器的事件 metadata', () => {
-  it('宣告位置帶行號照收（dsh 只在歷史格式拒收）', () => {
+  it('宣告位置帶行號照收', () => {
     const snapshot = surfaceEvent('required');
     const root = snapshot.roots[0]!;
     for (const suffix of [':8', ':8:3', '#L8', '#L8-L12']) {
