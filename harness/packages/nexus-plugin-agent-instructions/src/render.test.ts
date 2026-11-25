@@ -17,7 +17,7 @@ import {
 const bytes = (value: string): number => Buffer.byteLength(value, 'utf8');
 
 describe('基線的樣子', () => {
-  it('外框、引言、每一檔的標頭，順序與分隔都照 dsh', () => {
+  it('外框、引言、每一檔的標頭，順序與分隔都固定', () => {
     const rendered = renderAgentInstructions(
       [
         { displayPath: 'AGENTS.md', content: '規矩一。' },

@@ -112,7 +112,7 @@ describe('驗證', () => {
     ]);
   });
 
-  it('content 空掉就拋，訊息逐字照 dsh', () => {
+  it('content 空掉就拋，訊息固定', () => {
     expect(() => toTodoList([{ content: '   ', status: 'pending' }], true)).toThrow(
       TODO_EMPTY_CONTENT_MESSAGE,
     );
@@ -186,7 +186,7 @@ describe('描述', () => {
 });
 
 describe('計數', () => {
-  it('三個計數各數各的，句子逐字照 dsh', () => {
+  it('三個計數各數各的，句子固定', () => {
     const todos: TodoItem[] = [
       { content: '甲', status: 'completed' },
       { content: '乙', status: 'in_progress' },
@@ -345,7 +345,7 @@ describe('註冊', () => {
 });
 
 describe('設定（#453）', () => {
-  it('**必填、沒有預設**：一格都不給就讓載入失敗（照 dsh）', () => {
+  it('**必填、沒有預設**：一格都不給就讓載入失敗', () => {
     // 工具觀測不到執行期的並行，所以這是部署方要拍的板，猜一個預設值等於替它拍板。
     const result = Config.safeParse({});
     expect(result.success).toBe(false);
@@ -356,7 +356,7 @@ describe('設定（#453）', () => {
     expect(Config.safeParse({ allowParallelInProgress: 'false' }).success).toBe(false);
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', () => {
+  it('未知欄位讓載入失敗', () => {
     expect(Config.safeParse({ allowParallelInProgress: true, allowParallel: true }).success).toBe(
       false,
     );

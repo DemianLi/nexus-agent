@@ -270,7 +270,7 @@ describe('完成值必須是無損的 JSON', () => {
       expect(await runTool({}, code)).toBe('{\n  "a": 1\n}');
     });
 
-    it('accessor 的 getter 回合格的值：照 dsh 收下', async () => {
+    it('accessor 的 getter 回合格的值：收下', async () => {
       expect(await runTool({}, '({ get a() { return 1; } })')).toBe('{\n  "a": 1\n}');
     });
   });
@@ -624,7 +624,7 @@ describe('設定（#453）', () => {
     }
   });
 
-  it('未知欄位拒收（登記的偏離：dsh 放行）', () => {
+  it('未知欄位拒收', () => {
     expect(() => quickjs.Config.parse({ timeoutMS: 100 })).toThrow(/timeoutMS/);
   });
 });

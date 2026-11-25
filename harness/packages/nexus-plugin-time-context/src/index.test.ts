@@ -127,7 +127,7 @@ describe('foldTimeContext：從日誌摺出事實', () => {
     expect(facts.baselineBeforeTurn).toBe(T0 + 5_000);
   });
 
-  it('前幾輪 turn/start 帶的人話也算（dsh 把人話記成 user/message，我們記在 turn/start）', () => {
+  it('前幾輪 turn/start 帶的人話也算', () => {
     const log = new SessionLog('t');
     log.append('turn/start', { kind: 'message', text: '第一句' });
     at(10 * MIN);
@@ -355,7 +355,7 @@ function humanInterjection(log: SessionLog, clientTimeZone?: string): void {
   });
 }
 
-describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', () => {
+describe('瀏覽器時區：三種讀數（#1629）', () => {
   it('derive：沒有、一個、同一個（去重）、不同（排序）→ missing／resolved／resolved／mixed', () => {
     const none = new SessionLog('t');
     humanTurn(none, '嗨');
@@ -400,7 +400,7 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
     });
   });
 
-  it('格式不對、Intl 不認得的時區：拋 TypeError（dsh `request-zone.spec.ts`）', () => {
+  it('格式不對、Intl 不認得的時區：拋 TypeError', () => {
     for (const bad of ['', 'Taipei', ' Asia/Taipei', 'Asia/Nowhere_City', 'asia/../etc']) {
       const log = new SessionLog('t');
       humanTurn(log, '嗨', bad);
@@ -408,7 +408,7 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
     }
   });
 
-  it('逐字照 dsh：有效但不等於這個執行期正規名的別名也拋（dsh `request-zone.spec.ts:52`）；正規名那個照收', () => {
+  it('有效但不等於這個執行期正規名的別名也拋；正規名那個照收', () => {
     // 哪一個是正規名看執行期（Node 25.9 是 Asia/Calcutta；風險見 #1733），所以兩個都試，用 Intl 自己的回答分辨。
     const canonicalOf = (zone: string): string =>
       new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
@@ -430,7 +430,7 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
     expect(() => deriveBrowserTimeZoneContext(rejected.events)).toThrow('must be canonical');
   });
 
-  it('render：三種字樣逐字照 dsh', () => {
+  it('render：三種字樣逐字固定', () => {
     expect(renderBrowserTimeZoneContext({ kind: 'resolved', timeZone: 'Asia/Taipei' })).toBe(
       'Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.',
     );
@@ -568,7 +568,7 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
   });
 });
 
-describe('apply：時區在載入當下解析並留住（dsh tests/time-context.spec.ts:371、:383）', () => {
+describe('apply：時區在載入當下解析並留住', () => {
   const ctxWithServices = (): { ctx: never; captured: PreStepListener[] } => {
     const captured: PreStepListener[] = [];
     const services = new Map<string, unknown>([

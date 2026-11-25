@@ -372,7 +372,7 @@ describe('格式 10 以前以輪記的評分', () => {
 });
 
 describe('落盤確認（#1606）', () => {
-  it('評分每一次寫入之後都確認一次，含內容一樣的 put 與收回不存在的 delete（照 dsh `:183`、`:214`）；評語與 list 不確認', async () => {
+  it('評分每一次寫入之後都確認一次，含內容一樣的 put 與收回不存在的 delete；評語與 list 不確認', async () => {
     const { log } = logWithTurns();
     const target = { messageId: 'm-first' };
     const created = await service.put(log, { ...target, rating: 'negative', ifVersion: null });
@@ -501,11 +501,11 @@ describe('設定', () => {
     }
   });
 
-  it('必填：一格都不給也是載入失敗，沒有預設值（照 dsh 的 `required()`）', async () => {
+  it('必填：一格都不給也是載入失敗，沒有預設值', async () => {
     expect(() => feedback.Config.parse({})).toThrow(/maxNoteBytes/);
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+  it('未知欄位讓載入失敗', async () => {
     expect(() => feedback.Config.parse({ maxNoteBytes: 8, maxNotBytes: 8 })).toThrow(/maxNotBytes/);
   });
 });

@@ -24,7 +24,7 @@ const WITH_FULL_ACCESS: PresetTable = {
 };
 
 describe('出廠兩組', () => {
-  it('名字、值與順序照 dsh 的前兩組；全開那一組出廠不給（#1621）', () => {
+  it('前兩組的名字、值與順序固定；全開那一組出廠不給（#1621）', () => {
     expect(
       Object.entries(DEFAULT_PRESETS).map(([name, spec]) => [name, spec.sandbox, spec.approval]),
     ).toEqual([

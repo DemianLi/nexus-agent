@@ -504,7 +504,7 @@ describe('放棄重連之後（Q5 (b)）', () => {
 });
 
 describe('重連關掉、第一次就連不上', () => {
-  it('記的是「第一次就連不上」那一句（照 dsh `connection.ts:211-216`），不是掉線；下一份組裝重新連', async () => {
+  it('記的是「第一次就連不上」那一句，不是掉線；下一份組裝重新連', async () => {
     const { pool: shared, logged } = pool();
     const r = row({ reconnect: { ...FAST, enabled: false } });
     r.down();

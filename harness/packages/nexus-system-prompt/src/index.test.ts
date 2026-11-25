@@ -17,7 +17,7 @@ import type { SystemPromptAssembly } from './index.js';
 const VARIABLES = { model: 'gpt-x', cwd: '/' } as const;
 
 describe('@nexus/system-prompt 的定義', () => {
-  it('token 名是 systemPrompt（dsh 的服務名），契約版本是 semver 常數', () => {
+  it('token 名是 systemPrompt，契約版本是 semver 常數', () => {
     expect(systemPromptToken).toEqual({
       name: 'systemPrompt',
       version: SYSTEM_PROMPT_CONTRACT_VERSION,
@@ -171,7 +171,7 @@ describe('登記時大聲拒絕第一刀不支援的', () => {
     expect(() => assertSectionRegistrable({ ...ok, text: () => '字' })).toThrow(/text 是函式/u);
   });
 
-  it('dsh 的 complete、interpolate 欄位', () => {
+  it('不收 complete、interpolate 欄位', () => {
     expect(() => assertSectionRegistrable({ ...ok, complete: true })).toThrow(/complete/u);
     expect(() => assertSectionRegistrable({ ...ok, interpolate: false })).toThrow(/interpolate/u);
   });

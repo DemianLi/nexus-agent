@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CITE_RESOURCE_LINKS, projectNonText } from './project-content.js';
 
-describe('非文字塊換成 dsh 形狀的文字說明', () => {
+describe('非文字塊換成文字說明', () => {
   it('只有文字：照原樣（回 undefined）', () => {
     expect(projectNonText('純字串')).toBeUndefined();
     expect(
@@ -55,7 +55,7 @@ describe('非文字塊換成 dsh 形狀的文字說明', () => {
 });
 
 // `convertCallToolResult` 把 `resource_link` 轉成 `file` 塊，`metadata` 帶 `{uri, name, title?}`。
-describe('resource link：dsh 的 `Resource link: <name> (<uri>)`（#1319）', () => {
+describe('resource link：`Resource link: <name> (<uri>)`（#1319）', () => {
   const link = (url: string | undefined, name: string | undefined, title?: string) => ({
     type: 'file',
     url,
@@ -78,7 +78,7 @@ describe('resource link：dsh 的 `Resource link: <name> (<uri>)`（#1319）', (
     ]);
   });
 
-  it('缺名稱或缺 URI：走 dsh 同一句退路，而且不算有連結（不加引用提示）', () => {
+  it('缺名稱或缺 URI：走同一句退路，而且不算有連結（不加引用提示）', () => {
     const unavailable = {
       type: 'text',
       text: '[resource link unavailable: the MCP block is missing its name or URI]',

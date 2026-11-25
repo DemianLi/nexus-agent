@@ -109,7 +109,7 @@ describe('送出去的酬載', () => {
     expect((interrupted[0] as { kind: string }).kind).toBe('question');
   });
 
-  it('五個欄位照抄 dsh，`multi_select` 在裡面變成 `multiSelect`', async () => {
+  it('五個欄位原樣帶出，`multi_select` 在裡面變成 `multiSelect`', async () => {
     await (await toolOf('human')).invoke(ONE_QUESTION);
     expect(interrupted[0]).toEqual({
       kind: 'question',
