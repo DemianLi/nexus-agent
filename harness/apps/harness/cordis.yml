@@ -442,10 +442,10 @@
 
 # 用 `@` 引用別的會話時的四個上限（#1573 N0862）：一則訊息最多引用幾條（`maxReferences`，不能超過 3）、候選最多回幾筆
 # （`candidateLimit`）、每條來源序列化後最多幾個位元組（`maxReferenceBytes`，**省略即照模型窗口算**，給了就原樣蓋過）、
-# 自動預算占模型窗口的幾成（`referenceContextFraction`）。**schema 的預設是 3、50、0.2。**自動預算是
+# 自動預算占模型窗口的幾成（`referenceContextFraction`）。**schema 的預設是 3、50、0.2**；自動預算是
 # `max(65536, floor(窗口 × 4 × 比例))` 位元組，窗口跟著**這條 thread 下一步會走的模型**，換了模型下一次引用就用新那顆的窗口。
 #
-# **出廠的比例是 0.1，不是 schema 預設的 0.2。偏離登記：理由 2（產品需求），demian 2026-10-17 拍板 Q4 (b)。**
+# **出廠的比例是 0.1，不是 schema 預設的 0.2；偏離登記：理由 2（產品需求），demian 2026-10-17 拍板 Q4 (b)。**
 # 0.2 與「每 token 4 位元組」是照英文調的。本產品以中文為主：用 nexus 自己的估算器
 # （o200k，`token-estimate.ts`）量中文是約 0.31 token／位元組（2026-10-24 量 `AGENTS.md`、`docs/operations.md`、`docs/standards.md`、
 # https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/development-plan.md：混排 0.3100、只留中日韓字元 0.3114）。出廠模型窗口 784,369：比例 0.2 時每條 627,495 位元組，
@@ -469,7 +469,7 @@
 # 到了上限，新 thread（含讀歷史、續聊磁碟上的舊 thread）回 `thread_at_capacity`，已在行程裡的照常；閒置條件全成立滿 2 小時的 thread
 # 會被撤出記憶體、還名額（只有開了落盤才生效）。**要放寬，在自己的 `~/.nexus-agent/cordis.patch.yml` 把數值調大**；
 # 要關逐出（例如要在整段對話裡釘住組裝它的那一版），設 `idleEvictAfterMs: 0`。寫法、推法與代價見 docs/operations.md。起動期讀一次、改了要重啟。
-# **偏離登記：thread 數上限與閒置逐出都是產品需求。**逐點見 `src/settings/thread-capacity.ts` 的檔頭。
+# **偏離登記：thread 數上限與閒置逐出都是產品需求**，逐點見 `src/settings/thread-capacity.ts` 的檔頭。
 # **這一列關不掉**：兩格都有 schema 預設，關掉只會回到同一組值，讀起來卻像拆了保險絲，所以在 `PROTECTED_ENTRY_NAMES` 上（同 `downlink`）。
 - id: thread-capacity
   name: '#settings/thread-capacity'
@@ -485,7 +485,7 @@
 # **用量警告（#1493，保險絲第 0 級）**：取樣開了之後，每次讀數都和 `warnAtPercent`（1 到 99 的整數，預設 75）比——有 cgroup 上限用 `memory.current ÷ memory.max`
 # （上限在祖先 cgroup 時用行程受限的值），沒有就用主機的 `(總量 − 可用) ÷ 總量`（可用只認 `MemAvailable`，退到 `os.freemem` 就當讀不到，所以 macOS 上整個不警告）；`memory.current` 含 page cache 會略高估；嚴格超過就在日誌寫一行 `[記憶體] 警告：…`（講用的是哪個來源、百分比、現在幾條 thread、下一步），
 # 降到「門檻 − 5」以下才寫一行 `已恢復`，之間不重複。來源讀不到就不判斷，從可讀變成讀不到時講一次。**只警告，不做任何動作**。取樣關著（預設）就整段不建。
-# **偏離登記：產品需求。**逐點見 `src/memory-gauge.ts` 的檔頭。這一列關得掉（預設就是關）。
+# **偏離登記：產品需求**，逐點見 `src/memory-gauge.ts` 的檔頭。這一列關得掉（預設就是關）。
 - id: memory-gauge
   name: '#settings/memory-gauge'
   config:
@@ -500,7 +500,7 @@
 # - 指標（**預設關閉**）：`metrics.enabled: true` 才有 `GET /metrics`（Prometheus 文字格式 0.0.4，手寫）。要 `Authorization: Bearer <token>`，缺或錯回 401；
 #   token 在 `tokenFile`（缺席是 `<home>/metrics-token`，`0600`，沒有就建；權限過寬就拒絕啟動）。瀏覽器的會話 cookie 換不到指標。名單固定、標籤不含 thread id 或路徑。
 # 起動期讀一次、改了要重啟。要打開指標，在自己的 `~/.nexus-agent/cordis.patch.yml` 把 `metrics.enabled` 設成 true。
-# **偏離登記：產品需求。**逐點見 `src/ops-endpoints.ts` 的檔頭。這一列關得掉（`disabled: true` 等於沒有這一列，探針開、指標關）。
+# **偏離登記：產品需求**，逐點見 `src/ops-endpoints.ts` 的檔頭。這一列關得掉（`disabled: true` 等於沒有這一列，探針開、指標關）。
 - id: ops-endpoints
   name: '#settings/ops-endpoints'
   config:
@@ -828,7 +828,7 @@
 # 是暫定值**：比單次請求的最壞重試（約 21 分鐘）長，沒有量過健康長輪要多久。值的家在 schema（`src/settings/turn-timeout.ts`），這裡照抄
 # 同一個值讓人看得到。只有 serve 讀，CLI 一次性路徑不套。起動期讀一次、改了要重啟。**這一列關得掉**：`disabled: true` 就是不限；
 # **但寫壞了整個起不來**（`startup-audit.ts` 的必掛名單）：寫壞就掉，掉了就沒有時鐘，是 fail-open。
-# **偏離登記：產品需求。**逐點見 `src/settings/turn-timeout.ts` 的檔頭。
+# **偏離登記：產品需求**，逐點見 `src/settings/turn-timeout.ts` 的檔頭。
 - id: turn-timeout
   name: '#settings/turn-timeout'
   config:
@@ -841,7 +841,7 @@
 # 贏過這一列。續行關著時（serve 帶 `--no-goal-driver`、CLI 沒帶 `--goal-driver`）這一列不起作用，也不報錯。起動期讀一次、改了要重啟。
 # **這一列關得掉**：`disabled: true` 就是只剩目標自己那條上限（不在 `PROTECTED_ENTRY_NAMES` 上）。**但寫壞了整個起不來**
 # （在 `startup-audit.ts` 的必掛名單上，同 `background-subagents`）：寫壞就掉，掉了上限就沒了，是 fail-open。
-# **偏離登記：產品需求。**逐點見 `src/goal-driver.ts` 與 `src/settings/goal-round-cap.ts` 的檔頭。
+# **偏離登記：產品需求**，逐點見 `src/goal-driver.ts` 與 `src/settings/goal-round-cap.ts` 的檔頭。
 - id: goal-round-cap
   name: '#settings/goal-round-cap'
   config:
