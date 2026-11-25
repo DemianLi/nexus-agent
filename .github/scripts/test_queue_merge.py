@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
 
-from queue_merge import GATE_TIMEOUT_SECONDS, RUN_BUDGET_SECONDS, Queue, gate_state, verdict_of
+from queue_merge import GATE_TIMEOUT_SECONDS, RUN_BUDGET_SECONDS, Queue, gate_state, main, verdict_of
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -341,6 +345,14 @@ class Robustness(unittest.TestCase):
         results = queue.drain()
         self.assertTrue(results[0][1].startswith('failed:'))
         self.assertEqual(results[1], (9, 'merged'))
+
+    def test_main_exits_nonzero_and_names_the_reason_when_the_queue_cannot_be_listed(self) -> None:
+        gh = FakeGh()
+        gh.fail_on = 'pr'
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'GITHUB_REPOSITORY': 'o/r'}), mock.patch('queue_merge.Queue', lambda repo: Queue(repo, gh=gh)), contextlib.redirect_stdout(out):
+            self.assertEqual(main(['queue_merge.py']), 1)
+        self.assertIn('::error::列不出排隊的 PR', out.getvalue())
 
     def test_dispatch_failure_after_merge_is_reported_on_the_pr(self) -> None:
         gh = FakeGh()
