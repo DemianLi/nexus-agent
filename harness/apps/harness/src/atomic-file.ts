@@ -46,7 +46,7 @@ export async function writeAtomic(path: string, data: string): Promise<void> {
  * 第一次建立 `path`，不蓋掉已有的：暫存檔 `wx`、`0600`、寫滿、`sync` → `link` 到正式路徑 → fsync 目錄 → 盡力刪暫存檔。
  *
  * - `link` 失敗就刪暫存檔再原樣拋；目標已在是 `EEXIST`，交給呼叫端判斷（通常是「別人先建好了，讀它的」）。
- *   寫暫存檔那一段（`writeSyncedTempFile`）失敗時不刪：名字是隨機的 `.tmp`，讀方不認，當機殘留也一樣不清。
+ *   寫暫存檔那一段失敗時不刪：名字是隨機的 `.tmp`，讀方不認，當機殘留也一樣不清。
  * - 刪暫存檔排在目錄 fsync 之後、失敗不拋：正式檔已經發佈而且落盤了，多一個硬連結不該讓呼叫端以為沒建成。
  *
  * @param path - 目標檔的絕對路徑。目錄要先建好。
