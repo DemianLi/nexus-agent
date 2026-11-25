@@ -226,7 +226,7 @@ function wide(n: number, bytes: number): string {
   return `${Array.from({ length: n }, () => '中'.repeat(bytes / 3)).join('\n')}\n`;
 }
 
-describe('一頁多大：照 dsh', () => {
+describe('一頁多大', () => {
   const wrap = wrapperOf(createReadContinuationMiddleware());
 
   it('沒給 limit：填 2000；給了 null 也是', async () => {
@@ -251,7 +251,7 @@ describe('一頁多大：照 dsh', () => {
     }
   });
 
-  it('超過 2000：拋 dsh 的原句，工具不跑', async () => {
+  it('超過 2000：拋固定的那句，工具不跑', async () => {
     for (const limit of [READ_LIMIT + 1, String(READ_LIMIT + 1)]) {
       let ran = false;
       await expect(
@@ -375,7 +375,7 @@ describe('模型看到的 read_file', () => {
     return sent;
   };
 
-  it('limit 照 dsh 的措辭、不再必填、沒有預設；描述不在這裡換（#1563，見 fs-tool-descriptions.test.ts）', () => {
+  it('limit 的措辭固定、不再必填、沒有預設；描述不在這裡換（#1563，見 fs-tool-descriptions.test.ts）', () => {
     const [read] = toolsSent([baseReadTool]) as [
       { function: { description: string; parameters: Record<string, unknown> } },
     ];
@@ -447,7 +447,7 @@ describe('backend 自己建頁的旁路（#1530）', () => {
     }
   }
 
-  it('第一次領得到請求、第二次領不到；請求帶著工具的 offset／limit 與 dsh 的兩個上限', async () => {
+  it('第一次領得到請求、第二次領不到；請求帶著工具的 offset／limit 與兩個上限', async () => {
     const backend = recordReadExtent(new WindowBackend()) as WindowBackend;
     await wrap(requestFor('read_file'), async () => {
       await backend.read('/f', 2, 3);

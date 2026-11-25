@@ -42,7 +42,7 @@ describe('isEmptyStopReply', () => {
     ).toBe(false);
   });
 
-  it('有字（含只有空白）就不是空：數的是內容，不是 trim 之後的字數（同 dsh 數區塊）', () => {
+  it('有字（含只有空白）就不是空：數的是內容，不是 trim 之後的字數', () => {
     expect(isEmptyStopReply(new AIMessage({ content: '好', response_metadata: stop }))).toBe(false);
     expect(isEmptyStopReply(new AIMessage({ content: '\n', response_metadata: stop }))).toBe(false);
     expect(

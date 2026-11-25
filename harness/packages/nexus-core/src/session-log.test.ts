@@ -599,7 +599,7 @@ function reachableObjects(root: unknown): object[] {
   return [...seen];
 }
 
-describe('JSON 快照照 dsh 的規則（#1526）', () => {
+describe('JSON 快照的規則（#1526）', () => {
   it('B：帶自有 "__proto__" 鍵的那顆事件，從根走到的每一個物件（含原型鏈上非內建的）都凍過', () => {
     const log = new SessionLog('t1');
     const event = log.append('tool/result', {

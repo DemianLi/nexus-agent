@@ -122,7 +122,7 @@ async function expectRejectedAndSentAsIs(
   expect(out.model.invokes).toBe(2);
 }
 
-describe('拒收被截斷的摘要（dsh 的 MAX_TOKENS）', () => {
+describe('拒收被截斷的摘要（MAX_TOKENS）', () => {
   it('finish_reason 是 length：不換上半份，照原請求送出', async () => {
     await expectRejectedAndSentAsIs(HALF, 'length', '截斷');
   });
@@ -145,7 +145,7 @@ describe('拒收沒有文字的摘要', () => {
   });
 });
 
-describe('拒收含圖的摘要（dsh 的 UNSUPPORTED_CONTENT）', () => {
+describe('拒收含圖的摘要（UNSUPPORTED_CONTENT）', () => {
   const unsupported = new SummaryRejectedError('UNSUPPORTED_CONTENT').message;
 
   it.each([
@@ -167,7 +167,7 @@ describe('拒收含圖的摘要（dsh 的 UNSUPPORTED_CONTENT）', () => {
   });
 });
 
-describe('拒收之後，端點真的超窗那條路（dsh 的 overflow 路徑）', () => {
+describe('拒收之後，端點真的超窗那條路（overflow 路徑）', () => {
   it('緊急摘要被截斷：保留原本那顆超窗錯，warn 一條', async () => {
     const endpointError = new ContextOverflowError('端點說：超窗了');
     const out = await run({

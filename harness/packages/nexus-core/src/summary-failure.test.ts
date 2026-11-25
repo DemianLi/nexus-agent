@@ -151,7 +151,7 @@ const TOKEN_TRIGGER: Partial<SummarizationSettings> = {
   trigger: [{ type: 'tokens', value: 2_000 }],
 };
 
-describe('摘要失敗：我們自己的門檻觸發（dsh 的 pressure 路徑）', () => {
+describe('摘要失敗：我們自己的門檻觸發（pressure 路徑）', () => {
   it('預算門檻合成的超窗、摘要壞了：warn 一條，照原請求送出去，不拋', async () => {
     const out = await run({
       settings: TOKEN_TRIGGER,
@@ -327,7 +327,7 @@ describe('可取代的只剩上一顆摘要：不打摘要模型', () => {
   });
 });
 
-describe('摘要失敗：端點真的回超窗（dsh 的 overflow 路徑）', () => {
+describe('摘要失敗：端點真的回超窗（overflow 路徑）', () => {
   it('留下原本的請求錯誤（同一個物件），不是摘要那個錯；warn 一條', async () => {
     const endpointError = new ContextOverflowError('端點說：超窗了');
     const out = await run({

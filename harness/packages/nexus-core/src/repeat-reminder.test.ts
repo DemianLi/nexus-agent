@@ -82,7 +82,7 @@ const GENTLE_HEAD = 'You are repeating the exact same tool call with identical a
 const DETAILED_HEAD = 'Repeated tool call detected:';
 
 describe('resolveRepeatReminderSettings', () => {
-  it('預設值就是 dsh 那組：3／5／8、全部工具、500 字', () => {
+  it('預設值是這一組：3／5／8、全部工具、500 字', () => {
     expect(resolveRepeatReminderSettings()).toEqual({
       thresholds: [3, 5, 8],
       include: [],
@@ -362,7 +362,7 @@ describe('射程：include 與 exclude', () => {
 });
 
 describe('參數預覽的上限', () => {
-  it('超過上限就截斷，尾巴是 dsh 那個格式', () => {
+  it('超過上限就截斷，尾巴是固定的格式', () => {
     const long = 'y'.repeat(200);
     const calls = Array.from({ length: 5 }, () => ({ name: 'write', args: { text: long } }));
     const text = conversation(hookOf({ argumentsPreviewChars: 20 }), calls)[4]?.[0] ?? '';

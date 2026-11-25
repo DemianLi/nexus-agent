@@ -355,7 +355,7 @@ describe('沒配到結果的呼叫', () => {
     return log;
   }
 
-  it('記過 `tool/call` 的說結果不明，沒記過的說還沒開始——照 dsh 的 repair.ts', () => {
+  it('記過 `tool/call` 的說結果不明，沒記過的說還沒開始', () => {
     const log = crashed();
     const replay = replayConversation([
       ...log.events,

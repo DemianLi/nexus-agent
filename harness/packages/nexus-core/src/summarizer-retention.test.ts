@@ -40,19 +40,21 @@ describe('保留量的公式（retainTokensFor）', () => {
    * 門檻讓 dsh 的值超過門檻時生效。三顆算出來：90b 與 dsh 一樣（4,587），11b 與預設那顆被封在 20,000。
    */
   it.each([
-    ['90b（窗口 32,768）：dsh 的值，封頂不生效', SMALL_MODEL, 4_587],
-    ['11b（窗口 131,072）：dsh 的 20,316 被封在 20,000', MID_MODEL, 20_000],
-    ['預設那顆（窗口 700,045）：dsh 的 109,385 超過門檻，被封在 20,000', DEFAULT_MODEL, 20_000],
+    ['90b（窗口 32,768）：不封頂的值，封頂不生效', SMALL_MODEL, 4_587],
+    ['11b（窗口 131,072）：不封頂的 20,316 被封在 20,000', MID_MODEL, 20_000],
+    ['預設那顆（窗口 700,045）：不封頂的 109,385 超過門檻，被封在 20,000', DEFAULT_MODEL, 20_000],
   ])('%s', (_label, limits, expected) => {
     const trigger = effectiveTrigger(SHIPPED_TRIGGER, limits);
     expect(retainTokensFor(ratio, limits, trigger)).toBe(expected);
   });
 
-  it('封頂的就是 dsh 的載入期驗證擋的那一種：不封的話預設那顆的保留量比門檻還大', () => {
+  it('封頂的就是載入期驗證擋的那一種：不封的話預設那顆的保留量比門檻還大', () => {
     const trigger = effectiveTrigger(SHIPPED_TRIGGER, DEFAULT_MODEL);
-    const dsh = Math.floor((DEFAULT_MODEL.contextWindow - DEFAULT_MODEL.maxOutputTokens) * 0.16);
-    expect(dsh).toBe(109_385);
-    expect(dsh).toBeGreaterThan(100_000);
+    const uncappedRetain = Math.floor(
+      (DEFAULT_MODEL.contextWindow - DEFAULT_MODEL.maxOutputTokens) * 0.16,
+    );
+    expect(uncappedRetain).toBe(109_385);
+    expect(uncappedRetain).toBeGreaterThan(100_000);
     expect(retainTokensFor(ratio, DEFAULT_MODEL, trigger)).toBeLessThan(100_000);
   });
 
@@ -88,7 +90,7 @@ const conversation = (count: number): BaseMessage[] =>
     sized(index % 2 === 0 ? 'human' : 'ai', String(index)),
   );
 
-describe('選尾巴（retainedTailCount）：dsh 的「累加到 ≥ 為止、跨過的那則也留」', () => {
+describe('選尾巴（retainedTailCount）：「累加到 ≥ 為止、跨過的那則也留」', () => {
   const unit = estimateMessageTokens(sized('human', '0'));
 
   it('累加到 ≥ 保留量為止，跨過的那則也留', () => {
@@ -346,7 +348,7 @@ describe('接對：N 決定了送出去的串', () => {
    * 同一串訊息、不同模型：90b 的保留量是 4,587、11b 的是 20,000，所以留下的則數不同。**這一條同時證明分派用的是這一步
    * 的模型（`limitsOf(request.model)`），不是建構時定死的值。**
    */
-  it('小窗口模型（90b）：留 dsh 的 4,587，比兩成封頂小，所以不被封', async () => {
+  it('小窗口模型（90b）：留 4,587，比兩成封頂小，所以不被封', async () => {
     // 小窗口的有效門檻 26,214，一串 20 × unit 要超過它：用夠多則。
     const count = Math.ceil(26_214 / unit) + 8;
     const messages = conversation(count);
@@ -357,7 +359,7 @@ describe('接對：N 決定了送出去的串', () => {
     expect(String(small.sent[0]!.messages[0]!.content)).toContain('這是摘要。');
   });
 
-  it('中窗口模型（11b）：dsh 的 20,316 被封在 20,000，與沒型錄的同量', async () => {
+  it('中窗口模型（11b）：不封頂的 20,316 被封在 20,000，與沒型錄的同量', async () => {
     const count = Math.ceil(100_000 / unit) + 8;
     const out = await run({ modelName: 'mid', messages: conversation(count) });
     expect(out.cutoff).toBeDefined();

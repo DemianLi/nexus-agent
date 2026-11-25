@@ -106,7 +106,7 @@ describe('imageOccurrences', () => {
   });
 });
 
-describe('requiredImageOffload（逐字照 dsh offloadedImagePrefixCount，無 quantum）', () => {
+describe('requiredImageOffload（無 quantum）', () => {
   it('沒有額度、額度內：0', () => {
     const messages = [human([ref('a'), ref('b')], 1)];
     expect(requiredImageOffload(messages, {})).toBe(0);

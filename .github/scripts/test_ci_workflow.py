@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,48 @@ def loop_pairs(branch: str, verdict: str) -> set[str]:
             return set(re.findall(r'"([\w-]+)=\$\w+"', match.group(1)))
     raise AssertionError(f'找不到要求 {verdict} 的迴圈')
 
+INTERNAL_FLAG = '--expose-' + 'internals'
+INTERNAL_ADDON = 'node-addon-require-builtin'
+INTERNAL_LOADER_SRC = 'harness/vendor/loader/src/'
+THIS_FILE = Path(__file__).resolve().relative_to(ROOT).as_posix()
+
+
+def tracked_files(root: Path = ROOT) -> list[str]:
+    out = subprocess.run(['git', 'ls-files', '-z'], cwd=root, check=True, capture_output=True).stdout
+    return [f for f in out.decode('utf-8').split('\0') if f]
+
+
+def internal_loader_trigger(root: Path, files: list[str]) -> str | None:
+    lock = root / 'pnpm-lock.yaml'
+    if lock.is_file() and INTERNAL_ADDON in lock.read_text(encoding='utf-8'):
+        return f'pnpm-lock.yaml 裡有 {INTERNAL_ADDON}'
+    for f in files:
+        if f.startswith(INTERNAL_LOADER_SRC) or f == THIS_FILE or f.lower().endswith(('.md', '.mdx')):
+            continue
+        path = root / f
+        if path.is_file() and INTERNAL_FLAG.encode() in path.read_bytes():
+            return f'{f} 帶 {INTERNAL_FLAG}'
+    return None
+
+
+def covers_pre_v2_loader(matrix: list[str]) -> bool:
+    """24.12.0 起 Node 內部 loader 是 v2。setup-node 拿到只寫主版本的 `24` 會跑最新的 24，不算。"""
+    for node in matrix:
+        match = re.fullmatch(r'24\.(\d+)(?:\.\d+)?', str(node))
+        if match and int(match.group(1)) < 12:
+            return True
+    return False
+
+
+def internal_loader_gap(root: Path, files: list[str], matrix: list[str]) -> str | None:
+    trigger = internal_loader_trigger(root, files)
+    if trigger is None or covers_pre_v2_loader(matrix):
+        return None
+    return (
+        f'{trigger}，vendor loader 會碰 Node 內部 loader，但 node-compat 的矩陣 {list(matrix)} 沒有落在 >=24.0 <24.12 的格'
+        '（24.0–24.11.1 是 v1，24.12.0 起是 v2）。在 .github/workflows/ci.yml 的 node-compat 矩陣補一格，例如 \'24.11\'。'
+    )
+
 
 class NodeCompatShape(unittest.TestCase):
     def setUp(self) -> None:
@@ -113,6 +156,57 @@ class NodeCompatShape(unittest.TestCase):
         self.assertTrue(files)
         for f in files:
             self.assertTrue((ROOT / actual(f, lambda c: (ROOT / c).exists())).is_file(), f)
+
+    def test_matrix_covers_pre_v2_loader_when_internals_are_reachable(self) -> None:
+        gap = internal_loader_gap(ROOT, tracked_files(), self.job['strategy']['matrix']['node'])
+        self.assertIsNone(gap, gap)
+
+
+class InternalLoaderRule(unittest.TestCase):
+    TODAY = ['22.19', '26']
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def write(self, name: str, text: str) -> None:
+        (self.root / name).write_text(text, encoding='utf-8')
+
+    def test_neither_condition_passes(self) -> None:
+        self.write('pnpm-lock.yaml', 'lockfileVersion: 9\n')
+        self.write('a.ts', 'export {}\n')
+        self.assertIsNone(internal_loader_gap(self.root, ['a.ts'], self.TODAY))
+
+    def test_lockfile_addon_without_pre_v2_cell_fails(self) -> None:
+        self.write('pnpm-lock.yaml', f'  {INTERNAL_ADDON}@1.0.0:\n')
+        gap = internal_loader_gap(self.root, [], self.TODAY)
+        self.assertIsNotNone(gap)
+        self.assertIn(INTERNAL_ADDON, gap)
+        self.assertIn('pnpm-lock.yaml', gap)
+        self.assertIn('>=24.0 <24.12', gap)
+
+    def test_flag_in_file_with_pre_v2_cell_passes(self) -> None:
+        self.write('run.sh', f'node {INTERNAL_FLAG} x.js\n')
+        self.assertIsNone(internal_loader_gap(self.root, ['run.sh'], [*self.TODAY, '24.11']))
+
+    def test_flag_in_file_without_pre_v2_cell_names_the_file(self) -> None:
+        self.write('run.sh', f'node {INTERNAL_FLAG} x.js\n')
+        gap = internal_loader_gap(self.root, ['run.sh'], self.TODAY)
+        self.assertIsNotNone(gap)
+        self.assertIn('run.sh', gap)
+
+    def test_loader_source_and_markdown_do_not_count(self) -> None:
+        (self.root / 'harness/vendor/loader/src').mkdir(parents=True)
+        self.write('harness/vendor/loader/src/internal.ts', INTERNAL_FLAG)
+        self.write('README.md', INTERNAL_FLAG)
+        files = ['harness/vendor/loader/src/internal.ts', 'README.md']
+        self.assertIsNone(internal_loader_gap(self.root, files, self.TODAY))
+
+    def test_major_only_24_does_not_cover(self) -> None:
+        self.assertFalse(covers_pre_v2_loader(['24', '26']))
+        self.assertFalse(covers_pre_v2_loader(['24.12']))
+        self.assertTrue(covers_pre_v2_loader(['24.0']))
 
 
 class LowerBound(unittest.TestCase):

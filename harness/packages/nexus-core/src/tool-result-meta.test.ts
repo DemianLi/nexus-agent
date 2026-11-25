@@ -19,7 +19,7 @@ import {
   runInToolMetaSlot,
 } from './tool-result-meta.js';
 
-describe('computeHunkDiffs（逐行照抄 dsh）', () => {
+describe('computeHunkDiffs', () => {
   it('一個 hunk：上下文加 `-` 行對上下文加 `+` 行', () => {
     expect(computeHunkDiffs('/a', 'a\nb\nc\n', 'a\nB\nc\n')).toEqual([
       { path: '/a', oldText: 'a\nb\nc', newText: 'a\nB\nc' },

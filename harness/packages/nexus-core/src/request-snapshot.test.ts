@@ -108,7 +108,7 @@ const toolOf = (name: string, parameters: unknown) => ({
   function: { name, description: '壞掉的。', parameters },
 });
 
-describe('拷不動的參數不再靜靜丟掉（#1731，照 dsh snapshotJsonValue 拋出）', () => {
+describe('拷不動的參數不再靜靜丟掉（#1731，改成拋出）', () => {
   it('循環參照的工具參數：拋 TypeError、訊息帶工具名稱，不是回一份少了參數的 header', () => {
     const cyclic: Record<string, unknown> = { type: 'object' };
     cyclic['self'] = cyclic;
@@ -379,7 +379,7 @@ describe('recordRequestSnapshot：變了才記', () => {
   });
 });
 
-describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650）', () => {
+describe('記不進去，這次請求不送（#1726）', () => {
   it('handler 的錯原樣拋出、模型沒被叫；基準不前進，下一次記得進去照記 initial', async () => {
     const log = new SessionLog('s');
     const append = log.append.bind(log);

@@ -31,7 +31,7 @@ const IMAGE: ImageAttachmentRef = {
 };
 
 describe('檔案給模型的那一行', () => {
-  it('讀得到：檔名、位元組、雜湊前八碼、路徑，和 dsh 同一句', () => {
+  it('讀得到：檔名、位元組、雜湊前八碼、路徑', () => {
     const path = fileModelPath(FILE)!;
     expect(path).toBe(`/attachments/ab/${DIGEST}/說明 文件.txt`);
     expect(fileHandleText(FILE, path)).toBe(
