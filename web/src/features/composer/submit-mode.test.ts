@@ -9,7 +9,7 @@ import {
 
 const enter = { key: 'Enter', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false };
 
-describe('resolveSubmitMode（#710，照 dsh resolveSubmitMode）', () => {
+describe('resolveSubmitMode（#710）', () => {
   it('跑著時 Cmd/Ctrl+Enter 插話，Enter 排隊', () => {
     expect(resolveSubmitMode('running', 'accelerated')).toBe('steer');
     expect(resolveSubmitMode('running', 'enter')).toBe('queue');

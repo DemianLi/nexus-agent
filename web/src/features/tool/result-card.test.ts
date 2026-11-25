@@ -49,7 +49,7 @@ describe('readCardOf', () => {
     ['沒給 offset', { file_path: '/src/a.ts' }],
     ['offset 是 0（deepagents 0 起算，從檔頭讀）', { file_path: '/src/a.ts', offset: 0 }],
     ['offset 是字串（deepagents 會 coerce）', { file_path: '/src/a.ts', offset: '10' }],
-  ])('%s：照樣畫，不照抄 dsh 的 ≥1 整數檢查', (_, args) => {
+  ])('%s：照樣畫', (_, args) => {
     expect(readCardOf(read(args))).toBeDefined();
   });
 

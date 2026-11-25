@@ -158,7 +158,7 @@ function ratingsServer() {
 
 // StrictMode 下先掛上的那一份會被收掉：重讀要跟著最後那條線走，不能漏也不能多讀一次。
 describe.each([false, true])(
-  'useConversation 重接之後重讀評分（#772，照 dsh 的 connection/reset；StrictMode：%s）',
+  'useConversation 重接之後重讀評分（#772；StrictMode：%s）',
   (strict) => {
     beforeEach(() => configure({ reactStrictMode: strict }));
     afterEach(() => configure({ reactStrictMode: false }));

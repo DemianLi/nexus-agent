@@ -26,7 +26,7 @@ async function emitted(): Promise<{ fileName: string; source: string }[]> {
   return files;
 }
 
-describe('字型授權全文跟著字型進產物（#1713，照 dsh brandFontLicense）', () => {
+describe('字型授權全文跟著字型進產物（#1713）', () => {
   it('三顆字型各一份，放在 assets/fonts/，都是 OFL 1.1 全文', async () => {
     const files = await emitted();
     expect(files.map((f) => f.fileName)).toEqual([

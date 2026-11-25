@@ -224,7 +224,7 @@ describe('送出', () => {
   });
 });
 
-describe('主按鈕（照 dsh `InputBar.tsx:323-344`，#1591）', () => {
+describe('主按鈕（#1591）', () => {
   const button = (name: string) => screen.queryByRole('button', { name });
 
   it('沒在跑：只有送出，草稿空時按不下去', () => {
@@ -254,14 +254,14 @@ describe('主按鈕（照 dsh `InputBar.tsx:323-344`，#1591）', () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it('跑著、草稿是命令：照舊叫「送出」，不說排隊（dsh 的 plainMessageDraft）', () => {
+  it('跑著、草稿是命令：照舊叫「送出」，不說排隊', () => {
     render(<Harness stoppable />);
     type('/feedback 好用');
     expect(button('排隊送出')).toBeNull();
     expect(button('送出')?.hasAttribute('disabled')).toBe(false);
   });
 
-  it('跑著、草稿送不出去（例如跑著時不收的命令）：主按鈕是停止（dsh 的 blocked）', () => {
+  it('跑著、草稿送不出去（例如跑著時不收的命令）：主按鈕是停止', () => {
     const onStop = vi.fn();
     render(<Harness stoppable canSend={false} onStop={onStop} />);
     type('/plan');
@@ -494,7 +494,7 @@ describe('`/` 選單', () => {
     expect(input().value).toBe('');
   });
 
-  it('有裝飾的 `/feedback` 雖然帶參數，Enter 選到就直接執行（照 dsh：裝飾先判），不是填 `/feedback `', () => {
+  it('有裝飾的 `/feedback` 雖然帶參數，Enter 選到就直接執行（裝飾先判），不是填 `/feedback `', () => {
     const run = vi.fn(() => true);
     render(<Harness run={run} />);
     type('/fe');
@@ -681,7 +681,7 @@ describe('@ 引用', () => {
     await waitFor(() => expect(menu()).not.toBeNull());
   });
 
-  it('Shift+Tab 也收起，輸入框留著剛打的字（dsh 的 arbitrate）', async () => {
+  it('Shift+Tab 也收起，輸入框留著剛打的字', async () => {
     const fake = lister();
     render(<Harness fileReferences={fake.fileReferences} />);
     await opened(fake);
@@ -714,7 +714,7 @@ describe('@ 引用', () => {
     expect(sent).toEqual([]);
   });
 
-  it('一列都還沒有時畫骨架；這時 Enter 不歸選單管，照常送出（dsh 的 arbitrate）', async () => {
+  it('一列都還沒有時畫骨架；這時 Enter 不歸選單管，照常送出', async () => {
     const fake = lister();
     const sent: string[] = [];
     render(<Harness fileReferences={fake.fileReferences} onSubmit={(draft) => sent.push(draft)} />);

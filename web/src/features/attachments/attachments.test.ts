@@ -14,7 +14,7 @@ import {
 import { dragHasFiles } from '@/features/attachments/file-drag';
 
 describe('草稿附件的純函式', () => {
-  it('只有 dsh 白名單內的四種是圖（png、jpeg、webp、gif），其餘（含不在白名單的圖、沒有型別）是檔案', () => {
+  it('只有白名單內的四種是圖（png、jpeg、webp、gif），其餘（含不在白名單的圖、沒有型別）是檔案', () => {
     for (const type of ['image/png', 'image/jpeg', 'image/webp', 'image/gif']) {
       expect(attachmentKind({ type })).toBe('image');
       expect(imageMediaType({ type })).toBe(type);

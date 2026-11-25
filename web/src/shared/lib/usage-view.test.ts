@@ -11,7 +11,7 @@ import {
 const stats = { turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 };
 
 describe('sessionUsageView（#574）', () => {
-  it('兩格都是 null：不畫（null 等於 dsh 的全是 0）', () => {
+  it('兩格都是 null：不畫（null 等於全是 0）', () => {
     expect(sessionUsageView(null, null)).toBeNull();
   });
 
@@ -65,7 +65,7 @@ describe('sessionUsageView（#574）', () => {
     });
   });
 
-  it('模型呼叫都沒報用量：沒有總數，收著改寫次數（同 dsh 只剩時間那顆）', () => {
+  it('模型呼叫都沒報用量：沒有總數，收著改寫次數', () => {
     const view = sessionUsageView(null, stats);
     expect(view?.total).toBeUndefined();
     expect(view?.label).toBe('4 輪／17 次');
@@ -78,7 +78,7 @@ describe('sessionUsageView（#574）', () => {
   });
 });
 
-describe('formatDuration（照 dsh）', () => {
+describe('formatDuration', () => {
   it.each([
     [0, '0 秒'],
     [45_240, '45.2 秒'],

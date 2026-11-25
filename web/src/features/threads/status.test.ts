@@ -72,7 +72,7 @@ describe('哪一種等人回答', () => {
     ).toBeUndefined();
   });
 
-  it('計劃審核照 dsh planReviewOf：一題、帶 detail、不複選、同意的標籤要在選項裡', () => {
+  it('計劃審核：一題、帶 detail、不複選、同意的標籤要在選項裡', () => {
     expect(isPlanReview([PLAN])).toBe(true);
     expect(isPlanReview([PLAN, { id: 'y', question: '另一題' }])).toBe(false);
     expect(isPlanReview([{ ...PLAN, detail: undefined }])).toBe(false);
@@ -169,7 +169,7 @@ describe('跑完沒看', () => {
     expect(rowStatus(state, item('a'))).toBeUndefined();
   });
 
-  it('列表回來之前就停下：連先前狀態都不知道也算（dsh 的 beforeBaseline）；列表回來之後就不算', () => {
+  it('列表回來之前就停下：連先前狀態都不知道也算；列表回來之後就不算', () => {
     expect(rowStatus(run('here', status('a', false)), item('a'))).toBe('completed');
     expect(
       rowStatus(run('here', listed(item('x')), status('a', false)), item('a')),
@@ -295,7 +295,7 @@ describe('有效空白（#1600）', () => {
     expect(effectiveBlank(state, blankRow('B', true))).toBe(false);
   });
 
-  it('跑完也不鬆開：下一次刷新之前快照還說空白，照 dsh 留著「講過」', () => {
+  it('跑完也不鬆開：下一次刷新之前快照還說空白，留著「講過」', () => {
     const state = run('目前', listed(blankRow('B')), status('B', true), status('B', false));
     expect(effectiveBlank(state, blankRow('B'))).toBe(false);
   });

@@ -20,7 +20,7 @@ describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () =>
   });
 });
 
-describe('commandArm：命令走哪一路（#1971，dsh matchEnter）', () => {
+describe('commandArm：命令走哪一路（#1971）', () => {
   it.each([
     ['/plan', 'claim'],
     ['/plan off', 'claim'],

@@ -1970,7 +1970,7 @@ describe('新對話重用空白會話', () => {
     expect(state.reads).toBeGreaterThanOrEqual(2);
   });
 
-  it('送出被伺服器拒絕之後按：仍是空白，留在原地（#1600，照 dsh）', async () => {
+  it('送出被伺服器拒絕之後按：仍是空白，留在原地（#1600）', async () => {
     setSeq(0);
     const fake = fakeClient([]);
     const { client, state } = gated(fake, LISTED);
