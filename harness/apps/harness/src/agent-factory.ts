@@ -231,15 +231,14 @@ export interface CreateNexusAgentOptions {
   /**
    * 工具結果外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
    * 全文存進 {@link toolResultStash} 的主機目錄，模型只收到頭尾預覽加路徑。**省略就不掛**；**沒有
-   * {@link toolResultStash}（沒有會話鑰匙、沒有存處）也不掛**，那時超過 80,000 字元的結果仍由基座換成預覽——
-   * dsh 的規則是找不到可還原的存處就保留原結果。細節與偏離見 `@nexus/core` 的 `spill-policy.ts`。
+   * {@link toolResultStash}（沒有會話鑰匙、沒有存處）也不掛**，那時超過 80,000 字元的結果仍由基座換成預覽。細節見 `@nexus/core` 的 `spill-policy.ts`。
    */
   readonly spillPolicy?: { readonly maxInlineTokens: number };
   /**
    * **哪幾個條目可以少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），以條目物件比對
    * （放進 {@link plugins} 的那一顆）。
    *
-   * 給了就用載入器的逐列掉模式，照 dsh：這幾個條目自己的失敗——`apply` 拋錯、`requires` 缺件、撞到基座保留的
+   * 給了就用載入器的逐列掉模式：這幾個條目自己的失敗——`apply` 拋錯、`requires` 缺件、撞到基座保留的
    * 工具名——只讓它掉，組出來的 agent 照樣有其餘的，掉了哪幾個從回傳的 `dropped` 讀。**不在這份裡的條目掉了，
    * 整個組裝失敗**（{@link AssemblyDropError}）：產品路徑上那是組裝點自己加的外掛與必掛的列。組裝點的外掛不能
    * 少掛，因為有些使用方查不到它們給的服務就自己退回預設值照樣跑（例如 `ask-user` 查不到對話管道）。
@@ -286,7 +285,7 @@ export interface CreateNexusAgentOptions {
    */
   readonly subagentToolFilter?: ToolFilter;
   /**
-   * 「先讀後改」策略的開關。省略即開著（照 dsh，那邊是預設載入的插件）——**除非**清單上
+   * 「先讀後改」策略的開關。省略即開著——**除非**清單上
    * `@nexus/core/observation-policy` 那一列標了 `disabled: true`，三態見 `@nexus/core` 的
    * `FoldOptions.observationPolicy`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
    *
@@ -399,12 +398,12 @@ export interface CreateNexusAgentOptions {
   readonly tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到 `DEFAULT_TOOL_RESULT_PRUNE`
-   * （dsh 的 8192／4096／1024）上，`false` 是摘要照跑、只是不先剪。**省略時由清單上
+   * 上，`false` 是摘要照跑、只是不先剪。**省略時由清單上
    * `@nexus/core/tool-result-pruner` 那一列決定**，手搭清單（沒有那一列）才是內建預設；
    * 四態見 `@nexus/core` 的 `FoldOptions.toolResultPruning`（#456）。CLI 與 serve 走的就是
    * 那一列——部署在 patch 裡改它。
    *
-   * 照 dsh 只在摘要開著時有作用；給了物件照樣在組裝時驗。形狀見 `@nexus/core` 的
+   * 只在摘要開著時有作用；給了物件照樣在組裝時驗。形狀見 `@nexus/core` 的
    * `tool-result-pruner.ts`。
    */
   readonly toolResultPruning?: Partial<ToolResultPruneConfig> | false;
@@ -417,8 +416,8 @@ export interface CreateNexusAgentOptions {
    * **這一格存在是因為基座沒有這種 middleware。** 模型以同參數重複呼叫同一個工具時，
    * 今天唯一會讓它停下來的是 {@link DEFAULT_RECURSION_LIMIT}，而那個上限不分辨「在
    * 進展」與「在打轉」——它只會在跑了夠久之後把整輪掐掉。提醒器是**建議不是阻止**：
-   * 合理的重複一秒都不會被延遲。形狀與門檻照 dsh 的 `repeat-tool-reminder`，
-   * 偏離登記見 [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
+   * 合理的重複一秒都不會被延遲。形狀與門檻見
+   * [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
    *
    * **開著會吃掉迴圈預算**：它掛在 `beforeModel` 上，那在圖裡是一個節點，每一輪多一個
    * super-step，於是每輪格數從兩格變三格，換算見 {@link recursionLimit}（{@link stepInbox}
@@ -508,13 +507,8 @@ export interface CreateNexusAgentOptions {
  * 核准的回一則說明是「沒有人被問到」的拒絕（[#113](https://github.com/DemianLi/nexus-agent/issues/113)
  * 拍板 (a)：不加旗標，因為旗標是為了讓人選，而這裡沒有第二個值得選的行為）。
  *
- * 對到 dsh 的 `ApprovalPolicy: 'never'`，它的文件寫的正是這個用途 ——
- * "The strict headless stance (CI, unattended runs)"（`docs/subsystems/approval.md:43`）。
- *
- * **與 dsh 的偏離，只有這一句**：dsh 還分得出第三種 —— policy 留在 `'ask'` 但一個
- * answerer 都沒 compose，結果是 `'unavailable'` 而不是 `'rejected'`。我們的
- * `ApprovalChannel` 是從 checkpointer 在不在推出 `no-channel` 的，不是從一份 answerer
- * 名冊，所以「有 resume 管道但沒有介面」在我們這裡沒有表示法，退到 `never`。
+ * `ApprovalChannel` 只從 checkpointer 在不在推出 `no-channel`，所以「有 resume
+ * 管道但沒有介面」沒有表示法，退到 `never`。
  *
  * **不是每個入口都該用它。** `serve-run.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
  * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
@@ -581,9 +575,6 @@ export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
  * write 回 `{ error }`，所以那個組裝底下**每一則**超過 80,000 字元的工具結果都會這樣：
  * 實測 80,014 個字元換成 166 個，模型接著 `read_file` 拿到 `ENOENT`。
  *
- * dsh 明文保證相反：`dsh-spill-policy` 的三個不變式之一是「spill 失敗保留原始內聯結果，
- * 絕不把成功的呼叫變成錯誤」（`packages/spill/spill-policy/README.zh.md`，SHA `4e84901`）。
- *
  * ## 為什麼修在 backend 這一層，而不是包一層 middleware
  *
  * **因為原文在基座那一層裡面。** 我們自己的 `wrapToolCall` 包在外面時，拿到的已經是
@@ -599,7 +590,7 @@ export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
  *
  * - **`read-only`**：那次 write 不再被 fence 擋掉，缺陷消失。
  * - **`workspace-write`**：暫存不再落在使用者的專案目錄裡。今天它會留下永遠沒人清的
- *   `<root>/large_tool_results/*.txt`；dsh 的 spill 同樣**不寫工作區**，它有自己的私有根。
+ *   `<root>/large_tool_results/*.txt`。
  * - 而且它不必知道那次 write **為什麼**會失敗——`ENOSPC`、`EACCES`、掛載唯讀，一起蓋掉。
  *
  * ## 去向：主機上的私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），退路是記憶體
@@ -607,13 +598,13 @@ export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
  * 給了 `stash`（產品路徑上兩個入口都給）：路由到主機上按會話分的私有目錄，目錄 0700、檔案 0600，所以 CLI
  * `--resume` 或 serve 重開之後，預覽指著的路徑還讀得到同一個檔（`conversation-restore.ts` 照同一條規則重算路徑）。
  * 這一改**推翻了原本「放記憶體」的理由**——「唯讀模式不該碰磁碟、state 不需要清理政策」是偏好，不是基座做不到：
- * 唯讀指的是使用者的**工作區**，這個私有目錄不在工作區裡（dsh 的 spill 同樣如此）；清理政策改由啟動時的保留期
+ * 唯讀指的是使用者的**工作區**，這個私有目錄不在工作區裡；清理政策由啟動時的保留期
  * 清理承擔（`tool-result-stash.ts` 的 `cleanupToolResultStash`）。
  * **寫不進主機目錄就退回記憶體**（今天的 {@link TextOnlyStateBackend}），所以 #170 的「存不下就丟原文」不會復發。
  *
  * 沒給 `stash`（eval、spike、沒有會話日誌的組裝）維持記憶體：它是 graph state 的一部分，會進 checkpoint，
- * 跑完也不留在磁碟上供事後翻查。偏離 dsh 的三點（固定根、檔名由工具呼叫編號推出、會話鑰匙由呼叫端給）
- * 登記在 `tool-result-stash.ts` 的檔頭。
+ * 跑完也不留在磁碟上供事後翻查。固定根、檔名由工具呼叫編號推出、會話鑰匙由呼叫端給，
+ * 這三點見 `tool-result-stash.ts` 的檔頭。
  *
  * @param backend - 組裝點的 default backend。
  * @param stash - 主機暫存的根與會話鑰匙；省略就是記憶體。
@@ -678,14 +669,12 @@ export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
  *
  * ## 去向：graph state，與 {@link withToolResultStash} 同一個理由
  *
- * dsh 不把被壓掉的原文寫進任何檔案系統：原文留在會話日誌，模型只看到一則
- * `<compacted-summary>`（`packages/compaction/compaction-basic/README.zh.md`，SHA `0d1f500`）。
  * 我們的日誌從 [#305](https://github.com/DemianLi/nexus-agent/issues/305) 起也記著對話
  * （`assistant/message`、`tool/result`），所以耐久的那一份已經在日誌裡；backend 上這一份只是
  * **這個行程內**讓模型照摘要那句話去 `read_file` 的便利，只有原文讀不回來的呼叫（沒接會話日誌）才寫。放 state 不必碰磁碟（`read-only` 也
  * 留得住，以前那次寫入被 fence 擋掉、歷史直接消失），也不必有清理政策。
  *
- * **偏離登記**：基座把歷史寫成檔、還在摘要裡告訴模型路徑，dsh 沒有這條路；這條路基座無條件
+ * 基座把歷史寫成檔、還在摘要裡告訴模型路徑；這條路基座無條件
  * 建、關不掉（`contained-backend.ts` 的 `read-only` 那段），所以退到「照舊寫，但寫到工作區外」。
  *
  * **代價講明白**，都跟暫存那一格同形：
@@ -725,10 +714,8 @@ function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtoco
  * 多寫那一格不會改變任何行為，只會讓讀的人以為那裡有一個分岔。
  *
  * **第一態是一條登記過的偏離，不是順手寫的。** 形狀上它跟 #456 那三列的第一態一樣
- * （`options.X !== undefined`），但那三列沒有旗標，所以它們沒回答過「旗標與設定誰贏」。dsh 回答
- * 過，而且答案的**載體**跟這裡不同：它把優先序寫在設定值自己身上（`port: !!js
- * ctx.webStartup.port ?? 3080`），逐字「No row has launcher-level command-line status」。我們沒有
- * `inject`、也沒有延後解析的設定值，所以退到「在讀它的這個函式裡排優先序」。逐條登記見
+ * （`options.X !== undefined`），但那三列沒有旗標，所以它們沒回答過「旗標與設定誰贏」。這裡沒有
+ * `inject`、也沒有延後解析的設定值，所以在讀它的這個函式裡排優先序。逐條登記見
  * [`settings/recursion-limit.ts`](./settings/recursion-limit.ts) 的偏離 2。
  *
  * @param registry - 已經跑完 `loadPlugins()` 的 registry。
@@ -788,7 +775,7 @@ function maxConcurrencyFor(registry: PluginRegistry): number {
   return Math.max(MIN_LANGGRAPH_MAX_CONCURRENCY, maxParallelToolCallsFor(registry));
 }
 
-/** 上限是 1 ＝ 串行：屏障把每一顆都當獨佔（dsh 的 `maxParallelToolCalls: 1`）。 */
+/** 上限是 1 ＝ 串行：屏障把每一顆都當獨佔。 */
 function serialToolCallsFor(registry: PluginRegistry): boolean {
   return maxParallelToolCallsFor(registry) === 1;
 }
@@ -796,7 +783,7 @@ function serialToolCallsFor(registry: PluginRegistry): boolean {
 /**
  * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`#settings/tool-fs-search` 那一列
  * 提供了服務才掛，見那一列的檔頭。完整結果存進工具結果暫存（同外溢層那一份存檔服務）；沒有暫存（eval、spike、沒有會話
- * 日誌的組裝）時照 dsh 只留前段、註明沒存到。
+ * 日誌的組裝）只留前段、註明沒存到。
  */
 function searchOverflowFor(
   registry: PluginRegistry,
@@ -993,7 +980,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         ...(options.sharedWorkspace === undefined ? [] : [SHARED_WORKSPACE_PREFIX]),
       ],
       defaultBackend: withConversationHistory(
-        // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
+        // 墊底的虛擬 FS 讀到二進位檔就拒絕（#642），路由那兩格同一種。
         withToolResultStash(
           options.backend ?? new TextOnlyStateBackend(),
           stashRoute,
@@ -1098,9 +1085,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       return compileSubagentGraph(params, name, {
         ...(checkpointer !== undefined && { checkpointer }),
         ...(model !== undefined && { model }),
-        // 背景子代理的模型在委派那一刻定了（`delegationBaseline`），不跟著使用者後來換的模型走（#328，照 dsh）。
+        // 背景子代理的模型在委派那一刻定了（`delegationBaseline`），不跟著使用者後來換的模型走（#328）。
         follow: false,
-        // 背景子代理背後沒有人（#328 第 1 項只開前景）：換成 `policy-never` 的閘門，要核准的操作確定性回絕，不發中斷（#737，照 dsh）。
+        // 背景子代理背後沒有人（#328 第 1 項只開前景）：換成 `policy-never` 的閘門，要核准的操作確定性回絕，不發中斷（#737）。
         approvalGate: backgroundApprovalGate,
         // 政策句跟閘門用同一組事實（#1986）：閘門換成 `policy-never`，這一句也換成「一律自動回絕」那句。
         approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
@@ -1143,7 +1130,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       /**
        * 這一次組裝的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948），**沒給
        * {@link CreateNexusAgentOptions.toolResultStash} 時是 `undefined`**。跟外溢層、搜尋上限是同一個暫存實例：同一個會話目錄、
-       * 同一套權限，模型 `read_file` 讀得到。pump 拿它存被截斷的跨會話引用全文（dsh 取 `ctx.get('spillStore')`）。
+       * 同一套權限，模型 `read_file` 讀得到。pump 拿它存被截斷的跨會話引用全文。
        */
       spillStore: stashRoute?.spillStore(TOOL_RESULT_STASH_PREFIX),
       /**
@@ -1181,25 +1168,22 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *
-       * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，
-       * 也是為什麼這裡回的是「有沒有掛」而不是一個保險的預設值。
+       * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」，
+       * 所以這裡回的是「有沒有掛」而不是一個保險的預設值。
        */
       telemetrySharing: registry.services.get(SESSION_TELEMETRY_SERVICE)?.sharing,
       /**
        * 把一次組裝的**每一份**會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端
        * 就沒有出口，建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
        *
-       * **一份會話一個協調器，而且新開的那些自動有。** 這是 dsh 的形狀——它的 live
-       * capture「subscribes to the session firehose」並且「sweeps already-live sessions」
-       * （`packages/session/session-telemetry/src/coordinator.ts` 檔頭），per-session 的
-       * 狀態掛在以 session 為鍵的 `WeakMap` 上。subagent 的日誌因此不必有人記得重接。
+       * **一份會話一個協調器，而且新開的那些自動有。**
+       * subagent 的日誌因此不必有人記得重接。
        *
        * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
        * `feedback-only` 是 on-demand，只在人送出回饋時補送（{@link watchFeedback}）；其餘是 live。
        * 分叉來的會話，live 從繼承標記起送，`feedback-only` 補送整份、連繼承來的前綴（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
-       * dsh 把這一段放在 OTel 後端自己的建構子裡（它的後端自己組協調器）；我們的協調器從
-       * [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起就在這裡組，plugin 碰不到日誌，所以
-       * 策略跟著協調器住在這裡。協調器本身照舊不讀 `sharing`。
+       * 協調器在這裡組（[#89](https://github.com/DemianLi/nexus-agent/issues/89)），plugin 碰不到日誌，所以
+       * 策略跟著協調器住在這裡。協調器本身不讀 `sharing`。
        *
        * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
@@ -1214,10 +1198,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             log,
             sink: mounted,
             // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
-            // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
+            // 掛著的策略。
             rules: () => registry.telemetry.rules(),
             capture: sharing === 'feedback-only' ? 'on-demand' : 'live',
-            // `feedback-only` 補送整份，連分叉繼承來的前綴（照 dsh 出廠後端的 `includeHistory: true`）；
+            // `feedback-only` 補送整份，連分叉繼承來的前綴；
             // `full` 從這一份自己的第一顆起，分叉來的不重送來源的前綴（#1580）。
             includeHistory: sharing === 'feedback-only',
           });
@@ -1254,9 +1238,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
        * 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
        *
-       * **每一份會話各一個 runner**，同 dsh 的配套入口（`for (const session of
-       * ctx.sessions.list()) seedSession(session)` 加 `ctx.on('session/created', …)`，
-       * `packages/core/session/src/invariant.ts:218-220`）。subagent 的日誌因此不會變成
+       * **每一份會話各一個 runner**。subagent 的日誌因此不會變成
        * 一個沒有檢查的角落。
        *
        * @param sessions - 這次組裝的會話註冊表。
@@ -1370,7 +1352,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           runners.length = 0;
         };
         if (closeHost === undefined) return teardown;
-        // **先等背景 host 收完，才撤登記**（#1482，照 dsh：先收子代理、flush，最後才 dispose）。`closeHost()` 會中止進行中的輪並等它收尾，
+        // **先等背景 host 收完，才撤登記**（#1482：先收子代理、flush，最後才 dispose）。`closeHost()` 會中止進行中的輪並等它收尾，
         // 那一輪還會寫 `turn/end`（aborted）、結算通知，輪裡還在跑的工具也還會問會話與 fs 的查找：登記、綁定、參與者都得還在——
         // 撤得太早，行程裡剛好只剩另一條 thread 時，那一輪的查找會被挑到別人身上；落盤也先退訂的話，這些事件到不了後端。
         const detach = async (): Promise<void> => {
@@ -1449,15 +1431,14 @@ interface TelemetryAttachment {
   dispose(): Promise<void>;
 }
 
-/** 策略是關閉時收到回饋講的那一句。dsh 的 `DISABLED_FEEDBACK_WARNING` 翻過來。 */
+/** 策略是關閉時收到回饋講的那一句。 */
 export const DISABLED_FEEDBACK_WARNING = '遙測：策略是關閉，這則回饋不會經遙測送出去。';
 
 /**
- * 共享策略裡跟回饋有關的兩格，照 dsh 的 OTel 後端
- * （`packages/session/session-telemetry-otel/src/index.ts:160-164,236-248`，`c291e79`）：
+ * 共享策略裡跟回饋有關的兩格：
  *
  * - `feedback-only`：每收到一顆回饋（{@link isFeedbackEvent}），就把日誌從上次交到的地方補送到
- *   現在。第一次是整份——前面的輪、續接帶進來的歷史都在內，照 dsh 的 `includeHistory: true`。
+ *   現在。第一次是整份——前面的輪、續接帶進來的歷史都在內。
  * - `disabled`：收到回饋時講一聲，這則不會經遙測出去。
  * - `full` 本來就每顆都送，不用看。
  *
@@ -1465,7 +1446,7 @@ export const DISABLED_FEEDBACK_WARNING = '遙測：策略是關閉，這則回�
  * 日誌裡可能本來就有上一個行程的回饋——重播到它，就等於在接上的當下把整份歷史送出去，這一次
  * 沒有人按過送出。
  *
- * **補送沒有上界**，dsh 的 `captureSession` 有（`throughSeq`）。這裡省掉，靠的是 `subscribe`
+ * **補送沒有上界**，靠的是 `subscribe`
  * 在 append 之後同步叫：listener 跑的當下日誌剛好到那一顆回饋。除非另一個訂閱者在同一次通知裡
  * 又寫了一顆，今天沒有這種寫者。
  *

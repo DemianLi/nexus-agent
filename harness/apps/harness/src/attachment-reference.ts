@@ -3,9 +3,9 @@
  * {@link referencedImage}）與模型讀附件（[#1773](https://github.com/DemianLi/nexus-agent/issues/1773)，{@link referencedFilePaths}，
  * 路由在 `attachment-route.ts`）。兩條都從同一份事件對照表（{@link referencedAttachments}）出發，新增一種帶附件的事件只改一處。
  *
- * 照 dsh 的 `referencedImage`（`packages/api/session-controller/src/commands.ts:682`，`5badb150`）：附件儲存是整個
+ * 附件儲存是整個
  * `NEXUS_AGENT_HOME` 共用、內容定址的，知道 `attachmentId` 不該就換得到位元組——要這條 thread 自己的日誌說過它。
- * dsh 逐種事件找圖片區塊（`imageInEvent`）；我們逐種事件找**參照出現的地方**：
+ * 逐種事件找**參照出現的地方**：
  *
  * | 事件 | 參照在哪 |
  * | --- | --- |
@@ -16,7 +16,7 @@
  *
  * 檔案區塊（`nexus-file`）與檔案參照走同樣的位置，#1773 起一併認得。
  *
- * `compaction/summary` 不掃：dsh 掃是因為它的摘要裡可能留著圖片區塊，我們的摘要輸入把圖退成文字佔位（`summarization.ts`），
+ * `compaction/summary` 不掃：摘要輸入把圖退成文字佔位（`summarization.ts`），
  * 摘要裡不會有參照。
  *
  * @module

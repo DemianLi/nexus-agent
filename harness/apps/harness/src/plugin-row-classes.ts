@@ -25,7 +25,7 @@
  *   全用 `goals?.` 接；`serve-run.ts` 的 `runServe` 裡的 `goalDriver` 是那一條 thread 自己那次組裝的。
  * - **workspace-changes**：`assembly-root.ts:997` 每次組裝各取一份；`serve-run.ts` 的 `runServe` 在 thread 組裝區塊裡取兩次，沒掛就
  *   缺席；`wire-handler.ts:1139`、`:2563`、`:2582` 讀的是 `ready.get(threadId)?.workspaceChanges`，一條 thread 一份。它是
- *   `cordis.serve.yml:17` 的一列，不是組裝點自己建的。
+ *   `cordis.serve.yml:15` 的一列，不是組裝點自己建的。
  * - **sandbox-policy**：控制器每條 thread 組裝時各建一個（`assembly-root.ts:820`）。**關掉它的後果不是「照舊」而是
  *   「建不起來」**：有 `--workspace` 又沒掛這一列，那條 thread 的組裝直接拋（`:803-809`），重讀之後每條新 thread 都是。
  *   這跟 #1405 Q1「必掛的列掉了，只讓這一條 thread 建不起來，大聲報出來」同一路，不另做處理。

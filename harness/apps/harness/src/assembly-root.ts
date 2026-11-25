@@ -6,8 +6,7 @@
  * 只靠檔尾守衛才不會在被 import 時跑起來），而 patch 載進來的 plugin 若靜態 import `cli.js` 會卡在 unsettled top-level
  * await、以 13 退出（見 `cli-invariant-violation.fixture.ts`）。
  *
- * 照 dsh 的顆粒度：入口檔很薄，共用的開機邏輯住在沒有 main 的獨立模組（`apps/cli/src/profile-boot.ts`，自述
- * “Shared profile boot for every `dsh` surface”，`477b4f4`）。**方向只能是入口檔指向這裡**：這個模組不 import
+ * 入口檔很薄，共用的開機邏輯住在這個沒有 main 的獨立模組。**方向只能是入口檔指向這裡**：這個模組不 import
  * `cli.ts` 也不 import `serve-run.ts`（`import type` 也不行）。
  *
  * 純搬家，不改行為。`SYSTEM_PROMPT` 的措辭是「命令列助手」，組裝點無條件傳它，所以 serve 也用這份——照原字搬，
@@ -142,7 +141,7 @@ export interface CliInvocation {
    * 看起來設過、實際上什麼都沒圍到的模式。
    *
    * 預設值本身是 [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 0 項的定案：
-   * 照 dsh 的出廠 preset（`workspace-write`），而**可寫根之內的寫入在這一格底下是放行的**。
+   * 出廠 preset `workspace-write`，而**可寫根之內的寫入在這一格底下是放行的**。
    * 要它不放行就切到 `read-only`。
    */
   readonly sandbox?: SandboxMode;
@@ -157,14 +156,11 @@ export interface CliInvocation {
    * 會話日誌落盤的根目錄，**換位置用**。這一次的每一份日誌寫進它底下的一個 run 目錄；
    * 省略即 harness home 底下的 `sessions`（{@link harnessSessionsDir}）。
    *
-   * **預設落盤照 dsh**（[#444](https://github.com/DemianLi/nexus-agent/issues/444)，2026-09-19
-   * 拍板）：dsh base 出廠就把會話寫進 `$DSH_HOME/sessions`。這裡以前是「預設不落盤，往家目錄寫
-   * 由人決定」（[#172](https://github.com/DemianLi/nexus-agent/issues/172)），那是政策，不是偏離
-   * 規則要的「表達不出來」，所以改掉。目錄 `0700`、檔 `0600` 照舊。
+   * **預設落盤**（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。
+   * 目錄 `0700`、檔 `0600`。
    *
    * **關掉落盤不是這個旗標的事**，是清單上 `session-persistence` 那一列的 `disabled: true`
-   * （[#612](https://github.com/DemianLi/nexus-agent/issues/612)，同 dsh 拿掉
-   * `session-persistence-jsonl` 那一列）。兩者同時給會當場拋，見 {@link assertPersistenceFlags}。
+   * （[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。兩者同時給會當場拋，見 {@link assertPersistenceFlags}。
    */
   readonly sessionLog?: string;
   /**
@@ -188,16 +184,13 @@ export interface CliInvocation {
   /**
    * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
    *
-   * **CLI 預設關，而且那是一個決定不是保守**（serve 的預設是開，見下面 2026-10-07 那段）。dsh 的續行驅動器是「需要你刻意掛載的可選消費
-   * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
+   * **CLI 預設關，而且那是一個決定不是保守**（serve 的預設是開，見下面）。我們的入口點擁有輪迴圈——**續行驅動器掛不掛，就是
    * 這個旗標**。
    *
-   * （2026-09-19 註：引文是 dsh 當時 README 的原話，但 dsh 的 base 其實出廠就掛著續行驅動器——
-   * 「可選」指套件可以不掛，不是出廠關著。見 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md §三第 18 列。
-   * **2026-10-07（#445）重核的結論：預設只有 CLI 關，serve 預設開。** CLI 用 `HEADLESS_APPROVALS`，
+   * **預設只有 CLI 關，serve 預設開**（#445）。CLI 用 `HEADLESS_APPROVALS`，
    * 要核准的工具被確定性拒絕，續行只會一再撞同一個拒絕空轉；serve 要核准時停下來等人，沒有
    * 這個問題。所以這個欄位在兩個入口的預設相反，旗標名同一個：CLI `--goal-driver` 開、
-   * serve `--no-goal-driver` 關。）
+   * serve `--no-goal-driver` 關。
    *
    * 開著的時候有兩條硬上限，先到的那一條管：那個目標自己的 `max_goal_rounds`，與操作者給的那一條（下面的
    * `maxGoalRounds`，或 `goal-round-cap` 那一列，#1623）。「連續 N 輪沒進展就停」那條停損刻意沒做，理由在 `goal-driver.ts` 檔頭。
@@ -226,8 +219,8 @@ export interface CliInvocation {
    *
    * **產品預設不動，這一格是給呼叫端明著傳的。** 100 是「跑掉了」的界線，對一般任務是對的
    * 校準；需要更長的呼叫端（Proteus 的 adapter）自己傳一個大的，那時那個數字出現在呼叫端
-   * 的指令裡而不是沒有人設過。照 dsh 的房規：會隨部署變的選擇要改得動，一個 `DEFAULT_*`
-   * 常數不算 configurability（`tool-ralph` 的 `maxRounds` 就是 Config）——**那條房規現在由
+   * 的指令裡而不是沒有人設過。會隨部署變的選擇要改得動，一個 `DEFAULT_*`
+   * 常數不算 configurability——**這一點由
    * `recursion-limit` 那一列滿足**，這個旗標是疊在它上面的一層。
    *
    * **它換算成幾個模型輪取決於組裝**：`模型輪數 = floor((recursionLimit − 1) / 每輪格數)`，
@@ -256,25 +249,25 @@ export interface CliInvocation {
    * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
    *
    * **換掉整份清單這件事沒有旗標可以做**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
-   * 拿掉了 `--plugins`）。要一棵完全不一樣的樹是 profile 的工作，dsh 的產品 CLI 也是這樣分的；
+   * 拿掉了 `--plugins`）。要一棵完全不一樣的樹是 profile 的工作；
    * 低層嵌入方與測試走程式路徑（`createCliAgent`），不走旗標。
    */
   readonly patches?: readonly string[];
   /**
    * 把疊完的設定印出來就退出，一個 plugin 都不載。
    *
-   * 照 dsh 的 `--dump-config`：它印的是**啟動真的會掛的那一份**，而印它不需要把每一顆
+   * 印的是**啟動真的會掛的那一份**，而印它不需要把每一顆
    * plugin 都載起來（`renderConfigDump` 是純函式那條路）。
    */
   readonly dumpConfig: boolean;
   /**
    * 把疊完的 plugin 設定欄位規格表（JSON Schema）印出來就退出，一個 plugin 都不套用（[#741](https://github.com/DemianLi/nexus-agent/issues/741)）。
-   * 照 dsh 的 `--dump-config-schema`：跟 `--dump-config` 用同樣的幾層與 `--patch`，兩者互斥。
+   * 跟 `--dump-config` 用同樣的幾層與 `--patch`，兩者互斥。
    */
   readonly dumpConfigSchema: boolean;
   /**
    * 只印出貨那一層的設定就退出，**不讀** home 覆寫檔與 `--patch`（[#740](https://github.com/DemianLi/nexus-agent/issues/740)）。
-   * 照 dsh 的 `--dump-default-config`：它是設計來救「覆寫檔壞掉」的，壞掉的檔根本不會被解析。
+   * 它是設計來救「覆寫檔壞掉」的，壞掉的檔根本不會被解析。
    */
   readonly dumpDefaultConfig: boolean;
   /** 只印用法就退出。 */
@@ -397,8 +390,6 @@ export const SESSION_LOG_OFF_DISCLOSURE =
  * 還看不到），要改的是設定，不是 `disabled`。
  *
  * - **`--resume`**：續接答應呼叫端「這一次也接得回來」，而沒有落盤的話這一次一個位元組都不寫回去。
- *   照 dsh：headless 的 `--session-id` 沒有持久化服務就當場拋，理由正是「跑完會印出 id，卻在
- *   行程結束時丟掉整段歷史」（`packages/bundle/headless/src/index.ts:253-258`，`477b4f4`）。
  * - **`--session-log`**：一個明說的旗標跟一份明說的設定互相矛盾。安靜地讓哪一邊贏都是 #612 要擋
  *   的那種誤讀——使用者以為日誌在寫（或以為沒寫），實際上是另一回事。
  *
@@ -462,8 +453,7 @@ export function resolveWorkspaceRoot(
  * `undefined` 是這條 thread 沒有圍堵。
  *
  * 可寫根從行程級的一格改成逐條 thread 的一格：serve 的 `createAgent` 與 CLI 每條 thread 組裝時問它一次，得到的值**同時**交給續接守衛
- * （`assertSameWorkspaceRoot`）與組裝點，兩邊才不會分岔。dsh 的對應物是 `resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)`
- * （`packages/sandbox/sandbox-policy/src/index.ts:164-171`）：根是會話自己的一格，行程級那一格只是備援。
+ * （`assertSameWorkspaceRoot`）與組裝點，兩邊才不會分岔。
  */
 export type WorkspaceRootOf = (threadId: string) => string | undefined;
 
@@ -582,15 +572,11 @@ export interface LaunchPathsCheck {
  * **只做 `realpath`，不開檔、不讀內容**：訊息裡只有路徑，不會出現任何值。`ELOOP`、`EACCES` 這類解不開的錯原樣往外拋，
  * 啟動失敗，訊息帶著錯誤碼。
  *
- * ## 與 dsh 的偏離（理由 2：產品需求超出 dsh 的射程）
+ * ## 為什麼要這道檢查（多人共用主機）
  *
- * dsh 沒有這道檢查：`loadLayeredEnv` 讀 `$cwd/.env` 與 `$DSH_HOME/.env`，不看工作區在哪
- * （`packages/boot/app-boot/src/index.ts:238-259`，`687f282e`），而它的工作區預設就是 `process.cwd()`
- * （`packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
- * （`packages/fs/fs-sandbox/README.zh.md:12`）。dsh 是單人的寫程式代理，跟模型對話的人就是 key 的主人。我們的 serve 是
- * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
- * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）。讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
- * 終端機跑，跟 dsh 同一個形狀；放在這裡，CLI 之後要用可以直接叫。
+ * 我們的 serve 是多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key，所以啟動時檢查路徑重疊。
+ * 讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
+ * 終端機跑，跟模型對話的人就是 key 的主人；放在這裡，CLI 之後要用可以直接叫。
  *
  * ## #1775 的例外（#1620 Q3，demian 接受）：私有可寫根落在 home 底下
  *
@@ -1208,7 +1194,7 @@ export async function createCliAgent(
   // 唯讀共用區：入口給了就掛。有私有可寫根時共用區是 `--workspace`；落盤關掉的新 thread 可寫根是記憶體（`workspaceRoot` 是 `undefined`），
   // 共用區照樣掛（#1775，(f)）。舊 thread 與 CLI 不給。
   const sharedWorkspaceRoot = invocation.sharedWorkspaceRoot;
-  // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
+  // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669）。fence 還在擋，模型卻不知道、也請不到升級，
   // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
   if (
     workspaceRoot !== undefined &&
@@ -1238,7 +1224,7 @@ export async function createCliAgent(
   // `approvalPolicy` 服務把控制器本身交給 `approval-gate` 那一列去接日誌；**與 `approvals.enabled`（入口有沒有人在）是兩件事**。
   //
   // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `harness/packages/nexus-plugin-permission-presets/src/index.ts` 檔頭第 1 條）：
-  // 全開就是 `never`、其他是 `ask`，同 dsh 的 `DSH_PERMISSION_MODE`。**續接的呼叫端一定會把 `approvalPolicy` 給滿**
+  // 全開就是 `never`、其他是 `ask`。**續接的呼叫端一定會把 `approvalPolicy` 給滿**
   // （`cli.ts`、`serve-run.ts` 的合併：記著的，沒記就 `ask`）——否則一份只記了全開沙箱、沒記核准的舊日誌會在這裡被推成 `never`。
   const approvalPolicy = new ApprovalPolicyController(
     invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
@@ -1254,7 +1240,7 @@ export async function createCliAgent(
           rootDir: workspaceRoot,
           mode: sandboxMode.source,
           grants: sandboxMode,
-          // 多人共用主機上的使用者工作區：別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗（偏離 dsh，#1704）。
+          // 多人共用主機上的使用者工作區：別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗（#1704）。
           tolerateUnreadable: true,
           // 技能來源與記憶來源要 fold 完才知道，所以逐次讀下面填的 `settled`。
           ...(invocation.rootIsShared === true && {
@@ -1321,14 +1307,13 @@ export async function createCliAgent(
         [MCP_SANDBOX_SERVICE]: createMcpSandboxWrapper(),
         // 沒宣告沙箱的 stdio 也跟著宿主行程走（#2197）：缺席或包不了＝照舊直接起。
         [MCP_GUARD_SERVICE]: createMcpGuardWrapper(),
-        // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
+        // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）。`sandbox-policy` 那一列據它
         // 分岔——有圍堵就掛控制器、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。
         ...(workspaceRoot === undefined
           ? {}
           : {
-              // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格
-              // （照 dsh 的 `eligible`）；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
+              // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格。
               workspaceRoot,
               [GIT_STARTER_SERVICE]: createGitStarter(sandboxMode.source, workspaceRoot),
               fsContainment: CONTAINED_FILESYSTEM,
@@ -1457,7 +1442,7 @@ export async function createCliAgent(
       permissionCatalog = started.catalog;
       permissionNarrowed = started.narrowed;
       // **冷復活的背景子代理讀回委派快照時過的上限**（#1739）：背景子代理每一輪由 host 的 `enter` 走 `delegateFromLog`，快照是委派當下寫進它自己日誌的；
-      // 部署方事後把全開從組合表拿掉，root 在續接時收回了，冷復活的子代理讀回的仍是全開。只看「表＋快照」，不讀 root 當下的狀態（照 dsh，快照在
+      // 部署方事後把全開從組合表拿掉，root 在續接時收回了，冷復活的子代理讀回的仍是全開。只看「表＋快照」，不讀 root 當下的狀態（快照在
       // 委派時拍、冷復活只重播）；讀回時收、**不寫子代理日誌**（多寫就多一個能移動 fence 的寫入處）。偏離登記在 `@nexus/plugin-permission-presets` 檔頭第 10 條。
       sandboxMode.setDelegationCeiling((recorded, log) => {
         const narrowing = presets.narrowDelegated(recorded);
@@ -1568,12 +1553,8 @@ export function liveSubagentModelFor(
 }
 
 /**
- * 標題請求要記的推理強度（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)，照 dsh 1517a4db `session-title-first-prompt-llm/src/index.ts:74-76`
- * 取最低一級）。標題那顆以 `purpose: 'session-title'` 建，`live-model` 會依型錄條目關推理（`thinkingOffBody`）；這裡用
+ * 標題請求要記的推理強度（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。標題那顆以 `purpose: 'session-title'` 建，`live-model` 會依型錄條目關推理（`thinkingOffBody`）；這裡用
  * 同一個判準（{@link declaresOffEffort}）決定記不記 `'off'`，只讓紀錄多一格，不碰送出去的請求。
- *
- * **只有條目宣告了 `off` 時才跟 dsh 一致。** 沒宣告 `off` 的條目，dsh 取 `efforts[0]`（最低一級），紀錄和送出都用它；nexus 兩樣都不做
- * （沒有 `off` 以外的線上寫法），已登記為理由 1，見 `model-catalog.ts` 檔頭「`reasoningEfforts` 的驗證只搬 dsh 的前三條」那一條。
  *
  * @param models - `live-model` 的型錄。
  * @param modelId - 這顆標題模型的 id。
@@ -1625,7 +1606,7 @@ function titleLlmFor(
     limits,
     // 標題不在模型呼叫圖裡，SDK 層又不重試了（#1427）：自己吃同一份政策，不記日誌。
     retry: streamRetryOptionsOf(liveModel.retryPolicy),
-    // **標題自己指定了模型就不跟**（`config.modelId`）；沒指定才沿用觸發它的那次主請求走的（#723，照 dsh）。
+    // **標題自己指定了模型就不跟**（`config.modelId`）；沒指定才沿用觸發它的那次主請求走的（#723）。
     // 主請求走預設、或路由不在型錄裡（續接的會話選過後來被拿掉的模型）時回 `undefined`，用上面預設那顆。
     ...(options.followMainRoute &&
       config.modelId === undefined && {
