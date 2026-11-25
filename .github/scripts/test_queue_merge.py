@@ -352,6 +352,14 @@ class Robustness(unittest.TestCase):
             self.assertEqual(main(['queue_merge.py', '7']), 1)
         self.assertIn('::error::', out.getvalue())
 
+    def test_main_exits_nonzero_and_names_the_reason_when_the_queue_cannot_be_listed(self) -> None:
+        gh = FakeGh()
+        gh.fail_on = 'pr'
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'GITHUB_REPOSITORY': 'o/r'}), mock.patch('queue_merge.Queue', lambda repo: Queue(repo, gh=gh)), contextlib.redirect_stdout(out):
+            self.assertEqual(main(['queue_merge.py']), 1)
+        self.assertIn('::error::列不出排隊的 PR', out.getvalue())
+
     def test_dispatch_failure_after_merge_is_reported_on_the_pr(self) -> None:
         gh = FakeGh()
         gh.dispatch_error = 'HTTP 403'
