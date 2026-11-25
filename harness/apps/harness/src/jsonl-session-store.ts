@@ -224,7 +224,7 @@ const DIGEST_LENGTH = 12;
  *
  * CLI 的 root 固定叫 `cli`，subagent 是 `cli/<runId>`——那組 id 是我們自己造的，怎麼
  * 壓平都不會撞。**`serve` 不是**：`ThreadPump` 用 `new SessionRegistry(threadId)`
- * 開 root（`thread-pump.ts:1621`），而 `threadId` 直接來自 `/threads/:id/...` 的路徑。
+ * 開 root（`thread-pump.ts:1618`），而 `threadId` 直接來自 `/threads/:id/...` 的路徑。
  * 把不合法字元一律換成 `_` 的話，`a~b`、`a!b`、`a_b` 三條不同的 thread 會壓成同一個
  * 檔名——第二條的第一次寫入撞上 `wx` 而失敗，協調器按設計吞掉它（暫停自動路徑、
  * 一行 warn），於是**那條 thread 的日誌就這麼沒了**。`wx` 那條拒絕是留給「`create`

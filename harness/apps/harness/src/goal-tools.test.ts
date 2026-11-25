@@ -4,7 +4,7 @@
  *
  * 判準本身的單元在 `@nexus/plugin-goal` 的 `authority.test.ts`，那一層餵的是手做的事件
  * 序列。**這一份存在是因為那個序列長不長那樣，只有進入點說了算**：`turn/start{resume}`
- * 的**唯一生產者是 `thread-pump.ts:862-863`**（CLI 那條的 `runTurn` 只 append
+ * 的**唯一生產者是 `thread-pump.ts:860-861`**（CLI 那條的 `runTurn` 只 append
  * `kind: 'message'`，核准在同一輪的串流迴圈裡就地處理完，所以 CLI 走不到 resume 鏈）。
  * 手寫一段假的事件序列證不到「真的跑一次會長這樣」。
  *
