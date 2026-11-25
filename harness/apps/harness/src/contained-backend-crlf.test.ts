@@ -122,8 +122,8 @@ describe('edit：CRLF 檔', () => {
   });
 });
 
-describe('edit：二進位判斷掃整份，空檔配空 old_string 照 dsh', () => {
-  it('NUL 在 8192 位元組之後：照樣拒絕，檔案原封不動（dsh `buffer.includes(0)`；讀檔那條才取樣）', async () => {
+describe('edit：二進位判斷掃整份，空檔配空 old_string 的處理', () => {
+  it('NUL 在 8192 位元組之後：照樣拒絕，檔案原封不動（讀檔那條才取樣）', async () => {
     // 9000 個 `a`、一個 NUL、再接含 `\r\n` 的文字：只掃前 8192 的話會被當成文字，還會跑一次行尾正規化與還原。
     const bytes = Buffer.concat([
       Buffer.from('a'.repeat(9000)),
@@ -151,7 +151,7 @@ describe('edit：二進位判斷掃整份，空檔配空 old_string 照 dsh', ()
   });
 });
 
-describe('write：不還原行尾（照 dsh）', () => {
+describe('write：不還原行尾', () => {
   it('內容原樣寫進去', async () => {
     await backend.write('/w.txt', 'a\nb\n');
     expect(await bytesOf('w.txt')).toBe('a\nb\n');

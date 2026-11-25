@@ -574,7 +574,7 @@ describe('inspectionOf', () => {
     });
   });
 
-  it('帶繼承前綴的日誌：身分只從自己的事件折，前綴裡的是來源那一份的（#1579，dsh manager.ts:1348）', () => {
+  it('帶繼承前綴的日誌：身分只從自己的事件折，前綴裡的是來源那一份的（#1579）', () => {
     const source = childEvents('bg-1', { descriptor: { subagent: 'reviewer' } });
     const seed = buildForkSeed(source, source.length - 1);
     expect(inspectionOf(seed)).toMatchObject({
@@ -587,7 +587,7 @@ describe('inspectionOf', () => {
   });
 });
 
-describe('等背景子代理停下來：叫醒中的也算在推進（#1575，dsh waitForChildren 先等 materializations，manager.ts:255、:260）', () => {
+describe('等背景子代理停下來：叫醒中的也算在推進（#1575，先等 materializations）', () => {
   it('冷子代理正在重建：不兌現；重建完才兌現 true', async () => {
     const m = make(['bg-1'], [fixture('bg-1')]);
     let release!: () => void;

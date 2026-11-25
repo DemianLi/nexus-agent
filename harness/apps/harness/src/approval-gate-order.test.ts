@@ -135,7 +135,7 @@ const NEW_GATE_GUIDANCE =
   '要回答的問題是：**這位新的 gate 會不會回 `{ kind: "allow" }` 而不呼叫 `next()`？**\n' +
   '會的話，排在它後面的每一位都被整條吃掉，包括 submit-record 的 `submit_record` 閘門，\n' +
   '結局是「紀錄寫出去了」而不是「核准被跳過」——本檔第二層那三行實測就是那個結局。\n' +
-  '三個出路：(a) 讓它一定呼叫 `next()`；(b) 真的建 dsh 那種只能拒絕的 guard 層\n' +
+  '三個出路：(a) 讓它一定呼叫 `next()`；(b) 真的建只能拒絕的 guard 層\n' +
   '（#198 判過不建，要推翻請開新卡）；(c) 明著接受並把它加進上面那份清單。\n' +
   '`approvals` 只有 `gate`（只會往後接，registry.ts 的 `ApprovalRegistrationPoint`），排在前面的人贏，被排到後面的沒有辦法。';
 

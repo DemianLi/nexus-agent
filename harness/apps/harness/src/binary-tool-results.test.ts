@@ -59,7 +59,7 @@ function backend(): ContainedFilesystemBackend {
   return new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
 }
 
-describe('後端照 dsh 看內容判二進位', () => {
+describe('後端看內容判二進位', () => {
   it('圖片：前 8KB 有 NUL，拒絕成 binary file', async () => {
     await writeFile(join(root, 'dot.png'), PNG);
     expect(await backend().read('/dot.png')).toEqual({
@@ -81,7 +81,7 @@ describe('後端照 dsh 看內容判二進位', () => {
     });
   });
 
-  it('NUL 落在前 8KB 之外、整份仍是合法 UTF-8：照讀（dsh 只取樣前 8KB）', async () => {
+  it('NUL 落在前 8KB 之外、整份仍是合法 UTF-8：照讀（只取樣前 8KB）', async () => {
     await writeFile(join(root, 'late.txt'), `${'a'.repeat(8192)}\u0000\n`);
     const result = await backend().read('/late.txt');
     expect(result.error).toBeUndefined();
@@ -102,7 +102,7 @@ describe('後端照 dsh 看內容判二進位', () => {
     });
   });
 
-  it('read_file 回的是 dsh 那句錯誤，不是圖片塊', async () => {
+  it('read_file 回的是二進位那句錯誤，不是圖片塊', async () => {
     await writeFile(join(root, 'dot.png'), PNG);
     const middleware = createFilesystemMiddleware({ backend: backend() });
     const readFile = middleware.tools?.find((tool) => tool.name === 'read_file');
@@ -435,7 +435,7 @@ describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
 });
 
 describe('真的組裝：讀到圖片的那一輪與下一輪', () => {
-  it('兩輪都照常收尾，模型讀到的是 dsh 那句錯誤；那一次在日誌上是工具錯誤', async () => {
+  it('兩輪都照常收尾，模型讀到的是二進位那句錯誤；那一次在日誌上是工具錯誤', async () => {
     await writeFile(join(root, 'dot.png'), PNG);
     const upstream = await strictOpenAi([
       { call: { name: 'read_file', args: { file_path: '/dot.png' } } },

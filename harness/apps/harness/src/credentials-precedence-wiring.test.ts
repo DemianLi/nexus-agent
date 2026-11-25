@@ -205,7 +205,7 @@ describe('serve（Web profile）：受管檔最優先', () => {
   }, 60000);
 });
 
-describe('serve：受管檔多一個別的工具寫的頂層鍵、或只剩註解，照樣起得來（#1507，對齊 dsh alpha.5）', () => {
+describe('serve：受管檔多一個別的工具寫的頂層鍵、或只剩註解，照樣起得來（#1507）', () => {
   /** 日誌之外，憑證服務的警告走 stderr（`loadLiveLaunchEnv` 沒傳 `warn`，預設就是 stderr）。 */
   function captureStderr(): { text: () => string; restore: () => void } {
     const chunks: string[] = [];

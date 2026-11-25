@@ -1345,7 +1345,7 @@ describe('分叉繼承來的子代理目錄（#1579）', () => {
       .filter((data) => data?.name === SUBAGENT_CATALOG)
       .map((data) => (data!.payload as { childId: string }).childId);
 
-  it('前綴裡的不轉 frame（`F/x` 開不到），自己派的照轉：同 dsh catalog.ts:124-126', () => {
+  it('前綴裡的不轉 frame（`F/x` 開不到），自己派的照轉', () => {
     expect(childIds(FORKED)).toEqual(['F/y']);
   });
 

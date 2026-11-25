@@ -814,7 +814,7 @@ describe('send_message（#839）', () => {
 describe('背景子代理往上傳訊（#849）', () => {
   const RETURN = (id: string) => `message delivered to agent ${id}`;
 
-  it('子代理用 send_message 傳給直接 parent：出口收到寄件人是自己會話 id 的一則，前綴照 dsh；回條不是 parent 的回答', async () => {
+  it('子代理用 send_message 傳給直接 parent：出口收到寄件人是自己會話 id 的一則；回條不是 parent 的回答', async () => {
     const received: BackgroundAgentMessage[] = [];
     const run = await assemble({
       rootTurns: [delegate(undefined), { content: '根收尾' }],

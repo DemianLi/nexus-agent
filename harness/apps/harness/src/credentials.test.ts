@@ -556,7 +556,7 @@ describe('重載：每次解析先 stat，變了才重讀', () => {
   });
 });
 
-describe('別的工具多放的頂層鍵、只剩註解的檔（#1507，對齊 dsh alpha.5）', () => {
+describe('別的工具多放的頂層鍵、只剩註解的檔（#1507）', () => {
   it('多一個頂層鍵：解得出 key，warn 恰好一次，訊息只有個數與行號、不含鍵名與值；同一份檔再解析不再警告', () => {
     managed(`version: 1\nnote: ${SECRET}-note\nrefs:\n  ${KEY}: ${SECRET}\n`);
     const warned: string[] = [];

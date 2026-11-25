@@ -186,7 +186,7 @@ describe('CLI 的 --resume', () => {
    * **斷言的是那一則的字**：拿掉補結果這一步，基座的 `patchToolCallsMiddleware` 照樣補一則（實測），那一輪照樣
    * 不會被供應商拒收——只看「沒被拒收」的話這條驗收有沒有這個功能都綠。
    */
-  it('上一次停在工具跑到一半：補的是 dsh 那句「結果不明」，不是基座那句', async () => {
+  it('上一次停在工具跑到一半：補的是「結果不明」那句，不是基座那句', async () => {
     const runDir = await firstRun();
     await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '再回聲一次' } },

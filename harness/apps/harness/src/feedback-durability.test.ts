@@ -117,7 +117,7 @@ describe('落盤開著：評分等落盤確認', () => {
     ).rejects.toThrow('磁碟滿了');
   });
 
-  it('B：內容一樣的 put 也排空一次（照 dsh `:183`），每次 put／delete 各一次', async () => {
+  it('B：內容一樣的 put 也排空一次，每次 put／delete 各一次', async () => {
     const { root, store, feedback } = await tree();
     const { sessions, log } = thread(root, store, 't-count');
     const flushed: SessionLog[] = [];

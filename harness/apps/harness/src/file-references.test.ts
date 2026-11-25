@@ -87,7 +87,7 @@ afterEach(async () => {
   vi.mocked(readdir).mockClear();
 });
 
-describe('WorkspaceFileSearch（照 dsh）', () => {
+describe('WorkspaceFileSearch', () => {
   it('列即時的那一層、往下鑽、含空白的路徑，濾掉隱藏與排除的', async () => {
     const root = await workspace();
     const files = search(root);

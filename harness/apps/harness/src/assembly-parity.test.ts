@@ -158,7 +158,7 @@ const DESCRIPTION_EXCEPTIONS: Readonly<
       `By default, it reads up to 100 lines${READ_BETWEEN}then two spaces, then the source line. ` +
       'Never include these line-number prefixes when editing.',
     why:
-      '一頁預設 2000 行（照 dsh，#602），預設值由 read-continuation 的 wrapToolCall 填；基座的原文寫死 100。' +
+      '一頁預設 2000 行（#602），預設值由 read-continuation 的 wrapToolCall 填；基座的原文寫死 100。' +
       '行號那一句照實際輸出寫 tab，並涵蓋 write_file（#2286）',
   },
   grep: {
@@ -169,7 +169,7 @@ const DESCRIPTION_EXCEPTIONS: Readonly<
       'To match any of several strings, run a separate grep for each; `grep(pattern="foo|bar")` searches for the literal text "foo|bar", ' +
       'and `.*` or `\\\\.` match those characters literally.',
     why:
-      'grep 的 pattern 是正規式（#1605，照 dsh `grep.ts:286`）：ContainedFilesystemBackend 不再帶 `-F`；基座的原文講「字面」。' +
+      'grep 的 pattern 是正規式（#1605）：ContainedFilesystemBackend 不再帶 `-F`；基座的原文講「字面」。' +
       '只換開頭那兩段，後面基座講輸出與 /large_tool_results/ 的部分原樣；`pattern`／`glob` 兩格參數說明在 search-descriptions middleware，' +
       '兩邊都經過它，不屬於這個例外',
   },
@@ -177,7 +177,7 @@ const DESCRIPTION_EXCEPTIONS: Readonly<
     own: GLOB_HEAD,
     base: 'Find files matching a glob pattern, returning absolute paths.',
     why:
-      'glob 走 rg --files（#1605）：不含目錄、含隱藏與被 ignore 的檔、照修改時間排序；基座的第一句沒講這些（照 dsh `glob.ts:308`）。' +
+      'glob 走 rg --files（#1605）：不含目錄、含隱藏與被 ignore 的檔、照修改時間排序；基座的第一句沒講這些。' +
       '只換第一句，後面基座講 `*`／`**`／`?` 的一段原樣；`pattern` 參數說明在 search-descriptions middleware，兩邊都經過它',
   },
 };

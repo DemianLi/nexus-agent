@@ -627,7 +627,7 @@ describe('載體本身（假 agent）', () => {
   });
 
   describe('send（#839）', () => {
-    it('對閒著的子代理送話：開新的一輪，模型看到 dsh 的前綴，日誌是 agent-message（記寄件人）而不是 message', async () => {
+    it('對閒著的子代理送話：開新的一輪，模型看到寄件人前綴，日誌是 agent-message（記寄件人）而不是 message', async () => {
       const { agent, seen } = fakeAgent();
       const { host, sessions } = make(() => agent);
       const first = host.start({ subagent: 'worker', text: '第一句' });
@@ -1181,7 +1181,7 @@ describe('載體本身（假 agent）', () => {
       expect(codeOf(() => host.sendFromUser({ runId: settled.runId, text: 'x' }))).toBe('closed');
     });
 
-    it('派不出去時進日誌的碼照 dsh SubagentError（#1046）：名額滿、已關各一組，沒有這個編號不帶碼', () => {
+    it('派不出去時進日誌的碼（#1046）：名額滿、已關各一組，沒有這個編號不帶碼', () => {
       // 名額滿的產品路徑見 `background-host-refusal.test.ts`；`closed` 在 `subagent` 工具那條路上沒有生產者，只釘這張表。
       const info = (code: 'closed' | 'not-found' | 'at-capacity') =>
         backgroundRefusalInfo(new BackgroundSubagentError(code, 'x'));
@@ -1981,7 +1981,7 @@ describe('結算通知（#840）', () => {
       else signal.addEventListener('abort', () => resolve(), { once: true });
     });
 
-  it('做完了：摘要照 dsh 的原文，加上最後一則回覆的文字；拿到 outcome 時通知已經送到', async () => {
+  it('做完了：摘要用固定原文，加上最後一則回覆的文字；拿到 outcome 時通知已經送到', async () => {
     const { host, settlements, order } = setup((_text, _signal, log) =>
       reply(log, '查到了：三個檔案'),
     );
@@ -2015,7 +2015,7 @@ describe('結算通知（#840）', () => {
     await host.close();
   });
 
-  it('沒有回覆、或最後一則沒有文字：It left no closing message.（dsh 原文）', async () => {
+  it('沒有回覆、或最後一則沒有文字：It left no closing message.', async () => {
     const none = setup(() => undefined);
     await none.host.start({ subagent: 'worker', text: '查' }).outcome;
     expect(none.settlements[0]?.text).toMatch(/\n\nIt left no closing message\.$/);
@@ -2051,7 +2051,7 @@ describe('結算通知（#840）', () => {
     await host.close();
   });
 
-  describe('收尾訊息跳過空回覆（#1565，dsh assistant-output.ts:32-40）', () => {
+  describe('收尾訊息跳過空回覆（#1565）', () => {
     /** 撞到輸出上限、工具呼叫被清掉之後什麼都不剩的那一則——用生產者 `dropToolCalls` 造，不手寫形狀。 */
     const truncatedToolCallOnly = (log: SessionLog): void => {
       const truncated = new AIMessage({
@@ -2334,7 +2334,7 @@ describe('結算通知（#840）', () => {
     });
   });
 
-  describe('結算之前先落盤（#1565，dsh manager.ts:1023-1067、:1208-1218）', () => {
+  describe('結算之前先落盤（#1565）', () => {
     const childOf = (runId: string) => `root-1/${runId}`;
 
     it('通知主對話之前，子代理自己的日誌已經排空到 turn/end（最後一次排空看到的是 turn/end）', async () => {
@@ -2449,7 +2449,7 @@ describe('結算通知（#840）', () => {
     });
   });
 
-  describe('等背景子代理停下來（#1575 N0372，dsh manager.ts:247-285 waitForChildren）', () => {
+  describe('等背景子代理停下來（#1575 N0372）', () => {
     const childOf = (runId: string) => `root-1/${runId}`;
     /** 3 秒內沒兌現就當它卡住：讓「不該卡住」的那幾條明確紅，不靠 5 秒逾時。 */
     const within = <T>(promise: Promise<T>): Promise<T> =>
@@ -2718,7 +2718,7 @@ describe('sendToParent（#849）', () => {
     return { host, messages };
   }
 
-  it('直接 parent：出口收到寄件人是子代理自己會話 id 的一則，前綴照 dsh', async () => {
+  it('直接 parent：出口收到寄件人是子代理自己會話 id 的一則', async () => {
     const { host, messages } = setup();
     const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
     await outcome;
@@ -2889,7 +2889,7 @@ describe('close 中止進行中的輪（#841）', () => {
     expect(settlements.map((each) => each.summary)).toEqual([settlementSummary(runId, 'refusal')]);
   });
 
-  it('settlementSummary：五種原因各一句，refusal 逐字照 dsh', () => {
+  it('settlementSummary：五種原因各一句，refusal 是固定原文', () => {
     expect(settlementSummary('r1', 'refusal')).toBe('Background subagent r1 declined the task.');
     const texts = (['completed', 'aborted', 'max-tokens', 'error', 'refusal'] as const).map(
       (reason) => settlementSummary('r1', reason),
