@@ -25,8 +25,7 @@ updates:
       default-days: 30
     # develop 只允許 squash，PR 標題會原封不動成為 develop 上的 commit 標題。
     # dependabot 的標題是英文，靠 check_pr.py 的 bot 豁免通過 gate；prefix 讓
-    # type 先對上 docs/contributing.md 的格式，中文描述在合併前手改（ci.yml 有 edited
-    # 觸發，改完標題會自動重跑 gate）。
+    # type 先對上 docs/contributing.md 的格式，中文描述在合併前手改。
     commit-message:
       prefix: chore
     # 併成一張：develop 開了 strict，每合一張其餘都要重 rebase 再跑一輪 gate。
