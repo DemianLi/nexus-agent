@@ -304,7 +304,7 @@ describe('掛上與撤銷', () => {
     expect(bus.count('test/emit')).toBe(0);
   });
 
-  it('同一個函式被掛兩次，撤銷只撤自己那一筆（dsh 靠 reflect.bind 讓每筆註冊各有一支 callback，效果相同）', () => {
+  it('同一個函式被掛兩次，撤銷只撤自己那一筆', () => {
     const bus = new EventBus();
     const shared = (): undefined => undefined;
     const undoFirst = bus.on('test/emit', shared);

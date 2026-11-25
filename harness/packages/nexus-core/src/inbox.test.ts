@@ -72,7 +72,7 @@ describe('spliceInbox', () => {
     ).toThrow('（next-step）的變動超出範圍');
   });
 
-  it('id 在兩條清單之間唯一，同 dsh 的折疊', () => {
+  it('id 在兩條清單之間唯一', () => {
     const inbox = turns(item('a'));
     expect(() =>
       spliceInbox(inbox, { target: 'next-step', start: 0, inserted: [item('a')] }),

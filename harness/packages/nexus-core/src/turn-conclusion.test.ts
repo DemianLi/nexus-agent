@@ -86,7 +86,7 @@ describe('settleTurnConclusion', () => {
     expect(toolErrorOf(out)).toEqual({ name: 'ApprovalDenied', code: 'APPROVAL_POLICY_NEVER' });
   });
 
-  it('標了、但結果是 status:error（內層換掉的）→ 也拿掉 name：失敗不收（dsh ToolExecutionFailure 的 concludesTurn?: never）', () => {
+  it('標了、但結果是 status:error（內層換掉的）→ 也拿掉 name：失敗不收', () => {
     const out = settleTurnConclusion(
       requestFor(),
       named('輸出不合', { status: 'error' }),

@@ -135,7 +135,7 @@ describe('換模型通知', () => {
     expect(subject.noticeFor(log)).toEqual([]);
   });
 
-  it('模型變了才附：user 角色、文字逐字照 dsh、來源標非 user，也記進日誌', () => {
+  it('模型變了才附：user 角色、文字逐字固定、來源標非 user，也記進日誌', () => {
     const { subject, log } = controller();
     started(log, { model: 'a' });
     subject.select({ model: 'b' });

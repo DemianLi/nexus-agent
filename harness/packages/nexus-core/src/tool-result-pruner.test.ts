@@ -25,7 +25,7 @@ function toolMessage(content: string, id = 'call-1'): ToolMessage {
 }
 
 describe('預算的驗證', () => {
-  it('dsh 的預設值自己過得了驗證', () => {
+  it('預設值自己過得了驗證', () => {
     expect(assertToolResultPruneConfig(DEFAULT_TOOL_RESULT_PRUNE)).toBe(DEFAULT_TOOL_RESULT_PRUNE);
   });
 
@@ -176,7 +176,7 @@ describe('剪一整串訊息', () => {
     expect(after).toBe(SMALL.headChars + MARKER_CHARS + SMALL.tailChars);
   });
 
-  it('預設預算就是 dsh 的那組', () => {
+  it('預設預算是這一組', () => {
     expect(DEFAULT_TOOL_RESULT_PRUNE).toEqual({
       thresholdChars: 8192,
       headChars: 4096,

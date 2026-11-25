@@ -358,7 +358,7 @@ describe('工具事件', () => {
         }),
       { name: 'ToolArgsError', code: 'INVALID_ARGS' },
     ],
-  ])('%s → tool/result 帶 dsh 的碼', async (_label, thrown, expected) => {
+  ])('%s → tool/result 帶碼', async (_label, thrown, expected) => {
     const log = new SessionLog('s');
     await recorder(log)(call(), async () => {
       throw thrown();
@@ -366,7 +366,7 @@ describe('工具事件', () => {
     expect(lastResult(log)).toEqual({ callId: 'call-1', isError: true, error: expected });
   });
 
-  it('**一般拋錯照 dsh 沒有碼**——連 `error` 這個 key 都不放', async () => {
+  it('**一般拋錯沒有碼**——連 `error` 這個 key 都不放', async () => {
     const log = new SessionLog('s');
     await recorder(log)(call(), async () => {
       throw new Error('連不上');
@@ -392,7 +392,7 @@ describe('工具事件', () => {
     expect(classifyThrownToolError(new Error('Error'))).toBeUndefined();
   });
 
-  it('拋出 HarnessError → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`（#615）', () => {
+  it('拋出 HarnessError → 它自己的 `{ name, code }`（#615）', () => {
     class ProbeFailedError extends HarnessError {
       constructor() {
         super('壞了', 'PROBE_FAILED');

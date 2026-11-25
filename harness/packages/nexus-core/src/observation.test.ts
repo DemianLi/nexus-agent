@@ -300,7 +300,7 @@ describe('不歸它管的都原樣放行', () => {
   });
 });
 
-describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.section，write.ts:63-71、edit.ts:76-83）', () => {
+describe('規則在模型動手之前就講給它聽', () => {
   const WRITE_AND_EDIT =
     'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.';
   const WRITE_ONLY =
@@ -308,7 +308,7 @@ describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.sect
   const EDIT =
     'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.';
 
-  it('observationGuidance：工具在場才寫各自那一句，句子是 dsh 原句（工具名換成 write_file／edit_file）', () => {
+  it('observationGuidance：工具在場才寫各自那一句，句子固定（工具名是 write_file／edit_file）', () => {
     expect(observationGuidance(new Set([OBSERVED_WRITE_TOOL, OBSERVED_EDIT_TOOL]))).toBe(
       `${WRITE_AND_EDIT}\n\n${EDIT}`,
     );

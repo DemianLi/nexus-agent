@@ -550,7 +550,7 @@ describe('設定驗證排在所有 apply 之前（#453）', () => {
     expect(seen).toEqual([undefined]);
   });
 
-  it('沒有 Config 的 plugin 給了 config：照 dsh 不驗、原樣交給 apply（#751）', async () => {
+  it('沒有 Config 的 plugin 給了 config：不驗、原樣交給 apply（#751）', async () => {
     // dsh `vendor/cordis/src/fiber.ts:51`（`477b4f4`）：`if (!runtime.Config) return config`。
     const seen: unknown[] = [];
     const entry = {
@@ -843,7 +843,7 @@ describe('registry.logger', () => {
     ]);
   });
 
-  it('`warnings()` 只留最近 1000 則（照 dsh `LoggerService.bufferSize`）', async () => {
+  it('`warnings()` 只留最近 1000 則', async () => {
     let say: ((message: string) => void) | undefined;
     const { registry, dispose } = await loadPlugins([
       fakePlugin('noisy', (r) => {

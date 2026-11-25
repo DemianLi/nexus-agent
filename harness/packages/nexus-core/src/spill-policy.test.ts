@@ -197,7 +197,7 @@ describe('原樣交出的情形', () => {
 });
 
 describe('通知措辭', () => {
-  it('逐字照 dsh 的 formatSpillNotice', () => {
+  it('溢出通知逐字固定', () => {
     expect(
       formatSpillNotice(1234, {
         locator: '/large_tool_results/x.txt',

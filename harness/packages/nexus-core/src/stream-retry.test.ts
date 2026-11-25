@@ -115,7 +115,7 @@ describe('重打的判斷', () => {
     expect(calls).toBe(3);
   });
 
-  it('retryableCodes 是閘門：碼不在清單裡就不重打（原錯誤往外拋）；省略取 dsh 的預設五碼', async () => {
+  it('retryableCodes 是閘門：碼不在清單裡就不重打（原錯誤往外拋）；省略取預設的五碼', async () => {
     let calls = 0;
     const failWith = (code: string) => async () => {
       calls += 1;
@@ -268,7 +268,7 @@ describe('退避與中止', () => {
   });
 });
 
-describe('退避的形狀（照 dsh 的 retry-policy.ts:14-17）', () => {
+describe('退避的形狀', () => {
   const at = (random: number) => () => random;
 
   it('倍增，單次封頂在 maxDelayMs（預設 10 秒）', () => {
@@ -288,14 +288,14 @@ describe('退避的形狀（照 dsh 的 retry-policy.ts:14-17）', () => {
     expect(streamRetryDelayMs({ ...withDefault, random: at(0) }, 0)).toBe(900);
   });
 
-  it('抖動之後再夾到 maxDelayMs（照 dsh 的 localDelay）：封頂的那幾次抖動往上也不會超過上限，往下照樣有', () => {
+  it('抖動之後再夾到 maxDelayMs：封頂的那幾次抖動往上也不會超過上限，往下照樣有', () => {
     const options = { maxRetries: 9, initialDelayMs: 1_000, maxDelayMs: 2_000, jitterRatio: 0.1 };
     expect(streamRetryDelayMs({ ...options, random: at(0.999999) }, 6)).toBe(2_000);
     expect(streamRetryDelayMs({ ...options, random: at(0) }, 6)).toBe(1_800);
   });
 });
 
-describe('retry-after（照 dsh 的 recover）', () => {
+describe('retry-after', () => {
   const OPTIONS: StreamRetryOptions = {
     maxRetries: 3,
     initialDelayMs: 1_000,
