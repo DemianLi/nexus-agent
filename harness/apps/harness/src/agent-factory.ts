@@ -1176,8 +1176,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 把一次組裝的**每一份**會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端
        * 就沒有出口，建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
        *
-       * **一份會話一個協調器，而且新開的那些自動有。** per-session 的
-       * 狀態掛在以 session 為鍵的 `WeakMap` 上。subagent 的日誌因此不必有人記得重接。
+       * **一份會話一個協調器，而且新開的那些自動有。**
+       * subagent 的日誌因此不必有人記得重接。
        *
        * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
        * `feedback-only` 是 on-demand，只在人送出回饋時補送（{@link watchFeedback}）；其餘是 live。
