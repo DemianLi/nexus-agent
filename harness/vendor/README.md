@@ -15,7 +15,7 @@
 
 四個套件都停在上游標籤 `v4.0.0-rc.12`（`01b39624`，2026-10-21；[#1937](https://github.com/DemianLi/nexus-agent/issues/1937)）。
 
-第三方相依留在 npm：`cosmokit`、`@standard-schema/spec`、`yaml`（Include 讀 YAML）。`node-addon-require-builtin` 是 Loader 的選配 peer，沒有裝，Loader 走「沒有 Node internals」那條路。
+第三方相依留在 npm：`cosmokit`、`@standard-schema/spec`、`yaml`（Include 讀 YAML）。`node-addon-require-builtin` 是 Loader 的選配 peer，沒有裝，Loader 走「沒有 Node internals」那條路。裝了它或行程帶 `--expose-internals` 時，node-compat 的矩陣要補一格 24.12 之前的版本（24.0–24.11.1 是 v1 內部 loader），由 `.github/scripts/test_ci_workflow.py` 檢查。
 
 刻意不 vendor：`hmr`（決議 §3-1 第 1 條）、`group`、`timer`、`create`、`utils`。`logger-console` 原本也在這一行，[#1534](https://github.com/DemianLi/nexus-agent/issues/1534) 推翻：serve 的日誌要分等級、可改成一行一筆 JSON，Cordis 樹上只進記憶體緩衝的錯誤（例如插件 dispose 時拋的）也要印得出來。
 
