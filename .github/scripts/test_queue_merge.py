@@ -346,6 +346,15 @@ class Robustness(unittest.TestCase):
         self.assertTrue(results[0][1].startswith('failed:'))
         self.assertEqual(results[1], (9, 'merged'))
 
+    def test_main_exits_nonzero_when_a_return_itself_fails(self) -> None:
+        gh = FakeGh()
+        gh.fail_on = 'pr'
+        gh.queue = [7]
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'GITHUB_REPOSITORY': 'o/r'}), mock.patch('queue_merge.Queue', lambda repo: Queue(repo, gh=gh)), contextlib.redirect_stdout(out):
+            self.assertEqual(main(['queue_merge.py', '7']), 1)
+        self.assertIn('::error::', out.getvalue())
+
     def test_main_exits_nonzero_and_names_the_reason_when_the_queue_cannot_be_listed(self) -> None:
         gh = FakeGh()
         gh.fail_on = 'pr'
