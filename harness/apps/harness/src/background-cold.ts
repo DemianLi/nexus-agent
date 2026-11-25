@@ -5,7 +5,7 @@
  * ## 冷復活的形狀
  *
  * 身分與組成記在子代理**自己的日誌**（`subagent/descriptor`，見 `@nexus/core` 的 `subagent-descriptor.ts`），父端授權靠 header 的
- * `parentSession`。這個檔案是這三樣在我們這一側的「怎麼讀、怎麼接」：
+ * `parentSession`。這個檔案是它們「怎麼讀、怎麼接」：
  *
  * - {@link ColdChildStore.inspect}：唯讀冷讀（`open(id, 'read')`，不拿租約、不動檔），折出身分，回能不能復活。
  * - {@link ColdChildStore.resume}：拿寫租約、補當掉那一輪的收尾（同 root 的續接）、交出事件與續寫把手。

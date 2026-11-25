@@ -1,9 +1,8 @@
 /**
  * **host 拒絕派出背景子代理時，日誌帶錯誤碼**（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
  *
- * 修之前 `background-delegation.ts` 的 `catch` 只把 `BackgroundSubagentError` 的訊息交給 `toolRefusal`，`tool/result`
- * 沒有 `error`，追溯時只能解析給模型看的中文。現在註冊表取 `{ name, code }`
- * 寫進 `tool/result`，見 `background-subagents.ts` 的 `backgroundRefusalInfo`。
+ * `background-delegation.ts` 的 `catch` 把 `BackgroundSubagentError` 的訊息交給 `toolRefusal`，註冊表取 `{ name, code }`
+ * 寫進 `tool/result` 的 `error`，追溯時不必解析給模型看的中文，見 `background-subagents.ts` 的 `backgroundRefusalInfo`。
  *
  * **只有名額滿了這一種有產品路徑**：`closed` 在 `subagent` 工具這條路上沒有生產者（收線先清掉 delegation 的 host 才關它），
  * 翻譯表由 `background-subagents.test.ts` 釘。

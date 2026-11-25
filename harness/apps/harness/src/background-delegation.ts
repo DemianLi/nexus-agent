@@ -156,7 +156,7 @@ const subagentSchema = z.object({
     .describe('預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。'),
 });
 
-/** 開了選模型的 `subagent`：多兩個選填欄位（#877；沒有 `provider`）。 */
+/** 開了選模型的 `subagent`：多兩個選填欄位（#877）。 */
 const selectingSubagentSchema = subagentSchema.extend({
   model: z
     .string()
@@ -310,10 +310,7 @@ export class BackgroundDelegation {
   /**
    * `list_agents`：薄薄一層，讀 host 的目錄，不自己另存一份。
    *
-   * 描述裡「做完會通知」「用 send_message 接著談」兩句對應的機制是 #840、#839；
-   * 這個選項在 #841 翻預設之前不進產品，翻預設的前置就是它們都合併。
-   *
-   * 只做 `children`：我們沒有子代理再派子代理，`descendants` 沒有東西可列；診斷列（目錄壞掉）在行程內不會發生。
+   * 描述裡「做完會通知」「用 send_message 接著談」兩句對應的機制是 #840、#839。
    */
   #listAgentsTool() {
     return tool(
@@ -411,7 +408,7 @@ export class BackgroundDelegation {
    * - 背景子代理 → 它的直接 parent（#849）：`host.sendToParent`，收件人必須是 root 的會話 id。
    * - 其他（前景一次性子代理、認不出身分）：拒絕。
    *
-   * 描述（#858 之後）：跑著的子代理在下一步領走（`BackgroundSubagentHost.send` 插進它當下那一輪），閒著的開新的一輪。
+   * 描述：跑著的子代理在下一步領走（`BackgroundSubagentHost.send` 插進它當下那一輪），閒著的開新的一輪。
    * 傳給 parent 那一向，主對話有 `next-step`，忙著就插進去。
    */
   #sendMessageTool() {
