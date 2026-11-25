@@ -645,7 +645,7 @@ describe('上限與內容', () => {
     });
   });
 
-  it('上限要是正的安全整數，照 dsh 在 apply 當下驗，所以載入當場失敗', async () => {
+  it('上限要是正的安全整數，在 apply 當下驗，所以載入當場失敗', async () => {
     for (const field of ['maxFiles', 'timeoutMs', 'outputMaxBytes'] as const) {
       for (const bad of [0, -1, 1.5]) {
         // `loadPlugins` 把 `apply` 的拋出包進一層 generic `Error`（`load.ts:80-82`），所以對的是
@@ -720,7 +720,7 @@ describe('上限與內容', () => {
   });
 });
 
-describe('合格與否（#669，照 dsh 的 eligible）', () => {
+describe('合格與否（#669）', () => {
   it('沒有工作區根：什麼都不註冊——沒有服務、沒有監聽者、不接會話', async () => {
     const registry = createRegistry();
     const exit = registry.enter({ id: 'workspace-changes#0', name: 'workspace-changes' });
@@ -924,7 +924,7 @@ describe('git 快照（#461）', () => {
     expect(m.warnings).toEqual([]);
   });
 
-  it('模型沒呼叫工具的一輪：使用者改了檔也不記——配套入口要求那一輪跑過工具，同 dsh', async () => {
+  it('模型沒呼叫工具的一輪：使用者改了檔也不記——配套入口要求那一輪跑過工具', async () => {
     const root = await repository({ 'a.md': 'a\n' });
     const m = await mount({}, {}, { root });
     m.log.append('turn/start', { kind: 'message', text: '聊天。' });

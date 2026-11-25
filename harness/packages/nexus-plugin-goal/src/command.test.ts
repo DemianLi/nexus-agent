@@ -202,7 +202,7 @@ describe('註冊', () => {
     detach();
   });
 
-  it('**宣告收附件**——descriptor 的 input.attachments 是 true（#732，照 dsh）', () => {
+  it('**宣告收附件**——descriptor 的 input.attachments 是 true（#732）', () => {
     // 這條是從「提示裡沒有圖片」翻面來的絆索：`CommandInvocation` 有 `attachments` 之前，提示不能寫圖片；現在附件水管在了，
     // 宣告就是 `input.attachments`（提示字串跟 dsh 一樣不變）。
     const { registry, detach } = mount(1);

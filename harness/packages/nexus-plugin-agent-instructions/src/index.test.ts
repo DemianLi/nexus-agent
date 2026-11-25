@@ -177,7 +177,7 @@ describe('設定', () => {
     expect(Config.safeParse({ extra: 1 }).success).toBe(false);
   });
 
-  it('單檔上限要是正整數（照 dsh `.step(1).min(1)`），不是就讓設定驗證失敗、訊息指得出欄位；省略是 1 MiB', () => {
+  it('單檔上限要是正整數，不是就讓設定驗證失敗、訊息指得出欄位；省略是 1 MiB', () => {
     for (const maxSourceBytes of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       const result = agentInstructionsConfigSchema.safeParse({ maxSourceBytes });
       expect(result.success, String(maxSourceBytes)).toBe(false);
@@ -337,7 +337,7 @@ function listen(
   })([], { ...INVOCATION, ...(options.signal !== undefined && { signal: options.signal }) });
 }
 
-describe('讀整份，單檔有上限（#1533，照 dsh `files.ts:387-417`）', () => {
+describe('讀整份，單檔有上限（#1533）', () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -457,7 +457,7 @@ describe('這一輪被停下（invocation.signal，#1533）', () => {
     expect(backend.reads).toEqual(['/AGENTS.md']);
   });
 
-  it('ls 的時候被停下：拋中止，一個候選都沒讀（每個候選讀之前都看一次，dsh `files.ts:396`）', async () => {
+  it('ls 的時候被停下：拋中止，一個候選都沒讀（每個候選讀之前都看一次）', async () => {
     const controller = new AbortController();
     const backend = listingBackend({ '/AGENTS.md': '一。' }, { onLs: () => controller.abort() });
     await expect(listen(backend, LIMITS, { signal: controller.signal })).rejects.toMatchObject({

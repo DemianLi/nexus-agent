@@ -45,7 +45,7 @@ async function boot(config: unknown = {}, row = 'system-prompt') {
 }
 
 describe('設定', () => {
-  it('三格都選填，回到 dsh 的預設：開身分句、前後綴空', () => {
+  it('三格都選填，回到預設：開身分句、前後綴空', () => {
     expect(systemPromptConfigSchema.parse({})).toEqual({
       includeHarnessIdentity: true,
       personaPrefix: '',
@@ -59,7 +59,7 @@ describe('設定', () => {
 });
 
 describe('設定對應的三段', () => {
-  it('身分句開著：三段，order 照 dsh；關掉：只剩前後綴（空字串也登記）', () => {
+  it('身分句開著：三段，order 固定；關掉：只剩前後綴（空字串也登記）', () => {
     const full = systemPromptSectionsOf(systemPromptConfigSchema.parse({ personaPrefix: '前' }));
     expect(full.map((section) => [section.name, section.order, section.text])).toEqual([
       ['harness:identity', SECTION_ORDERS.HARNESS_IDENTITY, HARNESS_IDENTITY_SENTENCE],

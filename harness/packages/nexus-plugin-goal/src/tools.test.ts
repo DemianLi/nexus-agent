@@ -699,7 +699,7 @@ describe('接線說得出原因', () => {
  * `harness/apps/harness/src/tool-refusals.test.ts`。**碼打字面、不 import 常數**：那幾個字串歸 dsh
  * （`tool-goal/src/authority.ts:24`、`index.ts:147-311`，`goal/goal/src/domain.ts:93-102`）。
  */
-describe('拒絕落定成錯誤，碼照 dsh', () => {
+describe('拒絕落定成錯誤，各有固定的碼', () => {
   const harness = (code: string) => ({ status: 'error', error: { name: 'HarnessError', code } });
 
   it('成功的那一次不是錯誤', async () => {

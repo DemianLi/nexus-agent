@@ -31,7 +31,7 @@ describe('createMemoryPlugin', () => {
     await expect(loadPlugins(bad)).rejects.toThrow('空的來源清單');
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+  it('未知欄位讓載入失敗', async () => {
     await expect(
       loadPlugins([{ plugin: memoryPlugin, config: { source: ['/AGENTS.md'] } }]),
     ).rejects.toThrow(/source\b/);

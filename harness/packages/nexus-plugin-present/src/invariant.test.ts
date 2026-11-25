@@ -46,7 +46,7 @@ function presented(log: SessionLog, callId: string, isError = false): void {
 const FILES = [{ path: 'a.md', description: '說明' }, { path: 'b.md' }];
 
 describe('合法的日誌', () => {
-  it('新次序（#1286，同 dsh）：呼叫、交付、結果：零違規', () => {
+  it('新次序（#1286）：呼叫、交付、結果：零違規', () => {
     const log = new SessionLog('new-order');
     const violations = watch(log);
     log.append('tool/call', { callId: 'c1', name: PRESENT_TOOL_NAME, arguments: '{}' });

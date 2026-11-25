@@ -499,7 +499,7 @@ describe('附件', () => {
     ]);
   });
 
-  it('**空白文字加附件的 steer 收下**（`/plan` 只貼圖，照 dsh 的 hasPromptContent）；空白又沒附件（含空陣列）仍拒', async () => {
+  it('**空白文字加附件的 steer 收下**（`/plan` 只貼圖）；空白又沒附件（含空陣列）仍拒', async () => {
     const { executor, signal } = harness(
       accepting(({ steer, attachments }) => {
         steer('', attachments);
