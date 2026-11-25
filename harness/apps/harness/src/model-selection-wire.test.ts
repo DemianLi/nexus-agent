@@ -276,7 +276,7 @@ describe('model.select', () => {
   }, 60_000);
 });
 
-describe('標題沒有自己的覆寫：沿用主請求走的模型（#723，照 dsh）', () => {
+describe('標題沒有自己的覆寫：沿用主請求走的模型（#723）', () => {
   async function titleModelsAfterTurn(select: string | undefined): Promise<string[]> {
     endpoint = await fakeEndpoint();
     const root = await mkdtemp(join(tmpdir(), 'nexus-model-root-'));

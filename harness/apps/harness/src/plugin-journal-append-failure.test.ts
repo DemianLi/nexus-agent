@@ -240,7 +240,7 @@ describe('sync 失敗：截回、拋原錯', () => {
     expect(warnings).toEqual([]);
   });
 
-  it('照 dsh 開關把手：失敗那筆另開 r+ 截回，下一筆照常 a+', async () => {
+  it('開關把手：失敗那筆另開 r+ 截回，下一筆照常 a+', async () => {
     const path = journalPath();
     const fault = newFault();
     const warnings: string[] = [];

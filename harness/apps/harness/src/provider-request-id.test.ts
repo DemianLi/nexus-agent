@@ -186,7 +186,7 @@ describe('供應商請求編號進 llm/retry 與 turn/failed', () => {
     expect('requestId' in classifyTurnFailure(error)).toBe(false);
   }, 30_000);
 
-  it('request-id 與 x-request-id 同時出現時取 request-id（dsh 的順序）', async () => {
+  it('request-id 與 x-request-id 同時出現時取 request-id', async () => {
     cell = 'http502';
     headers = { 'x-request-id': 'b', 'request-id': 'a' };
     const { log } = await run();

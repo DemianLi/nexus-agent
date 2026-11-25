@@ -293,7 +293,7 @@ describe('核准之後，經過線', () => {
 });
 
 describe('上行擋下兩種會靜靜壞掉的送法（停在核准點時送新話從 #637 起改成收下）', () => {
-  it('停在核准點時送新話：照 dsh 收下、排著，中斷還掛著；答完才跑它（#637 的 Q4）', async () => {
+  it('停在核准點時送新話：收下、排著，中斷還掛著；答完才跑它（#637 的 Q4）', async () => {
     const { agent, calls } = build(ONE, { alpha: BOTH_FULL.alpha });
     const session = await open(agent, 'h6', '動手');
     await until(session, (state) => state.status === 'awaiting-input');

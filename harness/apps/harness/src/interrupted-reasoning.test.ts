@@ -327,7 +327,7 @@ describe('按了停止的那則，推理在重新整理之後還在（#561）', 
     }
   });
 
-  it('只送出空白：推理與正文都只有空白時整則不留（同 dsh 逐塊 trim）', async () => {
+  it('只送出空白：推理與正文都只有空白時整則不留（逐塊 trim）', async () => {
     const run = await stopWhen(
       [
         [
