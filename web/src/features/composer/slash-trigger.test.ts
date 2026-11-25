@@ -117,7 +117,7 @@ describe('slashCandidates', () => {
 });
 
 describe('applySlashPick', () => {
-  it('有裝飾的命令即使帶參數也直接執行（照 dsh：裝飾先判）', () => {
+  it('有裝飾的命令即使帶參數也直接執行（裝飾先判）', () => {
     const decorated = { ...feedback, input: { hint: '<內容>' } };
     expect(applySlashPick('/fe', atEnd('/fe')!, decorated, new Set(['feedback']))).toEqual({
       draft: '',
@@ -153,7 +153,7 @@ describe('技能那一組（#1929）', () => {
   const digest: SkillEntry = { name: 'digest', description: '週報', modelInvocable: true };
   const keys = (candidates: readonly SlashCandidate[]) => candidates.map(slashCandidateKey);
 
-  it('命令一組在前、技能一組在後，兩組各自照 rankByName（dsh 的 order 1、2）', () => {
+  it('命令一組在前、技能一組在後，兩組各自照 rankByName', () => {
     expect(keys(slashMenu([plan, feedback], [digest, deploy], atEnd('/')!))).toEqual([
       'command:plan',
       'command:feedback',

@@ -58,7 +58,7 @@ describe('切換', () => {
     expect(permissionLine('read-only')).toBe('/permission read-only');
   });
 
-  it('全開的組名照 dsh', () => {
+  it('全開的組名是 danger-full-access', () => {
     expect(DANGER_PRESET).toBe('danger-full-access');
   });
 

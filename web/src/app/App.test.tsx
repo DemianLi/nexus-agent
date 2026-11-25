@@ -382,7 +382,7 @@ describe('對話介面', () => {
       return { ...made, input };
     }
 
-    it('命令在途時整批插話不收（#1941，dsh `canSteerQueue` 排除 `machineBusy`）', async () => {
+    it('命令在途時整批插話不收（#1941）', async () => {
       stubCmdkLayout();
       setSeq(0);
       const made = steeringClient([
@@ -1235,7 +1235,7 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(fake.slashed).toEqual([]);
   });
 
-  it('清單在途時送出：兩條都先不走，等清單到了才路由（dsh 的 strong-wait）', async () => {
+  it('清單在途時送出：兩條都先不走，等清單到了才路由', async () => {
     setSeq(0);
     const fake = fakeClient([], {
       commands: [planCommand],
@@ -1260,7 +1260,7 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(fake.sent).toEqual([]);
   });
 
-  it('一行在等清單認的期間再送：都不發；清單到了只送第一行（dsh `adjudicating` 時 Enter 不動作）', async () => {
+  it('一行在等清單認的期間再送：都不發；清單到了只送第一行', async () => {
     setSeq(0);
     const fake = fakeClient([], {
       commands: [planCommand],
@@ -1292,7 +1292,7 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(fake.sent).toEqual([]);
   });
 
-  it('等清單認的期間文字框唯讀：草稿照樣看得到、打字不進去；認完才放開（dsh `editable` 排除 `machineBusy`）', async () => {
+  it('等清單認的期間文字框唯讀：草稿照樣看得到、打字不進去；認完才放開', async () => {
     setSeq(0);
     const fake = fakeClient([], { commands: [planCommand] });
     let arrive: (() => void) | undefined;
@@ -1317,7 +1317,7 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(input().value).toBe('');
   });
 
-  it('等清單認的期間 / 選單收起：游標移回 / 那一段也不開（#1929，dsh `popup.dismiss()` 並凍結觸發）', async () => {
+  it('等清單認的期間 / 選單收起：游標移回 / 那一段也不開（#1929）', async () => {
     setSeq(0);
     const fake = fakeClient([], { commands: [planCommand] });
     let arrive: (() => void) | undefined;

@@ -307,7 +307,7 @@ describe('@子代理 提及（#328）', () => {
     expect(runStart.mock.calls[0]![2]?.mention).toEqual({ kind: 'subagent', name: 'explorer' });
   });
 
-  it('等清單認的期間前一句被拒：標記不放回鎖住的輸入框，送出的那一行跟畫面一樣不帶（#1929，dsh `draftInitializationBlocked`）', async () => {
+  it('等清單認的期間前一句被拒：標記不放回鎖住的輸入框，送出的那一行跟畫面一樣不帶（#1929）', async () => {
     setSeq(0);
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
     let settle: (result: UplinkResult) => void = () => {};
@@ -386,7 +386,7 @@ describe('@子代理 提及（#328）', () => {
     expect(chip()).toBeNull();
   });
 
-  it('等清單認的期間 @ 選單收起：游標移回 @ 那一段也不開（#1929，dsh 進 adjudicating 時 `popup.dismiss()`）', async () => {
+  it('等清單認的期間 @ 選單收起：游標移回 @ 那一段也不開（#1929）', async () => {
     let arrive: (() => void) | undefined;
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
@@ -444,7 +444,7 @@ describe('@子代理 提及（#328）', () => {
   });
 });
 
-describe('命令在途（#1941，dsh 送出狀態機的 submitting）', () => {
+describe('命令在途（#1941）', () => {
   beforeEach(() => {
     stubCmdkLayout();
     attachmentGate.on = false;
@@ -571,7 +571,7 @@ describe('命令在途（#1941，dsh 送出狀態機的 submitting）', () => {
   });
 });
 
-describe('沒有 input 的命令（#1971，dsh `matchEnter`）', () => {
+describe('沒有 input 的命令（#1971）', () => {
   beforeEach(() => {
     stubCmdkLayout();
     attachmentGate.on = false;

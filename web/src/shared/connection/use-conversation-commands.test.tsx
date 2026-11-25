@@ -97,7 +97,7 @@ afterEach(() => {
 // `main.tsx` 開著 StrictMode：effect 先跑一次、收掉、再跑一次，開線與 `resetConnected` 都會多一次；被蓋掉的那一次不能發布。
 // 所以清單的回答跟著「現在是第幾條線」走（`phase`），呼叫次數從斷線前那一刻算起。
 describe.each([false, true])(
-  'useConversation 的命令清單跟著連線走（#1929，dsh resetConnected；StrictMode：%s）',
+  'useConversation 的命令清單跟著連線走（#1929；StrictMode：%s）',
   (strict) => {
     beforeEach(() => configure({ reactStrictMode: strict }));
     afterEach(() => configure({ reactStrictMode: false }));
@@ -169,7 +169,7 @@ describe.each([false, true])(
       expect(fake.client.slashList).toHaveBeenCalledTimes(listed + 1);
     });
 
-    it('等清單時畫面卸載：靜靜不等了（不回原因，dsh 的 release 不出聲），清單後來到也不送', async () => {
+    it('等清單時畫面卸載：靜靜不等了（不回原因），清單後來到也不送', async () => {
       const pending = deferred<SlashListOutcome>();
       const fake = scriptedClient(
         () => pending.promise,

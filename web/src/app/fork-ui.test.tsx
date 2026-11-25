@@ -248,7 +248,7 @@ describe('分支鈕放哪、能不能按', () => {
     expect(fake.calls.filter((call) => call.startsWith('fork'))).toEqual([]);
   });
 
-  it('新的一輪在串流：那一輪沒有鈕，更早那一輪照樣分得出去（server 不看來源在不在跑，dsh 只看同一輪）', async () => {
+  it('新的一輪在串流：那一輪沒有鈕，更早那一輪照樣分得出去（server 不看來源在不在跑）', async () => {
     seq = 0;
     const namespace = ['model_request:1'];
     const events = [

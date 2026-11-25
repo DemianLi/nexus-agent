@@ -40,7 +40,7 @@ describe('headerTitle', () => {
   });
 });
 
-it('documentTitle：照 dsh「標題 — 產品名」，沒有標題只寫產品名', () => {
+it('documentTitle：「標題 — 產品名」，沒有標題只寫產品名', () => {
   expect(documentTitle('改登入頁')).toBe(`改登入頁 — ${PRODUCT_TITLE}`);
   expect(documentTitle(null)).toBe(PRODUCT_TITLE);
   expect(documentTitle('')).toBe(PRODUCT_TITLE);

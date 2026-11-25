@@ -10,7 +10,7 @@ import {
 
 /** 分支鈕的判法與子 thread 的標題（#1581 刀 2）。 */
 
-describe('increasedForkTitle（照 dsh sessions-service.client.spec.ts:978-1000）', () => {
+describe('increasedForkTitle', () => {
   it.each([
     ['Roadmap', 'Roadmap (1)'],
     ['Roadmap (1)', 'Roadmap (2)'],

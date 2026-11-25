@@ -28,7 +28,7 @@ function ai(overrides: Partial<AiEntry> = {}): AiEntry {
 }
 
 describe('isRatable', () => {
-  it('收尾那則、有 messageId 才長；被停下來的那則不長（同 dsh：凍結的半段沒有 messageId）', () => {
+  it('收尾那則、有 messageId 才長；被停下來的那則不長（凍結的半段沒有 messageId）', () => {
     expect(isRatable(ai({ turnTail: true, messageId: 'm1' }))).toBe(true);
     expect(isRatable(ai({ messageId: 'm1' }))).toBe(false);
     expect(isRatable(ai({ turnTail: true }))).toBe(false);

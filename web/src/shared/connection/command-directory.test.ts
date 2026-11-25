@@ -33,7 +33,7 @@ const live = new AbortController().signal;
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-describe('CommandDirectory（#1929，dsh directory.ts）', () => {
+describe('CommandDirectory（#1929）', () => {
   it('resetConnected：丟掉手上的清單、狀態翻成在途，到了才是 ready', async () => {
     const { directory, call, changes } = scripted();
     const first = directory.resetConnected();
@@ -109,7 +109,7 @@ describe('CommandDirectory（#1929，dsh directory.ts）', () => {
     expect(await waiting).toEqual([help]);
   });
 
-  it('signal 中止：不等了、拋出，也不留在等的名單裡（dsh `settled`）', async () => {
+  it('signal 中止：不等了、拋出，也不留在等的名單裡', async () => {
     const { directory, call } = scripted();
     void directory.resetConnected();
     const release = new AbortController();

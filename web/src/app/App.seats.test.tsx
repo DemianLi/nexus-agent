@@ -1194,7 +1194,7 @@ describe('附件送出（#733、#732）', () => {
       return { slashList, arrive: () => arrive!() };
     }
 
-    it('等清單認的期間：移除、加入、拖放附件都不動作；放行後送出的附件就是畫面上那些（#1929，dsh facade 拒收）', async () => {
+    it('等清單認的期間：移除、加入、拖放附件都不動作；放行後送出的附件就是畫面上那些（#1929）', async () => {
       const { client, calls, uploads } = withSlash(() => ({ kind: 'success', command_id: 'c' }));
       const held = heldList();
       render(<App client={{ ...client, slashList: held.slashList }} />);
@@ -1237,7 +1237,7 @@ describe('附件送出（#733、#732）', () => {
       expect(screen.getByRole('button', { name: '加入附件' }).hasAttribute('disabled')).toBe(false);
     });
 
-    it('帶附件等清單時換到新對話：不上傳、不送；清單後來到也一樣（dsh 的 release）', async () => {
+    it('帶附件等清單時換到新對話：不上傳、不送；清單後來到也一樣', async () => {
       const { client, calls, uploads, runStart } = withSlash(() => ({
         kind: 'success',
         command_id: 'c',

@@ -114,7 +114,7 @@ describe('send 帶上瀏覽器時區（#1630）', () => {
     expect(rejected!).toEqual({ message: CLIENT_TIME_ZONE_UNAVAILABLE });
   });
 
-  it('斜線命令不帶時區（照 dsh 的 commands.execute）', async () => {
+  it('斜線命令不帶時區', async () => {
     stubBrowserZone(() => 'Asia/Taipei');
     const { client, started, slashed } = setup();
     const result = await mounted(client);

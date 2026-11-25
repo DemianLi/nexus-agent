@@ -13,7 +13,7 @@ const rejected = (over: Partial<QueueUpdateRejected>): QueueUpdateRejected => ({
   ...over,
 });
 
-describe('canSteerRows／canSteerQueue（#710，照 dsh）', () => {
+describe('canSteerRows／canSteerQueue（#710）', () => {
   it('只有連得上、這一輪跑著才能插話', () => {
     expect(canSteerRows(true, 'running')).toBe(true);
     expect(canSteerRows(false, 'running')).toBe(false);

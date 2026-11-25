@@ -86,7 +86,7 @@ describe('ComposerPick（patch `0007-composer-pick-trigger`）', () => {
     expect(menu()).not.toBeNull();
   });
 
-  describe('`disabled`：清單打不開，Trigger 照樣聚焦得到（照 dsh `PermissionSelect.tsx:180`）', () => {
+  describe('`disabled`：清單打不開，Trigger 照樣聚焦得到', () => {
     const disabled = (props: { open?: boolean } = {}) => (
       <ComposerPick
         label="權限"
