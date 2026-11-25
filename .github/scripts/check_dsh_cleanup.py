@@ -3,7 +3,7 @@
 只對「階段 1 那種 PR」生效：對照詞計數下降，而且除了註解與字串內容，程式碼沒變。三條規則：
 
 1. 這張 PR 改寫或新增的每一句註解，PR 內文都要有一列：整句、位置、head 上存在的 `path:lo-hi`，最後一格抄那幾行的原文片段。
-   引的範圍去掉空白、括號與標點後什麼都不剩就不算數；片段（壓掉空白、反引號、`|`、`*` 後）要是那幾行內容的子字串。
+   引的範圍去掉空白、括號與標點後什麼都不剩就不算數；片段（壓掉空白、反引號、反斜線、`|`、`*` 後）要是那幾行內容的子字串。
 2. 註解裡原有的段名（`## 標題`、表格的名稱格）在同一個檔消失就紅。段名本身含對照詞的不在此限。
 3. 消失的段名，用段名與簡寫找全 repo 指向它的地方；每一個候選指向，內文要有一列寫明為什麼仍成立。
 
@@ -490,17 +490,17 @@ def verify(a: Analysis, body: str, head: str) -> list[str]:
         hit = [i for i, r in enumerate(rows) if len(r) >= 2 and norm(r[0]) == key]
         where = f'{path}:{u.line} 的句子「{u.text[:60]}」'
         if not hit:
-            errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:line |` 補一列，整句放第一格。')
+            errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:lo-hi | 原文片段 |` 補一列，整句放第一格。')
             continue
-        found = {i: evidence_problem(rows[i], head, (path, u.line, u.last)) for i in hit}
-        good = [i for i in hit if found[i] is None]
+        problems = {i: evidence_problem(rows[i], head, (path, u.line, u.last)) for i in hit}
+        good = [i for i in hit if problems[i] is None]
         free = [i for i in good if i not in used]
         if free:
             used.add(free[0])
         elif good:
             errors.append(f'規則 1：{where}，同一句在好幾個檔或好幾處，每一處各要一列，這句的列已經被別處用掉了。')
         else:
-            errors.append(f'規則 1：{where}，{found[hit[0]]}')
+            errors.append(f'規則 1：{where}，{problems[hit[0]]}')
     for path, n, blocking in a.vanished:
         if blocking:
             errors.append(f'規則 2：{path}:{n.line} 的段名「{n.text}」在這個檔消失了。階段 1 不改段名，改名留給階段 2，跟所有指向同一張 PR 改。')
