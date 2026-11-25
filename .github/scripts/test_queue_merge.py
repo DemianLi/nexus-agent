@@ -251,6 +251,9 @@ class Parsing(unittest.TestCase):
     def test_old_format_verdict_without_the_machine_line_is_not_readable(self) -> None:
         self.assertIsNone(verdict_of([{'body': f'## verifier 判定：PASS\npatch-id: {PID}', 'authorAssociation': 'OWNER'}]))
 
+    def test_no_comments_means_no_verdict(self) -> None:
+        self.assertIsNone(verdict_of([]))
+
     def test_verdict_without_patch_id(self) -> None:
         self.assertEqual(verdict_of([{'body': 'verdict: PASS', 'authorAssociation': 'OWNER'}]), ('PASS', None))
 
