@@ -15,6 +15,7 @@ import argparse
 import functools
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -27,7 +28,7 @@ from check_ratchets import EXCLUDED_PREFIXES, ROOT, reference_lines  # noqa: E40
 from project_paths import canonical  # noqa: E402
 
 SLASH = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.css')
-HASH = ('.py', '.sh', '.yml', '.yaml', '.toml')
+HASH = ('.py', '.sh', '.yml', '.yaml', '.toml', '.txt')
 LANGS = SLASH + HASH
 IGNORED_PREFIXES = EXCLUDED_PREFIXES + ('.github/ratchets/', '.github/ratchets.json')
 SEARCH_EXCLUDED = ('references/', '.github/ratchets/', 'vendor/', 'apps/web/src/vendor/')
@@ -118,6 +119,12 @@ def scan(text: str, ext: str) -> tuple[str, Comments]:
             comments.append((line, cleaned, not has_code))
             line += len(parts) - 1
             i = j
+            if ext == '.tsx' and depth == 0:
+                tail = ''.join(code).rstrip()
+                after = text[i:].lstrip()
+                if tail.endswith('{') and after.startswith('}') and not tail[:-1].rstrip().endswith(('=>', '=', '(', ',', ':', 'return')):
+                    code[:] = [tail[:-1]]
+                    i = text.index('}', i) + 1
         elif marker and text.startswith(marker, i) and (slash or i == 0 or text[i - 1] in ' \t\n'):
             j = text.find('\n', i)
             j = n if j == -1 else j
@@ -130,9 +137,15 @@ def scan(text: str, ext: str) -> tuple[str, Comments]:
             if ext == '.py' and text.startswith(c * 3, i):
                 end = text.find(c * 3, i + 3)
                 end = n if end == -1 else end + 3
+                eol = text.find('\n', end)
+                alone = not has_code and not text[end : n if eol == -1 else eol].strip()
+                if alone:
+                    body = text[i + 3 : max(end - 3, i + 3)]
+                    comments.append((line, [p.strip() for p in body.split('\n')], True))
+                else:
+                    code.append('""')
+                    has_code = True
                 line += text.count('\n', i, end)
-                code.append('""')
-                has_code = True
                 i = end
                 continue
             if rust and c == "'" and not re.match(r"'(?:\\[^']*|[^\\'])'", text[i : i + 12]):
@@ -157,7 +170,11 @@ def scan(text: str, ext: str) -> tuple[str, Comments]:
             code.append(c)
             has_code = has_code or not c.isspace()
             i += 1
-    return re.sub(r'\s+', ' ', ''.join(code)).strip(), comments
+    joined = ''.join(code)
+    if ext == '.py':
+        kept = [re.sub(r'(?<=\S)\s+', ' ', row).rstrip() for row in joined.split('\n')]
+        return '\n'.join(row for row in kept if row), comments
+    return re.sub(r'\s+', ' ', joined).strip(), comments
 
 
 def units(comments: Comments) -> list[Unit]:
@@ -403,7 +420,7 @@ def line_exists(head: str, path: str, line: int) -> bool:
 def valid_refs(row: str, head: str, exclude: tuple[str, int, int] | None = None) -> list[tuple[str, int, int]]:
     out = []
     for m in REF.finditer(row):
-        path, lo = m.group(1), int(m.group(2))
+        path, lo = posixpath.normpath(m.group(1)), int(m.group(2))
         hi = int(m.group(3) or lo)
         if exclude and path == exclude[0] and lo <= exclude[2] and hi >= exclude[1]:
             continue
@@ -427,13 +444,21 @@ def table_rows(body: str) -> list[list[str]]:
 def verify(a: Analysis, body: str, head: str) -> list[str]:
     errors: list[str] = []
     rows = table_rows(body)
+    used: set[int] = set()
     for path, u in a.sentences:
         key = norm(u.text)
-        hit = [r for r in rows if len(r) >= 2 and norm(r[0]) == key]
+        hit = [i for i, r in enumerate(rows) if len(r) >= 2 and norm(r[0]) == key]
         where = f'{path}:{u.line} 的句子「{u.text[:60]}」'
         if not hit:
             errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:line |` 補一列，整句放第一格。')
-        elif not any(valid_refs(' '.join(r[1:]), head, exclude=(path, u.line, u.last)) for r in hit):
+            continue
+        good = [i for i in hit if valid_refs(' '.join(rows[i][1:]), head, exclude=(path, u.line, u.last))]
+        free = [i for i in good if i not in used]
+        if free:
+            used.add(free[0])
+        elif good:
+            errors.append(f'規則 1：{where}，同一句在好幾個檔或好幾處，每一處各要一列，這句的列已經被別處用掉了。')
+        else:
             errors.append(f'規則 1：{where}，那一列後面的格子沒有在 head 上存在的 nexus 實作 path:line（句子跨到的每一行都不算）。')
     for path, n, blocking in a.vanished:
         if blocking:
