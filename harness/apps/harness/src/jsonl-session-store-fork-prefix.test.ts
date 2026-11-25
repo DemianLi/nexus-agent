@@ -115,7 +115,7 @@ describe('分叉前綴與 header 對得上（驗收 3）', () => {
     expect(new SessionLog('a', { seed: read }).inheritedEventCount).toBe(2);
   });
 
-  it('seeded 卻沒有 inherited 標記：拒（dsh 的「標記位置不等於繼承長度」「長度超過事件數」在這裡都是這一種）', async () => {
+  it('seeded 卻沒有 inherited 標記：拒', async () => {
     const directory = await written([turnStart, turnEnd, turnStart, turnEnd], seeded);
     for (const error of await failures(directory)) {
       expect(error).toBeInstanceOf(SessionCorruptionError);

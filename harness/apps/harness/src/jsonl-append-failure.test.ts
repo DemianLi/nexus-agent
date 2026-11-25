@@ -346,7 +346,7 @@ describe('E 每批 sync', () => {
     await stored.close();
   });
 
-  it('失敗路徑照 dsh 開關把手：暫存檔用 wx、發佈後用 a 開；失敗那批用 r+ 截回，下一批用 a 重開', async () => {
+  it('失敗路徑的開關把手：暫存檔用 wx、發佈後用 a 開；失敗那批用 r+ 截回，下一批用 a 重開', async () => {
     const fault = newFault();
     const stored = create('e4', fault);
     await stored.append(batch(0));

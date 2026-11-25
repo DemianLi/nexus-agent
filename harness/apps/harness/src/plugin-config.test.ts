@@ -893,7 +893,7 @@ describe('讀清單時一列自己的失敗只讓那一列掉（#751）', () => 
     expect(dropped[0]?.message).toContain('沒有匯出一顆 plugin');
   });
 
-  it('停用的列模組載不起來、設定寫壞都不算掉：dsh 對停用的列不載入、不驗', async () => {
+  it('停用的列模組載不起來、設定寫壞都不算掉：停用的列不載入、不驗', async () => {
     const { plugins, dropped } = await loadRows(
       "- id: gone\n  name: '@nexus/根本沒這個套件'\n  disabled: true\n" +
         "- id: todo\n  name: '@nexus/plugin-todo'\n  disabled: true\n  config:\n    allowParallelInProgress: 1\n",

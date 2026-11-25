@@ -141,7 +141,7 @@ describe('沒讀過的檔不准改', () => {
     expect(await readFile(join(root, 'notes.md'), 'utf8')).toContain('被改掉了');
   });
 
-  it('**帶 offset / limit 的部分讀也算讀過**——照 dsh，這是刻意的弱化', async () => {
+  it('**帶 offset / limit 的部分讀也算讀過**——這是刻意的弱化', async () => {
     const root = await workspace();
     // dsh：「任何窗口读取都会授权对未变文件执行全文件覆盖，这有意弱于完整视图规则」。
     const messages = await run(root, [
@@ -279,7 +279,7 @@ describe('射程', () => {
   });
 });
 
-describe('規則要在模型動手之前就講給它聽：系統提示詞的 section，照 dsh（#1563）', () => {
+describe('規則要在模型動手之前就講給它聽：系統提示詞的 section（#1563）', () => {
   /**
    * **這幾句是機制的一部分，不是文件。**
    *
@@ -318,7 +318,7 @@ describe('規則要在模型動手之前就講給它聽：系統提示詞的 sec
     return { descriptions, system };
   }
 
-  it('root 那一輪的系統提示詞裡有 dsh 的那兩句；write_file／edit_file 的工具描述仍是基座的原文', async () => {
+  it('root 那一輪的系統提示詞裡有那兩句；write_file／edit_file 的工具描述仍是基座的原文', async () => {
     const { descriptions, system } = await modelSees({});
     expect(system).toContain(
       'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.',

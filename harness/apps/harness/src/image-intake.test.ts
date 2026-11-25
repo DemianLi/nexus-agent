@@ -217,13 +217,13 @@ describe('收下一句話的圖（五道上限、規範 base64、全有或全無
     }
   });
 
-  it('像素與單邊都超過時先報像素（同 dsh image.ts:121-126 的順序）', () => {
+  it('像素與單邊都超過時先報像素', () => {
     expect(() =>
       admitImages([{ mediaType: 'image/png', data: b64(pngHeader(9000, 9000)) }]),
     ).toThrowError(expect.objectContaining({ code: 'IMAGE_TOO_MANY_PIXELS' }));
   });
 
-  it('不是規範的 base64：Node 解得開的別種寫法一律拒（INVALID_IMAGE），同 dsh 的 decodeCanonicalBase64', () => {
+  it('不是規範的 base64：Node 解得開的別種寫法一律拒（INVALID_IMAGE）', () => {
     // 34 個位元組：最後一組是 `AA==`，補位前那個字元只有高 2 位元是資料。
     const canonical = b64(Uint8Array.from([...pngHeader(7, 5), 0]));
     expect(canonical.endsWith('AA==')).toBe(true);

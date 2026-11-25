@@ -121,7 +121,7 @@ async function lengths(directory: string): Promise<number[]> {
   return [read.length, resumed.events.length];
 }
 
-describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
+describe('N0556 讀盤逐行的信封', () => {
   const broken: [string, Record<string, unknown>, string][] = [
     ['A time 是小數', { type: 'turn/start', time: 1.5, data: {} }, 'time'],
     ['B 少了 data', { type: 'model/usage' }, 'data'],
@@ -148,7 +148,7 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
     },
   );
 
-  it('time 是 -0（JSON.parse 讀得出、JSON.stringify 寫不出）：後面還有收尾就拒，照 dsh sessionFormatSafeInteger', async () => {
+  it('time 是 -0（JSON.parse 讀得出、JSON.stringify 寫不出）：後面還有收尾就拒', async () => {
     const directory = await written([
       '{"type":"model/usage","seq":0,"time":-0,"data":{}}',
       turnEnd,
@@ -159,7 +159,7 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
     }
   });
 
-  it('seq 的形狀讀盤不驗，交給連續性（同 dsh 讀檔器）：-0 等於 0 讀得出，要到建 seed 才拒', async () => {
+  it('seq 的形狀讀盤不驗，交給連續性：-0 等於 0 讀得出，要到建 seed 才拒', async () => {
     const directory = await written(['{"type":"model/usage","seq":-0,"time":1,"data":{}}', usage]);
     expect(await lengths(directory)).toEqual([2, 2]);
     const { events, stored } = await openJsonlSessionStore({ directory }).resume('a');
@@ -328,7 +328,7 @@ describe('N0603 子代理目錄唯一', () => {
     }
   });
 
-  it('childId 不是字串也拒（dsh catalogFact）', async () => {
+  it('childId 不是字串也拒', async () => {
     const directory = await written([
       usage,
       { type: 'subagent/catalog', data: { callId: 'c', mode: 'continuable' } },

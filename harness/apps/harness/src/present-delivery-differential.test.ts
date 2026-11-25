@@ -190,7 +190,7 @@ const present = (id: string, path: string) => ({
 });
 
 describe('present 交付寫入：日誌逐筆相同', () => {
-  it('單次成功：call → presented → result（dsh 的次序）', async () => {
+  it('單次成功：call → presented → result', async () => {
     const seen = await run([
       { content: '交付。', toolCalls: [present('p1', 'report.md')] },
       { content: '好了。' },

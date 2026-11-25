@@ -266,7 +266,7 @@ describe('並發與等鎖', () => {
     expect(failedOf(dir)).toHaveLength(1);
   });
 
-  it('預設等鎖上限是 dsh 的 2 秒', async () => {
+  it('預設等鎖上限是 2 秒', async () => {
     const dir = home();
     seedHomePatch(dir, TODO_DISABLED);
     const lock = `${journalPathOf(dir)}.lock`;

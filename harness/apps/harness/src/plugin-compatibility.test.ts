@@ -96,7 +96,7 @@ describe('assertPluginCompatible', () => {
     }).not.toThrow();
   });
 
-  it('不相容、但 manifest 沒有非空的 name／version：照 dsh 拒絕，訊息指出缺哪一格與不滿足的需求', () => {
+  it('不相容、但 manifest 沒有非空的 name／version：拒絕，訊息指出缺哪一格與不滿足的需求', () => {
     const noName = plugin({ version: '1.0.0', peerDependencies: { '@nexus/core': '>=9.0.0' } });
     expect(() => {
       assertPluginCompatible(noName, '1.0.0');
@@ -160,7 +160,7 @@ describe('assertPluginCompatible', () => {
   });
 });
 
-describe('#1568：照 dsh 看 engines 與每個同版的 @nexus 套件', () => {
+describe('#1568：看 engines 與每個同版的 @nexus 套件', () => {
   it('驗收 1：只 peer @nexus/sdk（沒有 @nexus/core）的插件也會被判，訊息指名 @nexus/sdk', () => {
     const file = plugin({
       name: 'sdk-only',

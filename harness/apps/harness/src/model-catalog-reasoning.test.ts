@@ -54,7 +54,7 @@ describe('reasoningEfforts：寫錯的宣告在載入時拒收，指名哪一顆
   it.each([
     ['空 dict', {}, /reasoningEfforts 是空的/],
     [
-      '寫了 reasoningEfforts: 卻沒給值（YAML 的 null，dsh 與空 dict 併成一則）',
+      '寫了 reasoningEfforts: 卻沒給值（YAML 的 null，與空 dict 併成一則）',
       null,
       /reasoningEfforts 是空的/,
     ],

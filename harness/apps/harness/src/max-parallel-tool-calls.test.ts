@@ -121,7 +121,7 @@ describe('每步平行工具呼叫上限（#711）', { timeout: 30_000 }, () => 
     expect(order).toEqual(expected);
   });
 
-  it('寫 1（串行，同 dsh）：即使工具宣告可重疊，在途也只有 1 顆，照模型給的順序一顆一顆跑完，不丟任何一顆', async () => {
+  it('寫 1（串行）：即使工具宣告可重疊，在途也只有 1 顆，照模型給的順序一顆一顆跑完，不丟任何一顆', async () => {
     const { meter, order, expected } = await rootBurst(6, [row(1)]);
     // 判準是「剛好 1」且「6 顆都有結果」：LangGraph 的 maxConcurrency 1 會丟掉第一顆之後的，這裡 maxConcurrency 墊在 2。
     expect(meter.max).toBe(1);
@@ -288,7 +288,7 @@ describe('每步平行工具呼叫上限（#711）', { timeout: 30_000 }, () => 
   });
 
   describe('那一列', () => {
-    it('0、負數、小數、多寫欄位：載入時就擋；1 收下（串行，同 dsh）', () => {
+    it('0、負數、小數、多寫欄位：載入時就擋；1 收下（串行）', () => {
       for (const bad of [0, -1, 1.5]) {
         expect(
           () => agentLoopConfigSchema.parse({ maxParallelToolCalls: bad }),

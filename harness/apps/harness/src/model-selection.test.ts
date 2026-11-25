@@ -202,7 +202,7 @@ describe('沒選過的會話與今天一樣', () => {
 });
 
 describe('選了別顆', () => {
-  it('下一輪起 request.model 換成選的；附一則 user 角色的通知，逐字照 dsh，只附一次', async () => {
+  it('下一輪起 request.model 換成選的；附一則 user 角色的通知，只附一次', async () => {
     const endpoint = await fakeEndpoint([{ text: '一。' }, { text: '二。' }, { text: '三。' }]);
     const run = await assemble(endpoint.baseUrl);
     try {

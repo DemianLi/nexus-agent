@@ -1226,7 +1226,7 @@ describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
   });
 });
 
-describe('空的助手內容照 dsh 送（#592）', () => {
+describe('空的助手內容的送法（#592）', () => {
   const call = { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } };
 
   it('有工具呼叫、內容是空陣列：換成 null，其餘欄位原樣', () => {
@@ -1580,7 +1580,7 @@ describe('助手訊息不送 name（#1392）', () => {
  * 接線（真的 `runServe --live`＋夾具的 `empty_result`）在 `live-model-attribution.test.ts`。
  */
 describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）', () => {
-  it('字面是 dsh 的那幾個字', () => {
+  it('字面是 (no output)', () => {
     expect(EMPTY_TOOL_RESULT_TEXT).toBe('(no output)');
   });
 

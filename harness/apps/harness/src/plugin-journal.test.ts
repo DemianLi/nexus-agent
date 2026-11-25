@@ -126,7 +126,7 @@ describe('解析（驗收 G）', () => {
   });
 });
 
-describe('折疊：一列一條覆蓋項，照 dsh', () => {
+describe('折疊：一列一條覆蓋項', () => {
   const NAME = '@nexus/plugin-todo';
 
   it('停用再啟用同一列：只剩一條，disabled 是 false', () => {

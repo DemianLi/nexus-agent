@@ -219,7 +219,7 @@ describe('改設定、恢復成繼承值（驗收 B、C）', () => {
     expect(v2[0]?.config).toEqual({ allowParallelInProgress: false });
   });
 
-  it('新值等於繼承值：照 dsh 拿掉那一列的覆蓋，記成恢復（帶 requested），回報說了', async () => {
+  it('新值等於繼承值：拿掉那一列的覆蓋，記成恢復（帶 requested），回報說了', async () => {
     const { dir, env } = home();
     await changePlugin(
       { op: 'config-set', id: 'todo', config: { allowParallelInProgress: false } },
@@ -386,7 +386,7 @@ describe('寫入前先驗，驗不過拒絕並追加一筆 rejected（#1412 驗�
   });
 });
 
-describe('被 --patch 蓋掉（Q2，照 dsh 的兩種處置）', () => {
+describe('被 --patch 蓋掉（Q2，兩種處置）', () => {
   function overlay(dir: string, body: string): string {
     const path = join(dir, 'overlay.yml');
     writeFileSync(path, body);

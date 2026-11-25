@@ -432,7 +432,7 @@ describe('present 在真的圖上', () => {
     expect(outcome.violations).toEqual([]);
   });
 
-  it('沒有工作區：工具在，叫了回 dsh 那一句', async () => {
+  it('沒有工作區：工具在，叫了回沒有工作區那一句', async () => {
     const outcome = await run(
       [
         { content: '交付。', toolCalls: [presentCall([{ path: 'report.md' }])] },

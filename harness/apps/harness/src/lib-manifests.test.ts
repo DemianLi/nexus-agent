@@ -79,7 +79,7 @@ describe('每一條規則都擋得住', () => {
     expect(messages({ files: ['lib', 'lib/index.js.map'] }).join('\n')).toMatch(/\.map/);
   });
 
-  it('vendor 照 dsh 可以帶 src，但仍不收 .map', () => {
+  it('vendor 可以帶 src，但仍不收 .map', () => {
     const vendor = (files: string[]): string[] =>
       collectManifestViolations([{ ...sample({ files }), vendor: true }]).map(
         (violation) => violation.message,

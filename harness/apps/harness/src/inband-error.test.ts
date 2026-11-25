@@ -37,7 +37,7 @@ describe('classifyInbandError：type 與字串 code（沒有數字碼）', () =>
   });
 });
 
-describe('classifyInbandError：數字碼（400–599）當成 dsh 的 status', () => {
+describe('classifyInbandError：數字碼（400–599）當成 status', () => {
   it.each([
     [401, 'AUTH', 401],
     [403, 'AUTH', 403],
@@ -92,7 +92,7 @@ describe('classifyInbandError：數字碼（400–599）當成 dsh 的 status', 
   });
 });
 
-describe('字樣偵測（逐字照 dsh `isContextWindowExceededError`／`isQuotaExceededError`）', () => {
+describe('字樣偵測', () => {
   it.each([
     "This model's maximum context length is 8192 tokens",
     'context_length_exceeded',
