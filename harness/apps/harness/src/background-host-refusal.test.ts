@@ -1,8 +1,8 @@
 /**
- * **host 拒絕派出背景子代理時，日誌帶 dsh `SubagentError` 的碼**（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
+ * **host 拒絕派出背景子代理時，日誌帶錯誤碼**（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
  *
  * 修之前 `background-delegation.ts` 的 `catch` 只把 `BackgroundSubagentError` 的訊息交給 `toolRefusal`，`tool/result`
- * 沒有 `error`，追溯時只能解析給模型看的中文。dsh 同類拒絕是 `SubagentError`（`HarnessError`），註冊表取 `{ name, code }`
+ * 沒有 `error`，追溯時只能解析給模型看的中文。現在註冊表取 `{ name, code }`
  * 寫進 `tool/result`，見 `background-subagents.ts` 的 `backgroundRefusalInfo`。
  *
  * **只有名額滿了這一種有產品路徑**：`closed` 在 `subagent` 工具這條路上沒有生產者（收線先清掉 delegation 的 host 才關它），
@@ -132,7 +132,7 @@ it('名額滿了：被拒的那一顆記 SubagentError／ACTIVATION_LIMIT_REACHE
     const accepted = resultOf(rootEvents, 'call-a');
     expect(accepted?.isError).toBe(false);
     expect(accepted?.error).toBeUndefined();
-    // 第二顆：碼照 dsh，給模型的那一句照舊。
+    // 第二顆：帶碼，給模型的那一句照舊。
     const refused = resultOf(rootEvents, 'call-b')!;
     const { message, ...data } = refused;
     expect(data).toEqual({

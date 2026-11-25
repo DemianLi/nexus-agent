@@ -2,11 +2,8 @@
  * 背景子代理的**冷復活存放處**（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)，缺口源自
  * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。
  *
- * ## 照 dsh 的形狀
+ * ## 冷復活的形狀
  *
- * dsh 的 continuable 子代理是 durable session 加至多一個行程內的 activation：重啟之後 activation 沒了，session 還在磁碟上；
- * 收到 send／queue／steer 才把冷的接回來，**列出子代理不復活任何一個**（讀父會話自己的目錄 `subagent/catalog`），
- * 對冷的子代理 interrupt 是 no-op，名額（`ActivationPool.reserve`）在重建**之前**佔，滿了回 `ACTIVATION_LIMIT_REACHED`。
  * 身分與組成記在子代理**自己的日誌**（`subagent/descriptor`，見 `@nexus/core` 的 `subagent-descriptor.ts`），父端授權靠 header 的
  * `parentSession`。這個檔案是這三樣在我們這一側的「怎麼讀、怎麼接」：
  *
@@ -84,8 +81,7 @@ export interface ColdChildStore {
 /**
  * 一份子日誌的事件折成「叫不叫得醒」。
  *
- * 身分只從**自己的**事件折（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh 冷復活與封存准入
- * （`subagent/subagent/src/manager.ts:1348-1349`、`archive-admission.ts:84`，`687f282e`）：帶著繼承前綴開出來的日誌，前綴裡的
+ * 身分只從**自己的**事件折（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）：帶著繼承前綴開出來的日誌，前綴裡的
  * `subagent/descriptor` 是來源那一份的身分。
  */
 export function inspectionOf(events: readonly SessionEvent[]): ColdInspection {

@@ -24,7 +24,7 @@ export function isBackgroundRunId(value: string): boolean {
 }
 
 /**
- * 背景子代理寫給主對話（或主對話追加給它）的話，送進模型時的前綴（dsh 原文，`477b4f4`）。
+ * 背景子代理寫給主對話（或主對話追加給它）的話，送進模型時的前綴。
  *
  * **前綴是給模型看的，web 不解析它**（[#863](https://github.com/DemianLi/nexus-agent/issues/863)）：折疊器拿到的是
  * {@link agentMessageBody} 拿掉前綴的版本。
