@@ -197,7 +197,7 @@ class RulesTest(unittest.TestCase):
 
     def test_rule1_unfilled_placeholder_fails(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
-        errors = verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | <填：path:line> |', head)
+        errors = verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 <填：path:line> | export const real = 1; |', head)
         self.assertTrue(any('規則 1' in e for e in errors))
 
     def test_rule1_deleting_whole_sentences_needs_no_row(self) -> None:
@@ -280,7 +280,7 @@ class PrintedTableTest(unittest.TestCase):
 
     def test_a_row_with_a_leftover_placeholder_does_not_count(self) -> None:
         path, u = self.a.sentences[0]
-        row = f'| {u.text} | {path} 第 {u.line} 行 | src/impl.ts:1 {mod.PLACEHOLDER}：確認 |'
+        row = f'| {u.text} | {path} 第 {u.line} 行 | src/impl.ts:1 {mod.PLACEHOLDER}：確認 | export const real = 1; |'
         self.assertTrue(any('規則 1' in e and u.text[:10] in e for e in verify(self.a, row, self.head)))
 
     def test_the_hit_term_is_not_a_reason(self) -> None:
