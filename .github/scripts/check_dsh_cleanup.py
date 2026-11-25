@@ -2,11 +2,12 @@
 
 只對「階段 1 那種 PR」生效：對照詞計數下降，而且除了註解與字串內容，程式碼沒變。三條規則：
 
-1. 這張 PR 改寫或新增的每一句註解，PR 內文都要有一列：整句加上 head 上存在的 `path:line`。
+1. 這張 PR 改寫或新增的每一句註解，PR 內文都要有一列：整句、位置、head 上存在的 `path:lo-hi`，最後一格抄那幾行的原文片段。
+   引的範圍去掉空白、括號與標點後什麼都不剩就不算數；片段（壓掉空白、反引號、反斜線、`|`、`*` 後）要是那幾行內容的子字串。
 2. 註解裡原有的段名（`## 標題`、表格的名稱格）在同一個檔消失就紅。段名本身含對照詞的不在此限。
 3. 消失的段名，用段名與簡寫找全 repo 指向它的地方；每一個候選指向，內文要有一列寫明為什麼仍成立。
 
-句子是真是假、理由成不成立，script 判不了，留給 verifier。本機不帶 --body-file 也不設 BODY 時只印出要填的列。
+引的行撐不撐得起那一句、句子是真是假、理由成不成立，script 判不了，留給 verifier。本機不帶 --body-file 也不設 BODY 時只印出要填的列。
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ REF = re.compile(r'([\w@./\-]+\.\w+):(\d+)(?:[-–](\d+))?')
 PLACEHOLDER = '<填'
 HEADER_WORDS = ('檔頭',)
 MIN_REASON = 6
+SHOWN = 80
 MAX_NAME_CELL = 30
 
 Comments = list[tuple[int, list[str], bool]]
@@ -412,9 +414,20 @@ def analyze(base: str, head: str) -> Analysis:
     return Analysis(True, f'對照詞的行數 {before} → {after}，程式碼只有註解與字串內容變了', sentences, vanished, candidates)
 
 
-def line_exists(head: str, path: str, line: int) -> bool:
-    text = show(head, path)
-    return bool(text) and 1 <= line <= len(text.rstrip('\n').split('\n'))
+def rev_lines(rev: str, path: str, lo: int, hi: int) -> str | None:
+    text = show(rev, path)
+    rows = text.rstrip('\n').split('\n')
+    if not text or not 1 <= lo <= hi <= len(rows):
+        return None
+    return '\n'.join(rows[lo - 1 : hi])
+
+
+def is_blank(content: str) -> bool:
+    return not re.sub(r'[\W_]', '', content)
+
+
+def contains(content: str, snippet: str) -> bool:
+    return norm(snippet) in norm(content)
 
 
 def valid_refs(row: str, head: str, exclude: tuple[str, int, int] | None = None) -> list[tuple[str, int, int]]:
@@ -424,9 +437,36 @@ def valid_refs(row: str, head: str, exclude: tuple[str, int, int] | None = None)
         hi = int(m.group(3) or lo)
         if exclude and path == exclude[0] and lo <= exclude[2] and hi >= exclude[1]:
             continue
-        if lo <= hi and line_exists(head, path, lo) and line_exists(head, path, hi):
+        if lo <= hi and rev_lines(head, path, lo, hi) is not None:
             out.append((path, lo, hi))
     return out
+
+
+def shown(text: str) -> str:
+    flat = re.sub(r'\s+', ' ', text).strip()
+    return flat if len(flat) <= SHOWN else flat[:SHOWN] + '…'
+
+
+def evidence_problem(cells: list[str], head: str, exclude: tuple[str, int, int]) -> str | None:
+    if len(cells) < 4:
+        return '那一列少了最後一格：從 path:line 那幾行抄下來的原文片段（句子、位置、path:line、原文片段共四格）。'
+    refs = valid_refs(' '.join(cells[1:-1]), head, exclude)
+    if not refs:
+        return '那一列後面的格子沒有在 head 上存在的 nexus 實作 path:line（句子跨到的每一行都不算）。'
+    snippet = cells[-1]
+    if is_blank(snippet):
+        return f'最後一格的原文片段「{shown(snippet)}」去掉空白、括號與標點後什麼都不剩。'
+    problems = []
+    for path, lo, hi in refs:
+        content = rev_lines(head, path, lo, hi) or ''
+        where = f'{path}:{lo}' if lo == hi else f'{path}:{lo}-{hi}'
+        if is_blank(content):
+            problems.append(f'{where} 在 head 上去掉空白、括號與標點後什麼都不剩（內容是「{shown(content)}」），不算證據')
+        elif contains(content, snippet):
+            return None
+        else:
+            problems.append(f'{where} 在 head 上的內容是「{shown(content)}」，找不到那一列抄的片段「{shown(snippet)}」')
+    return '；'.join(problems) + '。'
 
 
 def cells_of(row: str) -> list[str]:
@@ -450,16 +490,17 @@ def verify(a: Analysis, body: str, head: str) -> list[str]:
         hit = [i for i, r in enumerate(rows) if len(r) >= 2 and norm(r[0]) == key]
         where = f'{path}:{u.line} 的句子「{u.text[:60]}」'
         if not hit:
-            errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:line |` 補一列，整句放第一格。')
+            errors.append(f'規則 1：{where}，內文沒有對應的一列。整句刪掉，或照 `| 整句 | 位置 | path:lo-hi | 原文片段 |` 補一列，整句放第一格。')
             continue
-        good = [i for i in hit if valid_refs(' '.join(rows[i][1:]), head, exclude=(path, u.line, u.last))]
+        problems = {i: evidence_problem(rows[i], head, (path, u.line, u.last)) for i in hit}
+        good = [i for i in hit if problems[i] is None]
         free = [i for i in good if i not in used]
         if free:
             used.add(free[0])
         elif good:
             errors.append(f'規則 1：{where}，同一句在好幾個檔或好幾處，每一處各要一列，這句的列已經被別處用掉了。')
         else:
-            errors.append(f'規則 1：{where}，那一列後面的格子沒有在 head 上存在的 nexus 實作 path:line（句子跨到的每一行都不算）。')
+            errors.append(f'規則 1：{where}，{problems[hit[0]]}')
     for path, n, blocking in a.vanished:
         if blocking:
             errors.append(f'規則 2：{path}:{n.line} 的段名「{n.text}」在這個檔消失了。階段 1 不改段名，改名留給階段 2，跟所有指向同一張 PR 改。')
@@ -482,8 +523,13 @@ def span(u: Unit) -> str:
 
 def report(a: Analysis) -> str:
     pipe = '\\|'
-    lines = ['## 規則 1：改寫與新增的註解句（貼進內文，整句放第一格，最後一格補 nexus 實作的 path:line，不用改位置那格）', '', '| 句子 | 位置 | nexus 實作的 path:line |', '| --- | --- | --- |']
-    lines += [f'| {u.text.replace("|", pipe)} | {path} 第 {span(u)} 行 | {PLACEHOLDER}：path:line> |' for path, u in a.sentences] or ['| （沒有） | | |']
+    lines = [
+        '## 規則 1：改寫與新增的註解句（貼進內文，整句放第一格；第三格補 nexus 實作的 path:line 或 path:lo-hi，第四格從那幾行抄一段原文，不用改位置那格）',
+        '',
+        '| 句子 | 位置 | nexus 實作的 path:line | 那幾行的原文片段 |',
+        '| --- | --- | --- | --- |',
+    ]
+    lines += [f'| {u.text.replace("|", pipe)} | {path} 第 {span(u)} 行 | {PLACEHOLDER}：path:line> | {PLACEHOLDER}：原文片段> |' for path, u in a.sentences] or ['| （沒有） | | | |']
     lines += ['', '## 規則 2：消失的段名', '']
     lines += [
         f'- {path}:{n.line}「{n.text}」' + ('' if blocking else '（含對照詞或是文件標題，不擋，改走規則 3）')

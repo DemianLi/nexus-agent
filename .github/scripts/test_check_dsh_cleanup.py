@@ -182,22 +182,22 @@ class RulesTest(unittest.TestCase):
         head_text = TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。')
         a, head = self.analyze_head(head_text)
         self.assertEqual([u.text for _, u in a.sentences], ['這一段由插件登記。'])
-        self.assertTrue(any('規則 1' in e and '沒有對應的一列' in e for e in verify(a, '', head)))
+        self.assertTrue(any('規則 1' in e and '沒有對應的一列' in e and '| 整句 | 位置 | path:lo-hi | 原文片段 |' in e for e in verify(a, '', head)))
 
     def test_rule1_row_with_existing_path_line_passes(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
-        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 |', head), [])
+        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 | export const real = 1; |', head), [])
 
     def test_rule1_missing_file_or_line_fails(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
         for ref in ('src/none.ts:1', 'src/impl.ts:99', 'src/impl.ts:0'):
             with self.subTest(ref=ref):
-                errors = verify(a, f'| 這一段由插件登記。 | src/a.ts 第 5 行 | {ref} |', head)
+                errors = verify(a, f'| 這一段由插件登記。 | src/a.ts 第 5 行 | {ref} | export const real = 1; |', head)
                 self.assertTrue(any('規則 1' in e for e in errors), errors)
 
     def test_rule1_unfilled_placeholder_fails(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
-        errors = verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | <填：path:line> |', head)
+        errors = verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 <填：path:line> | export const real = 1; |', head)
         self.assertTrue(any('規則 1' in e for e in errors))
 
     def test_rule1_deleting_whole_sentences_needs_no_row(self) -> None:
@@ -244,7 +244,7 @@ class RulesTest(unittest.TestCase):
     def test_body_edit_alone_changes_the_verdict(self) -> None:
         a, head = self.analyze_head(TS_BASE.replace(d('跟 @@ 的對照：@@ 把這一段放在 loop 裡。我們放在插件裡。'), '這一段由插件登記。'))
         self.assertTrue(verify(a, '', head))
-        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 |', head), [])
+        self.assertEqual(verify(a, '| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 | export const real = 1; |', head), [])
 
 
 class PrintedTableTest(unittest.TestCase):
@@ -258,8 +258,8 @@ class PrintedTableTest(unittest.TestCase):
         self.a = analyze(self.base, self.head)
         self.printed = mod.report(self.a)
 
-    def fill(self, evidence: str, reason: str) -> str:
-        return self.printed.replace('<填：path:line>', evidence).replace('<填：理由>', reason)
+    def fill(self, evidence: str, reason: str, snippet: str = 'export const real = 1;') -> str:
+        return self.printed.replace('<填：path:line>', evidence).replace('<填：原文片段>', snippet).replace('<填：理由>', reason)
 
     def test_the_printed_table_has_both_kinds_of_rows(self) -> None:
         self.assertTrue(self.a.sentences)
@@ -280,7 +280,7 @@ class PrintedTableTest(unittest.TestCase):
 
     def test_a_row_with_a_leftover_placeholder_does_not_count(self) -> None:
         path, u = self.a.sentences[0]
-        row = f'| {u.text} | {path} 第 {u.line} 行 | src/impl.ts:1 {mod.PLACEHOLDER}：確認 |'
+        row = f'| {u.text} | {path} 第 {u.line} 行 | src/impl.ts:1 {mod.PLACEHOLDER}：確認 | export const real = 1; |'
         self.assertTrue(any('規則 1' in e and u.text[:10] in e for e in verify(self.a, row, self.head)))
 
     def test_the_hit_term_is_not_a_reason(self) -> None:
@@ -290,6 +290,72 @@ class PrintedTableTest(unittest.TestCase):
     def test_real_evidence_and_reason_pass_rules_1_and_3(self) -> None:
         errors = verify(self.a, self.fill('src/impl.ts:1', '那是別的檔自己的偏離登記，名字沒變'), self.head)
         self.assertEqual([e for e in errors if '規則 1' in e or '規則 3' in e], [])
+
+
+class EvidenceContentTest(unittest.TestCase):
+    IMPL = 'export function real(): number {\n  // 登記在這裡\n\n  return registerPlugin(1);\n}\n'
+
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+        self.base = self.repo.commit({'a.ts': d('// @@ 才這樣。\n'), 'impl.ts': self.IMPL})
+        self.head = self.repo.commit({'a.ts': '// 由插件登記。\n'})
+        self.a = analyze(self.base, self.head)
+
+    def rule1(self, ref: str, snippet: str) -> list[str]:
+        return [e for e in verify(self.a, f'| 由插件登記。 | a.ts 第 1 行 | {ref} | {snippet} |', self.head) if '規則 1' in e]
+
+    def test_rev_lines_reads_the_range_at_that_revision(self) -> None:
+        self.assertEqual(mod.rev_lines(self.head, 'impl.ts', 4, 5), '  return registerPlugin(1);\n}')
+        self.assertEqual(mod.rev_lines(self.head, 'impl.ts', 1, 1), 'export function real(): number {')
+        for lo, hi in ((0, 1), (3, 2), (1, 6), (9, 9)):
+            self.assertIsNone(mod.rev_lines(self.head, 'impl.ts', lo, hi))
+        self.assertIsNone(mod.rev_lines(self.head, 'none.ts', 1, 1))
+
+    def test_a_range_with_nothing_but_blanks_brackets_and_punctuation_is_refused(self) -> None:
+        for ref in ('impl.ts:3', 'impl.ts:5'):
+            with self.subTest(ref=ref):
+                got = self.rule1(ref, 'return registerPlugin(1);')
+                self.assertTrue(got)
+                self.assertIn('什麼都不剩', got[0])
+        self.assertTrue(mod.is_blank(' \n}\n  ); // '))
+        self.assertFalse(mod.is_blank('}\nx'))
+
+    def test_a_range_is_accepted_when_one_of_its_lines_has_content(self) -> None:
+        self.assertEqual(self.rule1('impl.ts:3-4', 'return registerPlugin(1);'), [])
+
+    def test_the_quoted_text_must_be_in_the_cited_lines(self) -> None:
+        got = self.rule1('impl.ts:4', 'return somethingElse(2);')
+        self.assertTrue(got)
+        self.assertIn('impl.ts:4', got[0])
+        self.assertIn('return registerPlugin(1);', got[0])
+        self.assertIn('return somethingElse(2);', got[0])
+
+    def test_the_quote_is_compared_without_whitespace_pipes_and_backticks(self) -> None:
+        self.assertEqual(self.rule1('impl.ts:4', 'return   `registerPlugin`(1);'), [])
+        self.assertEqual(self.rule1('impl.ts:4', 'return registerPlugin(1);'), [])
+
+    def test_the_quote_of_another_line_does_not_count(self) -> None:
+        self.assertTrue(self.rule1('impl.ts:4', 'export function real'))
+        self.assertEqual(self.rule1('impl.ts:1-4', 'export function real'), [])
+
+    def test_a_row_without_the_quote_cell_or_with_a_short_one_is_refused(self) -> None:
+        none = verify(self.a, '| 由插件登記。 | a.ts 第 1 行 | impl.ts:4 |', self.head)
+        self.assertTrue(any('少了最後一格' in e for e in none), none)
+        for quote in ('', '}', ' ); '):
+            with self.subTest(quote=quote):
+                self.assertTrue(self.rule1('impl.ts:4', quote))
+
+    def test_any_cited_range_with_the_quote_is_enough(self) -> None:
+        self.assertEqual(self.rule1('impl.ts:5 impl.ts:4', 'return registerPlugin(1);'), [])
+
+    def test_the_ref_is_not_read_from_the_quote_cell(self) -> None:
+        got = verify(self.a, '| 由插件登記。 | a.ts 第 1 行 | 見下 | impl.ts:4 return registerPlugin(1); |', self.head)
+        self.assertTrue(any('規則 1' in e for e in got))
+
+    def test_the_printed_table_asks_for_the_quote(self) -> None:
+        printed = mod.report(self.a)
+        self.assertIn('| 句子 | 位置 | nexus 實作的 path:line | 那幾行的原文片段 |', printed)
+        self.assertIn(f'{mod.PLACEHOLDER}：原文片段>', printed)
 
 
 class OwnLineIsNotEvidenceTest(unittest.TestCase):
@@ -309,16 +375,16 @@ class OwnLineIsNotEvidenceTest(unittest.TestCase):
     def test_second_line_of_a_paragraph(self) -> None:
         a, h = self.analysis('// 第一句不動。\n// @@ 才這樣。\n', '// 第一句不動。\n// 我們也這樣。\n')
         self.assertEqual([(u.line, u.last) for _, u in a.sentences], [(2, 2)])
-        row = '| 我們也這樣。 | 位置 | {} |'
-        self.assertTrue(self.rule1(a, h, row.format('a.ts:2')))
-        self.assertEqual(self.rule1(a, h, row.format('impl.ts:1')), [])
-        self.assertEqual(self.rule1(a, h, row.format('a.ts:1')), [])
+        row = '| 我們也這樣。 | 位置 | {} | {} |'
+        self.assertTrue(self.rule1(a, h, row.format('a.ts:2', '我們也這樣')))
+        self.assertEqual(self.rule1(a, h, row.format('impl.ts:1', 'export const real = 1;')), [])
+        self.assertEqual(self.rule1(a, h, row.format('a.ts:1', '第一句不動')), [])
 
     def test_second_sentence_on_the_same_line(self) -> None:
         a, h = self.analysis('// 甲句不動。@@ 乙句。\n', '// 甲句不動。我們的乙句。\n')
         self.assertEqual([(u.line, u.last) for _, u in a.sentences], [(1, 1)])
-        self.assertTrue(self.rule1(a, h, '| 我們的乙句。 | 位置 | a.ts:1 |'))
-        self.assertEqual(self.rule1(a, h, '| 我們的乙句。 | 位置 | impl.ts:1 |'), [])
+        self.assertTrue(self.rule1(a, h, '| 我們的乙句。 | 位置 | a.ts:1 | 甲句不動 |'))
+        self.assertEqual(self.rule1(a, h, '| 我們的乙句。 | 位置 | impl.ts:1 | export const real = 1; |'), [])
 
     def test_sentence_spanning_lines(self) -> None:
         a, h = self.analysis(
@@ -327,15 +393,15 @@ class OwnLineIsNotEvidenceTest(unittest.TestCase):
         )
         self.assertEqual([(u.line, u.last) for _, u in a.sentences], [(2, 3)])
         self.assertIn('a.ts 第 2-3 行', mod.report(a))
-        row = '| 改寫後的句子寫得比較長，所以跨到第三行。 | 位置 | {} |'
-        for ref in ('a.ts:2', 'a.ts:3', 'a.ts:2-3', 'a.ts:1-2'):
+        row = '| 改寫後的句子寫得比較長，所以跨到第三行。 | 位置 | {} | {} |'
+        for ref, quote in (('a.ts:2', '改寫後的句子'), ('a.ts:3', '所以跨到第三行'), ('a.ts:2-3', '改寫後的句子'), ('a.ts:1-2', '前一句')):
             with self.subTest(ref=ref):
-                got = self.rule1(a, h, row.format(ref))
+                got = self.rule1(a, h, row.format(ref, quote))
                 self.assertTrue(got)
                 self.assertIn('a.ts:2 的句子', got[0])
-        for ref in ('a.ts:1', 'a.ts:4', 'impl.ts:1'):
+        for ref, quote in (('a.ts:1', '前一句'), ('a.ts:4', '末句。'), ('impl.ts:1', 'export const real = 1;')):
             with self.subTest(ref=ref):
-                self.assertEqual(self.rule1(a, h, row.format(ref)), [])
+                self.assertEqual(self.rule1(a, h, row.format(ref, quote)), [])
 
 
 class RuleThreeRoutesTest(unittest.TestCase):
@@ -374,9 +440,9 @@ class SentenceCellTest(unittest.TestCase):
         base = repo.commit({'a.ts': d(TS_BASE), 'impl.ts': 'export const real = 1;\n'})
         head = repo.commit({'a.ts': CLEAN.replace('我們放在插件裡。', '這一段由插件登記。')})
         a = analyze(base, head)
-        exact = '| 這一段由插件登記。 | 位置 | impl.ts:1 |'
+        exact = '| 這一段由插件登記。 | 位置 | impl.ts:1 | export const real = 1; |'
         self.assertEqual([e for e in verify(a, exact, head) if '規則 1' in e], [])
-        for longer in ('| 這一段由插件登記。再加一句別的話。 | 位置 | impl.ts:1 |', '| 前面還有字這一段由插件登記。 | 位置 | impl.ts:1 |'):
+        for longer in ('| 這一段由插件登記。再加一句別的話。 | 位置 | impl.ts:1 | export const real = 1; |', '| 前面還有字這一段由插件登記。 | 位置 | impl.ts:1 | export const real = 1; |'):
             with self.subTest(row=longer):
                 self.assertTrue(any('規則 1' in e for e in verify(a, longer, head)))
 
@@ -416,7 +482,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn('::error::規則 1', r.stdout)
 
     def test_filled_body_passes(self) -> None:
-        r = self.cli(body='| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 |')
+        r = self.cli(body='| 這一段由插件登記。 | src/a.ts 第 5 行 | src/impl.ts:1 | export const real = 1; |')
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn('證據通過', r.stdout)
 
@@ -447,13 +513,13 @@ class EvidencePathSpellingTest(unittest.TestCase):
         b = repo.commit({'a.ts': d('// 第一句不動。\n// @@ 才這樣。\n'), 'impl.ts': 'export const real = 1;\n'})
         h = repo.commit({'a.ts': '// 第一句不動。\n// 我們也這樣。\n'})
         a = analyze(b, h)
-        row = '| 我們也這樣。 | 位置 | {} |'
+        row = '| 我們也這樣。 | 位置 | {} | {} |'
         for ref in ('a.ts:2', './a.ts:2', 'x/../a.ts:2', './x/./../a.ts:2'):
             with self.subTest(ref=ref):
-                self.assertTrue([e for e in verify(a, row.format(ref), h) if '規則 1' in e])
+                self.assertTrue([e for e in verify(a, row.format(ref, '我們也這樣'), h) if '規則 1' in e])
         for ref in ('impl.ts:1', './impl.ts:1'):
             with self.subTest(ref=ref):
-                self.assertEqual([e for e in verify(a, row.format(ref), h) if '規則 1' in e], [])
+                self.assertEqual([e for e in verify(a, row.format(ref, 'export const real = 1;'), h) if '規則 1' in e], [])
 
     def test_rule3_row_may_spell_the_location_with_dot_slash(self) -> None:
         repo = Repo(self)
@@ -472,14 +538,14 @@ class RuleOneRowShapeTest(unittest.TestCase):
         b = self.repo.commit({'a.ts': d('// @@ 才這樣。\n'), 'impl.ts': 'export const real = 1;\n'})
         h = self.repo.commit({'a.ts': '// 見 impl.ts:1 的做法。\n'})
         a = analyze(b, h)
-        self.assertTrue([e for e in verify(a, '| 見 impl.ts:1 的做法。 | 位置 | |', h) if '規則 1' in e])
-        self.assertEqual([e for e in verify(a, '| 見 impl.ts:1 的做法。 | 位置 | impl.ts:1 |', h) if '規則 1' in e], [])
+        self.assertTrue([e for e in verify(a, '| 見 impl.ts:1 的做法。 | 位置 | | export const real = 1; |', h) if '規則 1' in e])
+        self.assertEqual([e for e in verify(a, '| 見 impl.ts:1 的做法。 | 位置 | impl.ts:1 | export const real = 1; |', h) if '規則 1' in e], [])
 
     def test_the_sentence_must_be_in_the_first_cell(self) -> None:
         b = self.repo.commit({'a.ts': d(TS_BASE), 'impl.ts': 'export const real = 1;\n'})
         h = self.repo.commit({'a.ts': CLEAN.replace('我們放在插件裡。', '這一段由插件登記。')})
         a = analyze(b, h)
-        self.assertTrue([e for e in verify(a, '| 位置 | 這一段由插件登記。 | impl.ts:1 |', h) if '規則 1' in e])
+        self.assertTrue([e for e in verify(a, '| 位置 | 這一段由插件登記。 | impl.ts:1 | export const real = 1; |', h) if '規則 1' in e])
         self.assertTrue([e for e in verify(a, '| 位置 | impl.ts:1 | 這一段由插件登記。 |', h) if '規則 1' in e])
 
     def test_the_same_sentence_in_two_files_needs_two_rows(self) -> None:
@@ -487,9 +553,9 @@ class RuleOneRowShapeTest(unittest.TestCase):
         h = self.repo.commit({'a.ts': '// 我們也這樣。\n', 'b.ts': '// 我們也這樣。\n'})
         a = analyze(b, h)
         self.assertEqual([p for p, _ in a.sentences], ['a.ts', 'b.ts'])
-        one = '| 我們也這樣。 | a.ts 第 1 行 | impl.ts:1 |'
+        one = '| 我們也這樣。 | a.ts 第 1 行 | impl.ts:1 | export const real = 1; |'
         self.assertEqual(len([e for e in verify(a, one, h) if '規則 1' in e]), 1)
-        two = one + '\n| 我們也這樣。 | b.ts 第 1 行 | impl.ts:1 |'
+        two = one + '\n| 我們也這樣。 | b.ts 第 1 行 | impl.ts:1 | export const real = 1; |'
         self.assertEqual([e for e in verify(a, two, h) if '規則 1' in e], [])
 
     def test_a_repeated_sentence_is_counted(self) -> None:
@@ -608,7 +674,7 @@ class PythonScanTest(unittest.TestCase):
         self.assertTrue(a.in_scope, a.reason)
         self.assertEqual([(p, u.text, u.line) for p, u in a.sentences], [('a.py', '改成別的。', 2)])
         self.assertTrue([e for e in verify(a, '', h) if '規則 1' in e])
-        self.assertEqual([e for e in verify(a, '| 改成別的。 | a.py 第 2 行 | impl.py:1 |', h) if '規則 1' in e], [])
+        self.assertEqual([e for e in verify(a, '| 改成別的。 | a.py 第 2 行 | impl.py:1 | x = 1 |', h) if '規則 1' in e], [])
 
     def test_multiline_docstring_keeps_line_numbers(self) -> None:
         text = 'def f():\n    """標題。\n\n    第二段 @@ 在這裡。\n    """\n    return 1\n'
