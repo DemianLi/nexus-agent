@@ -629,6 +629,83 @@ class RuleThreeRoutesMoreTest(unittest.TestCase):
         self.assertTrue([e for e in verify(analyze(b, other), '', other) if '規則 2' in e])
 
 
+class DriftedLineRefsTest(unittest.TestCase):
+    BASE = d('// @@ 先。\nconst a = 1;\nconst b = 2;\n')
+    HEAD = 'const a = 1;\nconst b = 2;\n'
+
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+
+    def found(self, files: dict[str, str], head: str | None = None, path: str = 'src/a.ts') -> dict[tuple[str, int], mod.Candidate]:
+        b = self.repo.commit({path: self.BASE, **files})
+        h = self.repo.commit({path: head or self.HEAD})
+        a = analyze(b, h)
+        self.assertTrue(a.in_scope)
+        return {(c.path, c.line): c for c in a.candidates}
+
+    def test_a_line_ref_whose_content_moved_is_a_candidate_with_the_new_line(self) -> None:
+        got = self.found({'docs/x.md': '見 src/a.ts:3。\n'})
+        self.assertEqual(list(got), [('docs/x.md', 1)])
+        self.assertIn('src/a.ts:2', got[('docs/x.md', 1)].hint)
+
+    def test_a_range_ref_gets_a_range_hint(self) -> None:
+        got = self.found({'docs/x.md': '見 src/a.ts:2-3。\n'})
+        self.assertIn('src/a.ts:1-2', got[('docs/x.md', 1)].hint)
+
+    def test_a_ref_whose_lines_were_deleted_asks_to_repoint(self) -> None:
+        got = self.found({'docs/x.md': '見 src/a.ts:1。\n'})
+        self.assertIn('重指', got[('docs/x.md', 1)].hint)
+
+    def test_a_ref_whose_content_did_not_change_is_not_a_candidate(self) -> None:
+        b = self.repo.commit({'src/a.ts': d('const a = 1;\nconst b = 2;\n// @@ 後。\n'), 'docs/x.md': '見 src/a.ts:2。\n'})
+        h = self.repo.commit({'src/a.ts': 'const a = 1;\nconst b = 2;\n'})
+        self.assertEqual(analyze(b, h).candidates, [])
+
+    def test_a_ref_line_the_change_itself_rewrote_is_skipped(self) -> None:
+        b = self.repo.commit({'src/a.ts': self.BASE, 'docs/x.md': '見 src/a.ts:3。\n'})
+        h = self.repo.commit({'src/a.ts': self.HEAD, 'docs/x.md': '見 src/a.ts:2。\n'})
+        self.assertEqual(analyze(b, h).candidates, [])
+
+    def test_prefix_and_bare_spellings_are_recognised(self) -> None:
+        path = 'harness/apps/x/src/a.ts'
+        refs = ['harness/apps/x/src/a.ts:3', 'apps/x/src/a.ts:3', 'a.ts:3']
+        got = self.found({'docs/x.md': '\n'.join(f'見 {r}。' for r in refs) + '\n'}, path=path)
+        self.assertEqual(sorted(line for _, line in got), [1, 2, 3])
+
+    def test_web_prefix_spellings_are_recognised(self) -> None:
+        got = self.found({'docs/x.md': '見 web/src/a.ts:3。\n見 apps/web/src/a.ts:3。\n'}, path='web/src/a.ts')
+        self.assertEqual(sorted(line for _, line in got), [1, 2])
+
+    def test_a_spelling_that_fits_two_files_is_not_guessed(self) -> None:
+        got = self.found({'docs/x.md': '見 a.ts:3。\n', 'src/other/a.ts': 'const z = 0;\n'})
+        self.assertEqual(got, {})
+
+    def test_the_row_must_name_the_line_and_give_a_reason(self) -> None:
+        b = self.repo.commit({'src/a.ts': self.BASE, 'docs/x.md': '見 src/a.ts:3。\n'})
+        h = self.repo.commit({'src/a.ts': self.HEAD})
+        a = analyze(b, h)
+        self.assertTrue([e for e in verify(a, '', h) if '規則 3' in e])
+        self.assertEqual([e for e in verify(a, '| docs/x.md:1 | src/a.ts:3 | 那一行講的是別個檔案同名的函式 |', h) if '規則 3' in e], [])
+        hint = a.candidates[0].hint
+        self.assertTrue([e for e in verify(a, f'| docs/x.md:1 | src/a.ts:3 | {hint} |', h) if '規則 3' in e])
+
+
+class HeaderPointerTest(unittest.TestCase):
+    def test_a_header_pointer_is_a_candidate_without_any_vanished_name(self) -> None:
+        repo = Repo(self)
+        b = repo.commit({'src/a.ts': d('// @@ 先。\nconst a = 1;\n'), 'docs/x.md': '偏離登記寫在 src/a.ts 的檔頭。\n'})
+        h = repo.commit({'src/a.ts': 'const a = 1;\n'})
+        a = analyze(b, h)
+        self.assertEqual(a.vanished, [])
+        self.assertEqual([(c.path, c.line, c.term) for c in a.candidates], [('docs/x.md', 1, '檔頭')])
+
+    def test_a_file_with_no_deleted_comment_is_not_searched(self) -> None:
+        repo = Repo(self)
+        b = repo.commit({'src/a.ts': d('// @@ 先。\nconst a = 1;\n'), 'src/b.ts': '// 一。\nconst b = 1;\n', 'docs/x.md': '寫在 src/b.ts 的檔頭。\n'})
+        h = repo.commit({'src/a.ts': 'const a = 1;\n'})
+        self.assertEqual(analyze(b, h).candidates, [])
+
+
 class FileKindsTest(unittest.TestCase):
     COMMENTS = {'.css': '/* @@ 註 */\na { b: c }\n'}
 

@@ -5,7 +5,9 @@
 1. 這張 PR 改寫或新增的每一句註解，PR 內文都要有一列：整句、位置、head 上存在的 `path:lo-hi`，最後一格抄那幾行的原文片段。
    引的範圍去掉空白、括號與標點後什麼都不剩就不算數；片段（壓掉空白、反引號、反斜線、`|`、`*` 後）要是那幾行內容的子字串。
 2. 註解裡原有的段名（`## 標題`、表格的名稱格）在同一個檔消失就紅。段名本身含對照詞的不在此限。
-3. 消失的段名，用段名與簡寫找全 repo 指向它的地方；每一個候選指向，內文要有一列寫明為什麼仍成立。
+3. 找全 repo 指向這張 PR 動過的東西的地方，每一個候選指向，內文要有一列寫明為什麼仍成立。候選有三路：
+   消失的段名（用段名與簡寫找）；行號漂移（別處寫的 `path:line`，那幾行在 base 與 head 上內容不同，印出建議改成第幾行）；
+   這張 PR 刪過註解的檔，被別處用「檔頭」指著。
 
 引的行撐不撐得起那一句、句子是真是假、理由成不成立，script 判不了，留給 verifier。本機不帶 --body-file 也不設 BODY 時只印出要填的列。
 """
@@ -68,6 +70,7 @@ class Candidate:
     path: str
     line: int
     term: str
+    hint: str = ''
 
 
 @dataclass
@@ -340,9 +343,9 @@ def owners_of(path: str, head: str) -> list[str]:
     return out
 
 
-def grep_lines(term: str, head: str) -> list[tuple[str, int, str]]:
+def grep_lines(term: str, head: str, fixed: bool = True) -> list[tuple[str, int, str]]:
     out = []
-    for ln in git('grep', '-n', '-I', '-F', '-e', term, head, '--', check=False).split('\n'):
+    for ln in git('grep', '-n', '-I', '-F' if fixed else '-E', '-e', term, head, '--', check=False).split('\n'):
         m = re.match(rf'^{re.escape(head)}:(.+?):(\d+):(.*)$', ln)
         if m and not canonical(m.group(1)).startswith(SEARCH_EXCLUDED) and m.group(1).rsplit('/', 1)[-1] not in SEARCH_EXCLUDED_NAMES and not HEADING_LINE.match(m.group(3)):
             out.append((m.group(1), int(m.group(2)), m.group(3)))
@@ -369,6 +372,74 @@ def find_candidates(vanished: list[tuple[str, Unit, bool]], head: str, skip: dic
     return sorted((c for c in found.values() if c.line not in skip.get(c.path, set())), key=lambda c: (c.path, c.line))
 
 
+REF_ANYWHERE = r'[A-Za-z0-9_@./-]+\.[A-Za-z0-9]+:[0-9]+'
+HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+
+
+def header_candidates(paths: list[str], head: str, skip: dict[str, set[int]]) -> list[Candidate]:
+    found: dict[tuple[str, int], Candidate] = {}
+    for path in paths:
+        for owner in owners_of(path, head):
+            for p, number, text in grep_lines(owner, head):
+                if any(h in text for h in HEADER_WORDS) and number not in skip.get(p, set()):
+                    found.setdefault((p, number), Candidate(p, number, HEADER_WORDS[0]))
+    return list(found.values())
+
+
+def hunks(base: str, head: str, path: str) -> list[tuple[int, int, int, int]]:
+    out = []
+    for ln in git('diff', '-U0', '--no-renames', f'{base}...{head}', '--', path).split('\n'):
+        m = HUNK.match(ln)
+        if m:
+            out.append((int(m.group(1)), int(m.group(2) or 1), int(m.group(3)), int(m.group(4) or 1)))
+    return out
+
+
+def new_line(n: int, found: list[tuple[int, int, int, int]]) -> int | None:
+    shift = 0
+    for old, old_count, _, new_count in found:
+        last = old + old_count - 1 if old_count else old
+        if old_count and old <= n <= last:
+            return None
+        if n > last:
+            shift += new_count - old_count
+    return n + shift
+
+
+def hint_for(path: str, lo: int, hi: int, base: str, head: str) -> str:
+    found = hunks(base, head, path)
+    new_lo, new_hi = new_line(lo, found), new_line(hi, found)
+    if new_lo is None or new_hi is None or new_lo > new_hi:
+        return '那幾行在這張 PR 被改寫或刪掉，要自己重指'
+    where = f'{path}:{new_lo}' if new_lo == new_hi else f'{path}:{new_lo}-{new_hi}'
+    return f'行號換算後建議改成 {where}'
+
+
+def drift_candidates(touched: list[FileChange], base: str, head: str, skip: dict[str, set[int]]) -> list[Candidate]:
+    found: dict[tuple[str, int], Candidate] = {}
+    tree = [canonical(t) for t in git('ls-tree', '-r', '--name-only', head).split('\n') if t]
+    for p, number, text in grep_lines(REF_ANYWHERE, head, fixed=False):
+        if number in skip.get(p, set()):
+            continue
+        for m in REF.finditer(text):
+            ref = canonical(posixpath.normpath(m.group(1)))
+            lo = int(m.group(2))
+            hi = int(m.group(3) or lo)
+            for f in touched:
+                target = canonical(f.path)
+                if lo > hi or not (target == ref or target.endswith('/' + ref)):
+                    continue
+                if sum(t == ref or t.endswith('/' + ref) for t in tree) > 1:
+                    continue
+                before = rev_lines(base, f.path, lo, hi)
+                after = rev_lines(head, f.path, lo, hi) if f.status != 'D' else None
+                if before is None or (after is not None and norm(before) == norm(after)):
+                    continue
+                name = f'{m.group(1)}:{lo}' if lo == hi else f'{m.group(1)}:{lo}-{hi}'
+                found.setdefault((p, number), Candidate(p, number, name, hint_for(f.path, lo, hi, base, head)))
+    return list(found.values())
+
+
 def analyze(base: str, head: str) -> Analysis:
     def out_of_scope(why: str) -> Analysis:
         return Analysis(False, why, [], [], [])
@@ -376,11 +447,14 @@ def analyze(base: str, head: str) -> Analysis:
     sentences: list[tuple[str, Unit]] = []
     vanished: list[tuple[str, Unit, bool]] = []
     before = after = 0
+    touched: list[FileChange] = []
+    trimmed: list[str] = []
     for f in changes(base, head):
         if f.kind == 'other':
             return out_of_scope(f'{f.path} 不是註解可以涵蓋的檔，程式碼有變')
         if f.kind == 'ignored':
             continue
+        touched.append(f)
         old_text = show(base, f.path)
         new_text = show(head, f.path) if f.status != 'D' else ''
         if f.kind == 'doc':
@@ -401,6 +475,8 @@ def analyze(base: str, head: str) -> Analysis:
                 seen[norm(u.text)] -= 1
             elif not is_separator(u.text):
                 sentences.append((f.path, u))
+        if any(count > 0 for count in seen.values()):
+            trimmed.append(f.path)
         have_names = Counter(core_of(n.text) for n in names(new_units))
         for n in names(old_units):
             core = core_of(n.text)
@@ -410,7 +486,11 @@ def analyze(base: str, head: str) -> Analysis:
                 vanished.append((f.path, n, not reference_lines(core)))
     if after >= before:
         return out_of_scope(f'對照詞的行數沒有下降（{before} → {after}）')
-    candidates = find_candidates(vanished, head, added_lines(base, head)) if vanished else []
+    skip = added_lines(base, head)
+    merged: dict[tuple[str, int], Candidate] = {}
+    for c in [*drift_candidates(touched, base, head, skip), *header_candidates(trimmed, head, skip), *(find_candidates(vanished, head, skip) if vanished else [])]:
+        merged.setdefault((c.path, c.line), c)
+    candidates = sorted(merged.values(), key=lambda c: (c.path, c.line))
     return Analysis(True, f'對照詞的行數 {before} → {after}，程式碼只有註解與字串內容變了', sentences, vanished, candidates)
 
 
@@ -473,8 +553,11 @@ def cells_of(row: str) -> list[str]:
     return [c.strip() for c in re.split(r'(?<!\\)\|', row.strip().strip('|'))]
 
 
-def reason_of(text: str, term: str) -> str:
-    return re.sub(r'[\s|`*\-–:：，。、,.]', '', REF.sub('', text.replace(term, '')))
+def reason_of(text: str, *echoed: str) -> str:
+    for piece in echoed:
+        if piece:
+            text = text.replace(piece, '')
+    return re.sub(r'[\s|`*\-–:：，。、,.]', '', REF.sub('', text))
 
 
 def table_rows(body: str) -> list[list[str]]:
@@ -508,11 +591,11 @@ def verify(a: Analysis, body: str, head: str) -> list[str]:
         if not any(
             len(r) >= 3
             and any(p == c.path and lo <= c.line <= hi for p, lo, hi in valid_refs(r[0], head))
-            and len(reason_of(r[-1], c.term)) >= MIN_REASON
+            and len(reason_of(r[-1], c.term, c.hint)) >= MIN_REASON
             for r in rows
         ):
             errors.append(
-                f'規則 3：{c.path}:{c.line} 可能指向消失的「{c.term}」，要在這張 PR 改掉，或照 `| path:line | 詞 | 為什麼仍成立 |` 補一列，理由放最後一格。'
+                f'規則 3：{c.path}:{c.line} 可能指向動過的「{c.term}」{f"（{c.hint}）" if c.hint else ""}，要在這張 PR 改掉，或照 `| path:line | 詞 | 為什麼仍成立 |` 補一列，理由放最後一格。'
             )
     return errors
 
@@ -535,8 +618,8 @@ def report(a: Analysis) -> str:
         f'- {path}:{n.line}「{n.text}」' + ('' if blocking else '（含對照詞或是文件標題，不擋，改走規則 3）')
         for path, n, blocking in a.vanished
     ] or ['- （沒有）']
-    lines += ['', '## 規則 3：可能指向消失段名的地方（每一個要改掉，或在內文留一列，最後一格寫為什麼仍成立）', '', '| 位置 | 命中的詞 | 為什麼仍成立 |', '| --- | --- | --- |']
-    lines += [f'| {c.path}:{c.line} | {c.term} | {PLACEHOLDER}：理由> |' for c in a.candidates] or ['| （沒有） | | |']
+    lines += ['', '## 規則 3：可能指向動過的地方（消失的段名、漂移的行號、「檔頭」）（每一個要改掉，或在內文留一列，最後一格寫為什麼仍成立）', '', '| 位置 | 命中的詞 | 為什麼仍成立 |', '| --- | --- | --- |']
+    lines += [f'| {c.path}:{c.line} | {c.term}{f"（{c.hint}）" if c.hint else ""} | {PLACEHOLDER}：理由> |' for c in a.candidates] or ['| （沒有） | | |']
     return '\n'.join(lines)
 
 
