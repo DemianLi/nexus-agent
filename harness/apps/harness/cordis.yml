@@ -664,7 +664,7 @@
 # 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。
 # 值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
 #
-# 兩處偏離登記在 `src/settings/live-model.ts` 的檔頭：端點退到起動期解一次。
+# 兩處偏離登記在 `src/settings/live-model.ts` 的檔頭：端點退到起動期解一次（偏離一）；重試只有一層、`mode: always` 拒收（偏離二）。
 #
 # **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`packages/llm/llm-pi-ai/README.md:40-103`）：
 # 每筆帶窗口、輸出上限（`maxTokens`，設了就是這顆每次請求送出去的 `max_tokens`）、`input`（收哪些種類，這是對端點
