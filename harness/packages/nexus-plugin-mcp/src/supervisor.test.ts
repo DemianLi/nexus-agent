@@ -109,7 +109,7 @@ afterEach(() => {
 });
 
 describe('政策的形狀', () => {
-  it('預設值照 dsh：500、30000、10、啟用', () => {
+  it('預設值：500、30000、10、啟用', () => {
     expect(reconnectSchema.parse({})).toEqual({
       enabled: true,
       initialDelayMs: 500,
@@ -311,7 +311,7 @@ describe('關閉', () => {
   });
 });
 
-describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () => {
+describe('關閉的期限（#1543）', () => {
   it('期限是 5000 ms', () => {
     expect(GENERATION_CLOSE_TIMEOUT_MS).toBe(5000);
   });

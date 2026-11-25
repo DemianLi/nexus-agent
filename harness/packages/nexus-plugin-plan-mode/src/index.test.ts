@@ -338,7 +338,7 @@ describe('計劃模式的組裝', () => {
   });
 
   /** 收得下自由訊息之後，提示字串跟 dsh 一樣（#776）。 */
-  it('提示是 [off|message]，同 dsh', async () => {
+  it('提示是 [off|message]', async () => {
     const { registry } = await load([planPlugin()]);
 
     expect(registry.commands.list()[0]?.input?.hint).toBe(PLAN_COMMAND_HINT);
@@ -963,7 +963,7 @@ describe('設定（#453）', () => {
     await expect(load(bad)).rejects.toThrow('startActive');
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+  it('未知欄位讓載入失敗', async () => {
     await expect(load([{ plugin: planModeShell, config: { guidence: '講清楚' } }])).rejects.toThrow(
       /guidence/,
     );

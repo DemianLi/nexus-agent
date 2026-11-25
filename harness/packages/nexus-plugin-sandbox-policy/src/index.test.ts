@@ -128,7 +128,7 @@ describe('政策那句話本身', () => {
     expect(sandboxPolicySentence('danger-full-access')).toContain('不受限制');
   });
 
-  it('三句都限定在「受檔案沙箱管的可用操作」——這是句子不宣稱圍堵的來源（照 dsh）', () => {
+  it('三句都限定在「受檔案沙箱管的可用操作」——這是句子不宣稱圍堵的來源', () => {
     for (const mode of ['read-only', 'workspace-write', 'danger-full-access'] as const) {
       for (const contained of [true, false]) {
         expect(sandboxPolicySentence(mode, { contained })).toContain('受檔案沙箱管的可用操作');

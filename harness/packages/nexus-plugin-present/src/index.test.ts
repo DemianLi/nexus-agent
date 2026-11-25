@@ -255,7 +255,7 @@ function refusalOf(result: unknown): { text: string; code: string | undefined } 
  * 跟自己比，不會紅。
  */
 describe('模型看到的描述', () => {
-  it('工具描述與 files 的說明逐字等於 dsh', async () => {
+  it('工具描述與 files 的說明逐字等於約定的句子', async () => {
     const { tool } = await mount();
     const { function: sent } = convertToOpenAITool(tool);
     expect(sent.description).toBe(
@@ -273,7 +273,7 @@ describe('模型看到的描述', () => {
 });
 
 describe('成功的那一次', () => {
-  it('回 dsh 的 `Presented <path>`，而且 `tools/result` 說成功的當下同步寫一筆交付（在 `tool/result` 之前）', async () => {
+  it('回 `Presented <path>`，而且 `tools/result` 說成功的當下同步寫一筆交付（在 `tool/result` 之前）', async () => {
     const root = await workspace();
     await writeFile(join(root, '報告.docx'), Uint8Array.of(80, 75, 0, 255));
     await mkdir(join(root, 'out'));
@@ -307,7 +307,7 @@ describe('成功的那一次', () => {
     expect(readRaw).not.toHaveBeenCalled();
   });
 
-  it('結果被判成錯誤就不交付——照 dsh 被 post-execute 擋下的那一條', async () => {
+  it('結果被判成錯誤就不交付', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
     const mounted = await mount({ root });
@@ -582,7 +582,7 @@ describe('拒絕', () => {
     expect(refusalOf(noCallId).text).toBe(`Error: ${PRESENT_NO_SESSION_MESSAGE}`);
   });
 
-  it('多一個鍵就是參數不合（照 dsh 的 additionalProperties: false）', async () => {
+  it('多一個鍵就是參數不合', async () => {
     const mounted = await mount();
     await expect(
       mounted.tool.invoke({ files: [{ path: 'a', extra: 1 }] }, rootConfig('c') as never),
@@ -591,7 +591,7 @@ describe('拒絕', () => {
 });
 
 describe('已知的偏離', () => {
-  it('**最後一段是符號連結擋不下來**：backend 沒有 lstat，這一格照 dsh 會拒、我們放行', async () => {
+  it('**最後一段是符號連結擋不下來**：backend 沒有 lstat，這一格該拒、我們放行', async () => {
     // 翻面的絆索：哪天 backend 協定有了 lstat、這裡改成拒絕，這一條會紅，偏離註解要一起收回。
     const root = await workspace();
     await writeFile(join(root, 'source'), 'source');
@@ -615,7 +615,7 @@ describe('設定（#453）', () => {
     }
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', () => {
+  it('未知欄位讓載入失敗', () => {
     expect(Config.safeParse({ maxFiles: 2, extra: 1 }).success).toBe(false);
   });
 

@@ -161,7 +161,7 @@ describe('SSE 解碼：信封驗證', () => {
     expect((error as WireProtocolError).field).toBe(field);
   });
 
-  it('seq 是 -0：拋（JSON 的 -0 解出來是 -0，一樣拒）', async () => {
+  it('seq 是 -0：拋（JSON 的 -0 解出來是 -0，不算安全非負整數）', async () => {
     const error = await failure(
       `data: ${JSON.stringify(good()).replace('"seq":1', '"seq":-0')}\n\n`,
     );

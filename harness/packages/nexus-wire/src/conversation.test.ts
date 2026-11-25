@@ -573,9 +573,8 @@ describe('停下的原因（#1624）', () => {
 });
 
 /**
- * 還沒有結果的卡收成失敗時也補碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：照 dsh 合成的
- * `{ code: 'interrupted' }`（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），停止、失敗、收尾三條
- * 路都補——dsh 也不分關閉的原因。所以每一列多比一格碼。
+ * 還沒有結果的卡收成失敗時也補碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：補的是
+ * `UNFINISHED_TOOL_CODE`（`interrupted`），停止、失敗、收尾三條路都補，不分關閉的原因。所以每一列多比一格碼。
  */
 describe('一輪收掉時還沒有結果的工具卡（#297）', () => {
   const open = (id: string, namespace: string[] = ['tools:a']) =>

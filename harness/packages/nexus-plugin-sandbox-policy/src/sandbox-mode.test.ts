@@ -48,7 +48,7 @@ describe('切換', () => {
     expect(controller.switchTo('read-only')).toEqual({ kind: 'unchanged', mode: 'read-only' });
   });
 
-  it('切到已經生效的那一格什麼都不發生——照 dsh 的「淨變化為零不追加」', () => {
+  it('切到已經生效的那一格什麼都不發生——淨變化為零不追加', () => {
     const controller = new SandboxModeController('read-only');
     const log = new SessionLog('t');
     controller.attach(subjectOf(log));

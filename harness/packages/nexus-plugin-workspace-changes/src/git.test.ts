@@ -63,7 +63,7 @@ describe('parseNumstat', () => {
 });
 
 describe('環境淨化', () => {
-  it('子行程拿到的是淨化過的環境，外加 dsh 那四個 git 變數', async () => {
+  it('子行程拿到的是淨化過的環境，外加那四個 git 變數', async () => {
     vi.stubEnv('FAKE_API_TOKEN', 'leak');
     vi.stubEnv('NEXUS_AGENT_HOME', '/somewhere');
     vi.stubEnv('KEEP_ME', 'yes');
