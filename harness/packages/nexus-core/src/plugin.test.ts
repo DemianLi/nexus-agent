@@ -202,7 +202,7 @@ describe('設定是資料（#453）', () => {
     expect(() => resolveEntries(bad)).toThrow('sized-main (sized)');
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', () => {
+  it('未知欄位讓載入失敗（登記的偏離）', () => {
     const typo = [{ plugin: sizedPlugin(), config: { maxByte: 7 } }];
     expect(() => resolveEntries(typo)).toThrow('sized#0 (sized)');
     expect(() => resolveEntries(typo)).toThrow(/maxByte\b/);
@@ -213,7 +213,7 @@ describe('設定是資料（#453）', () => {
     expect(() => resolveEntries(typo)).toThrow(/nested(\.|:)/);
   });
 
-  it('沒有 Config 的 plugin 給了 config：照 dsh 不驗、不拋，原樣交下去（#751 拍板）', () => {
+  it('沒有 Config 的 plugin 給了 config：不驗、不拋，原樣交下去（#751 拍板）', () => {
     // 手搭清單也不拋：dsh 對任何呼叫端都不擋這一格（`vendor/cordis/src/fiber.ts:51`，`477b4f4`）。
     // 設了卻沒有作用的那句警告只在產品路徑上印（`harness/apps/harness` 的 `loadDefaultPlugins`）。
     const entry = { ...fakePlugin('plain', noop), config: { anything: 1 } };

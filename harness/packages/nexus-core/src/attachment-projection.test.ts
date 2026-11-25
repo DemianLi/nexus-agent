@@ -130,7 +130,7 @@ describe('做不出送模型那一份時的佔位字（#2071）', () => {
   });
 });
 
-describe('送出的圖前面那一行把手（#1566，逐字照 dsh requestImageHandleText 沒有路徑的前半句）', () => {
+describe('送出的圖前面那一行把手（#1566，逐字是沒有路徑的前半句）', () => {
   it('沒名字：完整的 attachmentId；寬高照參照', () => {
     expect(requestImageHandleText(IMAGE)).toBe(
       `Image sha256:${'c'.repeat(64)}; request preview 4x3px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`,

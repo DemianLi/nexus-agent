@@ -72,7 +72,7 @@ describe('ledger 投影', () => {
     expect(record.body).toEqual({ kind: 'message', text: '你好' });
   });
 
-  it('沒有來源的 dsh 欄位就是不在：cwd / parent_id 不出現，不是分叉來的也不帶 seed_length', () => {
+  it('沒有來源的欄位就是不在：cwd / parent_id 不出現，不是分叉來的也不帶 seed_length', () => {
     const log = new SessionLog('thread-a');
     const sink = fakeSink();
     new SessionTelemetryCoordinator({ log, sink });

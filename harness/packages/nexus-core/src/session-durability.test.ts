@@ -32,7 +32,7 @@ describe('checkpointSession（#1606）', () => {
     expect(store.opened).toEqual(['t1']);
   });
 
-  it('沒有任何排空者參與：拒，訊息寫明不是耐久的，也不去讀存檔（dsh `:240-244`）', async () => {
+  it('沒有任何排空者參與：拒，訊息寫明不是耐久的，也不去讀存檔', async () => {
     const sessions = new SessionRegistry('t1');
     const store = storeOf({}, () => sessions.root.events);
     await expect(checkpointSession(sessions, store, sessions.root)).rejects.toThrow(
@@ -41,7 +41,7 @@ describe('checkpointSession（#1606）', () => {
     expect(store.opened).toEqual([]);
   });
 
-  it('排空者參與了、存檔裡卻沒有那一顆（不歸它寫）：讀回比對拒（dsh `:245`）', async () => {
+  it('排空者參與了、存檔裡卻沒有那一顆（不歸它寫）：讀回比對拒', async () => {
     const sessions = new SessionRegistry('t1');
     sessions.onFlush(() => Promise.resolve());
     sessions.root.append('turn/start', { kind: 'message', text: '嗨' });
@@ -95,7 +95,7 @@ describe('checkpointSession（#1606）', () => {
     ).rejects.toThrow('磁碟滿了');
   });
 
-  it('比的是叫的那一刻的最後一顆（按 seq 取），不是讀回時的檔尾（dsh `:239`、`:248`）', async () => {
+  it('比的是叫的那一刻的最後一顆（按 seq 取），不是讀回時的檔尾', async () => {
     const sessions = new SessionRegistry('t1');
     const log = sessions.root;
     log.append('feedback/record', { text: '慢' });

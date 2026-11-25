@@ -529,8 +529,8 @@ describe('其餘六個註冊點', () => {
     };
 
     it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
-      expect(() => register('~/.dsh/skills/')).toThrow('"~"');
-      expect(() => register('~/.dsh/skills/')).toThrow('alpha#0 (alpha)');
+      expect(() => register('~/.skills/')).toThrow('"~"');
+      expect(() => register('~/.skills/')).toThrow('alpha#0 (alpha)');
     });
 
     it('相對路徑被擋', () => {
