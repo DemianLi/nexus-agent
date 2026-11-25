@@ -3,7 +3,7 @@
  *
  * ## 為什麼要這一層
  *
- * 附件儲存是整台 serve 一份、內容定址（照 dsh，`attachment-store.ts` 檔頭）。以前模型讀附件的路由根是整個 `files` 目錄，
+ * 附件儲存是整台 serve 一份、內容定址（`attachment-store.ts` 檔頭）。以前模型讀附件的路由根是整個 `files` 目錄，
  * thread B 的 `ls /attachments` 列得出 thread A 上傳的檔，照路徑 `read_file` 也讀得到。一台主機多人共用、所有 web 使用者在
  * 同一個 OS 帳號底下，`0700` 分不開人（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-10-18.md#L64）。wire 這一層早就按 thread 分開了
  * （收據只在收下它的 thread 有效；網頁讀圖的授權是「這條 thread 的日誌引用過它」，`attachment-reference.ts`）；這個檔把模型
@@ -28,8 +28,7 @@
  *
  * ## 偏離（理由 2，登記在 `attachment-store.ts` 檔頭偏離 2）
  *
- * dsh 是單人桌面，模型讀的是主機路徑，沒有路由；nexus 一台主機多人共用，0700 分不開人，所以路由多一道「日誌引用過」的判準，
- * 跟網頁讀圖同一條（照 dsh `session.attachment`）。
+ * nexus 一台主機多人共用，0700 分不開人，所以路由多一道「日誌引用過」的判準，跟網頁讀圖同一條（`attachment-reference.ts`）。
  *
  * @module
  */
@@ -149,7 +148,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
       rootDir: options.rootDir,
       mode: 'read-only',
       // **讀不到的路徑不放行**（#1704 的偏離只給工作區）：這個根裡讀不到的檔是別的 thread 的別名檔（同一個內容雜湊目錄），
-      // 連「有幾個」都不交給模型（#1822）。維持 dsh 的做法：整次失敗，原始訊息只進伺服器日誌。
+      // 連「有幾個」都不交給模型（#1822）。整次失敗，原始訊息只進伺服器日誌。
       tolerateUnreadable: false,
       ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
       ...(options.toolMode !== undefined && { toolMode: options.toolMode }),

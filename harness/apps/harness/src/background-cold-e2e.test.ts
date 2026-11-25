@@ -199,7 +199,7 @@ describe('重啟之後送話叫醒背景子代理', () => {
       await until(() => second.models['worker-a'].prompts.length > 0);
       const prompt = conversation(second.models['worker-a'].lastPrompt);
       expect(prompt.slice(0, a.before.length)).toEqual(a.before);
-      // 模型寫的話帶 dsh 的前綴，不是人說的原文。
+      // 模型寫的話帶前綴，不是人說的原文。
       expect(String(prompt.at(-1)?.content)).toMatch(/sent a message: 模型叫醒$/);
     } finally {
       await second.shutdown();

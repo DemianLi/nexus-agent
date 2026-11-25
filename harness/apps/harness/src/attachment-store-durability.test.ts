@@ -1,6 +1,5 @@
 /**
- * 附件回報參照之前逐層 fsync 目錄（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)，dsh
- * `attachment-local/src/store.ts:126-183`、`:272-302`、`:350-388`）。
+ * 附件回報參照之前逐層 fsync 目錄（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)）。
  *
  * 照 `attachment-alias-atomic.test.ts` 的做法：包一層 `node:fs/promises`，記下目錄的 fsync、`link`、`rename` 的順序，
  * 在指定的地方注入失敗。斷電本身測不了，這裡只驗呼叫順序與失敗注入。附件根放 `/var/tmp`（見記憶「夾具在 tmpdir 會撞上

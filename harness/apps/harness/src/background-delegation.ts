@@ -95,21 +95,21 @@ import {
 import type { DelegationBaseline, ModelSelectionConfig } from './subagent-model-selection.js';
 import type { BackgroundAgent, BackgroundSubagentControl } from './background-subagents.js';
 
-/** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
+/** 模型看到的工具名。 */
 export const SUBAGENT_TOOL_NAME = 'subagent';
-/** 列出自己派出的背景子代理（dsh `tool-subagent-control/src/list-agents.ts`，`477b4f4`）。 */
+/** 列出自己派出的背景子代理。 */
 export const LIST_AGENTS_TOOL_NAME = 'list_agents';
-/** 列出授權清單裡的模型（#877；dsh `tool-subagent/src/list-models.ts`，`477b4f4`）。 */
+/** 列出授權清單裡的模型（#877）。 */
 export const LIST_SUBAGENT_MODELS_TOOL_NAME = 'list_subagent_models';
-/** 只停一個背景子代理當下那一輪（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
+/** 只停一個背景子代理當下那一輪。 */
 export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
-/** 對背景子代理追加指示（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
+/** 對背景子代理追加指示。 */
 export const SEND_MESSAGE_TOOL_NAME = 'send_message';
 /** 被換掉的基座委派工具。 */
 const BASE_DELEGATION_TOOL_NAME = 'task';
 /** 模型那一側拿掉 `task`。 */
 const WITHOUT_TASK: ToolAdmission = { admits: (name) => name !== BASE_DELEGATION_TOOL_NAME };
-/** `subagent` 參數不合 schema 時的碼，同圍堵認出 schema 不合時給的那一組（dsh `ToolArgsError`）。 */
+/** `subagent` 參數不合 schema 時的碼，同圍堵認出 schema 不合時給的那一組。 */
 const SUBAGENT_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
 
 /** 這個 middleware 的名字。 */
@@ -131,13 +131,13 @@ export interface BackgroundSubagentsOptions {
   /**
    * 這個會話允許模型逐次替子代理挑模型（#877）：**給了，`subagent` 才多 `model`／`reasoning_effort` 兩格並註冊
    * `list_subagent_models`；省略，這兩樣都不存在、帶了這兩格的呼叫會被拒絕**。授權清單是日誌上記著的政策（#875），
-   * 由 serve 在 `createAgent` 時取樣／讀回後傳進來；工具面在整個會話內不變（dsh：定義靜態，catalog 變動不改 prompt 前綴）。
+   * 由 serve 在 `createAgent` 時取樣／讀回後傳進來；工具面在整個會話內不變。
    */
   readonly modelSelection?: ModelSelectionConfig;
   /**
    * 這一次委派的基線（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：定義釘的模型與強度、父代理**此刻**的選擇、部署預設。
    * 組裝點從會話的控制器與 registry 的定義導出；省略（沒連真實供應商，沒有每會話選擇）＝沿用預設實例。背景子代理在**委派那一刻**
-   * 取這一次、之後固定（照 dsh：子代理建立時取父代理當下的選擇）。
+   * 取這一次、之後固定。
    */
   readonly delegationBaseline?: (subagent: string) => DelegationBaseline | undefined;
   /**
@@ -156,7 +156,7 @@ const subagentSchema = z.object({
     .describe('預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。'),
 });
 
-/** 開了選模型的 `subagent`：多兩個選填欄位（#877；欄位名照 dsh，沒有 `provider`）。 */
+/** 開了選模型的 `subagent`：多兩個選填欄位（#877）。 */
 const selectingSubagentSchema = subagentSchema.extend({
   model: z
     .string()
@@ -172,7 +172,7 @@ const selectingSubagentSchema = subagentSchema.extend({
     ),
 });
 
-/** 接在描述後面、講怎麼選模型的那一段（#877；照 dsh `choiceDescription` 的意思）。 */
+/** 接在描述後面、講怎麼選模型的那一段（#877）。 */
 const SELECTION_DESCRIPTION =
   '\n\n選模型是選填的：省略 `model` 與 `reasoning_effort` 就沿用你現在的模型。要指定時，先用 `list_subagent_models` ' +
   '看可選的模型與它的推理等級；換了模型卻沒給推理等級，就用新模型的預設。選模型只在背景委派（`run_in_background` 為 true）時可用。';
@@ -195,7 +195,7 @@ const BACKGROUND_DESCRIPTION =
   '\n\n`run_in_background` 預設 true：子代理在背景跑，這次呼叫當場回它的編號，你可以接著做別的事。' +
   '要等它的結果才能往下時傳 `false`，這次呼叫會等它跑完並回結果。';
 
-/** 接在系統提示詞後面的那一句（dsh `tool-subagent/src/index.ts:594-603`）。 */
+/** 接在系統提示詞後面的那一句。 */
 const PARALLEL_SENTENCE =
   '要派幾個互不相依的子代理時，在同一則訊息裡一起呼叫 `subagent`，派出去後繼續做有用的事，不要乾等。';
 
@@ -279,7 +279,7 @@ export class BackgroundDelegation {
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
           registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
-          // 只有這個會話有授權清單才註冊（#877；dsh：`list_subagent_models` 只在政策存在時註冊）。
+          // 只有這個會話有授權清單才註冊（#877）。
           if (this.#options.modelSelection !== undefined) {
             registry.tools.register(this.#listSubagentModelsTool(), { rootOnly: true });
           }
@@ -308,13 +308,9 @@ export class BackgroundDelegation {
   }
 
   /**
-   * `list_agents`：薄薄一層，讀 host 的目錄，不自己另存一份。名字、描述與輸出逐字照 dsh
-   * （`tool-subagent-control/src/list-agents.ts`）。
+   * `list_agents`：薄薄一層，讀 host 的目錄，不自己另存一份。
    *
-   * **描述裡「做完會通知」「用 send_message 接著談」兩句是 dsh 的原文**，那兩個機制是 #840、#839；
-   * 這個選項在 #841 翻預設之前不進產品，翻預設的前置就是它們都合併。
-   *
-   * 只做 `children`：我們沒有子代理再派子代理，`descendants` 沒有東西可列；診斷列（目錄壞掉）在行程內不會發生。
+   * 描述裡「做完會通知」「用 send_message 接著談」兩句對應的機制是 #840、#839。
    */
   #listAgentsTool() {
     return tool(
@@ -345,8 +341,7 @@ export class BackgroundDelegation {
   }
 
   /**
-   * `list_subagent_models`（#877）：授權清單裡有哪些模型、某一顆有哪些推理等級。**schema 固定、不列舉模型**（dsh：
-   * 把會變動的清單放進每次請求的前綴會讓快取失效）。授權在前，不在清單裡的 id 一律拒絕，見 `describeSubagentModels`。
+   * `list_subagent_models`（#877）：授權清單裡有哪些模型、某一顆有哪些推理等級。**schema 固定、不列舉模型**。授權在前，不在清單裡的 id 一律拒絕，見 `describeSubagentModels`。
    */
   #listSubagentModelsTool() {
     const selection = this.#options.modelSelection!;
@@ -375,12 +370,11 @@ export class BackgroundDelegation {
   }
 
   /**
-   * `interrupt_agent`：只停該背景子代理當下那一輪，**不等它停穩就回**。名字、描述與參數逐字照 dsh
-   * （`tool-subagent-control/src/index.ts`）。
+   * `interrupt_agent`：只停該背景子代理當下那一輪，**不等它停穩就回**。
    *
-   * 不存在的、沒在跑的、別人（別的主對話）的編號都是被接受的 no-op，照樣回同一句（dsh 明寫，也讓模型
+   * 不存在的、沒在跑的、別人（別的主對話）的編號都是被接受的 no-op，照樣回同一句（也讓模型
    * 不能藉由回應試探編號）。host 是這個主對話的，別人的編號在這裡本來就不存在。
-   * 描述裡「用 send_message 接著談」是 dsh 原文，對應機制是 #839。
+   * 描述裡「用 send_message 接著談」對應的機制是 #839。
    */
   #interruptAgentTool() {
     return tool(
@@ -412,9 +406,9 @@ export class BackgroundDelegation {
    *
    * - root → 自己派出去的背景子代理（#839）：`host.send`。
    * - 背景子代理 → 它的直接 parent（#849）：`host.sendToParent`，收件人必須是 root 的會話 id。
-   * - 其他（前景一次性子代理、認不出身分）：拒絕。dsh「只有 resident continuable 的 Activation 能傳給 parent」。
+   * - 其他（前景一次性子代理、認不出身分）：拒絕。
    *
-   * **描述是 dsh 的原文**（#858 之後）：跑著的子代理在下一步領走（`BackgroundSubagentHost.send` 插進它當下那一輪），閒著的開新的一輪。
+   * 描述：跑著的子代理在下一步領走（`BackgroundSubagentHost.send` 插進它當下那一輪），閒著的開新的一輪。
    * 傳給 parent 那一向，主對話有 `next-step`，忙著就插進去。
    */
   #sendMessageTool() {
@@ -427,7 +421,7 @@ export class BackgroundDelegation {
         if (host === undefined) throw new Error('背景子代理還沒接上會話，傳不了');
         const address = toolCallSessionAddress(config);
         if (address?.kind === 'root') {
-          // 重啟之前派出的冷子代理，先接回來再投遞（#1271，dsh 的 send 就是在這裡復活它）；已常駐的立刻過。
+          // 重啟之前派出的冷子代理，先接回來再投遞（#1271）；已常駐的立刻過。
           await host.resume(agent_id);
           void host.send({ runId: agent_id, message });
         } else if (address !== undefined && isBackgroundAddress(address)) {
@@ -495,15 +489,13 @@ export class BackgroundDelegation {
     return async (call, next) => {
       if (call.name !== SUBAGENT_TOOL_NAME) return next();
       // 只接手 root 的呼叫（#1045）：`subagent` 只在 root 那一層的模型視野裡（上面看到 `task` 才加），子代理的模型看不到它，
-      // 叫了就原樣交下去，落到基座的「沒有這顆工具」、由最內層標 `UNKNOWN_TOOL`（#1024）。同 dsh：派發與 schema 用同一份
-      // 逐 agent 視圖，看不到的呼叫在派發那一步是 `ToolNotFoundError`（`packages/core/tools/src/index.ts:1230-1252`、
-      // `:1578-1579`，`5badb15`）。這一份實例掛在每一層（#327），哪一層要從這次呼叫的身分查（`registry.ts` 的 `use`）；
+      // 叫了就原樣交下去，落到基座的「沒有這顆工具」、由最內層標 `UNKNOWN_TOOL`（#1024）。這一份實例掛在每一層（#327），哪一層要從這次呼叫的身分查（`registry.ts` 的 `use`）；
       // 認不出身分的也不接手。前提：root 那一層有 `task`（`toolFilter` 只套在子代理上）。
       const caller = toolCallSessionAddress({ configurable: call.configurable } as never);
       if (caller?.kind !== 'root') return next();
       const callId = call.callId ?? '';
       const selection = this.#options.modelSelection;
-      // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。dsh：關著的實例不但不顯示、還拒絕。
+      // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。
       if (selection === undefined) {
         const raw = call.args as Record<string, unknown> | undefined;
         if (raw !== undefined && ('model' in raw || 'reasoning_effort' in raw)) {
@@ -516,10 +508,8 @@ export class BackgroundDelegation {
       const parsed = (selection === undefined ? subagentSchema : selectingSubagentSchema).safeParse(
         call.args,
       );
-      // 參數不合 schema 帶 `INVALID_ARGS`，同 dsh `defineTool` 的 `ToolArgsError`（`packages/core/tools/src/schema.ts:599`，
-      // `5badb15`）。host 拒絕 `start`（名額滿、已關）照 dsh `SubagentError` 帶碼（#1046，見下面的 `catch`）；其餘拒絕
-      // 不帶碼：dsh `subagent` 的同類拒絕是工具本體拋一般的 `Error`（`packages/subagent/tool-subagent/src/index.ts:294-295`），
-      // 渲染出來沒有碼（#1024）。
+      // 參數不合 schema 帶 `INVALID_ARGS`。host 拒絕 `start`（名額滿、已關）帶碼（#1046，見下面的 `catch`）；其餘拒絕
+      // 不帶碼（#1024）。
       if (!parsed.success) {
         return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
           callId,
@@ -613,7 +603,7 @@ export class BackgroundDelegation {
           name: SUBAGENT_TOOL_NAME,
         });
       } catch (error) {
-        // host 拒絕（名額滿、已關）帶 dsh `SubagentError` 的碼（#1046），見 `backgroundRefusalInfo`；其餘（編不出圖等）不帶。
+        // host 拒絕（名額滿、已關）帶碼（#1046），見 `backgroundRefusalInfo`；其餘（編不出圖等）不帶。
         const info =
           error instanceof BackgroundSubagentError ? backgroundRefusalInfo(error) : undefined;
         return toolRefusal(error instanceof Error ? error.message : String(error), {

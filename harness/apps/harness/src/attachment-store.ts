@@ -2,14 +2,14 @@
  * 附件儲存：使用者上傳的檔案存在 harness home 底下、會話日誌之外，日誌與訊息只留參照
  * （[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  *
- * ## 照 dsh 的部分（`packages/attachment/attachment-local/src/{file-store,store}.ts`，`5badb150`）
+ * ## 儲存的做法
  *
  * - **內容定址、逐位元組原樣存**：參照是 `sha256:<hex>`＋清過的檔名＋位元組數。同樣的內容只存一份物件
  *   （`file-objects/<前兩碼>/<hex>`），每個檔名是指向它的硬連結（`files/<前兩碼>/<hex>/<檔名>`），所以模型與使用者
  *   拿到的路徑結尾就是真的檔名。
  * - **先寫暫存檔、`link` 進正式位置**：`link` 在目標已存在時失敗（`EEXIST`），那就是去重；讀的一方永遠讀不到寫一半的物件。
  * - **物件存成唯讀**（`0400`），目錄 `0700`。「一般檔案存成唯讀」是卡上的明文；`0600` 的暫存檔只存活到 `link` 完成。
- * - **檔名清成葉名**（`fileLeafName`，逐條照 dsh）：兩種分隔符都手動剝，不信 `basename`（POSIX 把 `\` 當一般字元，
+ * - **檔名清成葉名**（`fileLeafName`）：兩種分隔符都手動剝，不信 `basename`（POSIX 把 `\` 當一般字元，
  *   Windows 客戶端的整條本機路徑會漏進參照與日誌）。
  * - 串流進來、不聚合：上傳不吃記憶體。
  * - **圖落盤前先規範化**（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)；存哪一份見 #1827）：整張解碼、轉正、轉 8-bit sRGB、總像素縮到 2048² 以內再編碼，
@@ -19,35 +19,32 @@
  *   `<harness home>/cache/attachments/request-images/`，跟落盤那一份分開。規範化之前落盤的原圖也走這一條。細節見 `request-image.ts`。
  * - **讀與去重都重算雜湊**（`ATTACHMENT_CORRUPT`，[#1338](https://github.com/DemianLi/nexus-agent/issues/1338)）：
  *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
- *   也不讓壞物件「認領」新上傳。讀圖時再重讀檔頭比媒體類型與寬高（dsh `readImageFile`，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
+ *   也不讓壞物件「認領」新上傳。讀圖時再重讀檔頭比媒體類型與寬高（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）。沒有行程內的「已驗過」快取；別名硬連結不重算內容，只比 inode：跟物件不同
  *   （物件被刪掉重建過）就原子地換掉（[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。
- * - **回報參照之前逐層 fsync 目錄**（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)，dsh `store.ts:126-183`、
- *   `:272-302`、`:350-388`，`1517a4db`）：暫存檔內容 fsync 了還不夠，`link` 寫進父目錄的那一筆名字、這次新建的
+ * - **回報參照之前逐層 fsync 目錄**（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)）：暫存檔內容 fsync 了還不夠，`link` 寫進父目錄的那一筆名字、這次新建的
  *   `<前兩碼>` 目錄都要落盤，不然斷電後會話日誌引用的附件不見。
  *   - 每個行程對 home 證明一次：home 往上到檔案系統根逐層 fsync（`ensureDurableHome`）。
  *   - 暫存目錄、物件與別名的父目錄，建好之後往上逐層 fsync 到 home；**不看 `mkdir` 回報哪幾層是新建的**。
  *   - `link`（或去重、或別名換掉）之後，從父目錄逐層 fsync 到附件根才回。去重那條也走。
  *   - 目錄 fsync 用 `atomic-file.ts` 的 `syncDirectory`：Windows 略過，POSIX 錯往外拋，`save`／`saveImage` 包成
- *     `ATTACHMENT_STORE_FAILED`（dsh 的 `ATTACHMENT_WRITE_FAILED`）。
+ *     `ATTACHMENT_STORE_FAILED`。
  *
  * ## 偏離（依 docs/plugin-contract.md〈偏離〉 登記）
  *
  * 1. **模型讀它走虛擬前綴 {@link ATTACHMENTS_PREFIX}，不是主機絕對路徑。** 同 `tool-result-stash.ts`：路徑是 `CompositeBackend`
- *    的一條唯讀路由（根是 `<root>/files`），圍欄看不到的主機路徑不出現在模型面前，續接之後同一個路徑照讀。dsh 的 `read_file`
- *    收到的是主機路徑（它的檔案工具不在工作區圍欄裡）；我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
+ *    的一條唯讀路由（根是 `<root>/files`），圍欄看不到的主機路徑不出現在模型面前，續接之後同一個路徑照讀。我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
  * 2. **儲存沒有逐會話目錄，但模型讀附件的路由按 thread 收窄**（理由 2，[#1773](https://github.com/DemianLi/nexus-agent/issues/1773)，#1675 Q3 (a)，
- *    demian 2026-10-20 拍板）。**儲存照 dsh**：附件根是全域內容定址（`attachments/v1`），不按會話分，同樣的內容只存一份。**路由不照 dsh**：
- *    dsh 是單人桌面，模型讀的是主機路徑、沒有路由；nexus 是一台主機多人共用，所有 web 使用者在同一個 OS 帳號底下，`0700` 分不開人
+ *    demian 2026-10-20 拍板）。附件根是全域內容定址（`attachments/v1`），不按會話分，同樣的內容只存一份。nexus 是一台主機多人共用，所有 web 使用者在同一個 OS 帳號底下，`0700` 分不開人
  *    （以前同一台 serve 的任何 thread 都能 `ls /attachments` 列出別條 thread 上傳的檔，照路徑 `read_file` 讀得到）。補的是路由多一道
- *    「這條 thread 的 root 日誌引用過」的判準，跟網頁讀圖同一條（`attachment-reference.ts`，照 dsh `session.attachment`），在呼叫當下判，
+ *    「這條 thread 的 root 日誌引用過」的判準，跟網頁讀圖同一條（`attachment-reference.ts`），在呼叫當下判，
  *    `ls`／`read`／`grep`／`glob` 都過這一關，沒引用過的路徑回覆跟不存在相同。見 `attachment-route.ts`。對舊 thread 也生效：判準是日誌，
- *    自己上傳的照舊讀得到，只有別條 thread 的附件從此讀不到。**`grep`／`glob` 出錯時也不照 dsh**（#1822、#1994）：dsh 的 `search-core.ts` 把 rg 的 stderr 原樣接在
- *    錯誤訊息後面，在這裡會把同一個目錄下沒引用過的別名檔名帶給模型，所以 `SEARCH_FAILED`／`SEARCH_INVALID_PATTERN` 回固定字句
+ *    自己上傳的照舊讀得到，只有別條 thread 的附件從此讀不到。**`grep`／`glob` 出錯時回固定字句**（#1822、#1994）：rg 的 stderr 若原樣接在
+ *    錯誤訊息後面，會把同一個目錄下沒引用過的別名檔名帶給模型，所以 `SEARCH_FAILED`／`SEARCH_INVALID_PATTERN` 回固定字句
  *    （原文、thread id 與錯誤碼寫進伺服器日誌）；`SEARCH_ABORTED`／`SEARCH_RAW_OUTPUT_OVERFLOW` 不帶路徑，照舊。
- * 3. **home 以上的祖先開不了就略過那一層**（理由 2，#1528 Q1 (b)，demian 2026-10-17 拍板）。dsh 的 home 證明一路 fsync
- *    到檔案系統根，任何一層開不了都是寫入失敗；多人共用的主機常把 `/home` 這類目錄收成 `0711`（進得去、列不了），照 dsh
- *    的話每一次上傳都失敗。所以只在 home **以上**、只對**開目錄時**的 `EACCES`／`EPERM`，略過那一層並在伺服器日誌講一次；
- *    fsync 本身的錯、home 與 home 以下的任何錯照 dsh 拋。這個帳號開不了的祖先不是它建的，它在父目錄裡的那一筆不是
+ * 3. **home 以上的祖先開不了就略過那一層**（理由 2，#1528 Q1 (b)，demian 2026-10-17 拍板）。home 證明一路 fsync
+ *    到檔案系統根；多人共用的主機常把 `/home` 這類目錄收成 `0711`（進得去、列不了），開不了就失敗的話
+ *    每一次上傳都失敗。所以只在 home **以上**、只對**開目錄時**的 `EACCES`／`EPERM`，略過那一層並在伺服器日誌講一次；
+ *    fsync 本身的錯、home 與 home 以下的任何錯照拋。這個帳號開不了的祖先不是它建的，它在父目錄裡的那一筆不是
  *    這次寫入要保證的。
  *
  * @module
@@ -135,7 +132,7 @@ function utf8Prefix(value: string, maxBytes: number): string {
 }
 
 /**
- * 把呼叫端給的顯示名清成安全的葉名。逐條照 dsh `fileLeafName`：兩種分隔符手動剝、控制字元拿掉、Windows 不收的字元換 `_`、
+ * 把呼叫端給的顯示名清成安全的葉名：兩種分隔符手動剝、控制字元拿掉、Windows 不收的字元換 `_`、
  * 結尾的點與空白拿掉、Windows 裝置名前面墊 `_`、限 255 位元組，清完是空的就叫 `file`。
  *
  * @param value - 呼叫端宣告的名字，可能是整條客戶端路徑。
@@ -170,7 +167,7 @@ function isCode(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === code;
 }
 
-/** 這個行程已經證明過「它和它以上每一層都落盤了」的 harness home（dsh `store.ts:23`）。 */
+/** 這個行程已經證明過「它和它以上每一層都落盤了」的 harness home。 */
 const durableHomes = new Set<string>();
 /** 開不了、已經在日誌講過的 home 以上祖先：同一層一個行程只講一次（偏離 3）。 */
 const unreadableAncestors = new Set<string>();
@@ -206,7 +203,7 @@ async function syncAncestorAboveHome(
 }
 
 /**
- * 每個行程對一個 home 證明一次：從 home 往上逐層 fsync 父目錄，直到檔案系統根（dsh `ensureDurableHome`，`store.ts:176-183`）。
+ * 每個行程對一個 home 證明一次：從 home 往上逐層 fsync 父目錄，直到檔案系統根。
  * 別的行程建的 home，在這個行程裡不算數。home 本身由呼叫端先建好（`#prepare`）。
  */
 async function ensureDurableHome(home: string, warn: (line: string) => void): Promise<void> {
@@ -224,7 +221,7 @@ async function ensureDurableHome(home: string, warn: (line: string) => void): Pr
 /** 本機附件儲存。一個行程一份，可以並行呼叫。 */
 export class AttachmentStore {
   readonly #root: string;
-  /** harness home：`<home>/attachments/v1` 往上兩層，逐層 fsync 的邊界（dsh `dirname(dirname(root))`）。 */
+  /** harness home：`<home>/attachments/v1` 往上兩層，逐層 fsync 的邊界。 */
   readonly #home: string;
   readonly #warn: (line: string) => void;
   readonly #compression: CompressionLimiter;
@@ -478,7 +475,7 @@ export class AttachmentStore {
       throw new AttachmentError('圖片的內容對不上它的雜湊', 'ATTACHMENT_CORRUPT');
     }
     // 雜湊只證明位元組是當初存的那份，不證明參照的其他欄位：日誌裡的寬高、媒體類型被改過，畫面與模型會照著錯的
-    // 那份走。照 dsh `readImageFile`（`store.ts:450-458`，`687f282e`）重讀檔頭再比一次，只讀檔頭、不解碼像素。
+    // 那份走。重讀檔頭再比一次，只讀檔頭、不解碼像素。
     // **這一支刻意不套 EXIF 轉向**：規範化之前落盤的舊參照記的是檔頭裡存的軸，改成轉向之後的軸會讓它們一起變成
     // `ATTACHMENT_CORRUPT`。規範化之後的圖不帶轉向，檔頭的軸就是看起來的軸；收下時 `image-normalization.ts` 用同一支比過。
     const facts = probeImageHeader(data);
@@ -574,7 +571,7 @@ export class AttachmentStore {
     signal: AbortSignal | undefined,
     maxBytes: number | undefined,
   ): Promise<{ path: string; sha256: string; bytes: number }> {
-    // 照 dsh `stageImmutableObject`（`store.ts:315-319`）：先證明 home 到根，再把暫存目錄到 home 逐層 fsync。
+    // 先證明 home 到根，再把暫存目錄到 home 逐層 fsync。
     await ensureDurableHome(this.#home, this.#warn);
     const staging = join(this.#root, 'staging');
     await this.#ensureDurableDirectory(staging, this.#home);
@@ -612,7 +609,7 @@ export class AttachmentStore {
   }
 
   /**
-   * 把內容定址的物件 `link` 進正式位置；目標已存在就是去重，不算錯。照 dsh `publishStagedObject`（`store.ts:350-388`）：
+   * 把內容定址的物件 `link` 進正式位置；目標已存在就是去重，不算錯：
    *
    * - `link` 之前父目錄到 home 逐層 fsync；
    * - 去重碰到既有物件時重算它的摘要，對不上拋 `ATTACHMENT_CORRUPT`，不讓先前寫壞或被換過的物件被新上傳「認領」；
@@ -634,7 +631,7 @@ export class AttachmentStore {
 
   /**
    * 建檔名別名（物件的硬連結，[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)），回報之前跟物件一樣逐層
-   * fsync（dsh `publishImmutableAlias`，`store.ts:272-302`）：開頭父目錄到 home，三種結局（新建、同一個 inode、換掉）
+   * fsync：開頭父目錄到 home，三種結局（新建、同一個 inode、換掉）
    * 之後都從父目錄到附件根。
    */
   async #publishAlias(objectPath: string, aliasPath: string): Promise<void> {
@@ -648,8 +645,6 @@ export class AttachmentStore {
    * 別名已存在就比對它跟物件的 `dev`＋`ino`：同一個 inode 是去重，什麼都不做；不同（物件被刪掉重建過，別名還指著舊的）
    * 就先連到暫存名、再 `rename` 蓋過去，別名一直都在，不會有一段時間讀不到。只比 inode、不重算內容：物件剛在同一次
    * `save` 裡驗過。
-   *
-   * 這是偏離 1 的產物：dsh 的別名比摘要（`store.ts:283-290`），我們比 inode。
    */
   async #linkAlias(objectPath: string, aliasPath: string): Promise<void> {
     try {
@@ -684,8 +679,7 @@ export class AttachmentStore {
   }
 
   /**
-   * 建目錄（權限照 {@link #mkdirPrivate}），再從它往上逐層 fsync 父目錄，直到呼叫端擔保已落盤的 `boundary`
-   * （dsh `ensureDurableDirectory`，`store.ts:145-169`）。**不看 `mkdir` 回報哪幾層是新建的**：別的行程剛建、還沒
+   * 建目錄（權限照 {@link #mkdirPrivate}），再從它往上逐層 fsync 父目錄，直到呼叫端擔保已落盤的 `boundary`。**不看 `mkdir` 回報哪幾層是新建的**：別的行程剛建、還沒
    * fsync 的目錄，在這裡看來是「已存在」，「已存在」不等於「已落盤」。重複 fsync 無害，漏一層有害。
    */
   async #ensureDurableDirectory(path: string, boundary: string): Promise<void> {
@@ -698,7 +692,7 @@ export class AttachmentStore {
     }
   }
 
-  /** 從 `from` 往上逐層 fsync，到附件根為止（不含根），dsh `store.ts:377-382`。 */
+  /** 從 `from` 往上逐層 fsync，到附件根為止（不含根）。 */
   async #syncUpToRoot(from: string): Promise<void> {
     for (let level = resolve(from); level !== this.#root; level = dirname(level)) {
       await syncDirectory(level);
