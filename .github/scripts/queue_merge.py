@@ -8,8 +8,9 @@
   2. 最新的判定（作者是 OWNER、MEMBER 或 COLLABORATOR、帶 `verdict:` 行的最新一則留言）是 PASS 或 PASS+NOTES，
      帶 `patch-id:` 行，而且記的 patch-id 等於現在 `gh pr diff` 算的。
   3. `gate` 綠（SUCCESS，或 plan 成功時的 SKIPPED）。等的時候 head 變了也退回。
-  4. 合併前再核對一次 head、落後與 patch-id，然後 `gh pr merge --squash --match-head-commit <SHA>`。
-核對與合併途中 gh 失敗也一樣拿掉標籤並留言。
+  4. 合併前再核對一次 head、判定、落後與 patch-id（等 gate 期間出現新的 FAIL 也退回），然後 `gh pr merge --squash --match-head-commit <SHA>`。
+核對與合併途中 gh 失敗也一樣拿掉標籤並留言。退回本身失敗就記為 failed，繼續下一張，整輪以非零結束。
+列不出排隊的 PR 時沒有對象可以退回，整輪失敗並在輸出寫明原因。
 合併成功後 dispatch post-merge.yml：GITHUB_TOKEN 做的合併不會觸發 push 事件，合併後那一輪要靠這一步補上。
 
 權限只靠 workflow 的 GITHUB_TOKEN，不繞過 ruleset：合併不過就是退回。
@@ -113,6 +114,7 @@ class Queue:
         self.clock = clock
         self.timeout = timeout
         self.budget = budget
+        self.fatal: str | None = None
 
     def view(self, number: int) -> dict:
         fields = 'state,headRefOid,baseRefName,labels,comments,statusCheckRollup'
@@ -157,26 +159,31 @@ class Queue:
                 raise Returned(f'等了 {int(self.timeout // 60)} 分鐘 gate 還沒完成。')
             self.sleep(POLL_SECONDS)
 
+    def read_verdict(self, pr: dict) -> tuple[str, str]:
+        verdict = verdict_of(pr['comments'])
+        if verdict is None:
+            raise Returned('PR 上沒有可信作者貼的、帶 `verdict:` 行的 verifier 判定。')
+        if verdict[0] == 'FAIL':
+            raise Returned('最新的判定不是 PASS 或 PASS+NOTES。')
+        if verdict[1] is None:
+            raise Returned('最新的判定沒有 `patch-id:` 行。')
+        return verdict[0], verdict[1]
+
     def process(self, number: int) -> str:
-        pr = self.view(number)
-        if pr['state'] != 'OPEN' or LABEL not in [label['name'] for label in pr['labels']]:
-            return 'skipped'
         try:
+            pr = self.view(number)
+            if pr['state'] != 'OPEN' or LABEL not in [label['name'] for label in pr['labels']]:
+                return 'skipped'
             if pr['baseRefName'] != BASE:
                 raise Returned(f'base 是 {pr["baseRefName"]}，排隊合併只合進 {BASE}。')
-            verdict = verdict_of(pr['comments'])
-            if verdict is None:
-                raise Returned('PR 上沒有可信作者貼的、帶 `verdict:` 行的 verifier 判定。')
-            if verdict[0] == 'FAIL':
-                raise Returned('最新的判定不是 PASS 或 PASS+NOTES。')
-            if verdict[1] is None:
-                raise Returned('最新的判定沒有 `patch-id:` 行。')
+            _, recorded = self.read_verdict(pr)
             head = pr['headRefOid']
-            self.check_current(number, pr, verdict[1])
+            self.check_current(number, pr, recorded)
             self.wait_for_gate(number, head)
             pr = self.view(number)
             self.require_head(pr, head)
-            self.check_current(number, pr, verdict[1])
+            _, recorded = self.read_verdict(pr)
+            self.check_current(number, pr, recorded)
             try:
                 self.gh(['pr', 'merge', str(number), '--repo', self.repo, '--squash', '--match-head-commit', head])
             except RuntimeError as error:
@@ -186,7 +193,7 @@ class Queue:
         except Returned as reason:
             self.return_to_engineer(number, str(reason))
             return f'returned: {reason}'
-        except RuntimeError as error:
+        except (RuntimeError, ValueError, KeyError) as error:
             self.return_to_engineer(number, f'排隊合併自己出錯：{error}')
             return f'returned: {error}'
         try:
@@ -205,20 +212,36 @@ class Queue:
         seen: set[int] = set()
         started = self.clock()
         while self.clock() - started < self.budget:
-            pending = [only] if only is not None else self.queued()
+            try:
+                pending = [only] if only is not None else self.queued()
+            except (RuntimeError, ValueError, KeyError) as error:
+                self.fatal = f'列不出排隊的 PR，沒有對象可以退回，整輪中止：{error}'
+                break
             fresh = [n for n in pending if n not in seen]
             if not fresh:
                 break
             seen.add(fresh[0])
-            results.append((fresh[0], self.process(fresh[0])))
+            try:
+                results.append((fresh[0], self.process(fresh[0])))
+            except RuntimeError as error:
+                results.append((fresh[0], f'failed: 退回也失敗，標籤可能還在：{error}'))
         return results
 
 
 def main(argv: list[str]) -> int:
     repo = os.environ['GITHUB_REPOSITORY']
     only = int(argv[1]) if len(argv) > 1 else None
-    for number, result in Queue(repo).drain(only):
+    queue = Queue(repo)
+    results = queue.drain(only)
+    for number, result in results:
         print(f'#{number}: {result}')
+    if queue.fatal:
+        print(f'::error::{queue.fatal}')
+        return 1
+    failed = [number for number, result in results if result.startswith('failed:')]
+    if failed:
+        print(f'::error::退回失敗的 PR：{", ".join(f"#{n}" for n in failed)}')
+        return 1
     return 0
 
 

@@ -168,6 +168,26 @@ class Returns(unittest.TestCase):
         gh.views = [{}, {'statusCheckRollup': [check('plan'), check('gate', status='IN_PROGRESS', conclusion=None)]}, {'headRefOid': NEW_HEAD}]
         self.assert_returned(gh, make(gh), '變成')
 
+    def test_head_moves_after_the_gate_turned_green(self) -> None:
+        gh = FakeGh()
+        gh.views = [{}, {}, {'headRefOid': NEW_HEAD}]
+        self.assert_returned(gh, make(gh), '變成')
+
+    def test_verdict_turns_fail_while_the_gate_runs(self) -> None:
+        gh = FakeGh()
+        gh.views = [{}, {}, {'comments': [verdict('PASS'), verdict('FAIL')]}]
+        self.assert_returned(gh, make(gh), '不是 PASS')
+
+    def test_verdict_disappears_while_the_gate_runs(self) -> None:
+        gh = FakeGh()
+        gh.views = [{}, {}, {'comments': [{'body': '好了'}]}]
+        self.assert_returned(gh, make(gh), '帶 `verdict:` 行')
+
+    def test_newer_verdict_for_another_patch_is_checked_against_the_current_diff(self) -> None:
+        gh = FakeGh()
+        gh.views = [{}, {}, {'comments': [verdict('PASS'), verdict('PASS', OTHER_PID)]}]
+        self.assert_returned(gh, make(gh), 'patch-id 變了')
+
     def test_patch_id_changes_while_gate_runs(self) -> None:
         gh = FakeGh()
         answers = iter([PID, OTHER_PID])
@@ -259,6 +279,65 @@ class Robustness(unittest.TestCase):
         self.assertTrue(result.startswith('returned'))
         self.assertEqual(gh.ran('pr', 'edit'), [['pr', 'edit', '7', '--repo', 'o/r', '--remove-label', 'queue']])
         self.assertIn('排隊合併自己出錯', gh.ran('pr', 'comment')[0][-1])
+
+    def test_unreadable_pr_is_returned_and_the_next_one_is_processed(self) -> None:
+        gh = FakeGh()
+        gh.queue = [7, 9]
+        original = gh.__call__
+
+        def call(args: list[str]) -> str:
+            if args[:3] == ['pr', 'view', '7']:
+                gh.calls.append(args)
+                raise RuntimeError('gh pr view 失敗：HTTP 502')
+            return original(args)
+
+        queue = Queue('o/r', gh=call, patch_id=lambda repo, number: PID, sleep=lambda s: None, clock=lambda: 0.0, timeout=120)
+        results = queue.drain()
+        self.assertEqual([n for n, _ in results], [7, 9])
+        self.assertTrue(results[0][1].startswith('returned'))
+        self.assertEqual(results[1][1], 'merged')
+        self.assertEqual(gh.ran('pr', 'edit')[0], ['pr', 'edit', '7', '--repo', 'o/r', '--remove-label', 'queue'])
+        self.assertIn('HTTP 502', gh.ran('pr', 'comment')[0][-1])
+
+    def test_unparseable_pr_json_is_returned(self) -> None:
+        gh = FakeGh()
+        original = gh.__call__
+
+        def call(args: list[str]) -> str:
+            if args[:3] == ['pr', 'view', '7']:
+                gh.calls.append(args)
+                return '<html>'
+            return original(args)
+
+        queue = Queue('o/r', gh=call, patch_id=lambda repo, number: PID, sleep=lambda s: None, clock=lambda: 0.0, timeout=120)
+        self.assertTrue(queue.process(7).startswith('returned'))
+        self.assertEqual(len(gh.ran('pr', 'edit')), 1)
+
+    def test_unlistable_queue_fails_the_run_with_the_reason(self) -> None:
+        gh = FakeGh()
+        gh.fail_on = 'pr'
+        queue = make(gh)
+        self.assertEqual(queue.drain(), [])
+        self.assertIn('列不出排隊的 PR', queue.fatal or '')
+        self.assertIn('Resource not accessible', queue.fatal or '')
+        self.assertEqual(gh.ran('pr', 'edit'), [])
+
+    def test_failed_return_does_not_stop_the_next_pr(self) -> None:
+        gh = FakeGh()
+        gh.queue = [7, 9]
+        original = gh.__call__
+
+        def call(args: list[str]) -> str:
+            if args[:3] == ['pr', 'edit', '7']:
+                raise RuntimeError('gh pr edit 失敗：403')
+            if args[:3] == ['pr', 'view', '7']:
+                raise RuntimeError('gh pr view 失敗：502')
+            return original(args)
+
+        queue = Queue('o/r', gh=call, patch_id=lambda repo, number: PID, sleep=lambda s: None, clock=lambda: 0.0, timeout=120)
+        results = queue.drain()
+        self.assertTrue(results[0][1].startswith('failed:'))
+        self.assertEqual(results[1], (9, 'merged'))
 
     def test_dispatch_failure_after_merge_is_reported_on_the_pr(self) -> None:
         gh = FakeGh()
