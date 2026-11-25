@@ -509,7 +509,7 @@ describe('預覽', () => {
       }
     });
 
-    it('不是 UTF-8 就是 not-text，照 dsh 的 streamText——即使沒有 NUL', async () => {
+    it('不是 UTF-8 就是 not-text——即使沒有 NUL', async () => {
       const bytes = new Uint8Array([...new TextEncoder().encode('hello\n'), 0xff, 0xfe, 0x0a]);
       const outcome = await present({ 'latin.txt': bytes }, ['latin.txt']);
       try {
@@ -566,7 +566,7 @@ describe('預覽', () => {
       }
     });
 
-    it('空檔是零行，照 dsh；開頭的 BOM 照舊吃掉', async () => {
+    it('空檔是零行；開頭的 BOM 照舊吃掉', async () => {
       const outcome = await present({ 'empty.md': '', 'bom.md': '﻿hi\n' }, ['empty.md', 'bom.md']);
       try {
         expect(okOf(await readPage(outcome, { index: 0 }))).toMatchObject({
@@ -956,7 +956,7 @@ describe('位元組窗口', () => {
     }
   });
 
-  it('沒給 length 只給 offset：長度是頁的位元組上限，同 dsh', async () => {
+  it('沒給 length 只給 offset：長度是頁的位元組上限', async () => {
     const outcome = await present({ 'a.md': 'abcdefghijklmnopqrst' }, ['a.md'], {
       limits: small(8),
     });

@@ -32,7 +32,7 @@ describe('frameBytes', () => {
     expect(frameBytes(undefined)).toBe(0);
   });
 
-  it('預設上限是 2 MiB，照 dsh 的 maxBufferedBytes', () => {
+  it('預設上限是 2 MiB', () => {
     expect(DEFAULT_DOWNLINK_MAX_BYTES).toBe(2 * 1024 * 1024);
   });
 });

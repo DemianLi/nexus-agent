@@ -263,7 +263,7 @@ describe('投影的內容', () => {
 const catalogEntry = (patch: Record<string, unknown>) =>
   modelEntrySchema.parse({ id: 'fake', contextWindow: 32_768, maxTokens: 4096, ...patch });
 
-describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、不決定）', () => {
+describe('圖片額度的檢查在 adapter（#1270：adapter 只量、不決定）', () => {
   const twoImages = () =>
     new HumanMessage({
       content: [

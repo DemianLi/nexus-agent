@@ -351,7 +351,7 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
       },
     );
 
-    it('以 - 開頭的 pattern 照樣當 pattern 搜，argv 是 --regexp= 形式、起點在 -- 後面（形式同 dsh）', async () => {
+    it('以 - 開頭的 pattern 照樣當 pattern 搜，argv 是 --regexp= 形式、起點在 -- 後面', async () => {
       const a = await put('see -leading-dash here\n', 'a.txt');
       const spawns: (readonly string[])[] = [];
       const scope = createAttachmentScope();

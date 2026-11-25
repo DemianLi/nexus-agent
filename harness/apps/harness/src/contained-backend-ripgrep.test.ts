@@ -735,7 +735,7 @@ describe('掛進真的組裝之後', () => {
     expect(spawned).not.toHaveBeenCalled();
   }, 60_000);
 
-  it('grep 的 pattern 只有空白字元是合法的正規式（照 dsh：只擋「空」，不擋空白）', async () => {
+  it('grep 的 pattern 只有空白字元是合法的正規式（只擋「空」，不擋空白）', async () => {
     const { messages } = await runAgent([
       { name: 'grep', args: { pattern: ' ', path: '/a.log', output_mode: 'content' } },
     ]);

@@ -133,7 +133,7 @@ function sliceFrom(from: string): string[] {
   return calls.slice(at);
 }
 
-describe.runIf(POSIX)('writeAtomic（dsh storage-json atomic.ts:24-40）', () => {
+describe.runIf(POSIX)('writeAtomic', () => {
   it('A 順序：暫存檔 wx 0600 → 寫 → sync → close → rename → 開目錄 → sync 目錄 → close', async () => {
     const path = join(base, 'state.json');
     await writeAtomic(path, 'new\n');
@@ -212,7 +212,7 @@ describe('syncDirectory', () => {
   });
 });
 
-describe.runIf(POSIX)('publishNewFile（dsh 會話物化 index.ts:1296-1321、:1359-1369）', () => {
+describe.runIf(POSIX)('publishNewFile', () => {
   it('D 順序：暫存檔 wx 0600 → 寫 → sync → close → link → sync 目錄 → 刪暫存檔', async () => {
     const path = join(base, 'secret.json');
     await publishNewFile(path, 'k\n');

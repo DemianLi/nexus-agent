@@ -212,7 +212,7 @@ describe('pattern 與起點', () => {
     expect(result).toEqual({ files: [] });
   });
 
-  it('被 `.gitignore` 蓋住的與隱藏檔照樣列（`--no-ignore --hidden`），這是 dsh 的契約', async () => {
+  it('被 `.gitignore` 蓋住的與隱藏檔照樣列（`--no-ignore --hidden`）', async () => {
     await put('.gitignore', 'ignored.txt\n');
     await put('ignored.txt');
     await put('.hidden');
@@ -259,7 +259,7 @@ describe('pattern 與起點', () => {
   });
 });
 
-describe('檔名以 `..` 開頭的檔不被當成跑出根外（dsh `toWorkdirRelative`）', () => {
+describe('檔名以 `..` 開頭的檔不被當成跑出根外', () => {
   it('glob：`..foo`、`...bar`、`..` 開頭的目錄底下的檔都列', async () => {
     await put('..foo', 'x');
     await put('...bar', 'x');

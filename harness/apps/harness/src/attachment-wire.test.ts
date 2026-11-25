@@ -509,7 +509,7 @@ describe('內嵌的圖', () => {
     }
   });
 
-  it('只有圖、沒有字也收；沒宣告輸入種類的模型照收（同 dsh）', async () => {
+  it('只有圖、沒有字也收；沒宣告輸入種類的模型照收', async () => {
     const { client, handler, events } = connect('silent');
     try {
       const result = await client.runStart(THREAD, '', { attachments: [IMAGE] });

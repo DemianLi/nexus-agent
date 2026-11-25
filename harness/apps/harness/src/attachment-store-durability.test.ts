@@ -328,7 +328,7 @@ describe.runIf(POSIX)('G home 以上的祖先開不了（#1528，偏離 3）', (
     expect(injected).toBe(1);
   });
 
-  it('home 以上的 fsync 本身拋 EIO：照 dsh 拒絕；證明沒做完不算數，撤掉注入再存會重新證明', async () => {
+  it('home 以上的 fsync 本身拋 EIO：拒絕；證明沒做完不算數，撤掉注入再存會重新證明', async () => {
     const store = storeAt(home);
     failOn.set(`sync ${dirname(home)}`, 'EIO');
     await expect(
@@ -344,7 +344,7 @@ describe.runIf(POSIX)('G home 以上的祖先開不了（#1528，偏離 3）', (
     expect(calls.slice(0, homeChain(home).length)).toEqual(homeChain(home));
   });
 
-  it('home 以上開目錄拋別的錯（EIO）：照 dsh 拒絕', async () => {
+  it('home 以上開目錄拋別的錯（EIO）：拒絕', async () => {
     failOn.set(`open ${dirname(home)}`, 'EIO');
     await expect(
       storeAt(home).save({ data: new TextEncoder().encode('ok'), name: 'o.txt' }),
@@ -352,7 +352,7 @@ describe.runIf(POSIX)('G home 以上的祖先開不了（#1528，偏離 3）', (
     expect(injected).toBe(1);
   });
 
-  it('home 本身開不了（EACCES）：不是 home 以上，照 dsh 拒絕', async () => {
+  it('home 本身開不了（EACCES）：不是 home 以上，拒絕', async () => {
     failOn.set('open ~', 'EACCES');
     await expect(
       storeAt(home).save({ data: new TextEncoder().encode('ok'), name: 'o.txt' }),

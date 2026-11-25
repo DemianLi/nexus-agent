@@ -278,7 +278,7 @@ describe('背景子代理做完，閒著的主對話被叫醒', () => {
 });
 
 describe('背景子代理半路寫話給主對話（#849）', () => {
-  it('閒著的主對話被叫醒多開一輪：turn/start 是 agent-message、前綴照 dsh，不是人話，畫面沒有人的泡泡', async () => {
+  it('閒著的主對話被叫醒多開一輪：turn/start 是 agent-message、帶寄件人前綴，不是人話，畫面沒有人的泡泡', async () => {
     const r = await assemble({ stepInbox: true, workerSends: true });
     try {
       await until(() => r.rootLog().filter((event) => event.type === 'turn/end').length === 1);

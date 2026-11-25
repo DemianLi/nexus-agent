@@ -101,7 +101,7 @@ async function solidPng(width: number, height: number): Promise<string> {
   return png.toString('base64');
 }
 
-describe('收圖：單邊上限（照 dsh DEFAULT_MAX_IMAGE_DIMENSION）', () => {
+describe('收圖：單邊上限', () => {
   it('8193×1 的圖：run.start 回 invalid_argument、訊息帶 8192，日誌不動；8192×1 照收', async () => {
     const c = await connect();
     try {
@@ -200,7 +200,7 @@ describe('收圖：整張解碼（#2033）', () => {
   });
 });
 
-describe('讀圖：檔頭要對得上日誌記的參照（照 dsh readImageFile）', () => {
+describe('讀圖：檔頭要對得上日誌記的參照', () => {
   it('日誌引用的參照寫著 PNG 7×5、位元組其實是 GIF：unknown_error，不回位元組；對得上的照讀', async () => {
     const c = await connect();
     try {
