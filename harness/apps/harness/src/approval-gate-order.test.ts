@@ -14,8 +14,8 @@
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
  * **今天不是缺陷**：出貨清單裡**剛好一位** gate（下面第一層就是在釘這件事）——submit-record 的 `submit_record` 閘門，
- * 它對別的工具一律 `next()`、對 `submit_record` 回 `ask`，從不回 `allow`。但那是**這一位的寫法**，不是機制擋住的。沙箱升級以前也是一位 gate，
- * [#700](https://github.com/DemianLi/nexus-agent/issues/700) 把問人搬進工具本體，排在前面的 gate 怎麼放行都跳不過它。
+ * 它對別的工具一律 `next()`、對 `submit_record` 回 `ask`，從不回 `allow`。但那是**這一位的寫法**，不是機制擋住的。沙箱升級的問人在工具本體裡
+ * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），排在前面的 gate 怎麼放行都跳不過它。
  *
  * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
@@ -23,10 +23,6 @@
  * 的 `submitRecordGate`，#1466 起經樹上 `tools` 服務的 `gate()` 登記、折進 thread 的 `registry.approvals`，來源仍是這一列）。它被短路之後，工具**真的跑完**，那一列真的寫進工作區的檔案——**而沒有任何人
  * 看過它**。畫面上完全正常：沒有例外、沒有拒絕訊息、沒有中斷。這就是為什麼第二層量的是檔案最後在不在
  * （`written`），不是「閘門有沒有被呼叫」。
- *
- * **以前被吃掉的是 plan-mode 的 `exit_plan_mode` 閘門**，量的是計劃模式最後是開是關。
- * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 把交出計劃改走提問通道，plan-mode
- * 不再掛閘門，這裡換成下一位真的會 `ask` 的閘門。危險本身沒變。
  *
  * ## 順序由 plugin 載入順序決定，被排到後面的那位管不著
  *

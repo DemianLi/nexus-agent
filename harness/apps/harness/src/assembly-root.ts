@@ -156,8 +156,8 @@ export interface CliInvocation {
    * 會話日誌落盤的根目錄，**換位置用**。這一次的每一份日誌寫進它底下的一個 run 目錄；
    * 省略即 harness home 底下的 `sessions`（{@link harnessSessionsDir}）。
    *
-   * **預設落盤**（[#444](https://github.com/DemianLi/nexus-agent/issues/444)，2026-09-19
-   * 拍板）。目錄 `0700`、檔 `0600`。
+   * **預設落盤**（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。
+   * 目錄 `0700`、檔 `0600`。
    *
    * **關掉落盤不是這個旗標的事**，是清單上 `session-persistence` 那一列的 `disabled: true`
    * （[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。兩者同時給會當場拋，見 {@link assertPersistenceFlags}。
@@ -184,13 +184,13 @@ export interface CliInvocation {
   /**
    * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
    *
-   * **CLI 預設關，而且那是一個決定不是保守**（serve 的預設是開，見下面 2026-10-07 那段）。我們的入口點擁有輪迴圈——**續行驅動器掛不掛，就是
+   * **CLI 預設關，而且那是一個決定不是保守**（serve 的預設是開，見下面）。我們的入口點擁有輪迴圈——**續行驅動器掛不掛，就是
    * 這個旗標**。
    *
-   * （**2026-10-07（#445）重核的結論：預設只有 CLI 關，serve 預設開。** CLI 用 `HEADLESS_APPROVALS`，
+   * **預設只有 CLI 關，serve 預設開**（#445）。CLI 用 `HEADLESS_APPROVALS`，
    * 要核准的工具被確定性拒絕，續行只會一再撞同一個拒絕空轉；serve 要核准時停下來等人，沒有
    * 這個問題。所以這個欄位在兩個入口的預設相反，旗標名同一個：CLI `--goal-driver` 開、
-   * serve `--no-goal-driver` 關。）
+   * serve `--no-goal-driver` 關。
    *
    * 開著的時候有兩條硬上限，先到的那一條管：那個目標自己的 `max_goal_rounds`，與操作者給的那一條（下面的
    * `maxGoalRounds`，或 `goal-round-cap` 那一列，#1623）。「連續 N 輪沒進展就停」那條停損刻意沒做，理由在 `goal-driver.ts` 檔頭。
@@ -220,7 +220,7 @@ export interface CliInvocation {
    * **產品預設不動，這一格是給呼叫端明著傳的。** 100 是「跑掉了」的界線，對一般任務是對的
    * 校準；需要更長的呼叫端（Proteus 的 adapter）自己傳一個大的，那時那個數字出現在呼叫端
    * 的指令裡而不是沒有人設過。會隨部署變的選擇要改得動，一個 `DEFAULT_*`
-   * 常數不算 configurability——**這一點現在由
+   * 常數不算 configurability——**這一點由
    * `recursion-limit` 那一列滿足**，這個旗標是疊在它上面的一層。
    *
    * **它換算成幾個模型輪取決於組裝**：`模型輪數 = floor((recursionLimit − 1) / 每輪格數)`，
@@ -572,10 +572,10 @@ export interface LaunchPathsCheck {
  * **只做 `realpath`，不開檔、不讀內容**：訊息裡只有路徑，不會出現任何值。`ELOOP`、`EACCES` 這類解不開的錯原樣往外拋，
  * 啟動失敗，訊息帶著錯誤碼。
  *
- * ## 為什麼補這道檢查（產品需求：多人共用主機）
+ * ## 為什麼要這道檢查（多人共用主機）
  *
- * 我們的 serve 是多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
- * **不改的是** `launch-env.ts` 的分層與載入規則。讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
+ * 我們的 serve 是多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key，所以啟動時檢查路徑重疊。
+ * 讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
  * 終端機跑，跟模型對話的人就是 key 的主人；放在這裡，CLI 之後要用可以直接叫。
  *
  * ## #1775 的例外（#1620 Q3，demian 接受）：私有可寫根落在 home 底下
@@ -1313,7 +1313,7 @@ export async function createCliAgent(
         ...(workspaceRoot === undefined
           ? {}
           : {
-              // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
+              // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格。
               workspaceRoot,
               [GIT_STARTER_SERVICE]: createGitStarter(sandboxMode.source, workspaceRoot),
               fsContainment: CONTAINED_FILESYSTEM,
@@ -1555,8 +1555,6 @@ export function liveSubagentModelFor(
 /**
  * 標題請求要記的推理強度（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。標題那顆以 `purpose: 'session-title'` 建，`live-model` 會依型錄條目關推理（`thinkingOffBody`）；這裡用
  * 同一個判準（{@link declaresOffEffort}）決定記不記 `'off'`，只讓紀錄多一格，不碰送出去的請求。
- *
- * **只有條目宣告了 `off` 時才記。** 沒宣告 `off` 的條目沒有 `off` 以外的線上寫法，紀錄和送出都不做。
  *
  * @param models - `live-model` 的型錄。
  * @param modelId - 這顆標題模型的 id。

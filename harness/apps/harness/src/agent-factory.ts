@@ -507,8 +507,8 @@ export interface CreateNexusAgentOptions {
  * 核准的回一則說明是「沒有人被問到」的拒絕（[#113](https://github.com/DemianLi/nexus-agent/issues/113)
  * 拍板 (a)：不加旗標，因為旗標是為了讓人選，而這裡沒有第二個值得選的行為）。
  *
- * 我們的 `ApprovalChannel` 是從 checkpointer 在不在推出 `no-channel` 的，不是從一份 answerer
- * 名冊，所以「有 resume 管道但沒有介面」在這裡沒有表示法，退到 `never`。
+ * `ApprovalChannel` 只從 checkpointer 在不在推出 `no-channel`，所以「有 resume
+ * 管道但沒有介面」沒有表示法，退到 `never`。
  *
  * **不是每個入口都該用它。** `serve-run.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
  * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
@@ -598,7 +598,7 @@ export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
  * 給了 `stash`（產品路徑上兩個入口都給）：路由到主機上按會話分的私有目錄，目錄 0700、檔案 0600，所以 CLI
  * `--resume` 或 serve 重開之後，預覽指著的路徑還讀得到同一個檔（`conversation-restore.ts` 照同一條規則重算路徑）。
  * 這一改**推翻了原本「放記憶體」的理由**——「唯讀模式不該碰磁碟、state 不需要清理政策」是偏好，不是基座做不到：
- * 唯讀指的是使用者的**工作區**，這個私有目錄不在工作區裡；清理政策改由啟動時的保留期
+ * 唯讀指的是使用者的**工作區**，這個私有目錄不在工作區裡；清理政策由啟動時的保留期
  * 清理承擔（`tool-result-stash.ts` 的 `cleanupToolResultStash`）。
  * **寫不進主機目錄就退回記憶體**（今天的 {@link TextOnlyStateBackend}），所以 #170 的「存不下就丟原文」不會復發。
  *
@@ -1182,9 +1182,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
        * `feedback-only` 是 on-demand，只在人送出回饋時補送（{@link watchFeedback}）；其餘是 live。
        * 分叉來的會話，live 從繼承標記起送，`feedback-only` 補送整份、連繼承來的前綴（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
-       * 協調器從
-       * [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起就在這裡組，plugin 碰不到日誌，所以
-       * 策略跟著協調器住在這裡。協調器本身照舊不讀 `sharing`。
+       * 協調器在這裡組（[#89](https://github.com/DemianLi/nexus-agent/issues/89)），plugin 碰不到日誌，所以
+       * 策略跟著協調器住在這裡。協調器本身不讀 `sharing`。
        *
        * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
@@ -1199,7 +1198,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             log,
             sink: mounted,
             // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
-            // 掛著的策略。折疊要接得住。
+            // 掛著的策略。
             rules: () => registry.telemetry.rules(),
             capture: sharing === 'feedback-only' ? 'on-demand' : 'live',
             // `feedback-only` 補送整份，連分叉繼承來的前綴；

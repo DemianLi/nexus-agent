@@ -2,8 +2,7 @@
 #
 # 疊在 `cordis.yml` 之後、使用者的 patch 之前，**只有 `serve` 載**；CLI 不載它，`--dump-config` 也跟著入口走
 # （`serve --dump-config` 印得到這裡的列，`cli --dump-config` 印不到）。
-# 我們沒有
-# profile／組合包（#46 Out of scope），所以是「第二個出貨檔」而不是 preset；這一層只追加列，改列與停用仍是 patch 的事。
+# 沒有 profile／組合包（#46 Out of scope），所以是「第二個出貨檔」而不是 preset；這一層只追加列，改列與停用仍是 patch 的事。
 #
 # 欄位與覆寫方式同 `cordis.yml` 檔頭。
 
@@ -17,8 +16,8 @@
   name: '@nexus/plugin-workspace-changes'
 
 # 伺服器日誌怎麼印（#1534）：等級門檻與格式。**起動期讀一次、改了要重啟**；只有 serve 載（CLI 的輸出走 `Printer`，不歸這一列）。
-# 每一行伺服器日誌都帶等級（error／warn／info／debug），`levels` 以 logger 名為鍵、值是**等級名稱**（不是數字：我們 vendor 的上游與別處的 fork
-# 同一個數字意思不同，見 `src/settings/logger-console.ts` 檔頭偏離一），`default` 是沒單獨寫的 logger 的門檻。出廠 `default: info`＝印出來的行數和沒有這一列時一樣。
+# 每一行伺服器日誌都帶等級（error／warn／info／debug），`levels` 以 logger 名為鍵、值是**等級名稱**（不是數字：同一個數字在不同的 log 實作裡意思不同，
+# 見 `src/settings/logger-console.ts` 檔頭偏離一），`default` 是沒單獨寫的 logger 的門檻。出廠 `default: info`＝印出來的行數和沒有這一列時一樣。
 # 共用主機只留警告以上：在自己的 `~/.nexus-agent/cordis.patch.yml` 把 `levels` 改成 `{ default: warn }`。
 # `format: json` 時一行一個 JSON 物件（`ts`、`level`、`logger`、`msg`），訊息裡的換行留在 `msg` 字串裡；欄位表與注意事項見 docs/operations.md「伺服器日誌的等級與格式」。
 # `showTime` 設成 `''` 就不印時間前綴（journald 底下它自己會加）。`maxLength` 對每一行截斷，JSON 的 `msg` 也一樣。
