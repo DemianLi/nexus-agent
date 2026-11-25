@@ -441,6 +441,219 @@ class CommandLineTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class EvidencePathSpellingTest(unittest.TestCase):
+    def test_other_spellings_of_the_sentence_own_line_are_not_evidence(self) -> None:
+        repo = Repo(self)
+        b = repo.commit({'a.ts': d('// 第一句不動。\n// @@ 才這樣。\n'), 'impl.ts': 'export const real = 1;\n'})
+        h = repo.commit({'a.ts': '// 第一句不動。\n// 我們也這樣。\n'})
+        a = analyze(b, h)
+        row = '| 我們也這樣。 | 位置 | {} |'
+        for ref in ('a.ts:2', './a.ts:2', 'x/../a.ts:2', './x/./../a.ts:2'):
+            with self.subTest(ref=ref):
+                self.assertTrue([e for e in verify(a, row.format(ref), h) if '規則 1' in e])
+        for ref in ('impl.ts:1', './impl.ts:1'):
+            with self.subTest(ref=ref):
+                self.assertEqual([e for e in verify(a, row.format(ref), h) if '規則 1' in e], [])
+
+    def test_rule3_row_may_spell_the_location_with_dot_slash(self) -> None:
+        repo = Repo(self)
+        b = repo.commit({'src/a.ts': d(TS_BASE), 'src/p.ts': '// 偏離登記寫在 a.ts 的檔頭。\n'})
+        h = repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 登記')})
+        a = analyze(b, h)
+        reason = '那是別的檔自己的偏離登記，名字沒變'
+        self.assertEqual([e for e in verify(a, f'| ./src/p.ts:1 | 偏離登記 | {reason} |', h) if '規則 3' in e], [])
+
+
+class RuleOneRowShapeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+
+    def test_evidence_is_read_after_the_sentence_cell_only(self) -> None:
+        b = self.repo.commit({'a.ts': d('// @@ 才這樣。\n'), 'impl.ts': 'export const real = 1;\n'})
+        h = self.repo.commit({'a.ts': '// 見 impl.ts:1 的做法。\n'})
+        a = analyze(b, h)
+        self.assertTrue([e for e in verify(a, '| 見 impl.ts:1 的做法。 | 位置 | |', h) if '規則 1' in e])
+        self.assertEqual([e for e in verify(a, '| 見 impl.ts:1 的做法。 | 位置 | impl.ts:1 |', h) if '規則 1' in e], [])
+
+    def test_the_sentence_must_be_in_the_first_cell(self) -> None:
+        b = self.repo.commit({'a.ts': d(TS_BASE), 'impl.ts': 'export const real = 1;\n'})
+        h = self.repo.commit({'a.ts': CLEAN.replace('我們放在插件裡。', '這一段由插件登記。')})
+        a = analyze(b, h)
+        self.assertTrue([e for e in verify(a, '| 位置 | 這一段由插件登記。 | impl.ts:1 |', h) if '規則 1' in e])
+        self.assertTrue([e for e in verify(a, '| 位置 | impl.ts:1 | 這一段由插件登記。 |', h) if '規則 1' in e])
+
+    def test_the_same_sentence_in_two_files_needs_two_rows(self) -> None:
+        b = self.repo.commit({'a.ts': d('// @@ 才這樣。\n'), 'b.ts': d('// @@ 才這樣。\n'), 'impl.ts': 'export const real = 1;\n'})
+        h = self.repo.commit({'a.ts': '// 我們也這樣。\n', 'b.ts': '// 我們也這樣。\n'})
+        a = analyze(b, h)
+        self.assertEqual([p for p, _ in a.sentences], ['a.ts', 'b.ts'])
+        one = '| 我們也這樣。 | a.ts 第 1 行 | impl.ts:1 |'
+        self.assertEqual(len([e for e in verify(a, one, h) if '規則 1' in e]), 1)
+        two = one + '\n| 我們也這樣。 | b.ts 第 1 行 | impl.ts:1 |'
+        self.assertEqual([e for e in verify(a, two, h) if '規則 1' in e], [])
+
+    def test_a_repeated_sentence_is_counted(self) -> None:
+        b = self.repo.commit({'a.ts': d('// @@ 先。\n// 同一句。\nconst a = 1;\n')})
+        h = self.repo.commit({'a.ts': '// 同一句。\nconst a = 1;\n// 同一句。\n'})
+        self.assertEqual([u.text for _, u in analyze(b, h).sentences], ['同一句。'])
+
+
+class RuleThreeRowShapeTest(unittest.TestCase):
+    REASON = '那是別的檔自己的偏離登記，名字沒變'
+
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+        pointer = '// 偏離登記寫在 a.ts 的檔頭。\n// 另一行無關。\n'
+        self.base = self.repo.commit({'src/a.ts': d(TS_BASE), 'src/p.ts': pointer})
+        self.head = self.repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 登記')})
+        self.a = analyze(self.base, self.head)
+
+    def rule3(self, row: str) -> list[str]:
+        return [e for e in verify(self.a, row, self.head) if '規則 3' in e]
+
+    def test_reason_must_be_the_last_cell(self) -> None:
+        self.assertEqual(self.rule3(f'| src/p.ts:1 | 偏離登記 | {self.REASON} |'), [])
+        self.assertTrue(self.rule3(f'| src/p.ts:1 | 偏離登記 {self.REASON} | |'))
+        self.assertTrue(self.rule3(f'| src/p.ts:1 {self.REASON} | 偏離登記 | |'))
+        self.assertTrue(self.rule3(f'| src/p.ts:1 | {self.REASON} | |'))
+
+    def test_the_row_must_name_the_candidate_line(self) -> None:
+        self.assertTrue(self.rule3(f'| src/p.ts:2 | 偏離登記 | {self.REASON} |'))
+        self.assertEqual(self.rule3(f'| src/p.ts:1-2 | 偏離登記 | {self.REASON} |'), [])
+        self.assertTrue(self.rule3(f'| src/a.ts:1 | 偏離登記 | {self.REASON} |'))
+
+    def test_reason_must_not_be_the_hit_term_or_a_reference(self) -> None:
+        self.assertTrue(self.rule3('| src/p.ts:1 | 偏離登記 | 偏離登記 src/impl.ts:1 |'))
+
+
+class RuleThreeRoutesMoreTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+
+    def test_package_name_route(self) -> None:
+        pkg = '{"name": "@nexus/foo"}'
+        b = self.repo.commit({'packages/foo/package.json': pkg, 'packages/foo/src/a.ts': d(TS_BASE), 'src/p.ts': '// 見 @nexus/foo 的檔頭。\n'})
+        h = self.repo.commit({'packages/foo/src/a.ts': CLEAN.replace('## 偏離登記', '## 登記')})
+        self.assertIn(('src/p.ts', 1), [(c.path, c.line) for c in analyze(b, h).candidates])
+
+    def test_only_the_lines_this_change_touched_are_skipped(self) -> None:
+        two = '// 偏離登記寫在 a.ts 的檔頭。\n// 偏離登記也見 a.ts 的檔頭。\n'
+        b = self.repo.commit({'src/a.ts': d(TS_BASE), 'src/p.ts': two})
+        h = self.repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 登記'), 'src/p.ts': two.replace('寫在', '放在')})
+        self.assertEqual([(c.path, c.line) for c in analyze(b, h).candidates], [('src/p.ts', 2)])
+
+    def test_a_renamed_markdown_heading_is_not_blocking_but_is_searched(self) -> None:
+        pointer = '// 偏離登記寫在 x.md 的檔頭。\n'
+        b = self.repo.commit({'src/a.ts': d(TS_BASE), 'docs/x.md': '# 標題\n\n## 偏離登記\n', 'src/p.ts': pointer})
+        h = self.repo.commit({'src/a.ts': CLEAN, 'docs/x.md': '# 標題\n\n## 登記\n'})
+        a = analyze(b, h)
+        md = [(p, blocking) for p, n, blocking in a.vanished if p == 'docs/x.md']
+        self.assertEqual(md, [('docs/x.md', False)])
+        self.assertEqual([e for e in verify(a, '', h) if '規則 2' in e], [])
+        self.assertIn(('src/p.ts', 1), [(c.path, c.line) for c in a.candidates])
+
+    def test_parenthetical_only_changes_keep_the_name(self) -> None:
+        def heading(text: str) -> str:
+            return d(TS_BASE.replace('## 偏離登記', text))
+
+        b = self.repo.commit({'src/a.ts': heading('## 偏離登記（甲）')})
+        same = self.repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 偏離登記（乙）')})
+        self.assertEqual([e for e in verify(analyze(b, same), '', same) if '規則 2' in e], [])
+        other = self.repo.commit({'src/a.ts': CLEAN.replace('## 偏離登記', '## 另外的名字（甲）')})
+        self.assertTrue([e for e in verify(analyze(b, other), '', other) if '規則 2' in e])
+
+
+class FileKindsTest(unittest.TestCase):
+    COMMENTS = {'.css': '/* @@ 註 */\na { b: c }\n'}
+
+    def test_every_listed_language_is_comment_editable(self) -> None:
+        every = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.rs', '.css', '.py', '.sh', '.yml', '.yaml', '.toml', '.txt')
+        self.assertEqual(sorted(mod.LANGS), sorted(every))
+        for ext in every:
+            with self.subTest(ext=ext):
+                repo = Repo(self)
+                mark = '/* @@ 註 */' if ext == '.css' else '// @@ 註' if ext in mod.SLASH else '# @@ 註'
+                body = 'a { b: c }\n' if ext == '.css' else 'x\n'
+                b = repo.commit({f'f{ext}': d(f'{mark}\n{body}')})
+                h = repo.commit({f'f{ext}': body})
+                self.assertTrue(analyze(b, h).in_scope, analyze(b, h).reason)
+
+    def test_other_extensions_are_out_of_scope(self) -> None:
+        for ext in ('.json', '.sql', '.html', '.lock', '.svg'):
+            with self.subTest(ext=ext):
+                repo = Repo(self)
+                b = repo.commit({'a.ts': d('// @@ 註\nx\n'), f'f{ext}': 'a\n'})
+                h = repo.commit({'a.ts': 'x\n', f'f{ext}': 'b\n'})
+                a = analyze(b, h)
+                self.assertFalse(a.in_scope)
+                self.assertIn(f'f{ext} 不是註解可以涵蓋的檔', a.reason)
+
+    def test_txt_comment_edit_stays_in_scope_and_data_edit_does_not(self) -> None:
+        repo = Repo(self)
+        b = repo.commit({'list.txt': d('# 照 @@ 逐檔列。\na.test.ts\n')})
+        comment = repo.commit({'list.txt': '# 逐檔列。\na.test.ts\n'})
+        self.assertTrue(analyze(b, comment).in_scope)
+        data = repo.commit({'list.txt': '# 逐檔列。\nb.test.ts\n'})
+        self.assertFalse(analyze(b, data).in_scope)
+
+
+class PythonScanTest(unittest.TestCase):
+    PY = 'def f():\n    """{}"""\n    return 1\n'
+
+    def test_docstring_sentences_are_listed(self) -> None:
+        repo = Repo(self)
+        b = repo.commit({'a.py': d(self.PY.format('@@ 的做法。我們另有。')), 'impl.py': 'x = 1\n'})
+        h = repo.commit({'a.py': self.PY.format('改成別的。我們另有。')})
+        a = analyze(b, h)
+        self.assertTrue(a.in_scope, a.reason)
+        self.assertEqual([(p, u.text, u.line) for p, u in a.sentences], [('a.py', '改成別的。', 2)])
+        self.assertTrue([e for e in verify(a, '', h) if '規則 1' in e])
+        self.assertEqual([e for e in verify(a, '| 改成別的。 | a.py 第 2 行 | impl.py:1 |', h) if '規則 1' in e], [])
+
+    def test_multiline_docstring_keeps_line_numbers(self) -> None:
+        text = 'def f():\n    """標題。\n\n    第二段 @@ 在這裡。\n    """\n    return 1\n'
+        _, comments = scan(d(text), '.py')
+        found = units(comments)
+        self.assertEqual([(u.text, u.line) for u in found], [('標題。', 2), (d('第二段 @@ 在這裡。'), 4)])
+
+    def test_a_string_value_is_not_a_docstring(self) -> None:
+        _, comments = scan('x = """甲。\n乙。"""\ny = ("""丙""",)\n', '.py')
+        self.assertEqual(comments, [])
+
+    def test_indentation_is_code(self) -> None:
+        a, _ = scan('if x:\n    y = 1\nz = 2  # 舊\n', '.py')
+        b, _ = scan('if x:\n    y = 1\nz = 2  # 新\n', '.py')
+        c, _ = scan('if x:\n    y = 1\n    z = 2\n', '.py')
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c)
+
+
+class JsxCommentTest(unittest.TestCase):
+    def test_removing_a_jsx_comment_wrapper_is_comment_only(self) -> None:
+        a, ca = scan(d('<div>\n  {/* @@ 註 */}\n  <b />\n</div>\n'), '.tsx')
+        b, _ = scan('<div>\n  <b />\n</div>\n', '.tsx')
+        self.assertEqual(a, b)
+        self.assertEqual([c[1] for c in ca], [[d('@@ 註')]])
+
+    def test_empty_braces_that_are_code_still_count(self) -> None:
+        for before, after in (('const f = () => {/* c */};\n', 'const f = () => ;\n'), ('const o = {/* c */};\n', 'const o = ;\n')):
+            with self.subTest(before=before):
+                self.assertNotEqual(scan(before, '.tsx')[0], scan(after, '.tsx')[0])
+
+    def test_other_extensions_keep_the_braces(self) -> None:
+        self.assertNotEqual(scan('f(a, {/* c */});\n', '.ts')[0], scan('f(a, );\n', '.ts')[0])
+
+
+class RustCharTest(unittest.TestCase):
+    def test_char_literals_and_lifetimes_do_not_open_strings(self) -> None:
+        for lit in ("'\\n'", "'\\u{1F600}'", "'x'", "'\\\\'"):
+            with self.subTest(lit=lit):
+                a, _ = scan(f"fn f(s: &'static str) -> char {{ {lit} }} // 舊\nconst X: &str = \"a\"; // 舊二\n", '.rs')
+                b, ca = scan(f"fn f(s: &'static str) -> char {{ {lit} }} // 新\nconst X: &str = \"b\"; // 新二\n", '.rs')
+                self.assertEqual(a, b)
+                self.assertEqual([c[1] for c in ca], [['新'], ['新二']])
+
+
 if __name__ == '__main__':
     unittest.main()
 
