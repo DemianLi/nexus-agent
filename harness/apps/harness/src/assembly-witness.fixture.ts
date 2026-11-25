@@ -10,8 +10,7 @@
  * - serve 啟動時那一次試組**真的收掉了**：起來之後是「apply 1、收掉 1」。
  * - 冷讀的路（列表）**一份 agent 都不建**：列完之後 apply 還是 1，切過去一條才變 2。
  *
- * dsh 的 web 失敗矩陣也用一顆這樣的見證 plugin（dsh `apps/cli/tests/profiles/web/tests/web-failure-matrix.expected.e2e.ts:172-189`，
- * `477b4f4`）。旁邊那份 patch 檔把它 `insert` 到出貨清單上。
+ * 旁邊那份 patch 檔把它 `insert` 到出貨清單上。
  */
 
 import type { NexusPlugin } from '@nexus/core';

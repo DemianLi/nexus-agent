@@ -1,9 +1,6 @@
 /**
  * 一把供應商金鑰長什麼樣才算能用（[#1541](https://github.com/DemianLi/nexus-agent/issues/1541)）。
  *
- * 照 dsh `packages/llm/llm/src/api-key.ts`（判準與兩種理由）與 `packages/llm/llm/src/index.ts` 的 `assertUsableApiKey`
- * （拒收、訊息不回顯金鑰），對讀版本 `687f282e`（alpha.5 的 `1517a4db` 兩處一致）。
- *
  * **為什麼要在送出之前擋。** 金鑰會被放進 HTTP 標頭。標頭放不下的字元（全形字元、零寬空白、中間的換行）在 `fetch` 建標頭時才拋
  * `TypeError`，分類器落到 `UNKNOWN`；更糟的是中間有換行時，那句 `TypeError` 的訊息裡就是整把金鑰，接著寫進 `turn/failed`、會話日誌與網頁。
  * 放得下但供應商不認的（前導空白、中間空白、Latin-1）只會換來一個看不出原因的 401。所以在轉接器取金鑰的那一刻先判，

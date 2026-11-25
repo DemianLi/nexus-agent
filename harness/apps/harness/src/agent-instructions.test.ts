@@ -221,7 +221,7 @@ describe('產品路徑上的出貨清單就看得到工作區指令', () => {
       expect(text).toContain('Instructions from: AGENTS.md');
       expect(text).toContain('這個 repo 的規矩：先跑測試。');
 
-      // **位置**：緊跟在使用者那一句之後（dsh 插在已領取的訊息之後）。
+      // **位置**：緊跟在使用者那一句之後。
       const roles = first.map((message) => message.getType());
       const userIndex = first.findIndex((message) => message.text === '開工');
       expect(roles[0]).toBe('system');
@@ -248,7 +248,7 @@ describe('產品路徑上的出貨清單就看得到工作區指令', () => {
     const found = await run({
       files: {
         'AGENTS.md': '基礎規矩。',
-        // 與 `AGENTS.md` 只差首尾空白——dsh 的去重是「去掉首尾空白之後」比內容。
+        // 與 `AGENTS.md` 只差首尾空白——去重是「去掉首尾空白之後」比內容。
         'CLAUDE.md': '\n基礎規矩。\n\n',
         'AGENTS.local.md': '我自己的補充。',
       },

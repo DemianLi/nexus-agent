@@ -3,8 +3,7 @@
  *
  * 圖與日誌、存檔點裡只有參照（`nexus-file`／`nexus-image` 區塊）；**這一步發生在組請求的那一刻**，換完的訊息只交給底層的
  * 請求轉換，不回寫任何地方。所以位元組（base64）不可能進日誌、軌跡或存檔點——那是這支存在的意義，也是
- * `attachment-wire.test.ts` 釘住的。照 dsh 的位置（`packages/llm/llm/src/index.ts:1058-1070` 的 `projectFilesToText`／
- * `projectImagesForTextModel`，`5badb150`）：檔案換成確定性的一行字，圖在模型不收圖時換成一行佔位字。
+ * `attachment-wire.test.ts` 釘住的。檔案換成確定性的一行字，圖在模型不收圖時換成一行佔位字。
  *
  * ## 規則
  *
@@ -16,7 +15,7 @@
  *
  * ## 登記的偏離
  *
- * dsh 在 adapter 之前、對**整個請求**做這件事。我們在 `ChatOpenAI` 的子類（`attachment-chat-openai.ts`）裡做，因為基座表達不出
+ * 這件事在 `ChatOpenAI` 的子類（`attachment-chat-openai.ts`）裡做，因為基座表達不出
  * 「請求轉換之前的一道 hook」：LangChain 的 `handleChatModelStart` 在它之前跑（所以 callback 看到的是參照），而底層轉換
  * 不認得我們的區塊型別。
  *

@@ -3,19 +3,19 @@
  *
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它的候選 4
  * 掉出來的 [#199](https://github.com/DemianLi/nexus-agent/issues/199)，由
- * [#198](https://github.com/DemianLi/nexus-agent/issues/198) 判出來：**第 5 格不建 dsh 那
+ * [#198](https://github.com/DemianLi/nexus-agent/issues/198) 判出來：**第 5 格不建
  * 一層「只能拒絕」的 guard，改成一條絆索。** 這個檔案不改任何行為。
  *
  * ## 危險本身
  *
- * `PreToolListener` 的 `next()` **不呼叫就是把後面的人整個短路掉**——那是照 dsh 的
+ * `PreToolListener` 的 `next()` **不呼叫就是把後面的人整個短路掉**——那是
  * waterfall 語義刻意提供的能力（`harness/packages/nexus-core/src/approval.ts` 的
  * `PreToolListener`、`registry.ts` 的 `ApprovalRegistrationPoint.gate` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
  * **今天不是缺陷**：出貨清單裡**剛好一位** gate（下面第一層就是在釘這件事）——submit-record 的 `submit_record` 閘門，
  * 它對別的工具一律 `next()`、對 `submit_record` 回 `ask`，從不回 `allow`。但那是**這一位的寫法**，不是機制擋住的。沙箱升級以前也是一位 gate，
- * [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，排在前面的 gate 怎麼放行都跳不過它。
+ * [#700](https://github.com/DemianLi/nexus-agent/issues/700) 把問人搬進工具本體，排在前面的 gate 怎麼放行都跳不過它。
  *
  * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
@@ -25,7 +25,7 @@
  * （`written`），不是「閘門有沒有被呼叫」。
  *
  * **以前被吃掉的是 plan-mode 的 `exit_plan_mode` 閘門**，量的是計劃模式最後是開是關。
- * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 照 dsh 把交出計劃改走提問通道，plan-mode
+ * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 把交出計劃改走提問通道，plan-mode
  * 不再掛閘門，這裡換成下一位真的會 `ask` 的閘門。危險本身沒變。
  *
  * ## 順序由 plugin 載入順序決定，被排到後面的那位管不著
@@ -34,17 +34,6 @@
  * 沒有 `middleware.use({ prepend })` 或 `permissions` 那種槓桿。想排到前面的人只要在
  * 清單裡排前面就行，被排到後面的人沒有任何辦法。**這張卡不給 `approvals` 加 `prepend`**
  * （#199 的射程），只是把這件事釘住。
- *
- * ## 為什麼不照抄 dsh
- *
- * dsh 那一格是 `ctx.tools.guard()`，型別是
- * `ToolGuard = (execution: Readonly<ToolExecution>) => string | undefined`
- * （`references/deepseek-harness/packages/core/tools/src/index.ts:704`，SHA
- * `d347e703908d0406b7a7ef80e3a0e594d86b2215`）——**限制不是一套執行期政策，是一個窄回傳
- * 型別**：沒有 `allow` 可回，也沒有 `next` 可跳，所以「誰都不能強制放行」是型別保證的。
- * 便宜得很，但它解的是我們今天還沒有的問題（多位互不信任的 gate 作者），照抄會多一個
- * 註冊點與一套作用域規則。**#198 判：不建。** 那份 clone 不進版控且**會凍在 clone 當下**，
- * 要重對自己 `git -C references/deepseek-harness fetch` 再對 SHA。
  *
  * ## 更正 #198 的一句話
  *

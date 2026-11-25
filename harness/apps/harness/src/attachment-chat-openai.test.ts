@@ -141,7 +141,7 @@ describe('三條出請求的路都過投影', () => {
     await model('accepts').invoke([message()]);
     expect(bodies.at(-1)!.stream).not.toBe(true);
     expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
-    // 圖前面一行把手（#1566，照 dsh pi-ai `context.ts:79-89`），再來才是圖。
+    // 圖前面一行把手（#1566），再來才是圖。
     expect(userBlocks()[1]!.text).toBe(
       `Image sha256:${'d'.repeat(64)}; request preview 7x5px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`,
     );

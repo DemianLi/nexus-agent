@@ -252,7 +252,7 @@ describe.runIf(POSIX)('publishNewFile', () => {
 
     expect(injected).toBe(1);
     expect(calls.some((call) => call.startsWith('link '))).toBe(false);
-    // 暫存檔照 dsh `writeSyncedTempFile` 不刪（隨機名 `.tmp`，讀方不認），所以只斷言正式檔不在。
+    // 暫存檔（`writeSyncedTempFile`）不刪（隨機名 `.tmp`，讀方不認），所以只斷言正式檔不在。
     expect(await readdir(base)).not.toContain('secret.json');
   });
 });
