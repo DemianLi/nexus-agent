@@ -103,7 +103,8 @@ const CLAUSES: readonly { readonly what: string; readonly phrase: string }[] = [
 const DESTINATION =
   '這幾句是 #187 那份賭注的前提：閘門只數輪數，「同一件事」那一半交給模型，' +
   '而撐住它的只有「模型被告知了規則」這一件。\n' +
-  '要改的話先去讀 harness/packages/nexus-plugin-goal/src/tools.ts 檔頭「門檻只數輪數」那一段。\n' +
+  '要改的話先去讀 harness/packages/nexus-plugin-goal/src/tools.ts 檔頭「門檻只數輪數」那一段' +
+  '。\n' +
   '**真的要拿掉這幾句，就要一起去把 #187 的賭注改掉**——不然那張卡的判準會在量一條' +
   '模型從來沒被告知過的規則。';
 
