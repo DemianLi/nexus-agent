@@ -211,7 +211,7 @@ const INDEX: readonly InterceptionRow[] = [
       '我們一次 agent 呼叫只發一次——**2026-09-18 在新佔用者身上重量**：' +
       '同一條 thread 送第二句話會再進一次（`agent-instructions.test.ts` 靠去重擋住第二份），' +
       '同一次 invoke 的第二輪不會。價錢是**每次 invoke 一格、每輪零格**（上限 100：33 輪變 32 輪；' +
-      '#394 寫的「零」是上限 20 被 floor 吃掉的讀數）。摘要把基線切掉之後，要等到下一次 invoke（#397，登記在 plugin 檔頭）。要「每一步」的東西這一格撐不住，' +
+      '#394 寫的「零」是上限 20 被 floor 吃掉的讀數）。摘要把基線切掉之後，要等到下一次 invoke 才補回（#397，登記在 plugin 檔頭）。要「每一步」的東西這一格撐不住，' +
       '得換每輪多一格的 `beforeModel`（33 輪變 24 輪）——#389 因此以 not planned 關閉，重開條件在卡上。' +
       '**第二位消費者 `time-context`（#1625）與第三位 `skill-invocation`（#1574）同價**：也是每次 invoke 一格、每輪零格；' +
       '三位都在時上限 100 下出貨清單是 31 輪，少任一位是 32（`time-context-on-tree.test.ts` J 組）；每步重算退成每次 invoke 一則（偏離登記在 `@nexus/plugin-time-context` 檔頭第 1 條）。',
@@ -241,13 +241,13 @@ const INDEX: readonly InterceptionRow[] = [
       '**`ask` 沒有可組合的應答者 waterfall。**' +
       '我們的 `registry.approvals` **只收提問者**（`gate()`），應答者是 `approval.ts` 裡寫死的' +
       ' `interrupt(...)`，而 `ApprovalChannel` 是 `fold.ts` 折疊當下的一個判決、**不是掛點**，' +
-      '所以機器應答者在我們這側沒有位置可掛。結果詞彙也跟著窄一格：我們的**應答**只有 approve／reject（`cancelled` 不是人答的，是停止收回時由 pump 記，#1029）。' +
+      '所以機器應答者沒有位置可掛。**應答**的結果詞彙只有 approve／reject（`cancelled` 不是人答的，是停止收回時由 pump 記，#1029）。' +
       '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
-      '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
+      '記在這一列是因為第 4 格是**唯一的提問者**' +
       '（例如 `harness/packages/nexus-plugin-submit-record/src/index.ts` 的 `approvals.gate`，`submit_record` 回 `ask`；' +
       'plan-mode 以前也掛一位，#652 改走提問通道，不在這裡了）。' +
       '**plan-mode 的 `exit_plan_mode` 模式外拒絕曾經在這個事件上（#1272）、現在不在了（#1276）**：改成只在工具本體裡檢查' +
-      '（`execute` 拋 `is only available in plan mode`），那一層排在核准閘門之前的拒絕，demian 2026-10-09 決定拿掉。' +
+      '（模式外呼叫回 `NOT_IN_PLAN_MODE_MESSAGE`），那一層排在核准閘門之前的拒絕，demian 2026-10-09 決定拿掉。' +
       '所以它也不再是第 6 格 `tools/execute` 的佔用者；這個事件目前沒有任何監聽者。',
     recordDelta:
       '**核准的問與答各有一顆事件（#1029，翻了 #220 的「認帳不做」）。** 每次 request 追加 ' +
@@ -258,9 +258,9 @@ const INDEX: readonly InterceptionRow[] = [
       '（閘門在圖內、`interrupt()` 回來後從頭重跑，在它前面寫會是兩筆），回覆不是 approve 也不是 reject 時記 `unavailable`（#2027）；' +
       '不必問人就確定的（政策關掉 → `rejected`、' +
       '沒有管道 → `unavailable`、子代理一律 `policy-never`）由閘門在圖內一次寫一對。listener 直接 `deny` 不寫' +
-      '（只有 `ask` 才進核准服務）。**另有一格**：核准拒絕的 `tool/result` 帶碼' +
+      '（只有 `ask` 才進核准服務）。**核准拒絕的 `tool/result` 帶碼**' +
       '（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／`APPROVAL_INVALID_REPLY`／`TOOL_DENIED_BY_LISTENER`），' +
-      '依據是 #1018 Q2 拍板的「拒絕帶原因碼」，載體用 `deny.info` 那一格。' +
+      '依據是 #1018 Q2 拍板的「拒絕帶原因碼」，載體是 `tool/result` 的 `error`（`ToolErrorInfo`）。' +
       '**還沒有的**：`cancelled` 只在停在核准點按停止時寫（pump 的 `#withdraw`）；' +
       "**政策事件**（#437）：`approval/policy` 記政策（`ask`／`never`）的起始值與每次切換，子代理日誌補一顆 `source: 'delegation'`；" +
       '但日誌上 `approval/decided` 的 `rejected` 仍分不出人拒與政策拒，那一次呼叫要看 `tool/result` 的碼；' +
@@ -288,7 +288,7 @@ const INDEX: readonly InterceptionRow[] = [
       'harness/packages/nexus-core/src/max-tokens.ts',
     ],
     permissionDelta:
-      '**這一格與第 4、7 格在我們這側是同一種機制的三個陣列位置**。' +
+      '**這一格與第 4、7 格是同一種機制的三個陣列位置**。' +
       '位置由 `fold.ts` 決定，不由註冊順序決定。',
     recordDelta: undefined,
     frequencyDelta: UNMEASURED,
