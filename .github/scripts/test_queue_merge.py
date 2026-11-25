@@ -263,6 +263,9 @@ class Parsing(unittest.TestCase):
     def test_skipped_gate_without_a_green_plan_is_red(self) -> None:
         self.assertTrue(gate_state([check('plan', conclusion='FAILURE'), check('gate', conclusion='SKIPPED')]).startswith('red:'))
 
+    def test_empty_rollup_is_pending(self) -> None:
+        self.assertEqual(gate_state([]), 'pending')
+
     def test_missing_gate_is_pending(self) -> None:
         self.assertEqual(gate_state([check('plan')]), 'pending')
 
