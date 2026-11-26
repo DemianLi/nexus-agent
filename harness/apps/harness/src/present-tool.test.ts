@@ -4,7 +4,7 @@
  *
  * `@nexus/plugin-present` 自己的測試走 registry 那一層，證得了工具檢查什麼、什麼時候寫；證不了的是：
  *
- * 1. 圍堵真的替它寫了那顆 `tool/result`，而交付落在它之前（`tools/result` 在記 `tool/result` 之前派發，#1286，同 dsh）——
+ * 1. 圍堵真的替它寫了那顆 `tool/result`，而交付落在它之前（`tools/result` 在記 `tool/result` 之前派發，#1286）——
  *    「`tools/result` 說成功才寫」在真的呼叫順序上成立。
  * 2. **即時與重新整理產出同一顆 `custom` frame**：web 開著看到的，重新整理之後還在。
  * 3. **子代理的交付兩條路都不送**：它寫進子代理那一份，而歷史只讀 root——即時送了的話，重新整理就不見了。

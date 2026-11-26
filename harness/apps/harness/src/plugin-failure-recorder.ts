@@ -21,7 +21,7 @@
  * - **紀錄檔不在就什麼都不做、一行日誌都不出**：檔案不在（沒人寫過、`prepareJournal` 沒建成、舊 patch 檔還在待遷移）時，
  *   沒有任何東西指得到這一列。`appendJournalRecord` 在檔案不在時會建，所以先讀、不在就不呼叫它（#1413 的不變量：
  *   沒有紀錄時，serve 的輸出與改動前逐位元組相同）。
- * - **等鎖上限 2 秒**，照 dsh 的預設（`packages/util/atomic-write/src/index.ts:196`），不是寫入口的 30 秒：寫入口持鎖時要
+ * - **等鎖上限 2 秒**，不是寫入口的 30 秒：寫入口持鎖時要
  *   驗證一筆變更、載入模組，這裡持鎖只是追加一行。home 唯讀、鎖被別人拿著，都只記日誌（同一件事只講一次）。
  * - **不 reject**：呼叫端是 thread 的組裝與關閉流程，這裡的失敗不能讓它們多一種結局。
  * - **{@link FailureRecorder.note} 不等寫完**；只有「要拋之前」才 {@link FailureRecorder.flush}（必掛的列掉了，起不來
@@ -41,8 +41,7 @@
  *
  * ## 偏離登記
  *
- * 沿用 #1413 的第 2 條（變更歷史是產品需求，dsh 沒有）：這一種筆與 `rejected` 同屬它。dsh 的 `plugin-manager/changed`
- * 只帶 `reason`（`packages/boot/plugin-manager/src/types.ts:244-246`），沒有「某一列為什麼掛不上」的結構化紀錄。
+ * 沿用 #1413 的第 2 條（變更歷史是產品需求）：這一種筆與 `rejected` 同屬它。
  *
  * @module
  */
@@ -56,7 +55,7 @@ import {
 } from './plugin-journal.js';
 import type { FailureContext, FailureDiscovery, JournalBody } from './plugin-journal.js';
 
-/** 等鎖的上限：dsh 的預設 2 秒。 */
+/** 等鎖的上限：2 秒。 */
 export const FAILURE_RECORD_WAIT_MS = 2000;
 
 /** 交進來的一列：同 `StartupDrop` 的那幾格，不帶 `entry`。 */

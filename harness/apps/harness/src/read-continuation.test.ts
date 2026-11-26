@@ -9,7 +9,7 @@
  * 「基座自己截斷」那一條同時是**上游絆索**：它認的是基座 `READ_FILE_TRUNCATION_MSG` 的開頭，
  * 基座換了措辭，這一條會紅。
  *
- * 一頁多大照 dsh（[#602](https://github.com/DemianLi/nexus-agent/issues/602)）：預設 2000 行、50 KiB。
+ * 一頁多大（[#602](https://github.com/DemianLi/nexus-agent/issues/602)）：預設 2000 行、50 KiB。
  * 模型收到的說明量在 `read-limits-openai.test.ts`。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
@@ -111,7 +111,7 @@ describe('讀檔結果最後補上讀到哪', () => {
       { name: 'read_file', args: { file_path: '/app.log', offset: 4000 } },
     ]);
     const [first, second, third] = messages.map(textOf);
-    // 沒給 `limit`：一頁 2000 行，同 dsh。
+    // 沒給 `limit`：一頁 2000 行。
     expect(first).toMatch(
       / {2}2000\tline 2000\n\n\(Showing lines 1-2000 of 4500\. Use offset=2000 to continue\.\)$/,
     );

@@ -1,5 +1,5 @@
 /**
- * 收尾控制器（#599）。案例照 dsh 的 `apps/cli/tests/process-shutdown.spec.ts`（`477b4f4`）逐條抄。
+ * 收尾控制器（#599）。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';

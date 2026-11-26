@@ -57,18 +57,15 @@
  *
  * ## 偏離登記
  *
- * 1. **出口是主機端的檔，不是給 trusted client 的 inventory。** dsh 經 `pluginInventory/list` 給 trusted client
- *    （`packages/host/plugin-inventory/src/index.ts:70-73`）。我們沒有管理員身分，表達不出 trusted；wire 的 `/threads`
+ * 1. **出口是主機端的檔，不是給 trusted client 的 inventory。** 我們沒有管理員身分，表達不出 trusted；wire 的 `/threads`
  *    底下每個登入的人都看得到。所以退到寫成 home 底下的檔，只有進得了主機的人讀得到，跟 `--dump-config` 同一群人。
  *    管理員身分落地後（#1385 排程第 3 步）改成走那道閘的只讀路由。
- * 2. **「執行中」不從 Loader 讀。** dsh 每次直接讀 `ctx.loader.entries()`，不留快取（`index.ts:85`）。我們的清單由變更紀錄
+ * 2. **「執行中」不從 Loader 讀。** 我們的清單由變更紀錄
  *    導出（#1412），但清單上的列不在 Loader 的樹上，因為插件還在相容層（`cordis-root.ts` 偏離登記），退到啟動那一份
  *    `LoadedPluginConfig` 加試組結果。列隨著逐顆搬出相容層上樹之後，應改回讀 Loader。
  * 3. **沒有 `fiberPhase`**：清單上的列沒有各自的 fiber，用 `mounted`／`disabled`／`dropped`／`absent` 四態取代，掉在哪一步用
  *    `dropStage`。
  * 4. **`dropStage` 在 `running` 與 `saved` 各一份**，不是一個平的欄位：啟動時掉了、改設定之後重試掉在別一步，兩邊會不同。
- * 5. **逐列對照 dsh 沒有**：它只讓客戶端「比較快照」，plugin-manager 只對單次操作回 `applied`／`restart-required`
- *    （`packages/boot/plugin-manager/src/types.ts:121-125`）。這是產品需求，範圍超出 dsh。
  *
  * @module
  */
@@ -201,7 +198,6 @@ function sideRows(source: SnapshotSource): Map<string, SideRow> {
     // 宣告是啟用、交給組裝的那一顆卻是停用的，而且沒掉：樹上自我停用過、宣告沒變的橋接列（#1424），快照照現有四種狀態
     // 顯示成 `disabled`；是誰停的看變更紀錄。
     // **快照版本的規則**（#1442 Q3 (a)）：加選填欄位、舊讀者忽略也不會讀錯 → 不升；改了既有欄位的意思 → 升。
-    // 這條規則是類比 dsh 會話格式的升版規則（只有既有欄位擋不住誤讀時才升版），不是照 dsh：dsh 沒有這份快照。
     const state: RowState =
       stage !== undefined
         ? 'dropped'
@@ -390,7 +386,7 @@ export interface PluginSnapshotWriter {
 /**
  * 建寫檔的那一支。
  *
- * - **原子**：`atomic-file.ts` 的 `writeAtomic`（照 dsh `storage-json/src/atomic.ts:24-40`，#1527）——先寫暫存檔、
+ * - **原子**：`atomic-file.ts` 的 `writeAtomic`（#1527）——先寫暫存檔、
  *   `sync`、再 `rename` 蓋過去、fsync 目錄，讀的人只會看到完整的舊檔或完整的新檔，斷電也不會退回上一版。
  * - **暫存檔隨機名、`wx` 排他建立**：兩次寫入不會搶同一個暫存檔，也不跟隨預先放在那個名字上的連結。
  * - **寫入排成一條鏈**：同時開兩條對話會同時重讀，後來的先落地的話新結果會被舊的蓋掉；排隊之後，檔案裡留下的是
