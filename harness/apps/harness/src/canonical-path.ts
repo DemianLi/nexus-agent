@@ -66,7 +66,7 @@ export async function canonicalizeExisting(target: string): Promise<string | und
  * **感知分隔符**：`${root}${sep}` 前綴的寫法在根是 `/` 時會變成 `//`，什麼都比不中。用 `relative` 也要小心：
  * `/a` 對 `/a/..nexus` 的 `relative` 是 `..nexus`，只看 `startsWith('..')` 會把它判成外面。所以只有 `..` 本身、
  * `..` 加分隔符開頭、或跨磁碟機的絕對路徑才算外面。`harness/packages/nexus-plugin-workspace-changes/src/paths.ts` 的 `isInside`
- * 有上面那個 `..nexus` 的窄，那邊不改。
+ * 有上面那個 `..nexus` 的窄。
  *
  * @param root - 絕對目錄。
  * @param path - 要判的絕對路徑。

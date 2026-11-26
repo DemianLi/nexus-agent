@@ -19,7 +19,7 @@
  *   SIGKILL。逾時跟其他失敗一樣記 `null`。**只殺直接子行程**：git 自己留下的孫行程（使用者在程式碼 checkout 設了 `core.fsmonitor`
  *   這類設定時）不會被殺，跟 git 快照登記的是同一格窄。
  * - **這裡管的只是「沒有戳記才問 git」那條退路**：
- *   打包出來的產物帶戳記（{@link resolveBuildVersion}，#1502）；原始碼樹沒有戳記，才在執行期問 git。這張不動這個順序。
+ *   打包出來的產物帶戳記（{@link resolveBuildVersion}，#1502）；原始碼樹沒有戳記，才在執行期問 git。
  *
  * @module
  */

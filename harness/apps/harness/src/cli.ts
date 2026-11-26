@@ -265,7 +265,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     if (resume !== undefined) {
       throw new Error(`--dump-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
     }
-    // 要說的話同理：印完就退出，那句話永遠不會被說出去。以前這裡靜靜收下（#740 補上）。
+    // 要說的話同理：印完就退出，那句話永遠不會被說出去。
     if (positionals.join(' ').trim().length > 0) {
       throw new Error(`--dump-config 不能配要說的話：印設定不跑任何一輪。\n\n${USAGE}`);
     }
@@ -593,7 +593,7 @@ export async function runTurn(
   sessionLog.append('turn/start', turnStart);
   try {
     // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
-    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），退回標題在 `base` bundle 裡，每一種組裝都有。
+    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），每一種組裝都寫。
     if (typeof input === 'string') {
       try {
         ensureFallbackTitle(sessionLog, titleLimits);

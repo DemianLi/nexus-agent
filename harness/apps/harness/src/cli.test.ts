@@ -957,9 +957,7 @@ describe('REPL', () => {
  * 驗的是錯誤傳播路徑不被吞掉：衝突規則本身是 `harness/packages/nexus-core` 的單測在管，而從
  * registry 到行程退出碼的路只有一條，所以這裡只需要一個案例。
  *
- * 這個 repo 沒有建構產物（`build` 就是 `tsc --noEmit`、
- * package 的 `main` 直接指向 `src`），所以退到最接近的做法：用 tsx 跑原始碼入口，
- * 但仍然是**另起一個行程**跑真的 argv——這條測試要驗的退出碼與 stderr 只有在那裡才存在。
+ * 用 tsx 跑原始碼入口，是**另起一個行程**跑真的 argv——這條測試要驗的退出碼與 stderr 只有在那裡才存在。
  */
 describe('CLI 行程', () => {
   const cli = fileURLToPath(new URL('./cli.ts', import.meta.url));
