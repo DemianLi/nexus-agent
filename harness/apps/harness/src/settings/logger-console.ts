@@ -16,7 +16,7 @@
  * `ERROR 0、WARN 1、INFO 2、DEBUG 3`（`harness/vendor/cordis/src/logger.ts`）。數字是 vendor 內部的順序，所以設定寫名稱，
  * 換算在 `../server-log.ts` 的 `LOG_LEVEL_NUMBERS`（一張表、測試對著 vendor 實際行為釘住）。
  *
- * ### 偏離二：多一格 `format: 'json'`
+ * ### 偏離二：多一格 `format: 'json'`（理由 2：產品需求）
  *
  * nexus 要把 serve 的 stdout 經 journald
  * 交給內網的日誌平台，所以多一個一行一個 JSON 物件的格式，判準取 JSON Lines；欄位名取 OTel Logs 資料模型的慣用語意，**不引入 OTel SDK、不送出去**。
