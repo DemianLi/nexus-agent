@@ -1,5 +1,5 @@
 # 部署方把全開那一組加回權限表（#1621）。出廠表只有 `read-only` 與 `workspace-write`；`presets` 是整份替換，所以要把
-# 整張表重寫一份。值照 dsh base 出廠的第三組（`packages/bundle/base/cordis.patch.yml:274-276`，`687f282e`）。
+# 整張表重寫一份。
 # 讀它的是要量「加回之後跟今天一樣」的測試：`permission-presets.test.ts`、`permission-wire.test.ts`、
 # `subagent-sandbox.test.ts`、`workspace-changes.test.ts`。
 - id: permission-presets

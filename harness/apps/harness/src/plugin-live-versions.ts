@@ -24,19 +24,14 @@
  * - **只綁 root thread id**：子代理沿用 root 那一份清單，不另綁自己的 id。
  * - **引用計數不跨重啟**（Q1 (a)）：表只活在行程記憶體裡。
  *
- * ## 偏離登記（對 dsh `agent-preset-registry`，`packages/preset/agent-preset-registry/src/index.ts`）
+ * ## 偏離登記
  *
- * dsh 的代際（`Generation { scope, key, mount, users, retired }`，`:31-37`）更新或移除定義時把舊代際標成 `retired`
- * （`:93-96`），Agent 綁定時 `users++`、卸載時用 `ctx.effect` 遞減（`:245`、`:258-273`），`retired` 而且 `users === 0`
- * 才回收（`:148-152`），`inspectCompositions` 列出所有仍保留的代際（`:164-172`）。這一刀照它的「綁定＋檢視」那一半；
- * 四條偏離的理由類別都是「產品需求超出 dsh 的射程」（決議 §五）：
- *
- * 1. **單位**：dsh 一代是一整組 preset 組合；這裡一版是一列的一份宣告。本專案判過不做 preset
+ * 1. **單位**：一版是一列的一份宣告。本專案判過不做 preset
  *    （https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-09-26.md#L330，T-29），版本路由以列為單位（決議 §3-2 第 6 條）。
- * 2. **計數 → 清單**：dsh 的 `users` 是私有計數；這裡記 thread id，因為要「列出受影響的 thread」（#1431 Q3 (a)）。
- * 3. **出口**：dsh 經 `inspectCompositions` 在行程內查；這裡寫進快照檔，沿用 #1406 已登記的偏離（沒有管理員身分，不開
+ * 2. **計數 → 清單**：記 thread id，因為要「列出受影響的 thread」（#1431 Q3 (a)）。
+ * 3. **出口**：寫進快照檔，沿用 #1406 已登記的偏離（沒有管理員身分，不開
  *    wire 路由）。
- * 4. **不回收**：`retired` 且 `users === 0` 時的回收留給第二刀。今天舊版只是 thread 的閉包，沒有 fiber 可撤。
+ * 4. **不回收**：舊版的回收留給第二刀。今天舊版只是 thread 的閉包，沒有 fiber 可撤。
  *
  * @module
  */

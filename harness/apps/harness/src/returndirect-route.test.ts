@@ -13,7 +13,7 @@
  * 2. 最後一則沒有 `name` → 照常回頭叫模型（今天的行為）。
  * 3. 同一批全是 returnDirect → 都走 exitNode，收一次。
  * 4. **混批**（returnDirect 帶 `name` 與普通工具同一批）加上任何 `beforeModel` → langgraph 擲 `InvalidUpdateError`。這是
- *    core 在批裡不只一個呼叫時把 `returnDirect` 工具的 `name` 拿掉的原因（登記的偏離，理由 1）；dsh 是批內任何一個收就收。
+ *    core 在批裡不只一個呼叫時把 `returnDirect` 工具的 `name` 拿掉的原因（登記的偏離，理由 1）。
  * 5. 版號釘死：換版本要重新確認 (1)–(4) 之後才改這個常數。
  */
 

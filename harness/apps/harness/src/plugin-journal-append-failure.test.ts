@@ -1,6 +1,5 @@
 /**
- * 變更紀錄追加時寫滿整行、失敗截回寫前大小（[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)，
- * 照 dsh `appendLines`／`rollbackAppend`）。
+ * 變更紀錄追加時寫滿整行、失敗截回寫前大小（[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）。
  *
  * 照 `jsonl-append-failure.test.ts`（#1506）的做法：只在「開紀錄檔」那一下包住把手。`writeFile` 在**包住的單次寫**之上
  * 迴圈寫到整行寫完，所以底層短寫對它無害；單次 `write` 就沒有這個保證，這正是短寫那條要分辨的。斷言一律回頭讀**檔案**

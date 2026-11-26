@@ -366,7 +366,7 @@ describe('產物樹的內容檢查', () => {
           new RegExp(`^${file.replace('.', '\\.')} 產物缺這個檔`, 'mu'),
         ] as [string, () => void, RegExp],
     ),
-    // 期望值寫死 MIT、不引產品常數（照 dsh `build-python-release.py:256-259`）。
+    // 期望值寫死 MIT、不引產品常數。
     [
       'manifest 沒有 license',
       () => writeFileSync(join(root, 'package.json'), '{"name":"@nexus/harness"}'),

@@ -1,9 +1,8 @@
 /**
  * **模型回覆講到一半時才接上的下行，要補到進行中那則**——[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀。
  *
- * 照 dsh 的重連 baseline（`packages/api/session-controller/src/client/sessions/assistant-stream.ts` 的 `replace`，
- * `5badb15009a`）：進行中那一次嘗試已吐出的前綴在連上時一次交出，之後的即時片段接在後面。我們的下行與歷史是兩個請求
- * （web 先開下行、再拿歷史），所以多了 dsh 沒有的兩件事，這裡逐個釘：
+ * 進行中那一次嘗試已吐出的前綴在連上時一次交出，之後的即時片段接在後面。我們的下行與歷史是兩個請求
+ * （web 先開下行、再拿歷史），所以多了兩件事，這裡逐個釘：
  *
  * - **回覆要撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`**：量過，pump 先看到 `message-finish`、日誌後寫，
  *   中間那段接上的下行，歷史沒有它、線上也沒有，回覆就憑空消失。
