@@ -289,7 +289,7 @@ describe('serve 也真的走設定檔那條路', () => {
 
 /**
  * **serve 在綁 port 之前先照每條 thread 那一次組一份 agent**（#749），清單上哪一列壞了在啟動時就講，
- * 跟 CLI 同一刻、同一句。dsh 在 `boot()` 就掛完整份清單（dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。
+ * 跟 CLI 同一刻、同一句。
  *
  * 報了之後起不起得來照 #751 的必掛名單：設定驗不過的 `todo`、`apply` 裡才驗的 `tool-result-pruner` 都是可少掛的，
  * 啟動時印警告、照樣起來。

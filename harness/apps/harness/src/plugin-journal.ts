@@ -5,7 +5,7 @@
  * ## 它是什麼
  *
  * 決議 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md §3-5 第 18 條：**真相來源是 append-only 的稽核變更紀錄**。後台（今天是主機端的
- * `plugin-cli.ts`）每一次停用、啟用、改設定先寫進這份紀錄；`plugin-config.ts` 把它折成 dsh 的「profile patch」那一層，
+ * `plugin-cli.ts`）每一次停用、啟用、改設定先寫進這份紀錄；`plugin-config.ts` 把它折成「profile patch」那一層，
  * 疊進清單。插件與載入器都不寫回 YAML。這個模組只管紀錄本身：格式、讀、折、寫；怎麼疊進清單在 `plugin-config.ts`，
  * 怎麼驗證一筆變更在 `plugin-change.ts`。它不 import `plugin-config.ts`，兩邊不成環。
  *
@@ -35,24 +35,19 @@
  * ## 並發與壞掉的行（Q5）
  *
  * - **寫端**：取跨行程鎖 → 檔尾沒有換行就先截掉那半行（它從來沒回報成功，不丟任何稽核過的資料）→ 驗 → 寫滿整行 → fsync → 才回報。
- *   寫或 fsync 失敗就截回寫前大小再拋（[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)，照 dsh `rollbackAppend`）。
+ *   寫或 fsync 失敗就截回寫前大小再拋（[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）。
  * - **讀端**：不取鎖。最後一行沒有換行結尾，當成「還沒寫完的那一筆」略過。
  * - **其餘壞掉**（中間某行解析不了、序號跳號或倒退）：拋 {@link PluginJournalError}，訊息指名第幾行。
  *
  * ## 偏離登記
  *
- * 1. **設定變更存成追加檔，不是整檔取代**：dsh 存設定走整檔 rename、不做 fsync 的 `writeFileAtomic`
- *    （`packages/util/atomic-write/src/index.ts:79`）。稽核紀錄要只增不改、「回報成功就已落盤」，所以改借 dsh 會話日誌的
- *    追加原語：寫滿整行、`fsync`、失敗截回寫前大小（`session-persistence-jsonl/src/index.ts:1410-1449`，blob `3c3c1358`，
- *    見 {@link appendLine}，[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）。跟會話日誌不同的只有一處：
+ * 1. **設定變更存成追加檔，不是整檔取代**：稽核紀錄要只增不改、「回報成功就已落盤」，所以用追加：寫滿整行、`fsync`、
+ *    失敗截回寫前大小（見 {@link appendLine}，[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）。
  *    建檔那一次的目錄 fsync 失敗時吞掉，理由見 {@link syncDirectoryBestEffort}。
- * 2. **鎖照 dsh 的 `withFileLock`**（`:235`）：`wx` 建 `<file>.lock`、記 PID、持有者行程不在了就接手（`:97`、`:108`、`:146`）。
- *    **差在等待上限**：dsh 預設 2 秒（`:196`），並明寫「持有者的操作合法地跑得比檔案工作久時要自己給 `waitMs`」（`:200-208`）。
- *    這裡持鎖的時候要驗證一筆變更、載入模組，所以預設 30 秒。
- * 3. **同一個行程裡先排隊、再取檔案鎖**（[#1450](https://github.com/DemianLi/nexus-agent/issues/1450)）：dsh 的
- *    `withFileLock` 本身沒有行程內佇列，但它的呼叫端有（`credentials-local/src/index.ts:683` 的 `modifyRecord` 先
- *    `this.enqueue(...)`、再 `withFileLock`），所以同一行程的寫入從來不互相搶鎖檔。這裡的寫入口有兩處（寫入口與
- *    `prepareJournal`），把佇列放進 {@link withFileLock} 一處，而不是各自在呼叫端排。差別只在位置，語意同 dsh。
+ * 2. **鎖**：`wx` 建 `<file>.lock`、記 PID、持有者行程不在了就接手。**等待上限預設 30 秒**：
+ *    這裡持鎖的時候要驗證一筆變更、載入模組。
+ * 3. **同一個行程裡先排隊、再取檔案鎖**（[#1450](https://github.com/DemianLi/nexus-agent/issues/1450)）：
+ *    這裡的寫入口有兩處（寫入口與 `prepareJournal`），把佇列放進 {@link withFileLock} 一處，而不是各自在呼叫端排。
  *    不排隊的時候，同一行程的 N 個寫入全靠鎖檔輪流、後面的每輪睡滿 200 毫秒，實測 25 筆要 4.4 秒，其中 4 秒是睡眠。
  *
  * @module
@@ -159,8 +154,7 @@ export const journalRecordSchema = z.discriminatedUnion('op', [
     /** 當時的繼承值，**只給人看，折疊不用它**：用了就等於把出貨值抄了一份，下一版改預設會被釘住。 */
     after: configValue.nullable(),
     /**
-     * 使用者實際下的是 `config-set`，而新值等於繼承值，所以記成恢復（照 dsh `config-editor/src/index.ts:119-125`：
-     * 新值等於繼承值就拿掉那一列的覆蓋，不抄一份）。沒有這個欄位就是使用者直接下的 reset。
+     * 使用者實際下的是 `config-set`，而新值等於繼承值，所以記成恢復（新值等於繼承值就拿掉那一列的覆蓋，不抄一份）。沒有這個欄位就是使用者直接下的 reset。
      */
     requested: z.literal('config-set').optional(),
   }),
@@ -326,20 +320,19 @@ function isOverrideOf(patch: Record<string, unknown>, id: string): boolean {
  * 函式**，不然「哪一條是這一列的覆蓋項」會有兩套答案。
  *
  * 空字串**不**當成沒寫：`patchSchema` 的 `name` 是 `min(1)`（`plugin-config.ts`），含 `name: ''` 的覆蓋項過不了那一關，
- * 讀端讀到會拋、指名那一列，所以到不了這裡之後的任何一步。dsh 的 `!expectedName`（`plugin-manager/src/patch.ts:34-35`）
- * 把空字串也算沒斷言，但它的 patch 檔沒有這一關；我們的檔有，單獨留一支空字串的分支只會讓兩邊各說各話。
+ * 讀端讀到會拋、指名那一列，所以到不了這裡之後的任何一步。
  */
 function nameAssertionMatches(patch: Record<string, unknown>, name: string): boolean {
   return patch['name'] === undefined || patch['name'] === name;
 }
 
 /**
- * 把紀錄折成 patch 清單，**一列一條覆蓋項**（照 dsh）：
+ * 把紀錄折成 patch 清單，**一列一條覆蓋項**：
  *
- * - 開關：改**最後一條**相符的覆蓋項的 `disabled`，沒有就追加（`packages/boot/plugin-manager/src/patch.ts:14-43`，相符＝同 id、
+ * - 開關：改**最後一條**相符的覆蓋項的 `disabled`，沒有就追加（相符＝同 id、
  *   不是 `insert`、`name` 沒寫或等於這一列的；{@link nameAssertionMatches}）。
- * - 設定：改同一條的 `config`，沒有就追加 `{ id, name, config }`（`packages/boot/config-editor/src/index.ts:119-135`）。
- * - 恢復成繼承值：拿掉**那一列所有**覆蓋項的 `config`，只剩 `id`／`name` 的整條拿掉（`:120-129`）。**不是把出貨值抄一份。**
+ * - 設定：改同一條的 `config`，沒有就追加 `{ id, name, config }`。
+ * - 恢復成繼承值：拿掉**那一列所有**覆蓋項的 `config`，只剩 `id`／`name` 的整條拿掉。**不是把出貨值抄一份。**
  * - 遷移來的 `patch` 原樣接上，保留它在清單裡的位置（`insert` 之後的 patch 才指得到插進來的列）。
  *
  * 同一列後來的操作蓋掉前面的，所以結果的長度不隨紀錄筆數長。純函式，不改輸入。
@@ -557,11 +550,11 @@ export function hasFailedRecord(
   );
 }
 
-// ── 跨行程鎖，照 dsh `withFileLock`（packages/util/atomic-write/src/index.ts:235）────────────────
+// ── 跨行程鎖 ────────────────
 
 const LOCK_RETRY_INITIAL_MS = 20;
 const LOCK_RETRY_MAX_MS = 200;
-/** 預設等多久。dsh 是 2 秒；這裡持鎖時要驗證一筆變更，見檔頭偏離登記第 2 條。 */
+/** 預設等多久。持鎖時要驗證一筆變更，見檔頭偏離登記第 2 條。 */
 export const DEFAULT_LOCK_WAIT_MS = 30_000;
 
 async function isLockContention(error: unknown, lockPath: string): Promise<boolean> {
@@ -601,7 +594,7 @@ async function readLockRecord(lockPath: string): Promise<string | undefined> {
 }
 
 /**
- * 持有者行程已不在，就接手那把鎖。照 dsh（`:146`）：讀到同一筆紀錄的搶鎖者在「以該紀錄命名的 claim 檔」上排隊，
+ * 持有者行程已不在，就接手那把鎖。讀到同一筆紀錄的搶鎖者在「以該紀錄命名的 claim 檔」上排隊，
  * 拿到 claim 的重新確認紀錄與 PID 仍是那一筆才刪，所以不會刪掉別人在死掉的持有者之後拿到的鎖。
  */
 async function takeOverExitedLock(lockPath: string): Promise<boolean> {
@@ -748,7 +741,7 @@ export interface AppendJournalOptions {
  * 追加路徑上 fsync 目錄，**錯誤吞掉**。全倉只有這一處吞（#1527）：建檔走 {@link createJournalFile}，錯照拋。
  *
  * 走到這裡時這一筆已經寫進檔、fsync 過了。這時拋錯，呼叫端會以為沒寫成而重試，紀錄上就多一筆同樣的變更；
- * 「已寫入但回報失敗」怎麼處置不在 #1527。dsh 會話日誌建檔時目錄 fsync 的錯照拋，這一處不同，登記在檔頭偏離第 1 條。
+ * 「已寫入但回報失敗」怎麼處置不在 #1527。
  */
 async function syncDirectoryBestEffort(directory: string): Promise<void> {
   try {
@@ -833,8 +826,7 @@ export async function appendJournalRecord(
 }
 
 /**
- * 寫滿一整行並 fsync；寫或 fsync 失敗就截回寫前大小再拋，照 dsh `appendLines`／`rollbackAppend`
- * （`session-persistence-jsonl/src/index.ts:1410-1449`，[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）：
+ * 寫滿一整行並 fsync；寫或 fsync 失敗就截回寫前大小再拋（[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）：
  *
  * - **寫滿**：`writeFile` 迴圈寫到整行寫完。單次 `write` 短寫時不拋錯、照樣 resolve，留下半行卻回報成功，
  *   下一個寫者會把它當成「當掉的半行」截掉，一筆已回報的紀錄就沒了。
@@ -871,7 +863,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 另開 `r+` 把紀錄檔截回 `size` 並 fsync，同 dsh `rollbackAppend`（`index.ts:1441-1449`）。 */
+/** 另開 `r+` 把紀錄檔截回 `size` 並 fsync。 */
 async function rollbackAppend(path: string, size: number): Promise<void> {
   const handle = await open(path, 'r+');
   try {
@@ -883,8 +875,7 @@ async function rollbackAppend(path: string, size: number): Promise<void> {
 }
 
 /**
- * 一次建好整份紀錄檔（遷移與建空檔用）：`atomic-file.ts` 的 `writeAtomic`（照 dsh `storage-json/src/atomic.ts:24-40`，
- * #1527）——隨機名暫存檔 `wx`、fsync、rename 進位、fsync 目錄，讀端只會看到不存在或完整的那份；任何一步失敗都不留暫存檔，
+ * 一次建好整份紀錄檔（遷移與建空檔用）：`atomic-file.ts` 的 `writeAtomic`（#1527）——隨機名暫存檔 `wx`、fsync、rename 進位、fsync 目錄，讀端只會看到不存在或完整的那份；任何一步失敗都不留暫存檔，
  * **目錄 fsync 的錯照拋**。**呼叫端要在 {@link withFileLock} 裡呼叫，並確認紀錄檔不存在。**
  *
  * @param path - 紀錄檔路徑。

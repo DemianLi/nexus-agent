@@ -3,19 +3,19 @@
  *
  * `cordis-root.ts` 的樹上本來只有兩列（相容層與入口）。這一刀起還有三種東西：
  *
- * | 列 | 是什麼 | dsh 對應 |
- * |---|---|---|
- * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`），契約服務，一列 | `tools` 服務的提供者 |
- * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 | `sessionProjections` 服務的提供者 |
- * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，#1446），契約服務，一列 | `skills` 服務的提供者（形狀不同：收路徑，不收提供者，偏離登記在 `@nexus/skills`） |
- * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，#1456），契約服務，一列 | `commands` 服務的提供者 |
- * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，#1458），契約服務，一列；**宿主在建樹時給值**，不是插件登記進來的 | （dsh 沒有這一種：它的答題者是 `session.interrupt` 事件的監聽者；偏離登記在 `@nexus/approval-channel`） |
- * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 | （dsh 沒有這一種：工具從 `exec.agent.session` 拿；偏離登記在 `@nexus/session`） |
- * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，#1466），契約服務，一列；**宿主給挑法**（同一張登記表、同一支 `pickBoundForCall`，每一筆登記同時帶這條 thread 的 fs 把手），不是插件登記進來的 | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
- * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，#1474），契約服務，一列；插件登記 listener，**宿主**把登記者是某一列的那幾位建成 middleware 折進每條 thread（`pre-step-middleware.ts`） | `agent/pre-step` 事件（dsh 沒有 middleware 服務；偏離登記在 `@nexus/agent-loop`） |
- * | `session-durability` | 行程級的落盤確認（`@nexus/session/provider`，#1606），契約服務，一列；**只在清單掛著落盤時才有**（{@link TreeInput.durable}），做法由宿主給（這棵樹的註冊表登記＋{@link PluginTree.bindDurableStore} 交進來的 store） | `sessionPersistence` 服務（掛 `session-persistence-jsonl` 那一列才有；偏離登記在 `@nexus/session`） |
- * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） | 各插件 |
+ * | 列 | 是什麼 |
+ * |---|---|
+ * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`），契約服務，一列 |
+ * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 |
+ * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，#1446），契約服務，一列 |
+ * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，#1456），契約服務，一列 |
+ * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，#1458），契約服務，一列；**宿主在建樹時給值**，不是插件登記進來的 |
+ * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 |
+ * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，#1466），契約服務，一列；**宿主給挑法**（同一張登記表、同一支 `pickBoundForCall`，每一筆登記同時帶這條 thread 的 fs 把手），不是插件登記進來的 |
+ * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，#1474），契約服務，一列；插件登記 listener，**宿主**把登記者是某一列的那幾位建成 middleware 折進每條 thread（`pre-step-middleware.ts`） |
+ * | `session-durability` | 行程級的落盤確認（`@nexus/session/provider`，#1606），契約服務，一列；**只在清單掛著落盤時才有**（{@link TreeInput.durable}），做法由宿主給（這棵樹的註冊表登記＋{@link PluginTree.bindDurableStore} 交進來的 store） |
+ * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 |
+ * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） |
  *
  * ## 清單怎麼進樹
  *
@@ -28,7 +28,7 @@
  *
  * 「讀清單 → 推給樹 → 等收斂 → 取工具快照」是一段（{@link PluginTree.run}）：兩條 thread 同時組裝時各自要拿到
  * **跟自己讀到的清單相符**的工具，不能一條讀到舊清單、另一條推了新清單、它又取到新的。**只包這一段，不包整個組裝**。
- * **每次都推，不比對「跟上一次一樣就跳過」**（[#1674](https://github.com/DemianLi/nexus-agent/issues/1674)，照 dsh `app-boot/src/index.ts` 每次直接推）：
+ * **每次都推，不比對「跟上一次一樣就跳過」**（[#1674](https://github.com/DemianLi/nexus-agent/issues/1674)）：
  * 推被 Include 拒了之後，Include 手上已經是被拒的那一份（它在套用之前先寫 `config`），宿主記的「上一次推出去的」卻還是更早那一份，
  * 之後推回那一份會被當成沒變而跳過。同一份清單再推一次，Cordis 的 `update` 不動任何一列（量過：不重掛、不卸載、fiber 同一個、
  * 自我停用不重講，每次多 0.1～0.2 毫秒），所以不需要這個快取。
@@ -49,9 +49,8 @@
  *   Loader 在自我停用那一格的呼叫點發的 `loader/self-disable`（`harness/vendor/loader` 本地修改第 10 條，只有那一格發；`ctx.fiber.update()`
  *   走的 `internal/commit` 不發）經 {@link PluginTree.onSelfDisable} 交給宿主，serve 把它記成 `self-disabled`
  *   （`plugin-failure-recorder.ts`）。
- *   **偏離 dsh（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：dsh 任何一次協調（plugin-manager 操作、HMR 偵測到
- *   patch 檔改了）都會把 Include 的樹重疊一遍、把自我停用的列蓋回啟用；這裡只在那一列自己的宣告改了才重試，因為 nexus 每條
- *   thread 都重推一次——照 dsh「每次協調都蓋回」就是原本的閃動。
+ *   **只在那一列自己的宣告改了才重試（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：nexus 每條
+ *   thread 都重推一次，每次都把自我停用的列蓋回啟用就是原本的閃動。
  * - **`cordis.serve.yml` 不經 Include**：Include 只有一個 `path`，serve 專屬那一層是相容層疊在出貨層後面的另一個檔。
  *   那一層裡的函式插件上不了樹（它們會在這裡被判成 `absent`，指名原因）；今天那一層沒有函式插件。
  *
@@ -134,7 +133,7 @@ export const SESSION_LOOKUP_ROW_ID = 'session-lookup';
 export const FS_ROW_ID = 'fs';
 
 /**
- * `agent/pre-step` 登記處那一列的 id（#1474）。**刻意不叫 `agent-loop`**：`startup-audit.ts` 已經把 dsh 名單上的 `agent-loop` 對到
+ * `agent/pre-step` 登記處那一列的 id（#1474）。**刻意不叫 `agent-loop`**：`startup-audit.ts` 已經把名單上的 `agent-loop` 對到
  * 「組裝本身」（`nexus-compat`），同名會讓兩個對照分不清。
  */
 export const PRE_STEP_ROW_ID = 'pre-step';
@@ -286,7 +285,7 @@ export type RowVerdict =
       readonly tools: readonly StructuredToolInterface[];
       /**
        * 這一列登記工具時帶的註冊選項（#1458 Q3）：`rootOnly`、`outputSchema`。**只有帶了選項的工具才有一格**，沒帶的不在裡面。
-       * 折進這條 thread 的 registry 時跟著工具一起交給註冊點——宿主不認得選項的語意，原樣轉交，照 dsh 的 `defineTool`。
+       * 折進這條 thread 的 registry 時跟著工具一起交給註冊點——宿主不認得選項的語意，原樣轉交。
        */
       readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
       /**
@@ -514,8 +513,7 @@ export class PluginTree {
    * 落盤確認的做法：依 root 會話 id **精確**找回那條 thread 的註冊表（{@link ThreadSessions.sessionsForThread}），核對交進來的
    * 就是它的 root，再交給 core 的 `checkpointSession`（排空、讀回、比對）。
    *
-   * **偏離（理由 1，基座表達不出來）**：dsh 的 `ctx.sessions` 行程裡一份，`flush(live)` 直接拿得到；我們的註冊表每條 thread 一份，
-   * 所以多一步「從日誌找回註冊表」，用的是 `session-lookup` 那一列同一張登記表。
+   * 我們的註冊表每條 thread 一份，所以多一步「從日誌找回註冊表」，用的是 `session-lookup` 那一列同一張登記表。
    */
   async #checkpoint(log: SessionLog): Promise<void> {
     const sessions = this.#threadSessions.sessionsForThread(log.sessionId);
@@ -690,8 +688,7 @@ export class PluginTree {
     } else {
       // 推之前先抓住每一列現在的 fiber（#1636）：被刪掉的列先離開 Loader 的 store、才非同步收尾（`group.ts` 的 `remove` 不等），
       // `loader.await()` 看不到它。推完再等這些 fiber 收完，`sync` 回傳時清單上已經沒有的列都收完了（量過的是下面 `update` 那條路；
-      // 抓的位置在分支前面，Include 不是 ACTIVE、整列重建那條路也一起等，但沒有測試走到它）。照 dsh `app-boot/src/index.ts` 的
-      // `previousFibers`（master `687f282e`）。已經 FAILED 或 DISPOSED 的當場就了結。
+      // 抓的位置在分支前面，Include 不是 ACTIVE、整列重建那條路也一起等，但沒有測試走到它）。已經 FAILED 或 DISPOSED 的當場就了結。
       const previous = [...loader.entries()].flatMap((entry) =>
         entry.fiber === undefined ? [] : [entry.fiber],
       );

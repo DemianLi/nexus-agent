@@ -84,8 +84,7 @@ describe('run_javascript 在 agent 迴圈裡', () => {
 });
 
 /**
- * **程式失敗是工具失敗**（[#615](https://github.com/DemianLi/nexus-agent/issues/615)，照 dsh
- * `run_code` 的 `CodeRunFailedError`）：工具回 `ok: false`、帶碼。回字串的話，模型、
+ * **程式失敗是工具失敗**（[#615](https://github.com/DemianLi/nexus-agent/issues/615)）：工具回 `ok: false`、帶碼。回字串的話，模型、
  * 會話日誌、web 的工具卡三處都會記成成功。
  *
  * 走真的組裝、接上會話日誌（`attachSession`，沒接的話圍堵不記日誌），看三處：模型收到的

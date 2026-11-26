@@ -1,10 +1,9 @@
 /**
  * 子代理自己的日誌怎麼進插件投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)，通道見 #1026）。
  *
- * ## 形狀：一份日誌一份折疊，照 dsh
+ * ## 形狀：一份日誌一份折疊
  *
- * dsh 的投影格子按 session 分（`session-projection/src/index.ts` 的 `registration.cells.get(session)`）：子會話與 root
- * 各折各的、互不相見。這裡一樣——宣告 `children: true` 的單元（`childProjectionUnits`）對每個子代理各開一份折疊，值帶
+ * 子會話與 root 各折各的、互不相見：宣告 `children: true` 的單元（`childProjectionUnits`）對每個子代理各開一份折疊，值帶
  * `session`（子代理的 `runId`）送出，落在 web 的 `subagentProjections[runId][key]`。單元的 `apply` 不必知道它在折誰，
  * 也就不存在「即時與歷史交錯順序不同」的問題：每份折疊只吃一份日誌，照 `seq` 排。
  *
