@@ -39,9 +39,7 @@
  *
  * ## 偏離登記
  *
- * dsh 開 HMR 時設定一改立即影響使用那個 profile 的全部會話，沒開就保留到重啟（dsh
- * `packages/boot/plugin-manager/README.zh.md`〈概述〉）。我們是組 thread 時拉、只給新 thread：產品需求超出 dsh 的射程，
- * 歸在決議 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md §3-2 第 6 條（插件更新只給新對話）。清單由變更紀錄導出（#1412，決議 §3-5），
+ * 插件設定的變更是組 thread 時拉、只給新 thread，不推給已開的會話，歸在決議 https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-10-11.md §3-2 第 6 條（插件更新只給新對話）。清單由變更紀錄導出（#1412，決議 §3-5），
  * 重讀時一起讀；列不在 Loader 的樹上，因為插件還在相容層，上樹跟著逐顆搬出相容層一起做（`cordis-root.ts` 偏離登記）。
  *
  * ## 變更紀錄那一層的兩件事要讓人看得到（#1412）

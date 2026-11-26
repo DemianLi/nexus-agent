@@ -2,14 +2,13 @@
  * 側欄的釘選與封存：存在 harness home 底下的一個專用檔
  * （[#633](https://github.com/DemianLi/nexus-agent/issues/633)，第一張：釘選＋封存）。
  *
- * 照 dsh 的 `WorkspaceRegistry`（`packages/workspace/workspace/src/index.ts` 的 `archiveSession`／`unarchiveSession`／`pinSession`／
- * `unpinSession`，`5badb15009a`）：**兩個全域集合，不是會話身上的旗標**；每次變更回完整的集合；釘選**最近釘的在前**、封存**依封存順序**；
+ * **兩個全域集合，不是會話身上的旗標**；每次變更回完整的集合；釘選**最近釘的在前**、封存**依封存順序**；
  * 每一步都在序列佇列裡跑，所以「先檢查、再寫」不會被別的變更插進中間；取消是冪等的、不檢查會話存不存在。
  *
- * ## 規則（逐條對過 dsh 原始碼）
+ * ## 規則
  *
  * - **釘選**：已經釘了 → 什麼都不做（不重排、不寫）；否則已封存 → {@link ThreadArchivedPinError}；否則會話不存在 →
- *   {@link ThreadUnknownError}；通過才寫，插在最前面。**這個先後是 dsh 的**：已釘的即使會話已不存在也回成功。
+ *   {@link ThreadUnknownError}；通過才寫，插在最前面。**已釘的即使會話已不存在也回成功**。
  * - **封存**：已經封存 → 什麼都不做（不問、不停）；否則會話不存在 → {@link ThreadUnknownError}；沒帶 `stopActivity` 時，
  *   問 `activity`，有任何一項就 {@link ThreadActiveError}、**一個位元組都不寫**；通過才寫——**同一次寫入把它的釘選一併拿掉**
  *   （釘選與封存互斥）。帶了 `stopActivity`：先寫、**再**請 `stop` 去停，不等停穩；`stop` 拋了只講一聲、不撤銷封存。
@@ -17,27 +16,24 @@
  *
  * ## 載體：home 底下一個檔，規矩同 `browser-session-secret.ts`
  *
- * PM 在卡上拍板（2026-10-08）：放在 `NEXUS_AGENT_HOME` 底下一個檔、按 home 分，目錄 `0700`、檔案 `0600`。dsh 把這兩個集合放在
- * workspace registry 的耐久狀態裡；我們沒有 workspace registry（卡上「動工前要查的」），退的是載體，規矩照抄：
+ * PM 在卡上拍板（2026-10-08）：放在 `NEXUS_AGENT_HOME` 底下一個檔、按 home 分，目錄 `0700`、檔案 `0600`。我們沒有 workspace registry（卡上「動工前要查的」），這兩個集合放在 home 底下一個檔，規矩照抄：
  *
  * - 記錄帶版本（`{ version: 1, pinnedThreadIds, archivedThreadIds }`）；**認不得的記錄明確失敗、不覆寫**（版本不對、JSON 壞、
  *   欄位型別不對、兩個集合有重複或互相重疊）——交給人決定，跟瀏覽器密鑰那一把、受管憑證檔同一個處置。
  * - 讀之前先確認只有擁有者讀得到（`owner-only.ts`）。
- * - 寫是**先寫暫存檔、`fsync`、再 `rename` 蓋過去，然後 fsync 目錄**（`atomic-file.ts` 的 `writeAtomic`，照 dsh
- *   `storage-json/src/atomic.ts:24-40`，#1527）：讀的一方永遠讀不到寫一半的檔，行程死在中間也只會留一個暫存檔，
+ * - 寫是**先寫暫存檔、`fsync`、再 `rename` 蓋過去，然後 fsync 目錄**（`atomic-file.ts` 的 `writeAtomic`，#1527）：讀的一方永遠讀不到寫一半的檔，行程死在中間也只會留一個暫存檔，
  *   斷電後也不會退回上一版。
  * - **開檔在啟動時**（`serve-run.ts`），壞檔就讓 serve 起不來，而不是第一個釘選請求才失敗——跟瀏覽器密鑰那一把一樣。
  *
  * **不建通用 storage domain**：這是 demian 在 [#1576](https://github.com/DemianLi/nexus-agent/issues/1576) 的拍板（2026-10-17），
- * 不是 docs/plugin-contract.md〈偏離〉 偏離規則的理由 1 或 2。dsh 的 `storage-domain` 替 `WorkspaceRegistry` 做的事（單一寫入鏈、先落盤再換記憶體、
+ * 不是 docs/plugin-contract.md〈偏離〉 偏離規則的理由 1 或 2。通用 storage domain 會做的事（單一寫入鏈、先落盤再換記憶體、
  * 鏈上讀改寫、open 驗證）本檔都手寫了；home 底下被讀回來的狀態檔裡，形狀是 domain 的 global／kv 的只有這一個消費者，
  * 建一層抽象沒有第二個使用者。重開條件（任一成立）：出現第二個 kv／global 形狀的耐久狀態（排程、投影快取、workspace registry）；
- * 要把釘選／封存的變更推給同一個使用者的其他分頁（dsh 靠 `domain/changed`）。
+ * 要把釘選／封存的變更推給同一個使用者的其他分頁。
  *
  * ## 單一寫入者
  *
  * 記憶體裡的集合是真相，檔案是它的耐久副本：兩個 serve 行程共用同一個 home 時，後寫的會蓋掉先寫的（各自的記憶體互不知道）。
- * dsh 的 registry 同樣是單一寫入者的 domain（`DomainGlobal.set` 之後才換 `this.state`，全部經 `enqueueOperation`）。
  * **「單一寫入者」由 home 鎖保證**（`home-lock.ts`，#1503）：`serve` 啟動時對 `<home>/serve.lock` 拿 kernel 鎖握到行程結束，
  * 第二個 serve 在碰這份檔之前就起不來；這裡自己不做跨行程的鎖。多人共用主機時各人用各自的 home（`harness-home.ts`），集合本來就按 home 分。
  *
@@ -57,7 +53,7 @@ export const THREAD_ORGANIZATION_FILE = 'thread-organization.json';
 
 const RECORD_VERSION = 1;
 
-/** 釘選／封存的會話不存在（dsh `WorkspaceUnknownSessionError`）。 */
+/** 釘選／封存的會話不存在。 */
 export class ThreadUnknownError extends Error {
   override readonly name = 'ThreadUnknownError';
 
@@ -69,7 +65,7 @@ export class ThreadUnknownError extends Error {
   }
 }
 
-/** 釘選一條已封存的會話（dsh `WorkspaceArchivedSessionPinError`）：釘選與封存互斥。 */
+/** 釘選一條已封存的會話：釘選與封存互斥。 */
 export class ThreadArchivedPinError extends Error {
   override readonly name = 'ThreadArchivedPinError';
 
@@ -78,7 +74,7 @@ export class ThreadArchivedPinError extends Error {
   }
 }
 
-/** 封存一條還有工作在跑、又沒帶 `stopActivity` 的會話（dsh `WorkspaceActiveSessionError`）。 */
+/** 封存一條還有工作在跑、又沒帶 `stopActivity` 的會話。 */
 export class ThreadActiveError extends Error {
   override readonly name = 'ThreadActiveError';
 
@@ -335,7 +331,7 @@ export class ThreadOrganization {
 
   /**
    * 先寫檔、成功了才換記憶體裡的：寫不進去時記憶體不動，閘門與下一個請求看到的仍是檔案上的那一份。
-   * 寫法是 {@link writeAtomic}（dsh `storage-json` 的 `writeAtomic`）：`rename` 之後連 home 目錄一起 fsync，
+   * 寫法是 {@link writeAtomic}：`rename` 之後連 home 目錄一起 fsync，
    * 斷電重開不會回到上一版——封存過的會話不會變回沒封存、又開始跑模型。
    */
   async #commit(next: OrganizationState): Promise<void> {

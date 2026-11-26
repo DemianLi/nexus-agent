@@ -486,7 +486,7 @@ describe('續接一律讀 header，不用 thread id 重算', () => {
     await running?.close();
     running = undefined;
 
-    // 手造：子 thread 的 header 抄來源 A 的根（照 dsh 分叉照抄 cwd；#1580）。
+    // 手造：子 thread 的 header 抄來源 A 的根（分叉照抄 cwd；#1580）。
     await rewriteHeader(fx.home, 'forked', (header) => {
       header.workspaceRoot = rootA;
     });
