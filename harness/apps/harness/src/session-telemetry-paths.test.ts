@@ -372,7 +372,7 @@ describe('遙測接線：分叉來的 thread（#1580）', () => {
     }
   });
 
-  it('feedback-only：人送出回饋時補送整份，連繼承來的前綴（照 dsh 出廠的 includeHistory）', async () => {
+  it('feedback-only：人送出回饋時補送整份，連繼承來的前綴（出廠的 includeHistory）', async () => {
     const sessions = forkedSessions();
     const sink = collectingSink('feedback-only');
     const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [

@@ -201,7 +201,7 @@ describe('搜得到哪幾則（searchDocuments）', () => {
     );
   });
 
-  it('壓縮：被換掉的那幾則不收，換上去的摘要收（同 dsh 只查 current）', () => {
+  it('壓縮：被換掉的那幾則不收，換上去的摘要收（只查 current）', () => {
     const log = new SessionLog('t');
     chat(log, '一', 'A');
     chat(log, '二', 'B');
@@ -274,7 +274,7 @@ describe('中間壞掉的日誌（後端的撿回模式）', () => {
   });
 });
 
-describe('片段（同 dsh 的 makeSnippet）', () => {
+describe('片段（makeSnippet）', () => {
   it('短的原樣；長的從命中往前三分之一起截，前後標 …，最多 240 個 code point', () => {
     expect(makeSnippet('短短一句', 2, 240)).toBe('短短一句');
     const text = `${'前'.repeat(300)}命中${'後'.repeat(300)}`;
@@ -504,7 +504,7 @@ describe('ThreadSearch', () => {
     await expect(broken.search('什麼')).rejects.toMatchObject({ kind: 'persistence-failed' });
   });
 
-  describe('先後：查詢 → 沒東西可搜 → 不開（同 dsh `list.ts:163-266`）', () => {
+  describe('先後：查詢 → 沒東西可搜 → 不開', () => {
     it('查詢不合法：有沒有東西可搜都是 invalid', async () => {
       const engine = search(undefined, { openAt: 'never' });
       for (const query of ['', '   ', 'a\0b', 'x'.repeat(THREAD_SEARCH_QUERY_MAX_LENGTH + 1), 42]) {

@@ -22,7 +22,7 @@ import { sessionReferenceConfigSchema } from './settings/session-reference.js';
 
 const WINDOW = 700_045;
 
-describe('公式，同 dsh `referenceBudget`（index.ts:378-394，1517a4db）', () => {
+describe('公式 `referenceBudgetBytes`', () => {
   it('窗口 700,045、比例 0.2：560,036 位元組（約 547 KiB），就是卡面的算式', () => {
     expect(referenceBudgetBytes({ referenceContextFraction: 0.2, contextWindow: WINDOW })).toBe(
       560_036,
@@ -44,7 +44,7 @@ describe('公式，同 dsh `referenceBudget`（index.ts:378-394，1517a4db）', 
     );
   });
 
-  it('取不到窗口（沒有選擇控制器、腳本模型）用 64 KiB，對到 dsh 沒有容量資訊的那一格', () => {
+  it('取不到窗口（沒有選擇控制器、腳本模型）用 64 KiB（沒有容量資訊的那一格）', () => {
     expect(referenceBudgetBytes({ referenceContextFraction: 0.2, contextWindow: undefined })).toBe(
       DEFAULT_MAX_REFERENCE_BYTES,
     );

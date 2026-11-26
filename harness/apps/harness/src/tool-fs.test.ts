@@ -124,7 +124,7 @@ async function workspace(files: Record<string, string>): Promise<string> {
 }
 
 describe('設定列的 schema', () => {
-  it('省略全部：全開、數值是 dsh 的預設', () => {
+  it('省略全部：全開、數值是預設值', () => {
     expect(toolFsConfigSchema.parse({})).toEqual({
       read: true,
       write: true,
@@ -137,7 +137,7 @@ describe('設定列的 schema', () => {
   });
 
   it.each(['readLimit', 'readMaxLineLength', 'readMaxBytes', 'readStreamMinSize'])(
-    '%s：0、負數、小數、字串都拒收（同 dsh 的 assertPositiveInteger）',
+    '%s：0、負數、小數、字串都拒收（assertPositiveInteger）',
     (key) => {
       for (const bad of [0, -1, 1.5, '10']) {
         expect(toolFsConfigSchema.safeParse({ [key]: bad }).success, `${key}=${String(bad)}`).toBe(

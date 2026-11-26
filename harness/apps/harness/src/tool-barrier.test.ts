@@ -159,7 +159,7 @@ describe('同一步的獨佔屏障（#711 第 2 步）', { timeout: 30_000 }, ()
     expect(timeline.log.slice(4)).toEqual(['start:x', 'end:x', 'start:c', 'end:c']);
   });
 
-  it('宣告只認剛好是 true：寫 "true"、1 都算獨佔（fail-closed，同 dsh）', () => {
+  it('宣告只認剛好是 true：寫 "true"、1 都算獨佔（fail-closed）', () => {
     for (const declared of ['true', 1, {}, undefined, false]) {
       expect(
         isConcurrencySafe({ metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: declared } }, 'x'),

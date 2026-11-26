@@ -282,7 +282,7 @@ describe('取不到窗口與明講位元組（驗收 B、F）', () => {
     }
   });
 
-  it('比例 0.2（dsh 的）：大的那顆的預算是 560,036，同一份 200 KB 照樣完整——比例真的進了公式', async () => {
+  it('比例 0.2：大的那顆的預算是 560,036，同一份 200 KB 照樣完整——比例真的進了公式', async () => {
     const connection = connect({
       modelId: 'big',
       settings: { referenceContextFraction: 0.2 },

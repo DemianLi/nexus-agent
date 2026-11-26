@@ -211,7 +211,7 @@ describe('模型真的收到的 read_file', () => {
     });
   }
 
-  it('CLI 那條（invoke，非串流）：root 與子代理的每一次請求都是 dsh 的說明', async () => {
+  it('CLI 那條（invoke，非串流）：root 與子代理的每一次請求都帶同一份說明', async () => {
     const upstream = await scriptedOpenAi(SCRIPT);
     const built = await build(upstream.baseURL);
     try {

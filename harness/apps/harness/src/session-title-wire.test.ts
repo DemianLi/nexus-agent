@@ -192,7 +192,7 @@ describe('web 那條：開跑時寫一次、推一顆', () => {
   }, 20000);
 });
 
-describe('寫不進去只講一聲，那一輪照跑（同 dsh `onUserMessage` 的 catch）', () => {
+describe('寫不進去只講一聲，那一輪照跑（`onUserMessage` 的 catch）', () => {
   it('pump：warn 一行，那一輪照常收尾，模型照樣回', async () => {
     const warnings: string[] = [];
     const thread = await openReal(['第一個回覆。'], undefined, (message) => warnings.push(message));

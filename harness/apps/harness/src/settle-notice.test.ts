@@ -386,7 +386,7 @@ describe('不喚醒', () => {
     }
   });
 
-  it('停止時沒有東西停住：通知照常叫醒閒著的主對話（dsh：喚醒 idle 的 agent 是開一輪）', async () => {
+  it('停止時沒有東西停住：通知照常叫醒閒著的主對話（喚醒 idle 的 agent 是開一輪）', async () => {
     const hold = gate();
     const { agent, inputs } = fakeAgent([{ hold: hold.opened, abortable: true }]);
     const run = open(agent);

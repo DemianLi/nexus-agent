@@ -422,7 +422,7 @@ describe('驗收 7：不重複', () => {
   });
 });
 
-describe('掃描不完整：一份都不注入（照 dsh 的提供者語意，PM 裁決 issuecomment-6358917124 第 1 題）', () => {
+describe('掃描不完整：一份都不注入（PM 裁決 issuecomment-6358917124 第 1 題）', () => {
   class FlakyBackend extends ContainedFilesystemBackend {
     constructor(
       root: string,
