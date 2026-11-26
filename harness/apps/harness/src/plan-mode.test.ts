@@ -410,7 +410,7 @@ function exitVerdicts(events: readonly SessionEvent[]): unknown[] {
  * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
  *
  * **以前這一組叫「三條路」**，走的是核准：plan-mode 掛一位閘門對 `exit_plan_mode` 回 `ask`，計劃變成
- * 核准卡上的工具參數。那條路被否決了：核准的詞彙封閉，拒絕帶不回意見。現在的結局有五種：
+ * 核准卡上的工具參數。不走那條路，因為核准的詞彙封閉，拒絕帶不回意見。現在的結局有五種：
  * 同意、繼續規劃（帶意見）、關掉這一題、沒有人可以回答、不在模式裡。停止這一輪那條在
  * `plan-review-wire.test.ts`，要真的 pump。
  */

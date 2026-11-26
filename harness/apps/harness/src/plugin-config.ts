@@ -115,7 +115,7 @@ export const SHIPPED_CONFIG_FILENAME = 'cordis.yml';
  * 之後、使用者的 patch 之前，**只有 serve 載**（`DefaultConfigOptions.serve`）；CLI 不載，`--dump-config` 也跟著入口走。
  *
  * **登記：我們沒有 profile／組合包
- * （#46 Out of scope），所以退到最接近的一個檔**——出貨層有兩個檔而不是 preset 機制；層與層之間不能互相覆寫或刪列，
+ * （#46 Out of scope），所以退到最接近的一個檔**——出貨層是兩個檔；層與層之間不能互相覆寫或刪列，
  * 只能追加列（patch 才能改列），所以它不是 profile 層，不會長成 #46 排除的東西。
  */
 export const SERVE_SHIPPED_CONFIG_FILENAME = 'cordis.serve.yml';
@@ -1966,7 +1966,7 @@ export function renderLayeredConfigDump(options: DefaultConfigOptions = {}): str
  * 印不出來的時候，這一份還印得出來，拿來跟壞掉的那份對照。
  *
  * **刻意不經過 `defaultSources`**：那條路一定帶 `userPatch`，也要解析 home 路徑；這裡直接給一份空來源，
- * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope），「出貨」在這裡就是一個檔。
+ * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope）。
  *
  * @param options - `serve`：serve 入口，出貨層多一個 serve 專屬檔（同 {@link DefaultConfigOptions.serve}）。
  * @returns 一份帶來源註解的 YAML 文件。
