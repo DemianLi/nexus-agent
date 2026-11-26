@@ -1,22 +1,14 @@
 /**
  * 續行排程器的**決策那一半**：一輪收工之後，要不要再排一輪。
  *
- * **時刻：dsh 的 `agent/turn-stopping`**（awaited 通知，聽者可以要求再跑一步）。
- * 這個模組是那個時刻在我們樹上唯一的佔用者，但**只佔了一半**：dsh 那一格配一個
- * `agent.steer()` 讓聽者把下一步塞進去，我們沒有給聽者用的等價物——輪迴圈歸入口點所有，見下面
- * 那條載體偏離。人插話那一面有了（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
- * `@nexus/core` 的 `step-inbox.ts`），但它由 pump 送進圖，聽者碰不到。索引見 `harness/apps/harness/src/interception-index.test.ts`。
- *
- * 形狀照 dsh 的 `packages/goal/goal-round-driver/`（對讀版本
- * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04），
- * [#180](https://github.com/DemianLi/nexus-agent/issues/180)。
+ * 時刻：`agent/turn-stopping`。輪迴圈歸入口點所有，見下面那條載體偏離。人插話走 `@nexus/core` 的 `step-inbox.ts`（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），
+ * 由 pump 送進圖，這裡碰不到。索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * ## 為什麼它落在 `harness/apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
  *
- * dsh 的 driver 是一個 Cordis plugin，靠 `agent/pre-step` 與 `ctx.agents` 的 idle 判斷把
- * 一輪排進 agent 的 inbox。我們的 `PluginRegistry` 二十條通道（`registry.ts:863-883`）
+ * 我們的 `PluginRegistry` 二十條通道（`registry.ts:863-883`）
  * **沒有一條排得出一輪**——輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、
- * `cli.ts` 的 `runTurn`）。所以載體丟掉、紀律照抄，同 `containment.ts` 對
+ * `cli.ts` 的 `runTurn`）。所以排程器放在入口點旁、不做成 plugin，同 `containment.ts` 對
  * `guard/timeout-policy` 那一筆。
  *
  * **但檢查沒有跟著搬**：續行文字的 renderer（`@nexus/goal`）與驗它的不變量伴生（`@nexus/plugin-goal`）
@@ -31,8 +23,7 @@
  *
  * ## 就緒不是「`turn/end` 到了」
  *
- * `thread-pump.ts` 自己寫著「跑完**與停在核准點**都算收工」，而 dsh 明文「完成、暂停和
- * 阻塞会阻止续行」。三格都要問，見 {@link decideGoalRound}。
+ * `thread-pump.ts` 把「跑完**與停在核准點**」都算收工。要問的不只 `turn/end` 到了沒有，見 {@link decideGoalRound}。
  *
  * ## CLI 的那條額外停損：做的是這一條，不是 #180 要的那一條
  *
@@ -61,15 +52,12 @@
  * 模型在 `create_goal` 裡自己填的那個數字**贏過**組裝點給的預設，而且還能用 `update_goal` 中途調高。
  * 「唯一的硬上限是 `maxGoalRounds`」在真 key 上等於「唯一的硬上限由模型自己挑」，那不是一條停損。
  *
- * **偏離登記（理由 2，產品需求超出 dsh）**：dsh 的 driver 沒有這一格（`goal-round-driver/src/index.ts:182-188`，
- * `687f282e`，只比 `goal.maxGoalRounds`）。dsh 是單人桌面，driver 是使用者自己掛的；我們的 serve 是多人共用的內網主機、
+ * **偏離登記（產品需求）**：我們的 serve 是多人共用的內網主機、
  * 出廠就開著續行，一個失控的目標會一直花錢、佔 thread 名額，部署的人要能從外面夾住它。CLI 那一半同理：旗標後面直接是一支
- * 燒 API key 的迴圈（`cli.ts` 的 `driveGoalRounds`）。補的是一條模型改不動的上限；目標域的 `??` 不動，同 dsh。
+ * 燒 API key 的迴圈（`cli.ts` 的 `driveGoalRounds`）。補的是一條模型改不動的上限；目標域的 `??` 不動。
  *
- * （2026-09-19 註：「刻意掛載」這半句要打折——dsh 的 base 其實出廠就掛著這顆 driver，擋續行的
- * 是行程本地、每次 `agent/created` 歸零的啟用狀態。多一條操作者上限這個偏離本身不受影響，見
- * https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/plugin-architecture-gap-survey.md §三第 18 列。**2026-10-07（#445）：serve 預設開、CLI 維持
- * 預設關**——serve 要核准時停下來等人，不會空轉；CLI 的 `HEADLESS_APPROVALS` 會確定性拒絕。）
+ * （**serve 預設開、CLI 維持
+ * 預設關**（#445）——serve 要核准時停下來等人，不會空轉；CLI 的 `HEADLESS_APPROVALS` 會確定性拒絕。）
  *
  * 剩下的那一半照舊：`blockedAfterConsecutiveRounds`（預設 3）讓模型從第 3 輪起**可以**把
  * 自己 block 出去——那是准許不是保證，沒有東西逼它用。所以 CLI 開旗標時要把**兩條**上限
@@ -83,7 +71,7 @@ import type { GoalBlockReason, GoalId, GoalRef, SessionEvent } from '@nexus/core
 import { renderGoalRoundPrompt } from '@nexus/goal';
 import type { GoalActivationChange, GoalActivationListener, GoalView } from '@nexus/goal';
 
-/** 上限耗盡時記的那顆 blocker 的穩定代碼。逐字照 dsh。 */
+/** 上限耗盡時記的那顆 blocker 的穩定代碼。 */
 export const ROUND_LIMIT_BLOCK_CODE = 'round-limit';
 
 /**
@@ -92,8 +80,6 @@ export const ROUND_LIMIT_BLOCK_CODE = 'round-limit';
  * **跟 {@link ROUND_LIMIT_BLOCK_CODE} 分成兩個名字**，因為成因不同，而且不同在哪正是要
  * 量的東西：一個是目標自己那個數字（模型挑的）用完了，另一個是人喊停。合成一個代碼的
  * 話，「模型自己收斂到上限」與「人設的閘先夾住它」在日誌上長得一模一樣。
- *
- * dsh 沒有這個代碼，見檔頭那筆登記。
  */
 export const ROUND_CAP_BLOCK_CODE = 'round-cap';
 
@@ -129,38 +115,25 @@ export type GoalDriverIdleReason =
   | 'turn-open'
   /**
    * 上一輪**拋錯**結束。續行不重試，見 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 的 Out of scope。
-   * 不只這一次不排：{@link driveGoalRound} 還會收回續行授權，同 dsh 收到 `agent/error` 就 `disarm`
-   * （`packages/goal/goal-round-driver/src/index.ts:246-249`，`477b4f4`）。
+   * 不只這一次不排：{@link driveGoalRound} 還會收回續行授權。
    */
   | 'turn-failed'
   /**
    * 上一輪**被人中止**（`turn/end` 帶 `reason.kind: 'aborted'`）。人按了停止，續行不接著排，也不會在人
    * 隨便再說一句話之後接回來——[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8。
-   * {@link driveGoalRound} 收回續行授權，要續行得走一次有人授權的 `resume`；同 dsh 在「被中止的不是自己排的
-   * 那一輪」時直接 `disarm`（`packages/goal/goal-round-driver/src/index.ts:328-337`，`477b4f4`）。
+   * {@link driveGoalRound} 收回續行授權，要續行得走一次有人授權的 `resume`。
    * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
    *
    * **收尾之後又有人下了 `create` 或 `resume`，就不算**——那次收尾針對的是上一份授權，見 {@link reauthorizedSince}
    * （[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)：暫停一定中止在跑的那一輪，「暫停 → 恢復」靠這一句才會自己續上）。
    *
-   * **偏離一格（Q8 拍板過）**：dsh 在被中止的是自己排的那一輪時，還會在下一個 idle 把目標暫停（改耐久相位）；
-   * 我們只收回行程內的授權，相位與修訂號不動——Q8 寫的是「目標狀態不動」。
-   *
-   * **dsh 後來加的那一格我們已經有，機制不同**：dsh `9a8d21dfe75`／`c02925ed6b5`（2026-09-29，對讀 `5badb15009a`）
-   * 讓 driver 在 idle 時把還排在佇列的續行預約從 inbox 撤回（`agent.inbox.remove(attempt.messageId)`），否則下一則
-   * 人類輸入會先領到那份過期的預約、被 pre-step 拒掉，人的輸入就卡著。被中止的是別的工作時，dsh 只停用續行、不暫停目標，
-   * 這一半與我們同。我們沒有 inbox 預約：續行是 pump 佇列裡沒有 `itemId` 的一件，那一輪收成中止時
-   * `ThreadPump.#parkIfStopped`（`thread-pump.ts`） 把它整件拿掉（送出它的 promise 就此有結果），排在它後面的人類輸入照停住的規矩等下一次
-   * 送出。`send-queue.test.ts` 的「排著的續行那一輪在停止落定時丟掉，不停住」釘住這一條，情境與 dsh 的
-   * `queue-actions.e2e.ts` goal-stop 一致：人類那一輪在跑、續行排在後面、按停止、再送一句話只跑人類的那句，不跑續行。
-   * 引用的行號（`246-249`、`328-337`、`329-331`）是 `477b4f4` 那一版，之後 dsh 的檔案已經位移。
+   * 只收回行程內的授權，相位與修訂號不動（[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8）。
    */
   | 'turn-aborted'
   /**
    * 上一輪**撞到了模型的輸出上限**（`turn/end` 帶 `reason.kind: 'max-tokens'`，
    * [#433](https://github.com/DemianLi/nexus-agent/issues/433)）。不只這一次不排：{@link driveGoalRound} 還會
-   * 收回續行授權，要續行得走一次有人授權的 `resume`——同 dsh 的 `goal-round-driver` 看到 max-tokens 就
-   * `disarm`（`packages/goal/goal-round-driver/src/index.ts:329-331`，`477b4f4`）。
+   * 收回續行授權，要續行得走一次有人授權的 `resume`。
    */
   | 'turn-max-tokens'
   /** 停在核准點，中斷還掛著。 */
@@ -188,8 +161,7 @@ export type GoalDriverDecision =
  * ## 這個行程裡一輪都還沒開始，算收工（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）
  *
  * 以前這一格回 `no-turn`、不排。它把「就緒與否」綁在這個行程「跑過一輪」上，結果新開的行程、或續接回來還沒說過話的會話，
- * 打 `/goal <目標>` 或 `/goal resume` 之後什麼都不會發生，要等人再講一句話。dsh 的 `readyToDrive`
- * （`packages/goal/goal-round-driver/src/index.ts:103-109`，`477b4f4`）沒有「得先跑過一輪」這個條件，看的是 agent 此刻閒不閒。
+ * 打 `/goal <目標>` 或 `/goal resume` 之後什麼都不會發生，要等人再講一句話。
  *
  * 放行不會讓續接回來的會話自己跑起來：授權從 `disarmed` 開始，只有一次有人下的 `create` 或 `resume` 才 armed
  * （`service.ts`）；而 `currentTurnStart` 往回找時遇到最後一顆 `session/end-seed` 就停，上一個行程的輪不會被當成現在這一輪
@@ -220,8 +192,7 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
  * 這一輪收尾**之後**，有沒有一次有人下的 `create` 或 `resume`（唯二會武裝續行的變更，見 `service.ts`）。
  *
  * 有的話，輪次的收尾（中止、拋錯、撞輸出上限）針對的是上一份授權，不該再收回這一份。
- * 這是 dsh 那一格的日誌版：dsh 在 `turn/end` 抵達的**當下**收回（`goal-round-driver/src/index.ts:353-357`），
- * 事後的 `resume` 不受影響；我們的決定是無狀態的、讀日誌算的，所以要用日誌上的先後把「收尾在授權之前」
+ * 決定是無狀態的、讀日誌算的，所以要用日誌上的先後把「收尾在授權之前」
  * 與「收尾在授權之後」分開。少了這一句，「暫停 → 恢復」與「停止 → 恢復」之後 driver 一決定就把剛武裝的授權收回，
  * 續行輪不會自己開跑（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516) 起暫停一定中止在跑的那一輪，
  * 這條變成主流程）。
@@ -370,20 +341,19 @@ export interface GoalDriverPort {
   /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */
   flush(): Promise<void>;
   /**
-   * 等背景子代理停下來（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `drive` 的
-   * `subagents.waitForChildren(agent)`）。**回 `true` 表示等過東西**，呼叫端要重新判斷；`false` 是本來就沒有在推進的。
+   * 等背景子代理停下來（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）。**回 `true` 表示等過東西**，呼叫端要重新判斷；`false` 是本來就沒有在推進的。
    * `signal` 舉起就不再等（pump 收線）。
    *
    * 選填：沒有背景 host 的組裝（CLI、沒開背景續行）缺席，行為與以前逐字相同。
    */
   waitForChildren?(signal?: AbortSignal): Promise<boolean>;
   /**
-   * 訂續行授權的變化（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `goal/activation-changed`）。
+   * 訂續行授權的變化（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376）。
    * **不建服務**（理由同 {@link armed}）；回取消訂閱。pump 拿它送 `goal/activation` frame 給下行。選填：手搭的測試替身與 CLI 缺席。
    */
   onActivationChanged?(listener: GoalActivationListener): () => void;
   /**
-   * 現在的續行授權（有服務、有目前目標才有值），**不建服務**。給 thread 接上時種一顆用（dsh 的 UI 開線先讀 `goals.get`）。
+   * 現在的續行授權（有服務、有目前目標才有值），**不建服務**。給 thread 接上時種一顆用。
    * 服務折疊壞掉時回 `undefined`（種不出來就不種，不拋）。選填。
    */
   currentActivation?(): GoalActivationChange | undefined;
@@ -410,21 +380,21 @@ export interface GoalDriverPort {
  *
  * ## `flush()` 失敗是停用，不是重試
  *
- * 照 dsh：耐久檢查點過不去就 `disarm()`，之後要續行得走一次有人授權的 `resume`。
+ * 耐久檢查點過不去就 `disarm()`，之後要續行得走一次有人授權的 `resume`。
  * 重試的話，一份寫不下去的日誌會配上一個照樣往前跑的模型——而日誌正是之後要用來重建
  * 「它到底做了什麼」的那份東西。
  *
  * ## 上一輪撞到輸出上限也是停用
  *
- * 同 dsh（#433）：模型一輪寫不完，自動再排一輪多半再撞一次，要人看過再決定。只收回授權、不動相位，
+ * #433：模型一輪寫不完，自動再排一輪多半再撞一次，要人看過再決定。只收回授權、不動相位，
  * 跟上面那一條同一個動作。
  *
  * ## 背景子代理還在推進就先等（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）
  *
- * 照 dsh `drive`：檢查點之後、判上限與預約之前 `await waitForChildren`，等完複查（`goal-round-driver/src/index.ts:174-188`）。
+ * 檢查點之後、判上限與預約之前 `await waitForChildren`，等完複查。
  * 不等的話，某一輪派出背景子代理就結束、下一個續行輪馬上排上，模型看一眼就收工，`roundsStarted` 一路加到 `round-limit`。
  * **等過就整個重來一圈**（重讀日誌、重決定）：結算通知可能已經開了一輪，人可能已經插話或按了停止。
- * `block`（輪數到頂）也先等再判，同 dsh 的「先等、再判上限」。
+ * `block`（輪數到頂）也先等再判。
  *
  * @param readEvents - 讀當下的事件；**每次呼叫都要重讀**，不是一份快照。
  * @param port - 域那一側的事。
@@ -432,7 +402,7 @@ export interface GoalDriverPort {
  *   上的一致而不是一條擋得住什麼的閘**：唯一能在 `flush()` 期間新踩到上限的變化是
  *   `roundsStarted` 往前走，而那同時會讓下面那道「號碼變了就重來」先攔下來。寫成只帶
  *   第一次也量不出差別——留著是因為兩次決定該問同一個問題，不是因為它今天擋得到東西。
- * @param signal - 舉起就不再等背景子代理、這一刻不排（pump 收線；dsh 的 `unloading`）。CLI 不傳。
+ * @param signal - 舉起就不再等背景子代理、這一刻不排（pump 收線）。CLI 不傳。
  * @returns 排得出來的那一輪，或這一刻不排時的 `undefined`。
  */
 export async function driveGoalRound(
@@ -444,8 +414,7 @@ export async function driveGoalRound(
   for (;;) {
     const first = decideGoalRound(readEvents(), port.goal(), roundCap);
     if (first.kind === 'idle') {
-      // 撞到輸出上限、被人中止、拋錯：照 dsh 只在授權還在時收回（`goal-round-driver/src/index.ts:117-124`、
-      // `:246-249`、`:328-337`）。收回之後再問一次就是 `disarmed`，所以這一句冪等。
+      // 撞到輸出上限、被人中止、拋錯：只在授權還在時收回。收回之後再問一次就是 `disarmed`，所以這一句冪等。
       const revoking = REVOKING_REASONS[first.reason];
       if (revoking !== undefined && port.goal()?.activation === 'armed') {
         try {
@@ -457,7 +426,7 @@ export async function driveGoalRound(
       return undefined;
     }
     if (first.kind === 'block') {
-      // **先等背景子代理、再判上限**（dsh `drive` 的順序，`:174-188`）：子代理還在跑時續行輪只會空轉，輪數照樣加。
+      // **先等背景子代理、再判上限**：子代理還在跑時續行輪只會空轉，輪數照樣加。
       // 等過就重來一圈：等的這段時間目標、授權、日誌都可能變了。
       const waited = await waitForChildren(port, signal);
       if (signal?.aborted === true) return undefined;
@@ -480,7 +449,7 @@ export async function driveGoalRound(
       }
       return undefined;
     }
-    // 檢查點之後、判定之前等子代理（dsh：`flush` → `waitForChildren` → 複查 → 判上限、預約）。等過就整個重來。
+    // 檢查點之後、判定之前等子代理。等過就整個重來。
     const waited = await waitForChildren(port, signal);
     if (signal?.aborted === true) return undefined;
     if (waited) continue;

@@ -2,11 +2,10 @@
  * harness home 底下啟動時會讀的狀態檔，**v1 磁碟格式的封存夾具**，用今天出貨的讀取函式讀回
  * （[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，C126）。
  *
- * ## 規則（照 dsh `packages/session/session-projection-cache/README.zh.md:130`）
+ * ## 規則
  *
  * 改這幾份檔的 schema 或版本時，**同一張 PR 要留著這份 v1 夾具**，並在旁邊的測試證明 v1 怎麼處置：讀相容、照當前版本重寫，
- * 或 backup-and-skip。就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。dsh 的 backup-and-skip 只給可以丟掉的衍生資料
- * （`storage-domain/src/spec.ts:57-67`）；這幾份都是權威狀態，今天的處置全是「讀相容」，認不得的就大聲失敗、不覆寫。
+ * 或 backup-and-skip。就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。這幾份都是權威狀態，處置全是「讀相容」，認不得的就大聲失敗、不覆寫。
  *
  * | 檔 | 出貨的讀取函式 | v1 的處置 |
  * | --- | --- | --- |

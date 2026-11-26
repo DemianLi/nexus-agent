@@ -4,7 +4,7 @@
  * `run.start` 帶的圖是內嵌 base64（`{ type: 'image', mediaType, data, name? }`，見 `@nexus/wire` 的 `PromptAttachment`）。
  * 這一支只做**驗證**：解 base64、從位元組本身認出格式與寬高、五道上限。解碼、規範化與存下來是 `AttachmentStore.saveImages`。
  *
- * ## 五道上限（照 dsh `attachment-local/src/index.ts:34-42`，`687f282e`）
+ * ## 五道上限
  *
  * | 上限 | 值 |
  * | --- | --- |
@@ -14,11 +14,10 @@
  * | 每張像素 | 6400 萬（{@link MAX_IMAGE_PIXELS}，寬乘高） |
  * | 每張單邊 | 8192（{@link MAX_IMAGE_DIMENSION}，寬或高，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)） |
  *
- * 超過就**拒收**；規範化只縮這五道以內的圖。位元組上限先看 base64 的長度（不解碼就知道），像素與單邊上限要先讀得出寬高；先比總量、再比單邊，
- * 照 dsh `image.ts:121-126`。
+ * 超過就**拒收**；規範化只縮這五道以內的圖。位元組上限先看 base64 的長度（不解碼就知道），像素與單邊上限要先讀得出寬高；先比總量、再比單邊。
  *
- * **只收規範的 base64**（#1566，照 dsh `attachment/src/admission.ts:15-24` 的 `decodeCanonicalBase64`）：解碼後再編碼要等於原字串。
- * `QR==` 這種尾端多帶位元的寫法字元集與長度都合格，解出來跟 `QQ==` 一樣，照 dsh 拒收。
+ * **只收規範的 base64**（#1566）：解碼後再編碼要等於原字串。
+ * `QR==` 這種尾端多帶位元的寫法字元集與長度都合格，解出來跟 `QQ==` 一樣，拒收。
  *
  * ## 兩關：檔頭與整張解碼
  *
@@ -282,7 +281,7 @@ export function admitImages(
   }
   return parts.map((part, index) => {
     const decoded = Buffer.from(part.data, 'base64');
-    // 規範才收（照 dsh `decodeCanonicalBase64`）：字元集與長度上面驗過了，這裡擋「尾端多帶位元」的另一種寫法。
+    // 規範才收：字元集與長度上面驗過了，這裡擋「尾端多帶位元」的另一種寫法。
     if (decoded.toString('base64') !== part.data) {
       throw new ImageIntakeError(`${label(index, part)}不是規範的 base64`, 'INVALID_IMAGE');
     }

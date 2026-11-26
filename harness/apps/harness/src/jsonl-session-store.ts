@@ -1,15 +1,11 @@
 /**
  * {@link @nexus/core!SessionStore} 的 JSONL 後端：一份會話一個目錄、一個世代檔，一行一顆事件。
  *
- * 形狀照 dsh 隨產品交付的 `session-persistence-jsonl`（`docs/subsystems/persistence.zh.md`，
- * 本地 clone SHA `d347e703908d0406b7a7ef80e3a0e594d86b2215`）：逐 session 的僅追加日誌、
- * **header 與日誌邏輯上分開**（dsh 明文：元資料在日誌之外，`stat`／`list` 讀 header 不掃正文）、
- * 實體化延後到第一次寫。header 是世代檔的第一行（header 行，{@link JsonlHeaderLine}），檔在 `<目錄>/<sessionDirectoryName(id)>/session.v<N>.jsonl`（#1594 ③）。v0.5.19 以前寫的舊兩檔
+ * 逐 session 的僅追加日誌、**header 與日誌邏輯上分開**、實體化延後到第一次寫。header 是世代檔的第一行（header 行，{@link JsonlHeaderLine}），檔在 `<目錄>/<sessionDirectoryName(id)>/session.v<N>.jsonl`（#1594 ③）。v0.5.19 以前寫的舊兩檔
  * （`<base>.header.json`、`<base>.jsonl`）照讀，續接時遷成世代檔，舊路徑留墓碑（見下面〈遷移與墓碑〉）。
  *
- * **選 JSONL 不選 SQLite 是一個有代價的選擇，代價登記在這裡。** dsh 兩個 provider 都出
- * （`-jsonl` 與 `-sqlite`），我們先做 JSONL，理由三條：不必現場編譯（SQLite 那條要
- * `better-sqlite3`，而我們的 `onlyBuiltDependencies` 只放了 `esbuild`）、人讀得懂、
+ * **選 JSONL 不選 SQLite 是一個有代價的選擇，代價登記在這裡。** 我們先做 JSONL，理由三條：不必現場編譯（SQLite 那條要
+ * `better-sqlite3`，而我們的 `allowBuilds` 只放了 `esbuild`）、人讀得懂、
  * 以及未來 Proteus 的 `read_trace` 解析的就是 jsonl。丟掉的是頻繁更新時的效率，而
  * 僅追加的日誌本來就沒有頻繁更新。
  * 不必現場編譯這一條，租約也守得住：
@@ -17,8 +13,7 @@
  *
  * ## 一條沒抄的、一條照抄的
  *
- * - **沒有 Zstandard 壓縮與 checksum。** dsh 預設存成帶 checksum 的連續 Zstandard frame
- *   （也可配置成原始行）。我們存原始行：撕裂尾部的偵測與部分解碼是**讀方**的機器，
+ * - **沒有 Zstandard 壓縮與 checksum。** 我們存原始行：撕裂尾部的偵測與部分解碼是**讀方**的機器，
  *   而今天的讀方讀的都是原始行：續接（{@link JsonlSessionStore.resume}，CLI 的 `--resume`
  *   與 serve 碰到以前寫過的 thread，[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）、
  *   唯讀的列與冷讀（`list`／`open(id, 'read')`，serve 的會話列表與按內容搜尋，
@@ -29,19 +24,16 @@
  *   之前拿，把手關掉才放。一份會話一把，鎖檔在會話目錄裡（`session.lock`）。續接時要動舊路徑的
  *   （遷移舊兩檔、補墓碑）另外先拿舊路徑的 `<base>.lock`：v0.5.19 以前的版本寫舊兩檔時拿的就是它，遷移跟同時跑的舊版本因此
  *   互斥。順序固定是 `<base>.lock` 先、`session.lock` 後，兩個行程不會各握一把互等；`<base>.lock` 在交把手之前就放。
- *   撞名跟租約各擋一件事：**撞名在 `create` 當下就報**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559)，
- *   照 dsh `index.ts:360-379`）——同一個後端建過還沒實體化的（行程內的 pending），或磁碟上舊路徑的 header（含墓碑）、日誌任一個
+ *   撞名跟租約各擋一件事：**撞名在 `create` 當下就報**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559)）——同一個後端建過還沒實體化的（行程內的 pending），或磁碟上舊路徑的 header（含墓碑）、日誌任一個
  *   已經在，或會話目錄裡已有正規世代檔的，都同步拋 `SessionAlreadyExistsError`。實體化時的 `link` 仍然在，**檔案已經在就拒絕**，
  *   不覆寫也不續寫：擋的是 `create` 之後才出現的競態，撞上的 `EEXIST` 一樣換成 `SessionAlreadyExistsError`（`cause` 留著原錯）。
  *
  *   **拿租約是惰性的，所以輸的可能是先起來的那個**：一個行程還沒寫第一筆（還沒拿），另一個
  *   就 `--resume` 了同一份，後者先拿到；前者第一次寫的時候才撞上，而那一下在協調器的背景
- *   路徑上，**被收成一行 warn 而不是一個錯**。dsh 也是惰性的，所以不算偏離；只是我們的
- *   協調器讓那個後果更安靜。`create` 之後才發生的撞名同樣是惰性的，後果一樣。
+ *   路徑上，**被收成一行 warn 而不是一個錯**。`create` 之後才發生的撞名同樣是惰性的，後果一樣。
  *
  * ## 每批落盤、失敗截回（[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)）
  *
- * 照 dsh 的 `appendLines`（`packages/session/session-persistence-jsonl/src/index.ts:1406-1449`，SHA `1517a4db`）：
  * 每一批 `append` 先記檔案現在的大小，**寫滿**整批（`writeFile`，不接受短寫）、`fsync`，成功才讓 `seq` 前進。
  * 寫或 `fsync` 任一步失敗，就把檔案截回寫前大小再 `fsync`，然後拋原錯；截回也失敗拋
  * `AggregateError([原錯, 截回錯])`。協調器保留整批、之後重送（`session-persistence.ts`），所以殘留的半批
@@ -51,9 +43,8 @@
  * 什麼都沒發佈。發佈之後的步驟（目錄 `fsync`、墓碑）失敗時
  * 不撤，重試只補沒做完的；協調器重送的那批從 seq 0 起算，已經在世代檔裡的那幾顆不再寫。
  *
- * **和 dsh 唯一的形狀差異是把手的壽命**：dsh 每批開關一次，這裡成功路徑一個把手用到會話結束；失敗路徑
- * 照 dsh——先關掉這個把手、另用 `r+` 開檔截回，下一批用 `a` 重開（demian 2026-10-17 在 #1506 拍板 Q1 (a)）。
- * `append`／`flush`／`close` 排在同一條鏈上，一次只跑一個（dsh `storage.ts:187-195`），否則一邊關把手時另一邊還拿著它。
+ * **把手的壽命**：成功路徑一個把手用到會話結束；失敗路徑先關掉這個把手、另用 `r+` 開檔截回，下一批用 `a` 重開。
+ * `append`／`flush`／`close` 排在同一條鏈上，一次只跑一個，否則一邊關把手時另一邊還拿著它。
  *
  * ## 首次落盤是原子的（[#1510](https://github.com/DemianLi/nexus-agent/issues/1510)）
  *
@@ -65,7 +56,7 @@
  * - header 行加第一批事件先寫成暫存檔（`<final>.<12 hex>.tmp`，`wx`、`0600`）、`fsync`，再用 **`link` 發佈，不用 `rename`**：
  *   目標已存在時 `link` 回 `EEXIST`，兩個行程同時物化同一個 id 不會互相覆蓋（`rename` 會靜靜蓋掉）；
  *   發佈後 `fsync` 會話目錄，新目錄項才算斷電後還在；暫存檔盡力刪掉，刪不掉不讓這次寫入失敗。
- * - **目錄 `fsync` 的錯往外拋，不吞**（dsh `syncDirPosix`）。`plugin-journal.ts` 那支不分平台吞掉所有錯，不能拿來用：
+ * - **目錄 `fsync` 的錯往外拋，不吞**。`plugin-journal.ts` 那支不分平台吞掉所有錯，不能拿來用：
  *   一次 `EIO` 會悄悄關掉目錄 `fsync`。
  * - `link` 之前失敗就整個收回：握著租約刪鎖檔、放租約、會話目錄是空的就刪掉，同一個 id 建得回來。
  * - 發佈是**可重試、不撞上自己**的：`link` 一成功就記下已發佈的事件數，之後的重試只補做目錄 `fsync` 與墓碑。
@@ -74,8 +65,7 @@
  *
  * 偏離，登記：
  *
- * 1. **Windows：照樣 `link` 發佈，不做目錄 `fsync`**（理由 1，基座表達不出來）：Node 在 Windows 上開不了目錄，
- *    也沒有 dsh 用來呼叫 `MoveFileExW` 的 FFI。判斷依據是 `process.platform === 'win32'`，**不是吞錯**；
+ * 1. **Windows：照樣 `link` 發佈，不做目錄 `fsync`**（理由 1，基座表達不出來）：Node 在 Windows 上開不了目錄。判斷依據是 `process.platform === 'win32'`，**不是吞錯**；
  *    比照 `session-lease.ts` 已登記的 Windows 偏離。
  * 2. 不清當機後殘留的 `*.tmp`。殘留檔不會被讀方撿到：從目錄項認會話的只認 `@nexus/core` 的
  *    `parseLegacyTwoFileHeaderFilename` 與 `parseGenerationLogFilename` 認得的名字，照 id 找的由 id 算名字；
@@ -92,15 +82,13 @@
  * - **遷移當下當掉**：新世代發佈了、墓碑還沒寫。新世代的 header 行記著來源（`migratedFrom`），舊日誌跟它對得上就讀新世代，
  *   下一次寫打開補墓碑；對不上（遷移之後舊兩檔又被寫過）就當成兩份並存、大聲拒讀（{@link locateSession} 的表）。
  *
- * 照 dsh、不算偏離的：Windows 的 `rename` 暫時性錯誤（`EACCES`／`EBUSY`／`EPERM`）有界重試，常數同 `atomic-write:19-44`
- * （20 ms 起、上限 200 ms、8 次），只有墓碑取代舊 header 時用到。Windows 不做目錄 `fsync`，沿用上一節的偏離 1（理由 1）。
+ * Windows 的 `rename` 暫時性錯誤（`EACCES`／`EBUSY`／`EPERM`）有界重試（20 ms 起、上限 200 ms、8 次），只有墓碑取代舊 header 時用到。Windows 不做目錄 `fsync`，沿用上一節的偏離 1（理由 1）。
  *
  * ## 目錄：CLI 每次一個，serve 按專案固定一格
  *
- * dsh 的 `SessionId` 全域唯一；我們的 CLI root 固定叫 `cli`，放在固定的地方會每次都撞。
+ * CLI 的 root 固定叫 `cli`，放在固定的地方會每次都撞。
  * 所以 CLI 用 {@link createJsonlSessionStore} 每次開一個 **run 目錄**——沒有這一層，`wx`
- * 會讓第二次啟動變成一個硬錯誤。serve 的 root 是 thread id，本來就全域唯一，所以它照 dsh
- * 用 {@link openJsonlSessionStore} 落在 `<根>/<projectKey(cwd)>` 那一格，重開之後找得回同一條
+ * 會讓第二次啟動變成一個硬錯誤。serve 的 root 是 thread id，本來就全域唯一，所以它用 {@link openJsonlSessionStore} 落在 `<根>/<projectKey(cwd)>` 那一格，重開之後找得回同一條
  * thread。
  *
  * ## 檔名與 header 的規則：檔名在 `@nexus/core`，讀法在這裡
@@ -196,8 +184,7 @@ import {
 /**
  * 目錄與檔案的權限。
  *
- * **會話日誌裡有使用者打的每一句話**，所以是 `0700`／`0600`，同 dsh 的 spill store
- * （`dsh-spill-local` 的根目錄 `0700`、檔案 `0600`）。
+ * **會話日誌裡有使用者打的每一句話**，所以是 `0700`／`0600`。
  */
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -273,7 +260,7 @@ function safeBaseName(sessionId: string): string {
  *
  * `torn` 只在日誌尾端有讀方不算的東西時才有：最後一行寫到一半（當掉的常態），或讀不懂的完整行加上它之後
  * 沒收尾的行（可復原的壞尾，#1508）。而把手第一次寫入之前要把它截掉——不截的話，續寫的第一行會黏在那半行後面，
- * 兩行一起變成壞行。截完 sync、講一行（thread id、截到哪、丟了幾個位元組）；截掉的位元組不另存，同 dsh。
+ * 兩行一起變成壞行。截完 sync、講一行（thread id、截到哪、丟了幾個位元組）；截掉的位元組不另存。
  *
  * **截是跟著第一次寫入走的，不是跟著續接走的。** 續接幾乎都會寫：seed 結尾補的那顆
  * `session/end-seed` 就是一筆待寫。唯一不寫的是 seed 本來就停在 end-seed（上一次續接之後
@@ -326,8 +313,8 @@ interface LeaseContext {
   /** 讀 header、日誌本文與取 revision 用的檔案系統（見 {@link JsonlSessionStoreOptions.fs}）。 */
   readonly fs: StableReadFileSystem;
   /**
-   * 這個後端 `create` 過、還沒實體化的 id，照 dsh 的 `JsonlBackendTracker.pending`（`storage.ts:391` 起）：只在記憶體裡，
-   * 實體化成功或還沒實體化就關掉時移掉（dsh `:473`、`:499`）。
+   * 這個後端 `create` 過、還沒實體化的 id：只在記憶體裡，
+   * 實體化成功或還沒實體化就關掉時移掉。
    */
   readonly pending: Set<string>;
   /** 冷讀解析快取（{@link ColdLogMemo}）。 */
@@ -335,7 +322,7 @@ interface LeaseContext {
   /** {@link JsonlSessionStoreOptions.onWritten}；沒給就什麼都不做。 */
   readonly written: (id: string) => void;
   /**
-   * 這個後端**所有同時在跑的列舉共用**的並行上限，照 dsh 的 `listLimit`（`index.ts:297-302`、`:328`）：
+   * 這個後端**所有同時在跑的列舉共用**的並行上限：
    * 兩個 `list()` 同時跑，加起來也最多 `listConcurrency` 份在讀。
    */
   readonly listLimit: ListLimit;
@@ -362,20 +349,18 @@ interface ColdLog {
   readonly bodyBytes: number;
 }
 
-/** 冷讀解析快取最多留幾份，同 dsh 的 `COLD_LOG_MEMO_MAX_ENTRIES`（`index.ts:67`）。 */
+/** 冷讀解析快取最多留幾份。 */
 const COLD_LOG_MEMO_MAX_ENTRIES = 2;
 
 /**
- * **冷讀解析快取**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0625），照 dsh 的 `coldLogMemo`
- * （`session-persistence-jsonl/src/index.ts:312`、`:615-649`、`:752`、`:799-810`、`:868-880`，`687f282e`）。
+ * **冷讀解析快取**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0625）。
  *
  * 冷復活先唯讀打開檢查一次（`background-cold.ts` 的 inspect），緊接著續接又讀一次：同一份日誌整份解析兩次。
  * 這裡記住最近兩份的解析結果，**鍵是 id，守衛是那一份的 revision**（{@link siteRevision}）：舊兩檔是 header 與日誌兩個檔的
  * {@link fileRevision}（#1509 穩定讀的那組身分），單檔佈局是**先挑世代、再取那個世代檔**的世代版本與 revision：別的行程
  * 發佈新世代時舊世代檔一個位元組都沒變，不先重挑世代、只比舊檔的 revision 會命中舊內容。對不上就當沒有、照常讀。
- * 別的行程寫進去，revision 就變了；本後端自己寫的，寫之前先刪掉那一筆
- * （同 dsh `:752`）。只存預設讀法（`recoverable`）的結果，`salvage` 撿回來的不存——續接不走撿回，存了會讓一份該拒的
- * 檔靜靜續接成功（同 dsh `:860-868` 只存驗過的）。
+ * 別的行程寫進去，revision 就變了；本後端自己寫的，寫之前先刪掉那一筆。只存預設讀法（`recoverable`）的結果，`salvage` 撿回來的不存——續接不走撿回，存了會讓一份該拒的
+ * 檔靜靜續接成功。
  *
  * 不是持久投影快取（#725 的決定照舊）：行程內、最多兩份。常駐記憶體因此最多多出兩份日誌的大小（#1490 量測時要算進去）。
  */
@@ -437,7 +422,7 @@ interface PublishProgress {
 }
 
 /**
- * 暫存檔：`open(wx)` → 依序寫滿每一段 → `fsync` → 關。失敗就關掉、刪暫存檔再拋；關也失敗的話兩個錯都報（`AggregateError`）。照 dsh `writeSyncedTempFile`（`index.ts:1359-1369`）。
+ * 暫存檔：`open(wx)` → 依序寫滿每一段 → `fsync` → 關。失敗就關掉、刪暫存檔再拋；關也失敗的話兩個錯都報（`AggregateError`）。
  * 分段寫是給遷移的：header 行跟搬過來的前綴分開寫，不先拼成一份完整的 Buffer。
  *
  * @param openFile - 世代檔的暫存檔傳 {@link LeaseContext.openLog}，測試才換得到它的把手。
@@ -473,8 +458,7 @@ async function writeSyncedTemp(
 }
 
 /**
- * `fsync` 一個目錄，讓裡面新的目錄項斷電後還在（`datasync` 只保證檔案內容）。照 dsh `syncDirPosix`
- * （`index.ts:1394-1403`）：**錯往外拋，不吞。** Windows 開不了目錄，直接回（見檔頭的登記）。
+ * `fsync` 一個目錄，讓裡面新的目錄項斷電後還在（`datasync` 只保證檔案內容）。**錯往外拋，不吞。** Windows 開不了目錄，直接回（見檔頭的登記）。
  */
 async function syncDirectory(directory: string): Promise<void> {
   if (process.platform === 'win32') return;
@@ -491,7 +475,7 @@ const WINDOWS_RENAME_RETRY_INITIAL_MS = 20;
 const WINDOWS_RENAME_RETRY_MAX_MS = 200;
 const WINDOWS_RENAME_RETRY_LIMIT = 8;
 
-/** `rename` 蓋過既有檔，Windows 上暫時性的 `EACCES`／`EBUSY`／`EPERM` 有界重試，常數同 dsh `atomic-write`（`:19-44`）。 */
+/** `rename` 蓋過既有檔，Windows 上暫時性的 `EACCES`／`EBUSY`／`EPERM` 有界重試。 */
 async function renameOverExisting(temp: string, finalPath: string): Promise<void> {
   let delay = WINDOWS_RENAME_RETRY_INITIAL_MS;
   for (let retries = 0; ; retries += 1) {
@@ -669,9 +653,8 @@ class JsonlStoredSession implements StoredSession {
   async append(events: readonly SessionEvent[]): Promise<void> {
     this.#assertOpen();
     if (events.length === 0) return;
-    // 排隊之前先驗過並拷成沒凍過的副本，照 dsh `session-persistence-jsonl/src/storage.ts:191`：日誌交來的事件是凍過的，
-    // 凍過的深陣列 `JSON.stringify` 會撞 `RangeError`，這一批就永遠寫不出去（#1526）。持久化層的重試也走這裡，
-    // 等同 dsh `:308` 那一處。
+    // 排隊之前先驗過並拷成沒凍過的副本：日誌交來的事件是凍過的，
+    // 凍過的深陣列 `JSON.stringify` 會撞 `RangeError`，這一批就永遠寫不出去（#1526）。持久化層的重試也走這裡。
     const batch = materializeAppendBatch(events);
     return this.#enqueue(async () => {
       for (const [index, event] of batch.entries()) {
@@ -696,10 +679,9 @@ class JsonlStoredSession implements StoredSession {
     this.#assertOpen();
     return this.#enqueue(async () => {
       // 實體化過的會話，每一批 `append` resolve 時都已經 fsync 過（失敗那批也已截回並 fsync），
-      // 這裡不再多一次——照 dsh `storage.ts:207`（「appends are durable on resolution」）。
+      // 這裡不再多一次。
       if (this.#opened) return;
-      // 一份還沒寫過任何事件的會話，在這裡才真的變成磁碟上看得到的東西——dsh 同條
-      // （「一个空的已创建会话在此变得可持久列出」）。發佈的暫存檔寫完就 fsync 過了。
+      // 一份還沒寫過任何事件的會話，在這裡才真的變成磁碟上看得到的東西。發佈的暫存檔寫完就 fsync 過了。
       try {
         await this.#materialize([]);
       } finally {
@@ -715,7 +697,7 @@ class JsonlStoredSession implements StoredSession {
 
   /**
    * 收尾：落盤、關檔、放租約，**三步各自接住，全收完才報**——只有一個錯就拋那一個，兩個以上才是
-   * `AggregateError`，照 dsh `storage.ts:246-258`。以前關檔的錯會蓋掉落盤的錯，「哪些位元組沒落盤」就看不見了。
+   * `AggregateError`。
    */
   async #shutdown(): Promise<void> {
     // 新建的關掉之後，這個 id 在這個後端上不再算建過：沒發佈的，同一個 id 可以再 `create`；
@@ -778,7 +760,7 @@ class JsonlStoredSession implements StoredSession {
    * **寫前大小取檔案現在的大小，不在記憶體裡累計**：續接截尾（{@link #prepareResumed}）會讓記憶體裡的數字對不上檔案。
    */
   async #persist(batch: readonly SessionEvent[]): Promise<void> {
-    // 本後端要寫這一份了：冷讀快取那一筆先刪（同 dsh `index.ts:752`）。
+    // 本後端要寫這一份了：冷讀快取那一筆先刪。
     this.#context.coldLogs.delete(this.#header.id);
     const handle = await this.#materialize(batch);
     const published = Math.max(0, (this.#publish.linkedEvents ?? 0) - this.#nextSeq);
@@ -819,7 +801,7 @@ class JsonlStoredSession implements StoredSession {
     );
   }
 
-  /** 另開 `r+` 把日誌截回 `size` 並 fsync，同 dsh `rollbackAppend`（`index.ts:1441-1449`）。 */
+  /** 另開 `r+` 把日誌截回 `size` 並 fsync。 */
   async #rollback(size: number): Promise<void> {
     const handle = await this.#context.openLog(this.#logPath(), 'r+', FILE_MODE);
     try {
@@ -873,7 +855,7 @@ class JsonlStoredSession implements StoredSession {
         await syncDirectory(dirname(directory));
         await mkdir(this.#sessionDirectory, { recursive: true, mode: DIR_MODE });
         await syncDirectory(directory);
-        // **租約在第一筆實體化寫入之前拿**，照 dsh：一份還沒實體化的會話在檔案系統上沒有足跡。
+        // **租約在第一筆實體化寫入之前拿**：一份還沒實體化的會話在檔案系統上沒有足跡。
         this.#lease ??= await leaseFor(
           this.#context,
           join(this.#sessionDirectory, SESSION_LOCK_FILENAME),
@@ -967,9 +949,8 @@ class JsonlStoredSession implements StoredSession {
   }
 
   /**
-   * 截掉尾巴：先 `truncate`，再開 `r+` 做 `sync`，最後講一行（照 dsh `truncateTornTail`／`repair`，
-   * `session-persistence-jsonl/src/index.ts:1452-1460`、`:942-946`）。**不 sync 的話**，斷電後截斷可能沒落盤，
-   * 續寫的新行接在舊尾巴後面。**截掉的位元組不另存**（Q2 (a)，同 dsh）：磁碟上就沒了，warn 是唯一的紀錄。
+   * 截掉尾巴：先 `truncate`，再開 `r+` 做 `sync`，最後講一行。**不 sync 的話**，斷電後截斷可能沒落盤，
+   * 續寫的新行接在舊尾巴後面。**截掉的位元組不另存**：磁碟上就沒了，warn 是唯一的紀錄。
    */
   async #truncateTornTail(
     logPath: string,
@@ -1072,7 +1053,7 @@ export interface ParseHeaderOptions {
 
 /** {@link parseHeader} 交出來的東西。 */
 export interface ParsedSessionHeader {
-  /** 轉譯成這一版的 header：`version` 一律是 `SESSION_LOG_FORMAT_VERSION`，其餘各格原樣（照 dsh `types.ts:96-100`）。 */
+  /** 轉譯成這一版的 header：`version` 一律是 `SESSION_LOG_FORMAT_VERSION`，其餘各格原樣。 */
   readonly header: StoredSessionHeader;
   /** 磁碟上那份 header 寫的格式版本。見 `@nexus/core` 的 `ReadonlyStoredSession.storedFormatVersion`。 */
   readonly storedFormatVersion: number;
@@ -1093,9 +1074,8 @@ export interface ParsedSessionHeader {
  *
  * @throws {@link SessionFormatUnsupportedError} 版本比這一版新（開了 `acceptNewer` 就不拋），或比一條 `breaking` 邊舊
  *   （`acceptNewer` 不放行這一種）。
- * **各格的形狀與鍵白名單**與 `create` 共用（`session-log-validation.ts` 的 `assertStoredHeaderFields`，#1549），對到 dsh
- * 讀 header 時的精確鍵與型別檢查（`session-format-v1-to-v2/src/codec.ts:40-75`）。開了 `acceptNewer`、而且版本確實
- * 比這一版新的，整支不跑（dsh `format.ts:333-337`：新版的格式不必過這一版的結構檢查）；版本就是這一版的照驗。
+ * **各格的形狀與鍵白名單**與 `create` 共用（`session-log-validation.ts` 的 `assertStoredHeaderFields`，#1549）。開了 `acceptNewer`、而且版本確實
+ * 比這一版新的，整支不跑（新版的格式不必過這一版的結構檢查）；版本就是這一版的照驗。
  *
  * @throws {@link SessionCorruptionError} 不是 JSON、欄位形狀不對、或 id 對不上。
  */
@@ -1173,7 +1153,7 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
       : migrationSourceOf(id, migratedFrom, options.location);
   // 各格的形狀與鍵白名單，與 `create` 共用同一支（#1549）。排在版本判定之後：讀不了的版本照舊報
   // `SessionFormatUnsupportedError`，不會被這裡改判成壞檔。比這一版新的（只有 `acceptNewer` 走得到）整支跳過：
-  // 新版的 header 不必過這一版的結構檢查（dsh `format.ts:333-337`）。
+  // 新版的 header 不必過這一版的結構檢查。
   if (!newer) {
     try {
       assertStoredHeaderFields(value);
@@ -1233,7 +1213,7 @@ export type ParseBodyOptions = (
       readonly acceptUnknownEvents: true;
       /**
        * header 的版本比這一版新（`classifyStoredFormatVersion` 判 `newer`）。是的話不驗信封：新版的格式不必過這一版的
-       * 結構檢查（dsh `format.ts:333-337`，同 `parseHeader` 那一側）；這一版的檔照驗（#1549 PM 裁決 issuecomment-6354566852）。
+       * 結構檢查（同 `parseHeader` 那一側）；這一版的檔照驗。
        */
       readonly newerFormat: boolean;
     }
@@ -1246,7 +1226,7 @@ export type ParseBodyOptions = (
   /**
    * `strict`：第一個壞行就整份拒絕——驗證工具與離線掃描用。
    * `recoverable`：壞行與它之後的行可以丟掉，除非後面跟著收尾（見 {@link parseJsonlSessionBody}）——產品路徑的
-   * 續接與預設讀取用，照 dsh 的 `SessionLogScanner` 預設（`format.ts:404`）。
+   * 續接與預設讀取用。
    */
   readonly recovery: 'strict' | 'recoverable';
   /** 同 {@link ParseHeaderOptions.location}：不認得的必需種類拒讀時帶上。 */
@@ -1272,29 +1252,27 @@ function isTurnCloser(value: unknown): boolean {
  *
  * **換行在原始位元組上找（`0x0A`），位元組數也算在 Buffer 上**，只有完整的行才解碼成字串。先解碼成字串再算
  * `Buffer.byteLength` 會多算：完整行裡的非法 UTF-8 位元組解碼時變成 U+FFFD（3 個位元組），算出來的位元組數比
- * 實際多，截斷就會留下撕裂尾巴的前幾個位元組（照 dsh `format.ts:381-385`、`:423-436`）。`validBytes` 是最後一個
- * 被接受的行的結束位元組（dsh 的 `committedBytes`）。
+ * 實際多，截斷就會留下撕裂尾巴的前幾個位元組。`validBytes` 是最後一個
+ * 被接受的行的結束位元組。
  *
  * 最後一個換行之後的東西是寫到一半的那一行——當掉時的常態，不算壞檔，只是不算進去。
  * 換行之前的每一行必須是一筆 `seq` 等於已接受事件數的事件；不是的話那一行是壞行：
  *
  * - `strict`：整份拒絕。
- * - `recoverable`（照 dsh `format.ts:478-521`）：**第一個**壞行記成 issue，不立刻拋。之後的行不再檢查 `seq`，
+ * - `recoverable`：**第一個**壞行記成 issue，不立刻拋。之後的行不再檢查 `seq`，
  *   遇到任何一個收尾事件（`turn/end` 或 `turn/failed`）就拋那個 issue——壞行落在一個已收尾的輪中間，不是當掉
  *   留下的尾巴，是壞檔；沒有收尾的話，壞行與它之後的行都屬於那一次沒寫完的輪，丟掉，由續接補「中斷」。壞行本身
  *   parse 得了、而且是收尾事件，也立即拋。
  *
- * 壞行指：不是 JSON、信封不對（`@nexus/core` 的 `assertSessionEventEnvelope`，與 seed 共用，照 dsh 讀檔器逐行的
- * `decodeEvent`，`session-format-v1-to-v2/src/codec.ts:132-146`，#1549），或 `seq` 不等於已接受的事件數。
+ * 壞行指：不是 JSON、信封不對（`@nexus/core` 的 `assertSessionEventEnvelope`，與 seed 共用，#1549），或 `seq` 不等於已接受的事件數。
  * 離線掃描讀比這一版新的日誌（`newerFormat`）不驗信封、只看像不像一筆事件（`type` 是字串、`time` 是數字的物件）：
- * 新版的信封不必過這一版的結構檢查（同 header 那一側，dsh `format.ts:333-337`）。
+ * 新版的信封不必過這一版的結構檢查（同 header 那一側）。
  *
  * **種類這一版不認得、又沒標 `ignorable` 的，整份拒絕**（{@link SessionEventUnsupportedError}，
  * [#507](https://github.com/DemianLi/nexus-agent/issues/507)），不是略過那一行：不認得的必需事件可能左右後面每一筆
- * 怎麼讀。同 dsh（`packages/core/session/src/types.ts:501-511`，`5badb15`）。守衛在這裡而不是 append：
+ * 怎麼讀。守衛在這裡而不是 append：
  * append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住。`strict` 裡順序在壞檔判斷**之後**：同一行既不認得又 `seq`
- * 對不上的話，先報壞檔，那是比「更新的版本寫的」更需要人看的一種。`recoverable` 裡順序反過來，照 dsh「准入先於
- * 復原」（`format.ts:490-497`）：像一筆事件的每一行（`type` 是字串、`seq` 與 `time` 是數字，同撿回模式的門檻），
+ * 對不上的話，先報壞檔，那是比「更新的版本寫的」更需要人看的一種。`recoverable` 裡順序反過來：像一筆事件的每一行（`type` 是字串、`seq` 與 `time` 是數字，同撿回模式的門檻），
  * 包括壞行與壞行之後要丟掉的行，都先過這一關——否則新版行程寫的事件會被當成壞尾，靜靜截掉。
  *
  * **匯出給唯讀的讀方**：離線掃描（`eval/session-scan.ts`）不能走 {@link JsonlSessionStore.resume}
@@ -1333,8 +1311,8 @@ export function parseJsonlSessionBody(
       typeof value['type'] === 'string' &&
       typeof value['time'] === 'number';
     if (problem === undefined && !(options.acceptUnknownEvents === true && options.newerFormat)) {
-      // 信封照 dsh 逐行驗（`decodeEvent`，#1549），與 core 的 seed 共用同一支；不過就是壞行，照下面的 strict／recoverable 處理。
-      // `seq` 的形狀不在這裡驗，交給下面的 `seq === events.length`（同 dsh 讀檔器）。
+      // 信封逐行驗（#1549），與 core 的 seed 共用同一支；不過就是壞行，照下面的 strict／recoverable 處理。
+      // `seq` 的形狀不在這裡驗，交給下面的 `seq === events.length`。
       try {
         assertSessionEventEnvelope(value, `第 ${lineNumber} 行`, { checkSeq: false });
       } catch (error: unknown) {
@@ -1451,7 +1429,7 @@ function salvageJsonlSessionBody(
   return events;
 }
 
-/** {@link readStableSnapshot} 用到的檔案系統。**只給測試換**：真的磁碟上造不出「讀的當下變了」。同 dsh 的 `GenerationFileSystem`。 */
+/** {@link readStableSnapshot} 用到的檔案系統。**只給測試換**：真的磁碟上造不出「讀的當下變了」。 */
 export interface StableReadFileSystem {
   stat(path: string): Promise<BigIntStats>;
   readFile(path: string): Promise<Buffer>;
@@ -1462,13 +1440,13 @@ const defaultStableReadFs: StableReadFileSystem = {
   readFile: (path) => readFile(path),
 };
 
-/** 身分字串：裝置、inode、大小、修改與變更時間（奈秒）。照 dsh `generation.ts:243-245`。 */
+/** 身分字串：裝置、inode、大小、修改與變更時間（奈秒）。 */
 function identityOf(stats: BigIntStats): string {
   return [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(':');
 }
 
 /**
- * 穩定快照讀，逐行照 dsh `readStableSnapshot`（`session-persistence-jsonl/src/generation.ts:262-282`）：讀前 `stat`、
+ * 穩定快照讀：讀前 `stat`、
  * `readFile`、讀後再 `stat`，身分一樣就回傳；不一樣就重讀一次；第二次還是變了，回傳**第二次讀到的位元組截到讀前大小的前綴**
  * 與讀前身分——不被持續寫入的寫者餓死。（沒有 `AbortSignal`：今天沒有呼叫方要中止單份讀，見 #1509。）
  *
@@ -2057,7 +2035,7 @@ export function legacyTwoFilePathsIn(
 const MISSING_REVISION = 'missing';
 
 /**
- * 一個檔此刻的樣子，照 dsh 的 `fileRevision`（`packages/session/session-persistence-jsonl/src/index.ts:184-192`）：
+ * 一個檔此刻的樣子：
  * 裝置、inode、大小、修改與變更時間（奈秒）。不在就是 `missing`。
  */
 async function fileRevision(
@@ -2074,14 +2052,14 @@ async function fileRevision(
   return identityOf(stats);
 }
 
-/** 列舉預設同時讀幾份，同 dsh 的 `DEFAULT_LIST_CONCURRENCY`（`index.ts:91`）。 */
+/** 列舉預設同時讀幾份。 */
 const DEFAULT_LIST_CONCURRENCY = 3;
 
 /** 把一件工作排進上限裡跑：名額滿了就照到的順序排隊。 */
 type ListLimit = <R>(task: () => Promise<R>) => Promise<R>;
 
 /**
- * 最多 `concurrency` 件同時跑的限流器，語意同 dsh 用的 `p-limit`（`index.ts:328`）：dsh 引套件，這裡自己寫是因為
+ * 最多 `concurrency` 件同時跑的限流器。這裡自己寫是因為
  * 引套件要先過 #1545 的發布年齡閘。一個後端只建一個（{@link LeaseContext.listLimit}）。
  */
 function createListLimit(concurrency: number): ListLimit {
@@ -2104,7 +2082,7 @@ function createListLimit(concurrency: number): ListLimit {
 }
 
 /**
- * 每一件經後端共用的上限跑，**全部 settle 之後**才交結果，順序同輸入。逐行照 dsh `settleLimited`（`index.ts:225-231`）。
+ * 每一件經後端共用的上限跑，**全部 settle 之後**才交結果，順序同輸入。
  */
 function settleLimited<T, R>(
   limit: ListLimit,
@@ -2114,7 +2092,7 @@ function settleLimited<T, R>(
   return Promise.allSettled(items.map((item) => limit(() => task(item))));
 }
 
-/** settle 完的結果取值：**依輸入順序**拋第一個失敗，照 dsh `settledValues`（`index.ts:238-243`）——不是先失敗的那個。 */
+/** settle 完的結果取值：**依輸入順序**拋第一個失敗——不是先失敗的那個。 */
 function settledValues<R>(results: readonly PromiseSettledResult<R>[]): R[] {
   return results.map((result) => {
     if (result.status === 'rejected') throw result.reason;
@@ -2155,8 +2133,8 @@ async function listStoredSessions(
     if (isNotFound(error)) return { sessions: [], unreadable: 0 };
     throw error;
   }
-  // 一份一份讀換成經後端共用的上限讀（#1559 N0627），照 dsh `list`（`index.ts:532`）。每份開始前看一次 signal：
-  // 被取消的列舉，排隊中的那幾份輪到時才拋（同 dsh `:297-302`）。
+  // 經後端共用的上限一份一份讀（#1559 N0627）。每份開始前看一次 signal：
+  // 被取消的列舉，排隊中的那幾份輪到時才拋。
   const outcomes = settledValues(
     await settleLimited(
       context.listLimit,
@@ -2266,21 +2244,19 @@ async function otherLayoutEntry(
 }
 
 /**
- * 拒讀診斷用的位置（#1559 N0646），照 dsh 的 `locate()`（`index.ts:345-347`）：日誌檔的絕對路徑，不碰檔案系統。
+ * 拒讀診斷用的位置（#1559 N0646）：日誌檔的絕對路徑，不碰檔案系統。
  */
 function locate(site: SessionSite): SessionLocation {
   return { kind: 'jsonl', path: resolve(site.logPath) };
 }
 
 /**
- * 解析好的已接受前綴，交出去之前（也是存進冷讀快取之前）的驗證（#1549），續接與唯讀打開共用，順序照 dsh：
- * 讀檔器收尾時的關係驗證（`session-persistence-jsonl/src/format.ts:468`），再逐筆跑單筆資料規則（`index.ts:860` 的
- * `validateStoredEvents`，之後才 `:868` 存快取）。撿回（salvage）不跑：它本來就是在處理壞檔，dsh 沒有這條路。
- * 事件信封不在這裡驗：它在 {@link parseJsonlSessionBody} 逐行驗（壞行照 strict／recoverable 處理，照 dsh `decodeEvent`），
- * core 的 seed（`SessionLog`）再驗一次（dsh 兩層都有）。
+ * 解析好的已接受前綴，交出去之前（也是存進冷讀快取之前）的驗證（#1549），續接與唯讀打開共用：
+ * 先關係驗證，再逐筆跑單筆資料規則。撿回（salvage）不跑：它本來就是在處理壞檔。
+ * 事件信封不在這裡驗：它在 {@link parseJsonlSessionBody} 逐行驗（壞行照 strict／recoverable 處理），
+ * core 的 seed（`SessionLog`）再驗一次。
  *
- * 分叉前綴（#1579）排第一：關係驗證要用它回的切點，同 dsh 先在 `restoreReleasedV4Artifact` 驗標記、再跑
- * `assertReleasedV4Relationships`（`session-format-v3-to-v4/src/validation.ts:70-79`）。跑在尾端復原之後，理由見 {@link assertStoredInheritance}。
+ * 分叉前綴（#1579）排第一：關係驗證要用它回的切點。跑在尾端復原之後，理由見 {@link assertStoredInheritance}。
  *
  * @throws {@link SessionCorruptionError} 哪一行、哪一格不對。
  */
@@ -2434,7 +2410,7 @@ async function resumeLocked(
   let resumed: ResumedStoredSession | undefined;
   let failure: { readonly error: unknown } | undefined;
   try {
-    // **在讀之前拿**，照 dsh：別人握著的話，該在什麼都還沒讀之前就講。
+    // **在讀之前拿**：別人握著的話，該在什麼都還沒讀之前就講。
     if (legacyLock) {
       legacyLease = await leaseFor(context, legacyTwoFilePathsIn(directory, id).lock, id);
     }
@@ -2746,13 +2722,11 @@ async function verifyMigratedTemp(
 }
 
 /**
- * 一個專案目錄在會話根底下的目錄名——照 dsh 的 `projectKey`
- * （`packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
+ * 一個專案目錄在會話根底下的目錄名。
  *
  * 分隔符（`/`、`\\`、`:`）變成 `-`，連續的只留一個；不安全的 UTF-16 碼元寫成 `~XXXX`；
- * 前後包 `--`，長度封頂。**它是有損的**（分隔符與截短），dsh 明說這是刻意的：換來的是人
- * 在目錄裡找得到自己的專案。有損就可能撞，所以續接時照樣比 header 的 `cwd`
- * （{@link ./resume-guards.ts | ResumeCwdConflictError}），同 dsh。
+ * 前後包 `--`，長度封頂。**它是有損的**（分隔符與截短），這是刻意的：換來的是人在目錄裡找得到自己的專案。有損就可能撞，所以續接時照樣比 header 的 `cwd`
+ * （{@link ./resume-guards.ts | ResumeCwdConflictError}）。
  *
  * @param cwd - 專案目錄。
  * @returns 一段檔案系統安全的目錄名。
@@ -2800,7 +2774,7 @@ export interface JsonlSessionStoreOptions {
   /** 讀 header 時問的版本邊目錄。**只給測試換**，見 {@link ParseHeaderOptions.catalog}。 */
   readonly catalog?: SessionFormatCatalog;
   /**
-   * 列舉時最多同時讀幾份（#1559 N0627），照 dsh 的 `listConcurrency`（`index.ts:1811`，`min(1)`）。省略即 3。
+   * 列舉時最多同時讀幾份（#1559 N0627）。省略即 3。
    * 是**這個後端**的上限：同時跑的幾個 `list()` 加起來不超過它。
    * @throws `TypeError`（建構時）不是 1 以上的整數。
    */
@@ -2824,9 +2798,7 @@ export interface JsonlSessionStoreOptions {
 }
 
 /**
- * `create` 收到的 header 先驗、再拷一份（#1559 N0622），照 dsh 的 `materializeCreateHeader`
- * （`session-persistence/src/storage-contract.ts:112-121`）加 `toHeaderLine` 的版本與欄位斷言（`format.ts:119-134` →
- * `session-format/src/catalog.ts:110-122` → `session-format-v3-to-v4/src/codec.ts:43`）。驗過的就是要寫的那一份：
+ * `create` 收到的 header 先驗、再拷一份（#1559 N0622）。驗過的就是要寫的那一份：
  * 呼叫方之後改它的物件，不會改到落盤的 header。
  *
  * @throws `TypeError` 不是無損的 JSON、版本不是這一版、或某一格的形狀不對（{@link assertStoredHeaderFields}）。
@@ -2874,7 +2846,7 @@ function existsOnDisk(directory: string, id: string): boolean {
 
 /** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
 function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): JsonlSessionStore {
-  // 建構時就檢查根能不能讀（#1559 N0633），照 dsh `assertUsableRoot`（`index.ts:1591-1598`）：不在照常（第一次寫才建），
+  // 建構時就檢查根能不能讀（#1559 N0633）：不在照常（第一次寫才建），
   // 其餘（不是目錄、沒權限）當場拋。不然要等第一條會話第一次寫，在協調器的背景路徑上變成一行 warn。
   try {
     readdirSync(directory);
@@ -2963,9 +2935,7 @@ export interface SessionStoreDirectory {
  * 會話根底下有哪幾格存著會話，給跨專案的讀方（[#713](https://github.com/DemianLi/nexus-agent/issues/713) 的引用候選）
  * 一格一格 {@link openJsonlSessionStore} 再 `list`——**它不必自己認目錄名**。哪幾種要列成候選由它決定。
  *
- * dsh 的後端根就在整個會話根，`list` 一次掃遍（`packages/session/session-persistence-jsonl/src/index.ts` 的
- * `listArtifacts`）。我們不能照搬：CLI 的 root id 一律是 `cli`，一個根底下會有很多份同 id 的，而 dsh 對重複的 id
- * 直接拋。所以 `list` 掛在一格上，跨格的列舉另開這一支（demian 2026-09-29 拍板，#665）。
+ * CLI 的 root id 一律是 `cli`，一個根底下會有很多份同 id 的，所以 `list` 掛在一格上，跨格的列舉另開這一支。
  *
  * @param rootDir - 會話根（`harnessSessionsDir` 或 `--session-log` 給的）。還不存在就是空的。
  * @returns 認得出來的每一格，照名字排；其餘的（使用者自己放的東西）略過。
@@ -2997,7 +2967,7 @@ export async function listSessionStoreDirectories(
 /**
  * 打開一個**既有的** run 目錄——續接（`--resume`）用的。
  *
- * **不另開目錄**：續接照 dsh 是往同一份檔續寫，不是把舊的抄進新的——抄一份的話，兩個目錄
+ * **不另開目錄**：續接是往同一份檔續寫，不是把舊的抄進新的——抄一份的話，兩個目錄
  * 會帶著同一個 `(session.id, seq)`，而遙測的去重鍵正是它（`session-log.ts` 檔頭）。
  * 這個行程新出生的 subagent 日誌也落在這裡，與上一個行程的並排；它們的 id 帶 LangGraph
  * 的 task id（`session-address.ts`），`wx` 仍然擋撞名。

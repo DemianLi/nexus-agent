@@ -1,10 +1,8 @@
 /**
- * 讀盤時的分叉前綴（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh `session-format-v3-to-v4/src/validation.ts:19-79`
- * 與 `session-format-v1-to-v2/src/codec.ts:114-127`（`687f282e`）：
+ * 讀盤時的分叉前綴（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）：
  *
  * - header 的 `origin` 只准 `'subagent'`、`isSeeded` 只准 `true`；
- * - 帶 `isSeeded` 的要有 inherited 標記，沒帶的不能有。切點從標記推、不另外落盤，所以 dsh 的「切點不等於最後一顆標記」
- *   「切點超過事件數」收成同一條「seeded 卻沒有標記」；
+ * - 帶 `isSeeded` 的要有 inherited 標記，沒帶的不能有。切點從標記推、不另外落盤；
  * - 驗證跑在尾端復原之後：標記本身被當成壞尾巴丟掉時拋損壞，標記之後的壞尾巴照常丟；
  * - 子代理目錄的唯一性只看切點之後（撤掉 #1549 N0603 的過渡）。
  */

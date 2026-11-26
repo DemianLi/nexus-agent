@@ -1,8 +1,6 @@
 /**
  * 啟動環境：行程繼承的環境變數 > 目前資料夾的 `.env` > harness home 的 `.env`
- * （[#730](https://github.com/DemianLi/nexus-agent/issues/730)，整組照 dsh）。
- *
- * **逐條照 dsh** `packages/boot/app-boot/src/index.ts` 的 `loadLayeredEnv`（`477b4f4`）：
+ * （[#730](https://github.com/DemianLi/nexus-agent/issues/730)）。
  *
  * - 兩份檔**都先讀、先檢查，都過了才套用**：一份被拒絕不能留下另一份已經套用的半套環境。
  * - 已經有值的名字不蓋（繼承的 > 目前資料夾 > home）；**還沒有值的名字會被寫進行程的環境變數**——
@@ -12,15 +10,8 @@
  *   讓它改 `PATH` 或代理，等於讓一個專案決定你整個行程跑什麼、連到哪裡。
  *   代理那四個名字只有 harness home 那份可以設——那份是使用者自己的，不跟著專案走。
  * - 記下每個值來自哪一層（{@link LaunchEnvironment}），憑證服務要用。
- * - 讀 `.env` **不查權限**，同 dsh；要擋這件事的是之後的受管檔（serve 才掛，且它在憑證服務裡**排在這三層前面**，
+ * - 讀 `.env` **不查權限**；要擋這件事的是之後的受管檔（serve 才掛，且它在憑證服務裡**排在這三層前面**，
  *   [#1540](https://github.com/DemianLi/nexus-agent/issues/1540)；一次性入口不掛它，只看這三層）。
- *
- * ## 偏離 dsh（各一句）
- *
- * - dsh 擋 `DSH_` 開頭的名字，這裡換成 `NEXUS_AGENT_`（我們自己的變數，至少 `NEXUS_AGENT_HOME`）；
- *   `DEEPSEEK_BASE_URL` 那兩個是 dsh 自己的端點名，我們沒有，所以拿掉。
- * - dsh 的產品 CLI 一啟動就載入；這裡只在**真模型路徑**（`--live`、eval、spike）載入，
- *   因為沒接真模型的啟動以前就不讀任何 `.env`，靜靜開始讀會讓別的環境變數（追蹤那些）的行為跟著變。
  *
  * ## 舊位置
  *
@@ -60,7 +51,7 @@ export interface LaunchEnvironment {
   /** 由高到低：繼承的、目前資料夾、home。 */
   readonly layers: readonly LaunchEnvLayer[];
   /**
-   * 名字在允許的來源裡的有效值（先到先贏）。空字串算沒有，同 dsh 的憑證解析。
+   * 名字在允許的來源裡的有效值（先到先贏）。空字串算沒有。
    *
    * @param name - 環境變數名。
    * @param sources - 只看這幾層；省略即全部。
@@ -70,7 +61,7 @@ export interface LaunchEnvironment {
   readonly legacyEnvFile?: string;
 }
 
-/** 沒有任何 `.env` 可以設的名字。逐條照 dsh；`DEEPSEEK_*` 兩個換掉，見檔頭。 */
+/** 沒有任何 `.env` 可以設的名字。 */
 const BOOTSTRAP_NAMES = new Set([
   // 行程怎麼起、模組從哪裡載入。
   'PATH',
@@ -125,7 +116,7 @@ const BOOTSTRAP_NAMES = new Set([
   'NODE_TLS_REJECT_UNAUTHORIZED',
 ]);
 
-/** 沒有任何 `.env` 可以設的名字前綴。dsh 的 `DSH_` 換成 `NEXUS_AGENT_`。 */
+/** 沒有任何 `.env` 可以設的名字前綴。 */
 const BOOTSTRAP_PREFIXES = ['NEXUS_AGENT_', 'XDG_', 'DYLD_', 'BASH_FUNC_'];
 
 /**
@@ -274,7 +265,7 @@ export function loadLaunchEnv(options: LaunchEnvOptions): LaunchEnvironment {
 /**
  * 只有「行程繼承的環境」這一層的啟動環境，**不讀任何 `.env`**。
  *
- * 沒帶 `--live` 的啟動不讀 `.env`（見檔頭），但對外代理照樣要裝——網路上的 MCP 在假模型路徑上一樣連外
+ * 沒帶 `--live` 的啟動不讀 `.env`，但對外代理照樣要裝——網路上的 MCP 在假模型路徑上一樣連外
  * （[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。這一個給那條路徑：形狀同
  * {@link loadLaunchEnv} 的回傳，所以代理的解析不必分兩種來源。
  *
