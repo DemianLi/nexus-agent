@@ -129,7 +129,7 @@ describe('ContainedFilesystemBackend.read：十種情況與切片，字句與內
 
 describe('真的 read_file 工具：ToolMessage 逐字不變', () => {
   const expected: [string, 'success' | 'error', string][] = [
-    // CRLF 檔：行尾的 `\r` 去掉（#1563 N0335，照 dsh `read-render.ts:91-93`）。這是這份基準唯一被刻意改掉的一格。
+    // CRLF 檔：行尾的 `\r` 去掉（#1563 N0335）。這是這份基準唯一被刻意改掉的一格。
     [
       '/crlf.txt',
       'success',
