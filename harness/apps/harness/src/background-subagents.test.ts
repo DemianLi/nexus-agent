@@ -416,7 +416,7 @@ describe('載體本身（假 agent）', () => {
   });
 
   /**
-   * #1702：目錄寫不進去就派出失敗，照 dsh 寫目錄失敗時 `dispose(activation)` 再重拋（`manager.ts:1401-1416`）。
+   * #1702：目錄寫不進去就派出失敗。
    * 剛准入的那一輪撤回：不跑、不佔名額、不出現在現況裡；錯原樣往外拋，由工具本體那層翻成父代理的錯誤結果。
    */
   it('start 帶 callId、目錄寫不進去：原錯往外拋，那一輪撤回（不跑、不佔名額、不在現況）', async () => {
@@ -448,7 +448,6 @@ describe('載體本身（假 agent）', () => {
     await host.close();
   });
 
-  /** #1023：目錄只記成功的事實，同 dsh continuable「先准入、再寫目錄、最後回 id」。 */
   it('start 帶 callId：接受之後在 root 記一顆目錄；被拒（名額滿、編不出圖、已關閉）與沒帶 callId 都不記', async () => {
     const hold = gate();
     const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));

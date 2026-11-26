@@ -11,7 +11,7 @@ import {
 
 /**
  * 下行訂閱者的位元組有界佇列（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504) 第 3 步）的單元。
- * 照 `TerminalFollower`（dsh `terminal-controller/src/stream.ts`）的語意逐點釘：用 UTF-8 位元組計、`已排 + 這顆 > 上限` 才拒、
+ * 逐點釘：用 UTF-8 位元組計、`已排 + 這顆 > 上限` 才拒、
  * 拒了不收；多出的是補送（`seed`），照算位元組但不判上限。
  */
 
@@ -166,7 +166,6 @@ describe('boundFrame（偏離 D：下行副本的巢狀深度截斷，#1560 N138
     expect(() => boundFrame(loop)).toThrow(/circular/iu);
   });
 
-  // `{}` 上設自有的 `__proto__` 會改到原型、鍵就被吃掉；副本用空原型，鍵照原樣帶過去（同 dsh `json-stream.ts:90-94`）。
   it('截斷的副本留得住 `__proto__` 這種鍵（資料，不是原型）', () => {
     const frame = JSON.parse('{"__proto__":{"x":1},"inner":{"__proto__":"p"}}') as Record<
       string,

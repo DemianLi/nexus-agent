@@ -1,6 +1,5 @@
 /**
- * 行程 token 的交換與簽章 cookie 的驗證（#424）。案例照 dsh
- * `packages/client/connection/tests/browser-auth.host.spec.ts`（`ddefc45`）逐條移植；密鑰的載入
+ * 行程 token 的交換與簽章 cookie 的驗證（#424）。密鑰的載入
  * 另外在 `browser-session-secret.test.ts`。
  */
 

@@ -7,7 +7,7 @@
  * - **在工具本體裡直接排 `graph.invoke`**：LangGraph 用 AsyncLocalStorage 把呼叫端的 config 隱式繼承進去，
  *   root 的中止訊號、兩段的 `checkpoint_ns` 都跟進來。後果是 root 按停止時背景那一輪被靜靜截掉（promise 照樣成功），
  *   而同一個背景子代理的兩輪由不同工具呼叫拉起，存檔點對不上。
- * - **由在任何圖的環境之外建好的長壽迴圈取件**：`configurable` 乾淨，第二輪看得到第一輪。這是 dsh 收件匣的形狀。
+ * - **由在任何圖的環境之外建好的長壽迴圈取件**：`configurable` 乾淨，第二輪看得到第一輪。
  *
  * 這個 host 就是第二種。**它必須在任何圖的環境之外建**（組裝點，不是工具本體裡）：迴圈的環境是建它那一刻的環境，
  * 之後不論誰呼叫 {@link BackgroundSubagentHost.submit}，被拉起的那一輪都不帶呼叫端的環境。
@@ -16,14 +16,14 @@
  *
  * 1. 在這個子代理**自己的日誌**（同一張會話註冊表，`{kind:'subagent', runId}`，#823）寫 `turn/start`。
  * 2. `configurable` **只給明確的鍵**：`thread_id`（日誌 id，`<root>/<runId>`，全域唯一）、
- *    {@link BACKGROUND_SESSION_CONFIG_KEY}，與這一輪的插話收件匣（`STEP_INBOX_CONFIG_KEY`，#858，見下）。**不帶 root 的中止訊號**——dsh 的 root 停止不連帶停掉已派出去的
- *    背景子代理（`docs/subsystems/subagent.zh.md:152`，`477b4f4`），要個別停（卡 6 的 `interrupt_agent`）。
+ *    {@link BACKGROUND_SESSION_CONFIG_KEY}，與這一輪的插話收件匣（`STEP_INBOX_CONFIG_KEY`，#858，見下）。**不帶 root 的中止訊號**——root 停止不連帶停掉已派出去的
+ *    背景子代理，要個別停（卡 6 的 `interrupt_agent`）。
  * 3. 整輪包在注入的 `enter` 裡跑。產品接線時傳 `SandboxModeController.delegateFromLog`（#827）：沙箱那一格從子代理
  *    自己的日誌讀回，不是叫醒那刻 root 的現況。
  * 4. 走 v3 串流，並把投影裡沒人讀的 promise 標成已處理（`markProjectionsHandled`，#346）——裸走的話，工具本體拋錯會讓
  *    行程以未處理的 rejection 結束（探針的子行程對照組）。
  * 5. 收尾寫 `turn/end`；拋錯寫 `turn/failed`，錯誤在這裡收掉，不往外漏。
- * 6. **結算之前先落盤**（#1565，dsh `manager.ts` 的 `flushFinalState`）：把這個子代理自己的日誌排空，最後的回覆與 `turn/end` 才不會還在
+ * 6. **結算之前先落盤**（#1565）：把這個子代理自己的日誌排空，最後的回覆與 `turn/end` 才不會還在
  *    寫回窗口裡就先通知了主對話。排空失敗只講一聲，結算照發。
  *
  * 每個子代理**各自串行**（一次一輪，後到的排隊）、彼此並行。
@@ -43,7 +43,7 @@
  *
  * ## 輸出上限
  *
- * 撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫（它在子代理的那一疊裡，同 dsh），但**不在 `MaxTokensCarrier` 記一筆**
+ * 撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫（它在子代理的那一疊裡），但**不在 `MaxTokensCarrier` 記一筆**
  * （[#858](https://github.com/DemianLi/nexus-agent/issues/858)）：載體是一次性的 `task` 由父圖那一側取走的，背景位址沒有人取。
  * 結算摘要的 `max-tokens` 不靠它，讀的是子代理自己日誌上回覆的 `finish_reason`。
  *
@@ -128,7 +128,7 @@ export interface BackgroundAgent {
 export type BackgroundRoundOutcome =
   { readonly ok: true } | { readonly ok: false; readonly error: string };
 
-/** 每個主對話同時存活的背景子代理上限的預設值（dsh `SubagentRuntime.Config.maxActiveSubagents`，`477b4f4`）。 */
+/** 每個主對話同時存活的背景子代理上限的預設值。 */
 export const DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS = 8;
 
 /** 一個背景子代理的一段（epoch）怎麼結束的，決定通知的第一行。 */
@@ -136,7 +136,7 @@ export type BackgroundStopReason = SubagentSettleReason;
 
 /**
  * 一個背景子代理結算了（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：沒有輪次在跑、排著的也空了。
- * 給主對話的通知，內容照 dsh 的 `createSettlementMessage`（`subagent/src/continuation-messages.ts`，`477b4f4`）。
+ * 給主對話的通知。
  */
 export interface BackgroundSettlement {
   /** 背景子代理的編號（模型手上的那個）。 */
@@ -157,11 +157,7 @@ export interface BackgroundSettlement {
 }
 
 /**
- * 在背景子代理的第一句任務後面接上回報指引（[#849](https://github.com/DemianLi/nexus-agent/issues/849)），逐字照 dsh 的
- * `withContinuableReturnGuidance`（`subagent/src/continuation-messages.ts`，`477b4f4`）。
- *
- * 偏離登記：dsh 把指引當獨立的一個 text block 接在任務 blocks 後面；我們的任務是單一字串，用空行接在後面。
- * parent id 照 dsh 用 `JSON.stringify` 帶引號。
+ * 在背景子代理的第一句任務後面接上回報指引（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）。
  *
  * @param prompt - 第一輪的人話。
  * @param parentId - 直接 parent（主對話）的會話 id。
@@ -184,7 +180,7 @@ export interface BackgroundAgentMessage {
   readonly runId: string;
   /** 它的會話 id（日誌上的寄件人）。 */
   readonly sessionId: string;
-  /** 送進主對話模型的整段字，含 dsh 的前綴 `Agent <寄件人> sent a message: `。 */
+  /** 送進主對話模型的整段字，含前綴 `Agent <寄件人> sent a message: `。 */
   readonly text: string;
 }
 
@@ -207,8 +203,7 @@ export interface BackgroundParentPort {
   /** 背景子代理的現況變了（#867）：整份，不是差量。 */
   readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
   /**
-   * 主對話的 thread 現在是不是封存了（#633）。**每一輪的每一次模型呼叫之前都問**（同 dsh `ArchivedSessionGate`
-   * 沿 lineage 往上看 root）：是就不呼叫模型，這一輪以 `turn/end {reason:{kind:'blocked'}}` 收、結算原因是 `refusal`。
+   * 主對話的 thread 現在是不是封存了（#633）。**每一輪的每一次模型呼叫之前都問**：是就不呼叫模型，這一輪以 `turn/end {reason:{kind:'blocked'}}` 收、結算原因是 `refusal`。
    * 沒給就從不擋。
    */
   readonly isArchived?: () => boolean;
@@ -238,7 +233,7 @@ export interface BackgroundSubagentStatus {
 }
 
 /**
- * 一行摘要，逐字照 dsh 的 `settlementSummary`（`subagent/src/continuation-messages.ts`）。`refusal`（`declined the task`）是
+ * 一行摘要。`refusal`（`declined the task`）是
  * pre-step 拒絕丟掉已領走的輸入：我們的生產者是封存的會話把背景子代理的輪擋下（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
  */
 export function settlementSummary(runId: string, reason: BackgroundStopReason): string {
@@ -266,8 +261,7 @@ export function maxTurnsSettlementSummary(runId: string): string {
 }
 
 /**
- * 結算通知的整段字。dsh 是幾個 text 區塊（摘要、`Its closing message:`、子代理的文字區塊）；我們的 `turn/start.text` 與
- * `HumanMessage` 是一個字串，區塊之間空一行。
+ * 結算通知的整段字。
  *
  * `omitClosing`：子代理收尾前剛用 `send_message` 把結果傳上來（{@link sentJustBeforeFinishing}），結尾文字換成省略的那一句，
  * 同一段結果不進主對話兩次（[#2032](https://github.com/DemianLi/nexus-agent/issues/2032)）。
@@ -321,14 +315,12 @@ function isClosingCandidate(message: BaseMessage): boolean {
 /**
  * 這一次結算的收尾訊息：從 `fromSeq` 起往回找，**最後一則不是空的助手回覆**的文字（trim 後；可以是空字串）。
  *
- * 照 dsh `assistant-output.ts:32-40`：沒有內容也沒有工具呼叫的回覆（撞到輸出上限、工具呼叫被清掉之後什麼都不剩的那種，
+ * 沒有內容也沒有工具呼叫的回覆（撞到輸出上限、工具呼叫被清掉之後什麼都不剩的那種，
  * `max-tokens.ts` 的 `dropToolCalls`）不取代更早的輸出；判準是 {@link isClosingCandidate}。**不是「文字空就跳過」**：只有工具呼叫的那一則（沒撞上限）算候選、會被選中，到
- * `continuation-messages.ts:147-155` 才只留文字，沒有就寫 `It left no closing message.`——這裡一樣。
+ * 結算通知才只留文字，沒有就寫 `It left no closing message.`。
  *
- * 範圍是「上一次結算之後」（dsh `activation.ts:152` 的 `outputStart`）：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
+ * 範圍是「上一次結算之後」：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
  * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochs}），不是最近一顆。
- * 串流文字的退路（dsh `:55-59`）不做：`langgraph` 下子代理的日誌沒有素材（`assistant/attempt` 只由 pump 為 root 寫）；native 下子代理
- * 自己的日誌也有 `assistant/attempt`（模型呼叫的起訖紀錄器寫的），這裡不讀。
  */
 function closingTextOf(log: SessionLog, fromSeq: number): string {
   const events = log.events;
@@ -382,12 +374,12 @@ export interface BackgroundSubagentHostOptions {
   readonly maxActive?: number;
   /**
    * 背景子代理結算時通知主對話（#840）：**同步呼叫、在該子代理讓出所有權之前**（呼叫端等到的 `outcome` 在這之後才 resolve），
-   * 對每一個拿到過編號的子代理無條件送一則（dsh 明寫）。沒給就沒有人被通知（cli 的 REPL 一行一輪，沒有可以叫醒的一輪）。
+   * 對每一個拿到過編號的子代理無條件送一則。沒給就沒有人被通知（cli 的 REPL 一行一輪，沒有可以叫醒的一輪）。
    * 它拋錯只講一聲（`warn`），不影響輪次。
    */
   readonly onSettled?: (settlement: BackgroundSettlement) => void;
   /**
-   * 背景子代理寫話給主對話的出口（#849）。**沒給就寄不出去**：`sendToParent` 拋（dsh：沒有持久的 parent 信箱，
+   * 背景子代理寫話給主對話的出口（#849）。**沒給就寄不出去**：`sendToParent` 拋（沒有持久的 parent 信箱，
    * 找不到活著的 parent 就拒絕，不收下做不到的事）。同步呼叫；它拋錯就是這一則沒送到，原樣往上拋給呼叫的工具。
    */
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
@@ -417,7 +409,7 @@ export type BackgroundSubagentErrorCode = 'closed' | 'not-found' | 'at-capacity'
 /**
  * 往背景子代理送話或查它時被拒的原因，帶**型別化的碼**。訊息是給模型／人看的那句話，原樣不變；碼是給程式分流的
  * （wire 的 `subagent.send` 把它譯成三個錯誤碼，不去比對中文訊息）。`subagent` 工具派不出去時，碼也經
- * {@link backgroundRefusalInfo} 翻成 dsh 的那一組進會話日誌。
+ * {@link backgroundRefusalInfo} 翻成 `{ name, code }` 進會話日誌。
  */
 export class BackgroundSubagentError extends Error {
   readonly code: BackgroundSubagentErrorCode;
@@ -431,13 +423,6 @@ export class BackgroundSubagentError extends Error {
 
 /**
  * {@link BackgroundSubagentHost.start} 被 host 拒絕時，`subagent` 那一顆 `tool/result` 記的碼（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
- *
- * 照 dsh（`5badb15`）：`subagent` 工具本體 await `startContinuable`、不接錯（`packages/subagent/tool-subagent/src/index.ts:526-537`），
- * 名額滿了拋 `SubagentError` 的 `ACTIVATION_LIMIT_REACHED`（`packages/subagent/subagent/src/continuation-activation.ts:45-51`），
- * 收線中拋 `DRAINING`（同檔 `:446-455`，`continuation.ts:107` 起呼叫）；`SubagentError` 是 `HarnessError`（`error.ts:10-15`），
- * 註冊表接住後由 `errorInfo` 取 `{ name, code }`（`packages/core/tools/src/index.ts:661-668`、`:1586-1587`、`:1909-1917`），
- * 寫進 `tool/result` 的 `error`（`packages/core/agent-loop/src/tool-calls.ts:285`）。名字與碼抄 dsh 的字串，同
- * `INVALID_ARGS`、`UNKNOWN_TOOL` 的先例；`closed` 對 `DRAINING` 是最接近的對照（dsh 是收線開始就不收，我們是 host 已關）。
  *
  * **`closed` 在 `subagent` 工具這條路上今天沒有生產者**：收線先同步把 delegation 的 host 清掉、才關 host
  * （`background-delegation.ts` 的 `attach`），而 `wrapToolCall` 從讀 host 到 `start` 之間沒有 await，所以關了之後模型收到的是
@@ -555,8 +540,7 @@ function turnOf(body: {
 
 /**
  * 一個背景子代理被指定的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)、
- * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：型錄 id，加選填的推理等級。dsh 的 continuable descriptor 也是
- * 把解析後的 provider、model、effort 一起記下來；我們沒有 provider 這一層。
+ * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：型錄 id，加選填的推理等級。
  */
 export interface ModelChoice {
   /** 型錄 id。 */
@@ -598,7 +582,7 @@ export class BackgroundSubagentHost {
   readonly #coldChildren = new Map<string, ColdInspection>();
   /** 冷讀掃完了（成功與否都算）。{@link BackgroundSubagentHost.resume} 先等它：掃完之前不知道哪些叫得醒。 */
   readonly #coldScanned: Promise<void>;
-  /** 正在叫醒的：編號 → 同一件事（重複的叫醒共用一次）。算在並存上限裡——名額在重建**之前**佔，同 dsh 的 `ActivationPool.reserve`。 */
+  /** 正在叫醒的：編號 → 同一件事（重複的叫醒共用一次）。算在並存上限裡——名額在重建**之前**佔。 */
   readonly #waking = new Map<string, Promise<void>>();
   /** {@link whenChildrenSettled} 正在等的人；每次現況變動（{@link #publishStatus}）與叫醒的起落都喚醒，不輪詢。 */
   readonly #childWaiters = new Set<() => void>();
@@ -617,12 +601,11 @@ export class BackgroundSubagentHost {
   /** 正在跑的那一輪（每輪一個，跑完就丟）：中止控制器（`interrupt` 只舉這一個）與這一輪的插話收件匣（#858）。 */
   readonly #running = new Map<string, RunningRound>();
   /**
-   * 被中斷之後暫停的：它排著的輪次不丟、也不開跑，等下一次 `submit` 才恢復（dsh：被中斷的 driver 進入 idle 後，
-   * 一次喚醒發送會恢復被暫停的 FIFO 佇列，`docs/subsystems/subagent.zh.md:152` 附近）。
+   * 被中斷之後暫停的：它排著的輪次不丟、也不開跑，等下一次 `submit` 才恢復。
    */
   readonly #paused = new Set<string>();
   /**
-   * 這個子代理這一次結算的一段（#1565，dsh `outputStart`）。結算（確定沒有輪次排著）時刪掉，被中斷而暫停的不刪（那一段還沒收）。
+   * 這個子代理這一次結算的一段（#1565）。結算（確定沒有輪次排著）時刪掉，被中斷而暫停的不刪（那一段還沒收）。
    * 撤回（{@link BackgroundSubagentHost.#retract}）、關閉時丟掉的輪次與 `close()` 也清。
    */
   readonly #epochs = new Map<string, Epoch>();
@@ -670,7 +653,7 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 重啟之前派出的 continuable 子代理：讀 root 日誌上的 `subagent/catalog`（父端的權威，同 dsh），逐個唯讀冷讀它們的身分。
+   * 重啟之前派出的 continuable 子代理：讀 root 日誌上的 `subagent/catalog`（父端的權威），逐個唯讀冷讀它們的身分。
    * **不復活任何一個**。沒有存放處、或 root 日誌上沒有要讀的，回 `undefined`（同步，不多一拍）。
    */
   #scanCold(): Promise<void> | undefined {
@@ -678,7 +661,7 @@ export class BackgroundSubagentHost {
     if (cold === undefined) return undefined;
     const parentId = this.rootSessionId;
     const prefix = `${parentId}/`;
-    // 只看自己派的（切點之後，#1579，同 dsh 的目錄投影）。父會話派的另有 `<父 thread>/` 前綴、下面那道也濾得掉，兩道是同一件事。
+    // 只看自己派的（切點之後，#1579）。父會話派的另有 `<父 thread>/` 前綴、下面那道也濾得掉，兩道是同一件事。
     const root = this.#sessions.root;
     const targets = subagentLinks(root.events, root.inheritedEventCount)
       .filter((link) => link.mode === 'continuable' && link.childId.startsWith(prefix))
@@ -766,14 +749,12 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 父代理給一個背景子代理追加指示（[#839](https://github.com/DemianLi/nexus-agent/issues/839)，dsh
-   * `SubagentRuntime.sendMessage`，`477b4f4`）。**同步接受或拒絕**，接受之後那一輪獨立跑。
+   * 父代理給一個背景子代理追加指示（[#839](https://github.com/DemianLi/nexus-agent/issues/839)）。**同步接受或拒絕**，接受之後那一輪獨立跑。
    *
    * - 只有這個主對話派出去的編號（host 就是這個主對話的）；不認得的編號拋，訊息說明原因。
-   * - 模型看到的文字加 dsh 的前綴 `Agent <寄件人> sent a message: `；日誌那一輪的 `turn/start` 是
+   * - 模型看到的文字加前綴 `Agent <寄件人> sent a message: `；日誌那一輪的 `turn/start` 是
    *   `agent-message`（記寄件人，**不授予權限、也不是人話**），不是 `message`。
-   * - 對方閒著：開新的一輪。對方正在跑：**插進當下那一輪，下一步領走**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)，
-   *   同 dsh 的 “a working agent receives it at its next step”），回的是那一輪的下場。**那一輪被中止了、或圖收尾時窗已經關了**
+   * - 對方閒著：開新的一輪。對方正在跑：**插進當下那一輪，下一步領走**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)），回的是那一輪的下場。**那一輪被中止了、或圖收尾時窗已經關了**
    *   就排成它的下一輪（同 pump 的 `#acceptsSteer`）。
    * - 對方是被中斷後暫停的：這一則喚醒它，排在前面的輪次照舊先跑（#838）。
    * - 對方已結算而名額滿了：拒絕（同 `submit`，#836）。
@@ -794,8 +775,7 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 人（wire 上的 `subagent.send`）對單一背景子代理說一句話（[#865](https://github.com/DemianLi/nexus-agent/issues/865)，
-   * dsh `prompt` 對 continuable 子代理的那一支，`477b4f4`）。**投遞規矩同 {@link send}**（跑著且窗開著：下一步領走；
+   * 人（wire 上的 `subagent.send`）對單一背景子代理說一句話（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。**投遞規矩同 {@link send}**（跑著且窗開著：下一步領走；
    * 否則排成下一輪；已結算而名額滿了拒絕），差別在**身分**：
    *
    * - 模型看到的是**原文**，沒有 `Agent … sent a message: ` 前綴——那是人說的，不是 agent 轉的；
@@ -887,12 +867,11 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 背景子代理給自己的直接 parent 寫一則話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)，dsh
-   * `SubagentRuntime.sendMessage` 的 child→parent 那一向，`477b4f4`）。**同步接受或拒絕**。
+   * 背景子代理給自己的直接 parent 寫一則話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）。**同步接受或拒絕**。
    *
    * - 寄件人必須是這個 host 認得的背景子代理；收件人只能是它的**直接 parent**，也就是這個 host 的 root。
-   *   別的編號（兄弟、自己、不存在的）一律拒絕：dsh「Agent-message authority is exact adjacency」。
-   * - 模型看到的文字加 dsh 的前綴 `Agent <寄件人> sent a message: `，寄件人是**子代理自己的會話 id**。
+   *   別的編號（兄弟、自己、不存在的）一律拒絕。
+   * - 模型看到的文字加前綴 `Agent <寄件人> sent a message: `，寄件人是**子代理自己的會話 id**。
    * - 投遞由 `onMessage` 決定（產品接線是 pump 的 `receiveAgentMessage`：閒著叫醒、忙著插話）。
    *
    * @throws host 已關閉；寄件人不是這裡的背景子代理；收件人不是它的直接 parent；沒有出口（主對話收不到）。
@@ -939,7 +918,7 @@ export class BackgroundSubagentHost {
    * @param input.text - 第一輪的人話。
    * @param input.choice - 這個子代理用哪一顆模型與推理等級，省略＝沿用 root 的；之後每一輪都是它（#876、#877）。
    * @param input.callId - 派它的那一顆 `tool/call`（root 那一份上的）。給了就在 root 記一顆 `subagent/catalog`（#1023），
-   *   **在接受第一句話之後**，同 dsh continuable「先准入、再寫目錄、最後回 id」。
+   *   **在接受第一句話之後**：先准入、再寫目錄、最後回 id。
    * @returns 編號（`bg-` 加隨機，不是計數器：root 續接之後不能撞上舊日誌）與第一輪的下場。
    * @throws host 已關閉；存活的背景子代理已達並存上限；編不出這個子代理的圖。
    */
@@ -977,8 +956,6 @@ export class BackgroundSubagentHost {
       try {
         appendSubagentCatalog(this.#sessions.root, { childId, callId, mode: 'continuable' });
       } catch (error) {
-        // 目錄寫不進去就派出失敗（#1702）：撤回剛准入的那一輪再重拋，同 dsh 寫目錄失敗時 `dispose(activation)`
-        // （`packages/subagent/subagent/src/manager.ts:1401-1416`）。錯經工具本體回到父代理成錯誤結果。
         this.#retract(runId);
         throw error;
       }
@@ -1007,13 +984,12 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 只停這個背景子代理**當下那一輪**（[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh
-   * `SubagentRuntime.interrupt`，`477b4f4`）。同步、不等停穩就回。
+   * 只停這個背景子代理**當下那一輪**（[#838](https://github.com/DemianLi/nexus-agent/issues/838)）。同步、不等停穩就回。
    *
    * - 舉的是那一輪自己的控制器，經 `TURN_CANCEL_CONFIG_KEY` 走合作式中止（等落定中的工具、不開新的、模型請求切斷）；
    *   **不是 root 的訊號**，root 按停止照舊不連帶它。
    * - 它**排著還沒領走的輪次不丟**，但暫停到下一次 `submit`。
-   * - 不存在的編號、沒在跑的（已結算或只排著）：被接受的 no-op，回 `false`（dsh 明寫，不是錯誤）。
+   * - 不存在的編號、沒在跑的（已結算或只排著）：被接受的 no-op，回 `false`（不是錯誤）。
    *
    * @returns 有舉起一輪的中止就是 `true`。
    */
@@ -1047,21 +1023,19 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 等到沒有背景子代理在推進（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `SubagentManager.waitForChildren`，
-   * `manager.ts:247-285`）。目標續行排下一輪之前問它：子代理還在跑時續行輪只會空轉。
+   * 等到沒有背景子代理在推進（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）。目標續行排下一輪之前問它：子代理還在跑時續行輪只會空轉。
    *
-   * **「在推進」的定義照 dsh：等著的是正在動的，閒著停放的不等**（`:248-251`）：
+   * **「在推進」的定義：等著的是正在動的，閒著停放的不等**：
    * - {@link hasRunning} 為真：有一輪在跑，或排著而沒被中斷暫停。**一輪跑完到結算通知發出之間（含結算前的最後一次排空，#1565）
-   *   子代理還在 `#busy`**，算在推進——dsh 同：`watchLocalSettlement` 的 `flushFinalState` 期間 agent 已 idle，但 `result.promise` 要到
-   *   結算才兌現，`waitForChildren` 走最後一行 `race(result, poke)` 等它（`:271-272`）。
-   * - 叫醒中的（{@link resume} 正在重建冷子代理）：dsh 先等 `materializations`（`:255`、`:260`）。
-   * - **不等**：被 {@link interrupt}／{@link interruptAll} 暫停而排著輪次的（＝dsh 的收件匣有欠著、閒著停放，`:271`）。
+   *   子代理還在 `#busy`**，算在推進。
+   * - 叫醒中的（{@link resume} 正在重建冷子代理）：要等。
+   * - **不等**：被 {@link interrupt}／{@link interruptAll} 暫停而排著輪次的（閒著停放）。
    *   所以不能用 {@link idle}：它會被暫停的排著輪次卡住，永不兌現。
    *
-   * 不輪詢：由 `#publishStatus` 與叫醒的起落喚醒，醒了重新判斷（dsh 的 `while (true)`）。
+   * 不輪詢：由 `#publishStatus` 與叫醒的起落喚醒，醒了重新判斷。
    *
-   * @param signal - 舉起就不再等，回傳目前為止有沒有等過（同 dsh 的 `unloading`；呼叫端自己看 signal 決定要不要往下）。
-   * @returns 有沒有等過任何東西：`true` 表示呼叫端該重新判斷（同 dsh「host must recheck parent completion」）。
+   * @param signal - 舉起就不再等，回傳目前為止有沒有等過（呼叫端自己看 signal 決定要不要往下）。
+   * @returns 有沒有等過任何東西：`true` 表示呼叫端該重新判斷。
    */
   async whenChildrenSettled(signal?: AbortSignal): Promise<boolean> {
     let waited = false;
@@ -1108,8 +1082,7 @@ export class BackgroundSubagentHost {
   }
 
   /**
-   * 全部停下（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，封存帶 `stopActivity`；dsh 的 `workspace/session-stop`
-   * 請 subagent 擁有者停它的後代）。**同 {@link interrupt}，同步、不等停穩**：跑著的每一輪舉起合作式中止，排著的輪次一併暫停到
+   * 全部停下（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，封存帶 `stopActivity`）。**同 {@link interrupt}，同步、不等停穩**：跑著的每一輪舉起合作式中止，排著的輪次一併暫停到
    * 下一次 `submit`——只舉中止不夠，被中止那一輪的收尾會讓下一個排著的輪次接著跑。
    *
    * @returns 動到幾個子代理（跑著的與排著的合計）。
@@ -1128,7 +1101,7 @@ export class BackgroundSubagentHost {
   /**
    * 每個認得的背景子代理此刻的狀態，依派出的先後（[#867](https://github.com/DemianLi/nexus-agent/issues/867)）。
    *
-   * `running`＝有一輪正在跑，或排著一輪**且沒被中斷暫停**；其餘是 `idle`。跟 {@link list} 的 `running` 不同：後者照 dsh
+   * `running`＝有一輪正在跑，或排著一輪**且沒被中斷暫停**；其餘是 `idle`。跟 {@link list} 的 `running` 不同：後者
    * 只看有沒有輪次，被中斷後暫停的排著的輪次也算；這裡是給「停止這一輪」鈕與輸入框用的，暫停的不算在跑。
    */
   statuses(): readonly BackgroundSubagentStatus[] {
@@ -1171,7 +1144,7 @@ export class BackgroundSubagentHost {
   /**
    * 目錄：這個主對話派出去的每一個背景子代理，依派出的先後。給 `list_agents`（#837）。
    *
-   * `running`＝有輪次排著或正在跑（dsh 的 `running` 只看有沒有輪次在做事，不透露是否載入）；
+   * `running`＝有輪次排著或正在跑；
    * 其餘是 `inactive`。`label` 是子代理的種類名。
    */
   list(): readonly BackgroundSubagentListing[] {
@@ -1203,11 +1176,11 @@ export class BackgroundSubagentHost {
 
   /**
    * 讓一個重啟之前派出的背景子代理**常駐**（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)），之後 {@link send}／{@link sendFromUser}
-   * 才收得到話。照 dsh：只有送話才把冷的接回來，列出（{@link list}、{@link statuses}）與 {@link interrupt} 都不復活。
+   * 才收得到話。只有送話才把冷的接回來，列出（{@link list}、{@link statuses}）與 {@link interrupt} 都不復活。
    *
    * 已經常駐的（這個行程派的、或叫醒過的）立刻回。步驟與順序：
    *
-   * 1. 名額先佔（滿了拒絕，**在重建之前**，同 dsh 的 `ActivationPool.reserve`；佔著期間算存活，所以併發的叫醒搶不到同一格）。
+   * 1. 名額先佔（滿了拒絕，**在重建之前**；佔著期間算存活，所以併發的叫醒搶不到同一格）。
    * 2. 拿寫租約、補當掉那一輪的收尾（`ColdChildStore.resume`）。
    * 3. 按日誌上的身分編圖，**對話從日誌重播灌回去**（`restore`）——跟 root 的續接同一個既有偏離，見 `background-cold.ts`。
    * 4. 日誌以上一個行程的事件為 seed 開在註冊表上，持久化協調器往原檔續寫。
@@ -1373,7 +1346,7 @@ export class BackgroundSubagentHost {
           this.#requeueSteers(job, leftover);
           this.#publishStatus();
           this.#wake?.();
-          // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**，同 dsh 在所有權釋放之前。
+          // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**。
           if (!this.#queue.some((queued) => queued.runId === job.runId)) {
             // 這一段收完了：下一次 `submit` 是新的一段，收尾訊息不回頭撿這一段的。不論有沒有人接 `onSettled` 都重置。
             this.#epochs.delete(job.runId);
@@ -1488,7 +1461,6 @@ export class BackgroundSubagentHost {
               ? { reason: { kind: 'max-turns' } }
               : {},
       );
-      // 中止先判，蓋過輸出上限，同 dsh（`agent-loop/src/agent.ts:349-355`）。
       stop = controller.signal.aborted
         ? 'aborted'
         : blocked
@@ -1528,7 +1500,7 @@ export class BackgroundSubagentHost {
     // **結算之前先落盤**（#1565）：通知主對話之前，這個子代理自己的最後一則回覆與 `turn/end` 要已經排空，否則強制結束落在 10ms
     // 寫回窗口裡時，主對話記著「收尾訊息是 X」、子代理日誌卻沒有 X。放在 `#round` 裡、不放進 `.then`：`.then` 保持同步，
     // 「先讓出位子、再交下場」不被拆開。這裡 await 的時候 `#running` 已經拿掉、`#busy` 還在：期間到的話排成下一輪，`.then`
-    // 的佇列檢查在 flush 之後才讀，所以這次不發結算（等於 dsh `manager.ts:1042-1048` 在 flush 之後重核）。
+    // 的佇列檢查在 flush 之後才讀，所以這次不發結算。
     if (log !== undefined) await this.#flushFinal(job.runId, log);
     let settlement: BackgroundSettlement | undefined;
     if (log !== undefined) {
@@ -1555,7 +1527,7 @@ export class BackgroundSubagentHost {
 
   /**
    * 把這個子代理自己的日誌排空（單份：`SessionRegistry.flush(log)`，#1511 沒動這一支，失敗照舊往外拋，所以在這裡接住）。
-   * 失敗只講一聲，字樣照 dsh `manager.ts:1208-1218`；結算照發。
+   * 失敗只講一聲；結算照發。
    */
   async #flushFinal(runId: string, log: SessionLog): Promise<void> {
     try {
