@@ -398,7 +398,7 @@ describe('排不出來的每一種，理由各自有名字', () => {
   /**
    * **收尾在授權之前才算數**（#1516）：人下的暫停一定中止在跑的那一輪，所以「暫停 → 恢復」每次都是
    * 「最後一顆 `turn/end` 是 aborted，後面接一次 `resume`」。
-   * 我們的決定讀日誌算，要靠先後。
+   * 決定讀日誌算，要靠先後。
    */
   describe('收尾之後又有人授權（create／resume）', () => {
     const ABORTED: readonly [string, unknown] = [

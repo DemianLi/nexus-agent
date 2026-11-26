@@ -1,14 +1,14 @@
 /**
  * 續行排程器的**決策那一半**：一輪收工之後，要不要再排一輪。
  *
- * 輪迴圈歸入口點所有，見下面那條載體偏離。人插話那一面有了（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
- * `@nexus/core` 的 `step-inbox.ts`），但它由 pump 送進圖，聽者碰不到。索引見 `harness/apps/harness/src/interception-index.test.ts`。
+ * 輪迴圈歸入口點所有，見下面那條載體偏離。人插話走 `@nexus/core` 的 `step-inbox.ts`（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），
+ * 由 pump 送進圖，這裡碰不到。索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * ## 為什麼它落在 `harness/apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
  *
  * 我們的 `PluginRegistry` 二十條通道（`registry.ts:863-883`）
  * **沒有一條排得出一輪**——輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、
- * `cli.ts` 的 `runTurn`）。所以載體丟掉、紀律照抄，同 `containment.ts` 對
+ * `cli.ts` 的 `runTurn`）。所以排程器放在入口點旁、不做成 plugin，同 `containment.ts` 對
  * `guard/timeout-policy` 那一筆。
  *
  * **但檢查沒有跟著搬**：續行文字的 renderer（`@nexus/goal`）與驗它的不變量伴生（`@nexus/plugin-goal`）
@@ -23,7 +23,7 @@
  *
  * ## 就緒不是「`turn/end` 到了」
  *
- * `thread-pump.ts` 自己寫著「跑完**與停在核准點**都算收工」。要問的不只 `turn/end` 到了沒有，見 {@link decideGoalRound}。
+ * `thread-pump.ts` 把「跑完**與停在核准點**」都算收工。要問的不只 `turn/end` 到了沒有，見 {@link decideGoalRound}。
  *
  * ## CLI 的那條額外停損：做的是這一條，不是 #180 要的那一條
  *
@@ -56,8 +56,8 @@
  * 出廠就開著續行，一個失控的目標會一直花錢、佔 thread 名額，部署的人要能從外面夾住它。CLI 那一半同理：旗標後面直接是一支
  * 燒 API key 的迴圈（`cli.ts` 的 `driveGoalRounds`）。補的是一條模型改不動的上限；目標域的 `??` 不動。
  *
- * （**2026-10-07（#445）：serve 預設開、CLI 維持
- * 預設關**——serve 要核准時停下來等人，不會空轉；CLI 的 `HEADLESS_APPROVALS` 會確定性拒絕。）
+ * （**serve 預設開、CLI 維持
+ * 預設關**（#445）——serve 要核准時停下來等人，不會空轉；CLI 的 `HEADLESS_APPROVALS` 會確定性拒絕。）
  *
  * 剩下的那一半照舊：`blockedAfterConsecutiveRounds`（預設 3）讓模型從第 3 輪起**可以**把
  * 自己 block 出去——那是准許不是保證，沒有東西逼它用。所以 CLI 開旗標時要把**兩條**上限
@@ -127,7 +127,7 @@ export type GoalDriverIdleReason =
    * **收尾之後又有人下了 `create` 或 `resume`，就不算**——那次收尾針對的是上一份授權，見 {@link reauthorizedSince}
    * （[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)：暫停一定中止在跑的那一輪，「暫停 → 恢復」靠這一句才會自己續上）。
    *
-   * **Q8 拍板過**：我們只收回行程內的授權，相位與修訂號不動——Q8 寫的是「目標狀態不動」。
+   * 只收回行程內的授權，相位與修訂號不動（[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8）。
    */
   | 'turn-aborted'
   /**
@@ -192,7 +192,7 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
  * 這一輪收尾**之後**，有沒有一次有人下的 `create` 或 `resume`（唯二會武裝續行的變更，見 `service.ts`）。
  *
  * 有的話，輪次的收尾（中止、拋錯、撞輸出上限）針對的是上一份授權，不該再收回這一份。
- * 我們的決定是無狀態的、讀日誌算的，所以要用日誌上的先後把「收尾在授權之前」
+ * 決定是無狀態的、讀日誌算的，所以要用日誌上的先後把「收尾在授權之前」
  * 與「收尾在授權之後」分開。少了這一句，「暫停 → 恢復」與「停止 → 恢復」之後 driver 一決定就把剛武裝的授權收回，
  * 續行輪不會自己開跑（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516) 起暫停一定中止在跑的那一輪，
  * 這條變成主流程）。

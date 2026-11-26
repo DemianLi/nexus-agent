@@ -1,13 +1,13 @@
 /**
  * 串流內錯誤信封（`{ "error": { type, code, message } }`）→ 失敗碼與載體狀態（[#1805](https://github.com/DemianLi/nexus-agent/issues/1805)）。
  *
- * 梯子：每一階都是
+ * 分類是一條梯子：每一階都是
  * 「狀態條件**或**欄位／字樣條件」，順序是 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`，
  * 都對不上才看有沒有狀態（有：`HTTP_<狀態>`；沒有：`SERVER`）。
  *
  * ## 數字碼那一階
  *
- * **數字碼那一階是我們加的**：信封的數字 `code`／`status`（400–599）當成 `status` 餵進同一條梯子。理由：基座
+ * **數字碼那一階**：信封的數字 `code`／`status`（400–599）當成 `status` 餵進同一條梯子。理由：基座
  * （OpenAI SDK／LangChain 的重試與分類）整條路只看 HTTP 狀態，第一則事件就是信封的端點（#516）必須翻成帶狀態的 HTTP 回應
  * 基座才認得出來，所以信封裡的數字要當成狀態。數字碼與 `type`／字樣**同時**出現時，沒有誰蓋掉誰：每一階是「或」，
  * 先到的階贏——`{ code: 503, type: 'authentication_error' }` 是 `AUTH`（因為 `AUTH` 在 `SERVER` 前面）。
@@ -19,8 +19,8 @@
  * {@link InbandFailure.code}。第一則事件就是信封的那一條不靠旗標：合成的 400 回應交給轉接器（`BaseChatOpenAI`），它自己認得超窗的 400，
  * 實測（`model-failure-classification.test.ts` 的 `typedRows`）也是 `CONTEXT_WINDOW_EXCEEDED`。
  *
- * **字樣偵測**：#1805 只套在信封上；#1557 起
- * `classifyTurnFailure` 也把它套到模型呼叫錯誤鏈上每一環的 `type`、`code`、`message`。
+ * **字樣偵測**：下面兩支套在信封上，也套在 `classifyTurnFailure` 看的模型呼叫錯誤鏈每一環的
+ * `type`、`code`、`message`（#1557）。
  */
 
 const STRUCTURED_CONTEXT_OVERFLOW = new RegExp(
@@ -103,7 +103,6 @@ export function classifyInbandError(error: Record<string, unknown> | undefined):
   const fields = error ?? {};
   const status = numericStatusOf(fields);
   const type = typeof fields.type === 'string' ? fields.type : '';
-  // `${type} ${code（字串才算）} ${message}`。
   const detail = `${type} ${typeof fields.code === 'string' ? fields.code : ''} ${typeof fields.message === 'string' ? fields.message : ''}`;
 
   if (

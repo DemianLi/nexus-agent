@@ -1266,7 +1266,6 @@ describe('封存的會話（#633）', () => {
     expect(pump.pendings).toHaveLength(0);
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'resume']);
     expect(endKinds(pump.sessionLog).at(-1)).toBe('blocked');
-    // 核准是在叫模型之前就給的，掛著的核准照樣落地。
     const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
     expect(results).toHaveLength(1);
     await stop();
