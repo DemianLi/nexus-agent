@@ -10,7 +10,7 @@
  *
  * ## 子行程的環境與逾時（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)）
  *
- * - **清洗過的環境**：照 dsh「每個 spawner 都走同一份清洗」（`packages/subprocess/subprocess/src/index.ts:41-47`，`687f282e`），
+ * - **清洗過的環境**：
  *   用 `@nexus/core` 的 `scrubbedParentEnv()`，再疊上跟 git 快照同一組 git 變數（`harness/packages/nexus-plugin-workspace-changes/src/git.ts`
  *   的 `GitRunner.run`）。`launch-env` 從 `.env` 寫進行程環境的 key 不再交給 git；`GIT_OPTIONAL_LOCKS=0` 讓 `git status` 不去刷新
  *   程式碼 checkout 的 index。
@@ -18,8 +18,8 @@
  *   快照那種 30 秒；同步呼叫也沒有「先 TERM、寬限之後再 KILL」那一步，忽略 SIGTERM 的子行程會讓呼叫等到它自己結束，所以直接
  *   SIGKILL。逾時跟其他失敗一樣記 `null`。**只殺直接子行程**：git 自己留下的孫行程（使用者在程式碼 checkout 設了 `core.fsmonitor`
  *   這類設定時）不會被殺，跟 git 快照登記的是同一格窄。
- * - **這裡管的只是「沒有戳記才問 git」那條退路**：dsh 的 commit 是打包時記下的（`apps/desktop/scripts/desktop-build-commit.mjs:23-29`），
- *   我們打包出來的產物也帶戳記（{@link resolveBuildVersion}，#1502）；原始碼樹沒有戳記，才在執行期問 git。這張不動這個順序。
+ * - **這裡管的只是「沒有戳記才問 git」那條退路**：
+ *   打包出來的產物帶戳記（{@link resolveBuildVersion}，#1502）；原始碼樹沒有戳記，才在執行期問 git。
  *
  * @module
  */

@@ -406,8 +406,7 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
   // 剛好超過上限一層，跟上面「剛好 600」那一格湊成一對邊界。
   //
   // **#1665 之後先撞上的是日誌那一關，不是存檔點。** 以前日誌拒收這一則（601 層）時錯被吞掉，回覆照樣進 state，這一輪結束寫存檔點
-  // 才拋 checkpoint_depth_exceeded。現在回覆記不進去，模型呼叫當場失敗（`@nexus/core` 的 `model-calls.ts`，照 dsh
-  // `assistant-stream.ts:83-88`），回覆不進 state，存檔點輪不到這一則。這是行為改了，不是放寬：這一輪照樣失敗、下一輪照樣看不到深參數。
+  // 才拋 checkpoint_depth_exceeded。現在回覆記不進去，模型呼叫當場失敗（`@nexus/core` 的 `model-calls.ts`），回覆不進 state，存檔點輪不到這一則。這是行為改了，不是放寬：這一輪照樣失敗、下一輪照樣看不到深參數。
   // 存檔點那一關自己的 601 層邊界由上面 `DepthCheckedSerializer` 那一組直接釘（不經日誌）。
   //
   // 碼是 NESTING_TOO_DEEP（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：日誌那一關拋的 `SessionEventDepthError` 帶碼，
@@ -432,7 +431,7 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
         `^會話事件的 assistant/message 的 data\\.message\\..* 是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層$`,
       ),
     );
-    // 偏離 dsh（理由 1）：dsh 沒有這一類，不是 `LlmError` 的錯一律 UNKNOWN（`agent.ts:379-381`，`687f282e`）；上限是基座帶來的，見 `classifyTurnFailure`。
+    // 上限是基座帶來的，見 `classifyTurnFailure`。
     expect(data.error.code).toBe(NESTING_TOO_DEEP_CODE);
     // 不重打：同一則回覆再要一次一樣深。
     expect(mainCalls(upstream, '深:deep')).toBe(1);
@@ -447,7 +446,7 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
     await say(server, 'same-deep', '再一句');
     const roles = (prompt: string) =>
       requestFor(upstream, prompt).map((m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`);
-    // 失敗那一輪的人話留著、回覆沒有：同 dsh，`user/message` 在那一步開頭就寫了（`agent.ts:426-436`），回覆被拒就沒有。
+    // 失敗那一輪的人話留著、回覆沒有：`user/message` 在那一步開頭就寫了，回覆被拒就沒有。
     const live = roles('再一句');
     expect(live).toEqual(['system:', 'user:第一句', 'assistant:好', 'user:深:deep', 'user:再一句']);
 
