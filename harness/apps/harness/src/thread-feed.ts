@@ -2,19 +2,19 @@
  * 全部 thread 共用的那條下行的集線器（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）。契約見
  * `@nexus/wire` 的 `THREAD_FEED_PATH`。
  *
- * 照 dsh gateway 的 remote event 串流（`packages/api/gateway/src/index.ts:490-600`，`477b4f4`）：
+ * 規則：
  *
  * - 每條 thread 的 pump 一建好就接上來（{@link ThreadFeed.attach}），它講的 {@link PumpActivity} 補上 `threadId`
  *   廣播給每一條線。
- * - **一條線接上的當下補送所有 thread 還掛著的 `input.requested`**，同 dsh 的 `pendingRemoteEvents`（`:500`）。
+ * - **一條線接上的當下補送所有 thread 還掛著的 `input.requested`**。
  *   快照與註冊在同一段同步程式裡，中間沒有空檔讓一題兩邊都沒有或兩邊都有。
- * - 狀態不補送：起點是列表，同 dsh 的 `reconcileStatus`。
+ * - 狀態不補送：起點是列表。
  * - **接上一條 thread 時廣播一顆 `added`**（#2988）：新開的會話不等列表就進得了側欄。新開的與撤出記憶體後再打開的都發；
  *   開線時不補送。
  * - **刪除與釘選、封存集合由處理那支指令的一方交進來廣播**（{@link ThreadFeed.announce}，#2990），開線時同樣不補送。
  *
  * **每條線的佇列有位元組上限**（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）：對方不收的線積壓超過上限就收掉這一條，
- * 其他線不受影響。dsh 對應的 `RemoteEventQueue` 沒有這一層，偏離 B／C 的登記與理由見 `bounded-event-queue.ts`。
+ * 其他線不受影響。偏離 B／C 的登記與理由見 `bounded-event-queue.ts`。
  *
  * @module
  */

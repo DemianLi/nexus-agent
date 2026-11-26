@@ -2,7 +2,7 @@
  * 逐 chunk 掃一份文字，建出一頁（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：選到的行、總行數、有沒有被位元組
  * 上限截掉，全程只留下那一頁，不論檔案多大。
  *
- * 照 dsh 的 `buildWindow`（`packages/fs/tool-fs/src/read-render.ts:111-144`，master `687f282e`）：
+ * 規則：
  *
  * - **單行緩衝只留 `maxLineLength + 1` 個字元**：多一個字元就足以證明這一行超長，所以沒有換行的巨行也不會讓記憶體失控。
  *   選到的行截到 `maxLineLength`，後面接 `... (line truncated to N chars)`。
@@ -10,12 +10,12 @@
  *   每行（截斷後、含後綴）的 UTF-8 位元組，非第一行再加一個換行。
  * - chunk 的邊界沒有意義：換行可以在任何地方。
  *
- * **行尾的 `\r` 去掉**（{@link WindowParams.stripCarriageReturn}，`read_file` 裡才開；照 dsh `read-render.ts:91-93` 的 `stripCarriageReturn`，
+ * **行尾的 `\r` 去掉**（{@link WindowParams.stripCarriageReturn}，`read_file` 裡才開，
  * [#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：`edit` 現在對行尾做正規化（`contained-backend.ts`），模型照讀到的內容寫
  * `old_string` 就對得上，不必再為了它保留 `\r`。判行長在去掉之後（`maxLineLength` 個字元的 CRLF 行不會被標截斷，#1776）。不在 `read_file` 裡的
  * 呼叫（摘要器、`agent-instructions` 的 `discover`、直接呼叫）維持基座的切片語意，`\r` 原樣。**開頭的 BOM 仍保留**（`utf8-stream.ts`）。
  *
- * 另外多回三樣 dsh 的 `WindowResult` 沒有、基座的 `read` 語意要的東西：換行的個數（`Line offset N exceeds file length (M lines)` 的 M 是
+ * 另外多回三樣基座的 `read` 語意要的東西：換行的個數（`Line offset N exceeds file length (M lines)` 的 M 是
  * 換行數加 1）、檔案是不是以換行結尾（頁到檔尾時結尾那個換行要留著，與基座切片一致）、有沒有看過非空白字元（基座對空檔與全空白的檔回
  * 一句提醒，要在掃描途中記，不能事後 `trim` 整份）。
  *
@@ -44,7 +44,7 @@ export interface WindowScan {
   readonly cappedByBytes: boolean;
   /** 整份文字有幾個 `\n`。 */
   readonly newlines: number;
-  /** 總行數：最後一行後面的換行不算一行，同基座的編號與 dsh。 */
+  /** 總行數：最後一行後面的換行不算一行，同基座的編號。 */
   readonly totalLines: number;
   /** 文字非空、而且最後一個字元是 `\n`。 */
   readonly endsWithNewline: boolean;
@@ -111,7 +111,7 @@ export async function scanWindow(
   const endLine = (): void => {
     totalLines += 1;
     if (collecting) {
-      // 去 `\r` 在判長度之前（#1776，照 dsh 先去掉才判）：CRLF 檔裡剛好 `maxLineLength` 個字元的行不該被標截斷。
+      // 去 `\r` 在判長度之前（#1776）：CRLF 檔裡剛好 `maxLineLength` 個字元的行不該被標截斷。
       // 緩衝丟過字元的一行一定超長，那時緩衝尾巴是不是 `\r` 不作數。不去 `\r` 的呼叫（基座切片語意）判長度時仍不算它。
       const crlf = buffer.endsWith('\r');
       const line = stripCarriageReturn && crlf && !lineDropped ? buffer.slice(0, -1) : buffer;

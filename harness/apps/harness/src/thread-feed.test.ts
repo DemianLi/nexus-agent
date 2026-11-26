@@ -1,7 +1,7 @@
 /**
  * 全部 thread 共用的那條下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）。
  *
- * 照 dsh：在跑／閒著的切換廣播（`api-session/status`），等人回答的請求接上時補送（`pendingRemoteEvents`），答掉或收回
+ * 在跑／閒著的切換廣播，等人回答的請求接上時補送，答掉或收回
  * 時撤回。前半對著 pump 量它講了什麼、按什麼順序；後半走真的 handler 與 client。
  *
  * **最容易假綠的是「停在核准點時沒講閒著」**：狀態整個壞掉（一顆都不送）時也成立。所以每一條都先證它講過在跑，

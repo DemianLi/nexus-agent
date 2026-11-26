@@ -6,8 +6,7 @@
  * `wrapToolCall` 只比工具名，子代理幻覺出來的 `subagent` 呼叫照樣被接手：前景拿 root 那一份 `task` 派出巢狀的孫代理，
  * 背景把孫代理掛到 root 的 host 上（root 的子代理目錄多一條指向 root 日誌裡不存在的呼叫），日誌一律記成功、沒有碼。
  *
- * 照 dsh：派得出去的就是這個 agent 看得到的（`packages/core/tools/src/index.ts:1230-1252`，派發與 schema 用同一份逐 agent
- * 視圖），看不到的呼叫在派發那一步拋 `ToolNotFoundError`（`:1578-1579`，`5badb15`）。我們這側由最內層把基座的「沒有這顆
+ * 原則是派得出去的就是這個 agent 看得到的：看不到的呼叫由最內層把基座的「沒有這顆
  * 工具」標成 `UNKNOWN_TOOL`（#1024，`harness/packages/nexus-core/src/invalid-tool-args.ts`）。
  *
  * **全走產品組裝**：`createNexusAgent({ backgroundSubagents })`＋腳本模型＋`ThreadPump`＋`attachSession`，日誌經

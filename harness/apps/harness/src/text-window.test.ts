@@ -83,7 +83,7 @@ describe('scanWindow＋pageOf 對舊算法：隨機文字、隨機切片', () =>
       const scan = await scanWindow(randomChunks(text, next), params);
       const got = pageOf(scan, params);
       const want = reference(text, offset, limit, maxBytes);
-      // 舊算法一行都塞不下時仍給第一行（偏離二）；dsh 的算法不給。每行最多 3 片、每片最多 7 位元組（21），maxBytes 下限 24，這個分歧碰不到。
+      // 每行最多 3 片、每片最多 7 位元組（21），maxBytes 下限 24，所以每一行都塞得進一頁，一行都塞不下的情形碰不到。
       expect({ round, text, got }).toEqual({ round, text, got: want });
     }
   });
@@ -171,7 +171,7 @@ describe('scanWindow：行長與位元組上限', () => {
     ]);
   });
 
-  // #1776：沒開 strip 的呼叫判長度時仍不算行尾的 `\r`（dsh 先去掉 `\r` 才判；那些呼叫保留 `\r`，所以判長度時要自己扣掉）。
+  // #1776：沒開 strip 的呼叫判長度時仍不算行尾的 `\r`（那些呼叫保留 `\r`，所以判長度時要自己扣掉）。
   it('沒開 strip：CRLF 剛好 2000 字元的行不標截斷，`\r` 仍留著；2001 字元的標', async () => {
     const scan = await scanWindow(
       [`${'x'.repeat(2000)}\r\n${'y'.repeat(2001)}\r\n${'z'.repeat(2000)}\n`],
