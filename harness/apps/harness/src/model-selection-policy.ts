@@ -2,8 +2,6 @@
  * 子代理逐次選模型的**政策**（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡
  * [#709](https://github.com/DemianLi/nexus-agent/issues/709)）：設定怎麼變成一個會話的政策，以及續接時怎麼讀回來。
  *
- * 照 dsh（`packages/subagent/tool-subagent/src/index.ts:626-640` 與 `model-selection-state.ts:17`，`477b4f4`）：
- *
  * - **沒有歷史的新會話**從設定取樣一次，寫成 `subagent/model-selection-policy` 事件（`agent-factory.ts` 的 `attachSession`）；
  * - **有歷史的會話**（續接）只讀日誌那一份，**不看現在的設定**：設定事後再改只影響新會話。
  *   沒有那顆事件的舊會話就是關著，即使現在設定打開了。

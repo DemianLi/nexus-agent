@@ -12,7 +12,7 @@
  * - **狀態機**（{@link createMemoryPressureWatch}）每個來源各一份狀態，互不影響：
  *   - 嚴格超過門檻（`>`）講一次「警告」；之後不重複。
  *   - 降到「門檻 − {@link PRESSURE_HYSTERESIS_POINTS}」**以下**（嚴格小於）講一次「已恢復」；門檻附近來回不洗版（Q3）。
- *   - **讀不到就不判斷、不警告，也不把讀不到當成 0**（借 dsh `terminal-controller/src/retention.ts:119`、`:122`：檢查失敗記成 `state: 'unknown'`，不是 `idle` 就不收，活動狀態未知時不動作）。
+ *   - **讀不到就不判斷、不警告，也不把讀不到當成 0**。
  *     從可讀變成不可讀時講一次原因（起動時就讀不到也講一次），不可讀期間狀態保持不變——讀不到不算恢復，回來時接續。
  *   - 同一個來源的「依據」換了（例如 cgroup 消失、改看主機），分母的意思變了，狀態重來。
  *
@@ -31,11 +31,6 @@
  * - **heap 的遲滯壓不住 GC 鋸齒**（#1718 合成量測，見 PR 內文）：heapUsed 隨老生代 GC 在 20 多個百分點的範圍內起伏，遠大於
  *   {@link PRESSURE_HYSTERESIS_POINTS}。常態落在門檻附近的 heap 會「警告、已恢復、警告」輪流響，每次越過一行，只寫日誌。照拍板用同一組門檻，
  *   不另訂；若實際洗版，要改的是 heap 來源怎麼取樣（例如只看 GC 後的值），不是這個狀態機。
- *
- * ## 偏離 dsh：產品需求超出 dsh（理由 2）
- *
- * dsh（`687f282e`）沒有執行期的記憶體監看。這是 serve 跑在多人共用的內網主機上、需要在爆之前通知管理者才有的需求。
- * 只借上面「讀不到就不判斷」的形狀（dsh `retention.ts:119` 檢查失敗記成 `state: 'unknown'`、`:122` 不是 `idle` 就不收）。
  *
  * @module
  */
@@ -139,9 +134,6 @@ export const memoryUsageSource: PressureSource = {
  * - **讀不到**：行程自己的讀數拋了，或 `heap_size_limit` 不是正數——明說原因，不當成 0。
  * - **依據固定**：`heap_size_limit` 在行程活著的期間不變，所以狀態機不會因為依據換了而重來。
  * - 跟 {@link memoryUsageSource} 的合併方式是**各講各的**，見檔頭「兩個來源怎麼合」。
- *
- * 依據：dsh 自己把這個上限當一級量測值（`scripts/run-memory-pressure-bench.ts:114-115`，`687f282e`：
- * `defaultNodeHeapLimitMb: getHeapStatistics().heap_size_limit`）。警告本身是 dsh 沒有的，沿用 #1493 的偏離登記（理由 2）。
  */
 export const heapUsageSource: PressureSource = {
   id: 'heap-usage',

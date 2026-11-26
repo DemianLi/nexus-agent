@@ -1,8 +1,8 @@
 /**
  * 持久化型別圖的正規化與指紋（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1）。
  *
- * 照 dsh `scripts/persistence-schema-model.spec.ts` 與 `persistence-schema-snapshot.spec.ts`（`687f282e`）。沒搬的：
- * 訊息來源政策那一組（`SourceCompatibility` 不搬，見 `persistence-schema.ts` 檔頭），以及精簡清單「讀回來還原」的幾格
+ * 沒有的：
+ * 訊息來源政策那一組（`SourceCompatibility` 沒有，見 `persistence-schema.ts` 檔頭），以及精簡清單「讀回來還原」的幾格
  * （`parsePersistenceSnapshot` 屬於驗證器，⓪b-2）。
  */
 

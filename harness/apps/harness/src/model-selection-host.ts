@@ -2,17 +2,15 @@
  * 每會話模型選擇的**組裝端**（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）：從型錄建控制器、
  * 把控制器接上 root 的日誌、把選擇的現況投影給 web。機制本身（快照、換模型、通知）在 `@nexus/core` 的 `model-selection.ts`。
  *
- * 照 dsh 的分工：型錄與推理等級的宣告歸 adapter（`llm-pi-ai`），選擇歸 `session-controller`，換模型歸 agent。我們的 adapter 是
- * `createLiveModel`，型錄是 `live-model` 那一列的 `models`（#729）。
+ * 我們的 adapter 是 `createLiveModel`，型錄是 `live-model` 那一列的 `models`（#729）。
  *
- * ## 與 dsh 的差異（登記）
+ * ## 設計取捨（登記）
  *
- * - **推理強度只認 `off` 與 `default`。** dsh 的等級由 adapter 驗證、線上怎麼帶也是 adapter 的事；我們的型錄雖然可以宣告任意名字，但只有
+ * - **推理強度只認 `off` 與 `default`。** 型錄雖然可以宣告任意名字，但只有
  *   `off` 量過線上寫法（`thinkingOffBody`）。與 {@link ./subagent-model-selection.ts} 同一條界線：宣告了別的名字也先不放進可選清單，
  *   `model.select` 帶了就拒。**`default` 可選的條件是模型有可選等級**（今天就是宣告了 `off`）——它是「不加任何設定」，沒有它使用者選了 `off` 就回不去。
  * - **沒有 provider。** 見 `model-route.ts`。
- * - **選擇存在會話日誌，不存成使用者的個人預設。** PM 2026-10-08 決策：dsh 的背景存檔要有設定編輯器才存得住，我們沒有由程式代管的個人
- *   設定檔，照 dsh 沒掛設定編輯器時的已知限制（`agent-default-model/README.md:117`）處理。
+ * - **選擇存在會話日誌，不存成使用者的個人預設。** PM 2026-10-08 決策。
  *
  * @module
  */
@@ -65,7 +63,7 @@ export interface ModelSelectionHost {
   catalog(): ModelCatalog;
   /**
    * 驗一個選擇（`model.select` 用）：型錄有那顆、強度是它可選的等級（有可選等級的模型也收 `default`）。通過回正規化後的路由。
-   * 照 dsh `selectModel`：不在型錄、或模型沒有推理資訊卻帶強度、或帶了沒宣告的等級，都在打供應商之前拒（`model_unavailable`）。
+   * 不在型錄、或模型沒有推理資訊卻帶強度、或帶了沒宣告的等級，都在打供應商之前拒（`model_unavailable`）。
    */
   validate(selection: ModelSelection): ModelRoute | ModelUnavailable;
   /**
@@ -228,7 +226,7 @@ function selectionOf(route: ModelRoute | null): ModelSelection | null {
 }
 
 /**
- * 折疊狀態→給 web 的 {@link ModelSelectionState}：`next` 是使用者最後選的、沒選過就等於 `lastUsed`（dsh `modelSelection` 投影）。
+ * 折疊狀態→給 web 的 {@link ModelSelectionState}：`next` 是使用者最後選的、沒選過就等於 `lastUsed`。
  * **`model.catalog` 的 `selection` 也走這一個函式**，兩處不會各算各的。
  */
 export function modelSelectionView(state: ModelSelectionFold): ModelSelectionState {

@@ -84,7 +84,7 @@ function workspaceWith(agentsMd: string | undefined): string {
   return dir;
 }
 
-/** 一個 home；`patch` 有給就寫成 home 裡的 `cordis.patch.yml`（使用者的 patch 檔，第一次啟動時會遷進變更紀錄，見 `plugin-config.ts:20`；`plugin disable` 這類指令寫的是變更紀錄，不是這個檔）。 */
+/** 一個 home；`patch` 有給就寫成 home 裡的 `cordis.patch.yml`（使用者的 patch 檔，第一次啟動時會遷進變更紀錄，見 `plugin-config.ts:19`；`plugin disable` 這類指令寫的是變更紀錄，不是這個檔）。 */
 function home(patch?: string): NodeJS.ProcessEnv {
   const dir = scratch();
   if (patch !== undefined) writeFileSync(join(dir, 'cordis.patch.yml'), patch, { mode: 0o600 });

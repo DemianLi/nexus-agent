@@ -2,37 +2,27 @@
  * 模型型錄：每顆模型的窗口、輸出上限、收哪些種類的輸入、推理等級，以及怎麼關推理
  * （[#729](https://github.com/DemianLi/nexus-agent/issues/729)）。
  *
- * 照 dsh `llm-pi-ai` 的型錄形狀（`packages/llm/llm-pi-ai/src/catalog.ts:574-610`，`477b4f4`）：**型錄的來源是設定，
- * 不去問端點有哪些模型**；每一筆帶 `id`、`contextWindow`、`maxTokens`（設了就是這顆每次請求的預設輸出上限）、
- * `input`、`reasoningEfforts` 與 `compat`；`models` 整份取代型錄（`README.md:99`），不是逐筆合併。
+ * **型錄的來源是設定，不去問端點有哪些模型**；每一筆帶 `id`、`contextWindow`、`maxTokens`（設了就是這顆每次請求的預設輸出上限）、
+ * `input`、`reasoningEfforts` 與 `compat`；`models` 整份取代型錄，不是逐筆合併。
  * 只有查詢與解析在這裡，不裝功能；設定的邊界在 `settings/live-model.ts`。
  *
- * ## 與 dsh 的差異
+ * ## 欄位的設計
  *
- * - **多一格 `tokenizer`（#1102）。** dsh 的型錄沒有這一格：它的估算器是固定密度（4 個字元一個 token，見
- *   `token-estimate.ts` 的偏離），不分模型。我們的估算以 o200k 為底，而出廠預設模型把數字逐位切詞，數字為主的內容
- *   會少估到一半。dsh 表達得出來的做法（固定密度加錨）在同一批資料上更差，所以這是我們才有的缺口，記在條目上、跟 id
- *   同一筆（理由同下面的 `compat`：換模型時要一起換）。
- * - **多一格 `imageBudget`（#1270）。** dsh 的圖片請求額度住在 adapter 的部署 profile（`maxRequestImageBytes`，
- *   `packages/llm/llm-pi-ai/src/adapter.ts:370`，`5badb150`），是一個部署一份；我們沒有 profile 這一層，而端點的收圖上限是
- *   **每顆模型各自的**（`meta/llama-3.2-90b-vision-instruct` 每次請求最多一張），跟 id 同一筆、換模型時一起換。形狀照
- *   `LlmImageRequestBudget`（`maxImages`、`maxBytes`），單位是張數與位元組。
- * - **`compat` 收 `chatTemplateKwargs` 與 `supportsFinishReason`（#1538）。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
- *   哪個欄位限制輸出、思考怎麼送……）；我們沒有 pi-ai 那一層，只有一個要送 chat template 參數的需求。值裡只認
- *   `{ $var: 'thinking.enabled' }` 這一個佔位符（dsh 有三個：另兩個是 `thinking.effort`、`thinking.budget`，
- *   `catalog.ts:152-160`），因為今天沒有任何等級的線上寫法會被送出去：每會話可選的只有 `off` 與 `default`（#723，
+ * - **有一格 `tokenizer`（#1102）。** 我們的估算以 o200k 為底，而出廠預設模型把數字逐位切詞，數字為主的內容
+ *   會少估到一半，所以記在條目上、跟 id 同一筆（理由同下面的 `compat`：換模型時要一起換）。
+ * - **有一格 `imageBudget`（#1270）。** 端點的收圖上限是**每顆模型各自的**（`meta/llama-3.2-90b-vision-instruct` 每次請求最多一張），
+ *   所以跟 id 同一筆、換模型時一起換。
+ * - **`compat` 收 `chatTemplateKwargs` 與 `supportsFinishReason`（#1538）。** 只有一個要送 chat template 參數的需求。值裡只認
+ *   `{ $var: 'thinking.enabled' }` 這一個佔位符，因為今天沒有任何等級的線上寫法會被送出去：每會話可選的只有 `off` 與 `default`（#723，
  *   `model-selection-host.ts`），`default` 是「不加任何設定」，沒有東西要解 `thinking.effort`、`thinking.budget`。
  * - **`reasoningEfforts` 的值今天沒有消費者，只讀鍵。** 鍵是給人選的等級名字，`off` 是「不推理」；{@link thinkingOffBody}
  *   只看 `off` 這個鍵在不在，不讀值，其餘等級的值也不會被送出去。
- * - **`reasoningEfforts` 的驗證只搬 dsh 的前三條（#1561）。** 照 `resolveModelReasoning`（`packages/llm/llm-pi-ai/src/catalog.ts:741-756`，
- *   `687f282e`）：空 dict（含 YAML 寫了 `reasoningEfforts:` 卻沒給值的 `null`，dsh `:741` 同樣把兩者併成一則）、`off` 以外的等級沒有線上的寫法、
- *   值是空字串，三種都在載入時拒收，訊息指名是哪一顆模型的哪一級。
- *   **形狀不同**：dsh 的 `invalid()` 回傳型別是 `never`，當場拋出，只報第一個問題（`catalog.ts:676-678`）；這裡是 zod 的 `superRefine`，
+ * - **`reasoningEfforts` 的驗證（#1561）。** 空 dict（含 YAML 寫了 `reasoningEfforts:` 卻沒給值的 `null`，兩者併成一則）、`off` 以外的等級沒有線上的寫法、
+ *   值是空字串，三種都在載入時拒收，訊息指名是哪一顆模型的哪一級。這裡是 zod 的 `superRefine`，
  *   收集**所有**問題一次報完（一筆裡好幾個等級寫壞時不必改一個、重跑一次）。
- *   **不搬**的兩件（理由 1：基座表達不出來）：nexus 沒有 pi-ai 的 `thinkingLevelMap`，`off` 以外沒有線上路徑，「`default` ＝ 不送」是最接近的
- *   實作，隱含的 `default` 已登記在 `model-selection-host.ts` 開頭「與 dsh 的差異」第一條。後果有兩件：第四條「`off` 以外至少一級」不搬
- *   （`{ off: null }` 是有意義的宣告：這顆會推理、可以關掉、預設照模型自己的）；鍵不限制在 dsh 的 `THINKING_LEVELS`（出廠那一筆的鍵是
- *   `off` 與 `default`，`default` 不在其中）。`thinkingLevelMap` 本身是 pi-ai 自己的預設行為，不適用。
+ *   `off` 以外沒有線上路徑，「`default` ＝ 不送」是最接近的實作，隱含的 `default` 已登記在 `model-selection-host.ts` 開頭「推理強度只認 `off` 與 `default`」。
+ *   所以不要求「`off` 以外至少一級」（`{ off: null }` 是有意義的宣告：這顆會推理、可以關掉、預設照模型自己的），
+ *   鍵也不限制名字（出廠那一筆的鍵是 `off` 與 `default`）。
  * - **`chat_template_kwargs` 只有「關」那一邊會送。** pi-ai 在非 `off` 的等級底下會把 `thinking.enabled` 解成 `true`
  *   一併送出；我們的主請求今天不帶這一格，只有標題這種要關推理的用途才帶（#650）。所以 `default` 是模型自己的預設，
  *   **開不開推理各顆不同，不代表會推理**。主請求都不送時，`nvidia/nemotron-3.5-bolt-e4b` 35 則回覆的推理 token 全是 0，
@@ -73,8 +63,8 @@ const modelEntryFields = z.strictObject({
    */
   input: z.array(z.enum(inputKinds)).optional(),
   /**
-   * 一次請求收得下的圖有多少（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，照 dsh `LlmImageRequestBudget`）。
-   * 單位是**張數與位元組**（圖片 base64 的總長度），不是 token。**沒寫就是沒宣告＝不檢查**（同 dsh 的「absent leaves … unbounded」）：
+   * 一次請求收得下的圖有多少（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）。
+   * 單位是**張數與位元組**（圖片 base64 的總長度），不是 token。**沒寫就是沒宣告＝不檢查**：
    * 超額時最舊的圖被換成佔位字並記一筆 `image/offload`，之後每次請求都沿用。只有量過端點的才宣告，量法與數字寫在條目旁的註解。
    */
   imageBudget: z
@@ -91,7 +81,7 @@ const modelEntryFields = z.strictObject({
     .union([
       z.literal(false),
       z.record(z.string(), z.string().nullable()),
-      // YAML 寫了 `reasoningEfforts:` 卻沒給值會是 `null`。dsh 把它跟 `{}` 併成同一則訊息（`catalog.ts:741`）；這裡讓它過了欄位這一層，
+      // YAML 寫了 `reasoningEfforts:` 卻沒給值會是 `null`。它跟 `{}` 併成同一則訊息；這裡讓它過了欄位這一層，
       // 由下面的 `superRefine` 帶 id 拒收（欄位層的 union 錯誤只有 `Invalid input`，沒有指名是哪一顆）。型別是 `never`：拒收之後不會有 `null` 流到消費者。
       z.null().transform((value) => value as never),
     ])
@@ -103,13 +93,13 @@ const modelEntryFields = z.strictObject({
    * 按位數計之後差 0.0%。
    */
   tokenizer: z.strictObject({ digits: z.enum(['grouped', 'single']) }).optional(),
-  /** 線上相容開關，見檔頭「與 dsh 的差異」。 */
+  /** 線上相容開關，見檔頭「欄位的設計」。 */
   compat: z
     .strictObject({
       /** 送成 `chat_template_kwargs` 的參數。 */
       chatTemplateKwargs: z.record(z.string(), chatTemplateValue).optional(),
       /**
-       * 這個端點的串流會不會送 `finish_reason`（#1538，照 dsh `supportsFinishReason`，`llm-pi-ai/src/catalog.ts:401-405`）。
+       * 這個端點的串流會不會送 `finish_reason`（#1538）。
        * **沒寫就是 `true`**：串流在收到結束原因之前結束算斷線、陌生的結束原因算失敗。內網自架端點（vLLM 之類）不送時設 `false`，
        * 兩項檢查都關掉，行為同沒有這一層。
        */
@@ -121,7 +111,7 @@ const modelEntryFields = z.strictObject({
 /**
  * 一筆型錄條目，見檔頭。
  *
- * `reasoningEfforts` 照 dsh `resolveModelReasoning` 的前三條檢查（`packages/llm/llm-pi-ai/src/catalog.ts:741-756`，`687f282e`）：
+ * `reasoningEfforts` 做三條檢查：
  * 空 dict 拒收、`off` 以外的等級不能留空（沒有線上的寫法）、值不能是空字串。放在條目這一層，因為 record 那一支拿不到 `id`，訊息要指名是哪一顆。
  */
 export const modelEntrySchema = modelEntryFields.superRefine((entry, context) => {
@@ -214,8 +204,7 @@ export function singleDigitModelIds(catalog: readonly ModelEntry[]): string[] {
 export type ImageSupport = 'accepts' | 'rejects' | 'undeclared';
 
 /**
- * 這一筆收不收圖。**沒宣告 `input` 就回 `'undeclared'`，不當成收圖**——同 dsh 的 `read_image` 要明確宣告才放行
- * （`packages/fs/tool-fs/src/read-image.ts:128-130`）。
+ * 這一筆收不收圖。**沒宣告 `input` 就回 `'undeclared'`，不當成收圖**。
  *
  * @param entry - 型錄條目。
  * @returns `'accepts'`（宣告了 `image`）、`'rejects'`（宣告了 `input` 但沒有 `image`）、`'undeclared'`（沒宣告）。
@@ -226,7 +215,7 @@ export function acceptsImages(entry: ModelEntry): ImageSupport {
 }
 
 /**
- * 這一筆**宣告了** `off` 那一級（`reasoningEfforts` 有 `off` 這個鍵）。看宣告，不看值：`off: null` 在 dsh 的意思是「支援，但什麼都不送」。
+ * 這一筆**宣告了** `off` 那一級（`reasoningEfforts` 有 `off` 這個鍵）。看宣告，不看值：`off: null` 的意思是「支援，但什麼都不送」。
  * 標題請求紀錄的 `reasoningEffort` 與 {@link thinkingOffBody} 共用這一個判準，記的跟送的出自同一處（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
  *
  * @param entry - 型錄條目。

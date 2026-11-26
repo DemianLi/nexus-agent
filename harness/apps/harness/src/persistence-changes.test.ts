@@ -1,9 +1,8 @@
 /**
  * 持久化型別變更的確認紀錄與驗證器（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-2）。
  *
- * 照 dsh `scripts/persistence-changes.spec.ts`（`687f282e`）：多數格用手搭的清單（`typeRoot`）當抽取結果，在暫存目錄
- * 寫紀錄、驗歷史。沒搬的：歷史格式的快照解析、定稿檢查點、訊息來源的相容政策（理由見 `persistence-changes.ts` 檔頭）；
- * 中英兩份的比對改成單一份（偏離 1）。dsh 拿定稿當起點的幾格，改從基線起算、拿掉定稿那幾個斷言。
+ * 多數格用手搭的清單（`typeRoot`）當抽取結果，在暫存目錄
+ * 寫紀錄、驗歷史。沒有的：歷史格式的快照解析、定稿檢查點、訊息來源的相容政策（理由見 `persistence-changes.ts` 檔頭）。
  *
  * 另外兩組是 nexus 加的：「驗收」那組在 ⓪b-1 那種夾具樹上跑真的抽取器，逐條走卡面的驗收 A–F；最後一格對這個 repo
  * 跑 {@link verifyPersistenceChanges}，CI 靠它擋「動了持久化型別卻沒寫紀錄」。
@@ -970,7 +969,7 @@ describe('紀錄歷史的驗證', () => {
     const tampered = structuredClone(schema);
     Object.assign(tampered.roots[0]!, { digest: '0'.repeat(64) });
     expect(() => parsePersistenceSnapshot(tampered)).toThrow('digest mismatch');
-    // nexus 只有 formatVersion 1：2 是 dsh 的來源政策版本（過渡，#1883）。
+    // 只有 formatVersion 1（過渡，#1883）。
     for (const formatVersion of [2, 3])
       expect(() => parsePersistenceSnapshot({ ...schema, formatVersion })).toThrow(
         'normalization version',
@@ -1614,7 +1613,7 @@ describe('驗收：在夾具樹上跑真的抽取器', { timeout: EXTRACT_TIMEOU
     expect(() => verifyTree(root)).toThrow(`${PERSISTENCE_SCHEMA_PATH} is stale`);
   });
 
-  // 同 dsh `:802`：真的命令列行程、真的 TypeScript 抽取，暫存的樹沒有 git 歷史。
+  // 真的命令列行程、真的 TypeScript 抽取，暫存的樹沒有 git 歷史。
   it('真的命令列對只有原始碼的暫存樹', () => {
     const root = sourceTree('export interface Payload { readonly value: string }\n');
     const script = fileURLToPath(new URL('./persistence-changes.ts', import.meta.url));

@@ -1,8 +1,7 @@
 /**
  * 下行接上時補送還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。
  *
- * 照 dsh gateway 的做法：新的 client 一接上，先把還沒答的請求補送一次（`packages/api/gateway/src/index.ts:500`，
- * `477b4f4`）。我們的載體是 `ThreadPump.subscribe` 註冊當下放進佇列的那幾顆 `input.requested`。
+ * 新的 client 一接上，先把還沒答的請求補送一次。我們的載體是 `ThreadPump.subscribe` 註冊當下放進佇列的那幾顆 `input.requested`。
  *
  * 前半對著 pump 量補送的規則；後半走真的線、照網頁重新整理的順序（開下行 → 抓歷史 → 從空重折 → 抽下行）量面板
  * 回不回得來、答了接不接得下去。
@@ -333,7 +332,7 @@ describe('停在核准時重新整理，走真的線', () => {
       await first.events.return(undefined);
       const again = await refresh(client, 'refresh');
       // 前提：歷史自己折不出面板——沒有這一句，歷史哪天自己補得出來，下面照樣綠而補送沒被量到。卡在歷史裡，
-      // 停在閘門上的照 dsh 是執行中（#317）。
+      // 停在閘門上的算執行中（#317）。
       expect(again.state.pendings).toEqual([]);
       expect(cards(again.state)).toEqual(['alpha:running']);
 
@@ -361,7 +360,7 @@ describe('停在核准時重新整理，走真的線', () => {
   }, 20000);
 
   /**
-   * **兩個分頁**：新開的那頁拿到補送、答了；原本那頁沒有收到任何「別人答了」的訊號（拍板第 3 題不補 dsh 的 cancel），
+   * **兩個分頁**：新開的那頁拿到補送、答了；原本那頁沒有收到任何「別人答了」的訊號（拍板第 3 題不補 cancel），
    * 它的面板靠 resume 那一輪的 `lifecycle running` 收掉。
    */
   it('兩個分頁：一邊答完，另一邊的面板收掉', async () => {

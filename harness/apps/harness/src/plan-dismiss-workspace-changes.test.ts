@@ -1,9 +1,9 @@
 /**
- * **關掉計劃審核收尾這一輪，改動紀錄記在 `turn/end` 之前**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)，照 dsh）。
+ * **關掉計劃審核收尾這一輪，改動紀錄記在 `turn/end` 之前**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）。
  *
  * 關掉審核時 `exit_plan_mode` 的結果帶 `name`、工具設了 `returnDirect`，基座的 tools 路由走 exitNode，**跑所有 `afterAgent`**，
  * 其中一顆是 `@nexus/plugin-workspace-changes` 的 `stopping()`（輪內記錄）。同一輪先改了檔、再交計劃、人關掉審核，
- * 日誌上的 `workspace/changes` 落在這一輪、**在 `turn/end` 之前**——dsh 的 `agent/turn-stopping` 也是這個時機。
+ * 日誌上的 `workspace/changes` 落在這一輪、**在 `turn/end` 之前**。
  * （曾試過 middleware 的 `beforeModel` 跳 `end`：略過 `afterAgent`，記錄要等 `turn/end` 之後由 `end()` 補記；探針量過，沒採用。）
  *
  * 走產品組裝（serve 的出貨清單＋`--workspace`）、真的 pump 與 wire，模型是腳本。

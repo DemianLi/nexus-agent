@@ -3,12 +3,12 @@
  * （[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1）。圖裡的數字參照只在同一張圖內有效；
  * 型別名與宣告位置是附帶的資訊，不進指紋。
  *
- * 照 dsh `scripts/persistence-schema-model.ts`（`687f282e`）搬過來，演算法不改。跟 dsh 不同的兩處：
+ * 這裡的兩處選擇：
  *
- * - **沒有 `SourceCompatibility`，`formatVersion` 固定 1。** dsh 用它記 `@persistenceSource` 綁定的訊息來源政策，
- *   nexus 這一刀不搬那兩個標記（過渡，登記在 `persistence-schema.ts` 檔頭，撤除條件見
+ * - **沒有 `SourceCompatibility`，`formatVersion` 固定 1。** `@persistenceSource`／`@persistenceAttribution`
+ *   這兩個標記這一刀不做（過渡，登記在 `persistence-schema.ts` 檔頭，撤除條件見
  *   [#1883](https://github.com/DemianLi/nexus-agent/issues/1883)），所以這裡也沒有對應的欄位與 v2 指紋。
- * - **指紋前綴是 `nexus-persistence-schema-v1`**，不跟 dsh 共用摘要空間。
+ * - **指紋前綴是 `nexus-persistence-schema-v1`**。
  *
  * @module
  */

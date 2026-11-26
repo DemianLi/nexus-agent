@@ -1,7 +1,7 @@
 /**
  * **`exit_plan_mode` 只有人關掉審核才收這一輪；其餘結局照常回頭叫模型**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607) PM 審查 B1／B2）。
  *
- * dsh 只在 `ASK_CANCELLED` 時 `exec.concludeTurn()`（`plan-mode/src/index.ts:331-341`），拋錯與拒絕一律不收。這裡用產品組裝
+ * 只有 `ASK_CANCELLED` 才 `exec.concludeTurn()`，拋錯與拒絕一律不收。這裡用產品組裝
  * （出貨清單、計劃模式開著）把每一種「不是關掉審核」的結局各跑一次，斷言**模型被叫了第二次**——它有機會改正：
  *
  * - 參數缺 `plan`（工具外層的校驗，圍堵接住的拋錯）；
@@ -203,7 +203,7 @@ describe('exit_plan_mode：本體自己的拒絕，第二次請求送給供應�
 });
 
 /**
- * **本體標了要收，但內層把結果換成錯誤 → 不收**（dsh `ToolExecutionFailure` 的 `concludesTurn?: never`）。
+ * **本體標了要收，但內層把結果換成錯誤 → 不收**。
  * 一顆測試用的 `returnDirect` 工具：本體呼叫 `concludeTurn` 並回一句不是 JSON 的字，登記時宣告 `outputSchema`，
  * 輸出校驗在內層把它換成 `INVALID_TOOL_OUTPUT` 的錯誤——標記還在槽上，但結果是錯誤，模型要再被叫一次。
  */
