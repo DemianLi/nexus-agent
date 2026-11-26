@@ -175,7 +175,6 @@ describe('兩條產品路徑', () => {
       'assistant/message',
       'turn/end',
     ]);
-    // 回覆寫在它那次呼叫的 `model/end` 之前：回覆在前，它派發的工具事件在後。
     const types = events.map((event) => event.type);
     expect(types.indexOf('assistant/message')).toBeLessThan(types.indexOf('model/end'));
 
@@ -236,8 +235,7 @@ describe('subagent 的回覆', () => {
 
 describe('外掛注入的：重複工具呼叫的提醒', () => {
   /**
-   * 提醒是 `beforeModel` 塞進對話的 HumanMessage——模型看得到，推模型歷史的一側就得讀得到。它落在
-   * 它提醒的那次模型呼叫之前。
+   * 提醒是 `beforeModel` 塞進對話的 HumanMessage——模型看得到，推模型歷史的一側就得讀得到。
    *
    * 跑法同 `repeat-reminder.test.ts`：一場永不停的迴圈跑到上限，同參數重複到第一道門檻就會提醒。
    */
