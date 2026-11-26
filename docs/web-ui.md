@@ -355,6 +355,7 @@
 - `cn` 套件（`web/package.json` 的 `"cn"`）與 clsx＋tailwind-merge 是否完全等價：只驗過 `button`（240 組，差異 0），其他基礎元件沒有比對（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
 - Artifact 沙盒裡的字型載入沒驗（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
+- bundle 大小沒量過：markdown 是自建的，加上 shiki 與 katex 之後 `web/` 的 bundle 有多大沒人量，`web/` 也沒有量大小的檢查。
 
 ## 12. 維護
 

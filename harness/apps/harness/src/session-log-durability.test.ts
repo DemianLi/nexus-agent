@@ -158,11 +158,7 @@ async function modeOf(path: string): Promise<number> {
   return (await stat(path)).mode & 0o777;
 }
 
-/**
- * 預設落盤（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。**這一組是翻面來的**：
- * 以前這裡守的是「沒給就一個位元組都不寫」，拍板照 dsh 改成預設寫進 harness home 之後，同一個位置
- * 改守「沒給就寫進 home，而且只寫那裡」。
- */
+/** 預設落盤（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。 */
 describe('--session-log 沒給', () => {
   it('寫進 harness home 底下的 sessions，披露講得出那個位置，cwd 裡什麼都沒有', async () => {
     const home = testHarnessHome();
@@ -243,9 +239,8 @@ const PERSISTENCE_OFF_PATCH = fileURLToPath(
 );
 
 /**
- * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。**這一組是 #444
- * 翻面前那條「沒給就一個位元組都不寫」的形狀**，觸發條件從「沒給旗標」換成「那一列 `disabled: true`」
- * ——照 dsh：不掛 `session-persistence-jsonl` 就是不落盤。
+ * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。
+ * 不掛 `session-persistence-jsonl` 就是不落盤。
  */
 describe('清單把落盤關掉', () => {
   it('一個位元組都不寫：home 不建、cwd 是空的，披露講只在記憶體裡與是哪一列', async () => {
