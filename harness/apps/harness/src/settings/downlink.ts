@@ -6,19 +6,18 @@
  * 一份交給 `startWireServer`（心跳間隔），一份交給 `createWireHandler`（位元組上限）。**改了要重啟 serve**
  * （分類 `startup-read`，`plugin-row-classes.ts`）。
  *
- * ## 偏離 dsh
+ * ## 偏離登記
  *
  * 逐條登記在別處，這裡只指路：
  *
  * - 偏離 A（SSE 註解行心跳＋「緩衝卡著、連兩拍沒排出去」才斷；理由 1）：`../wire-server.ts` 檔頭。
  * - 偏離 B（事件下行加每條線的位元組上限；理由 2）、偏離 C（超限或死線只斷線、不送終止 frame；理由 1）：`../bounded-event-queue.ts` 檔頭。
  *
- * ## 數值照 dsh，預設開
+ * ## 預設值，預設開
  *
- * - `heartbeatIntervalMs` 預設 2000，範圍 1 到 2,147,483,647：照 dsh `websocketHeartbeatIntervalMs`
- *   （`packages/api/gateway/src/index.ts:147`、`:156-161`、`:211-215`，`1517a4db`）。「漏 2 拍淘汰」是 dsh 的協定常數
- *   （`MAX_MISSED_HEARTBEATS = 2`，`stream-server.ts:42`），不開成設定。
- * - `maxQueuedBytes` 預設 2 MiB：照 dsh `maxBufferedBytes`（`packages/api/terminal-controller/src/index.ts:87`）。
+ * - `heartbeatIntervalMs` 預設 2000，範圍 1 到 2,147,483,647。「漏 2 拍淘汰」是協定常數
+ *   （`MAX_MISSED_HEARTBEATS = 2`，`wire-mux.ts`），不開成設定。
+ * - `maxQueuedBytes` 預設 2 MiB。
  *
  * **預設開**（demian 2026-10-17 拍板）：只有不 drain 的線才會被動到，健康的線只多收到看不見的心跳註解行。
  *
@@ -26,7 +25,7 @@
  *
  * 這一列預設是**開著**，`startupSetting` 把關掉的列當成沒有那一列、值回到 schema 的預設，也就是**保護還在**——讀起來卻像把保險絲拆了。
  * （`thread-capacity` 自 #1619 起出廠也開著，照這一列的前例同樣關不掉。）所以它在 `PROTECTED_ENTRY_NAMES` 上，寫
- * `disabled: true` 在啟動當場拋錯（dsh 的三項保護也都沒有關閉開關）。**要放寬，把數值調大**。理由見 `plugin-config.ts`。
+ * `disabled: true` 在啟動當場拋錯。**要放寬，把數值調大**。理由見 `plugin-config.ts`。
  *
  * @module
  */
@@ -46,7 +45,7 @@ export const DOWNLINK_PLUGIN_NAME = 'downlink';
 
 /** `strictObject`：多寫一個欄位是打錯字，同其他幾列。預設值各只有一份，在消費的那一邊。 */
 export const downlinkConfigSchema = z.strictObject({
-  /** SSE 心跳間隔，毫秒。自然數，範圍同 dsh：1 到 2,147,483,647（`setInterval` 收得下的上界）。 */
+  /** SSE 心跳間隔，毫秒。自然數，範圍 1 到 2,147,483,647（`setInterval` 收得下的上界）。 */
   heartbeatIntervalMs: z
     .number()
     .int()

@@ -58,7 +58,7 @@ const LIMITS = { maxWords: 5, maxBytes: 40, maxTitleBytes: 80 };
 const ROUTE = { provider: 'http://title.test/v1', model: 'nexus-test/title-model' };
 
 /**
- * dsh `session-title-first-prompt-llm` 的系統提示，**逐字**（1517a4db 起五行，#1573），數字代入 base 的 5 與 10。
+ * 標題的系統提示（五行，#1573），數字代入 base 的 5 與 10。
  * 字面值：函式改掉的話這一條要紅。
  */
 const DSH_SYSTEM_PROMPT = [
@@ -316,7 +316,7 @@ describe('送出去的是什麼、寫了什麼', () => {
   });
 
   /**
-   * #1573 N0885：照 dsh `titleFromOutput`（`session-title-first-prompt-llm/src/index.ts:96-113`）只取第一個非空行，並剝掉包住整行的
+   * #1573 N0885：只取第一個非空行，並剝掉包住整行的
    * 星號強調。以前整段文字被 `cleanTitleText` 收成一行，「標題＋一段說明」整串進了側欄。
    */
   describe('取標題：第一個非空行、剝整行強調', () => {
@@ -355,7 +355,7 @@ describe('送出去的是什麼、寫了什麼', () => {
   });
 
   /**
-   * #1573 N0885：請求紀錄多一格 `reasoningEffort`（dsh `session-title-llm/src/index.ts:267-275`，有 effort 才記）。
+   * #1573 N0885：請求紀錄多一格 `reasoningEffort`（有 effort 才記）。
    * 組裝端交進來的值原樣記；沒交就沒有這個 key。**只是紀錄，不改送出去的東西**。
    */
   describe('請求紀錄的 reasoningEffort', () => {
