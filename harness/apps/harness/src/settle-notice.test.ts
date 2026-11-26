@@ -1,7 +1,7 @@
 /**
  * 背景子代理結算的通知怎麼到主對話（[#840](https://github.com/DemianLi/nexus-agent/issues/840)），pump 這一側。
  *
- * 照 dsh 的 `notifySettlement`（`subagent/src/continuation-activation.ts`，`477b4f4`）分三種：閒著→排下一輪並叫醒、
+ * 結算分三種：閒著→排下一輪並叫醒、
  * 忙著→插話、這條 thread 已經收了→不喚醒。**每一種都不能被讀成人話**：`turn/start` 的 `kind` 與 `user/message` 的
  * `source` 都不是 `message`／`user`，`hasDirectHumanTurn` 因此不給直接人類授權（#152 的底線）。
  *

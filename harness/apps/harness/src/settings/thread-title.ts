@@ -12,18 +12,14 @@
  * CLI 的 `runTurn` 寫退回標題，歷史路由替舊日誌推標題。**它們吃的是同一份起動期的值**，不另外從註冊表讀：同一個
  * 數字有兩條來路的話，列表推的與日誌寫的就可能不一樣。
  *
- * ## 與 dsh 的偏離
+ * ## 擁有者與 apply
  *
- * 1. **擁有者是 package-internal specifier（`#settings/thread-title`），不是套件名。** dsh 的每個
- *    可調值都由一個**套件**擁有——這兩個數字在 dsh 是 `- id: session-title` /
- *    `@deepseek-ai/dsh-session-title` 那一列的 `fallbackMaxWords`、`fallbackMaxBytes`
- *    （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`，**數字一模一樣**）。
- *    我們表達不出來的是：**`harness/apps/harness` 解不到自己**——條目走 `plugin-config.ts` 的
+ * 1. **擁有者是 package-internal specifier（`#settings/thread-title`），不是套件名。**
+ *    套件名走不通，因為**`harness/apps/harness` 解不到自己**——條目走 `plugin-config.ts` 的
  *    `import(entry.name)`，而 `@nexus/harness` 沒有連進自己的 `node_modules`（實測
  *    `Cannot find package '@nexus/harness'`）。退到 Node 的 `imports` 欄位，映射寫在
  *    `package.json` 裡看得見；為幾個設定值開套件是另一個方向，代價更大。
- * 2. **`apply` 是空的，也不註冊服務。** 照 dsh 的 `fs-observation-policy`（「it registers no
- *    service」）那條先例：組裝期沒有消費者，發一顆服務只會讓人以為有人在讀。
+ * 2. **`apply` 是空的，也不註冊服務。** 組裝期沒有消費者，發一顆服務只會讓人以為有人在讀。
  *
  * ## 這一列關不掉
  *
@@ -42,18 +38,17 @@ import type { NexusPlugin, PluginRegistry } from '@nexus/core';
 export const THREAD_TITLE_PLUGIN_NAME = 'thread-title';
 
 /**
- * 標題最多幾個詞。照 dsh `session-title` 的 `fallbackMaxWords`。
+ * 標題最多幾個詞。
  *
  * **中文咬不到這一格**：中文沒有空白，所以實務上擋住的是 {@link DEFAULT_THREAD_TITLE_MAX_BYTES}。
  */
 export const DEFAULT_THREAD_TITLE_MAX_WORDS = 5;
 
-/** 標題最多幾個 UTF-8 位元組。照 dsh 的 `fallbackMaxBytes`；40 個位元組是 13 個中文字。 */
+/** 標題最多幾個 UTF-8 位元組；40 個位元組是 13 個中文字。 */
 export const DEFAULT_THREAD_TITLE_MAX_BYTES = 40;
 
 /**
- * 任何來源的標題最多幾個 UTF-8 位元組（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。照 dsh `session-title` 的
- * `maxTitleBytes`：模型產生的標題照它正規化；退回標題的 {@link DEFAULT_THREAD_TITLE_MAX_BYTES} 不得超過它。
+ * 任何來源的標題最多幾個 UTF-8 位元組（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。模型產生的標題照它正規化；退回標題的 {@link DEFAULT_THREAD_TITLE_MAX_BYTES} 不得超過它。
  */
 export const DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES = 80;
 
@@ -67,7 +62,6 @@ export const threadTitleConfigSchema = z
     /** 見 {@link DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES}。 */
     maxTitleBytes: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES),
   })
-  // 照 dsh：`fallbackMaxBytes` 不得超過 `maxTitleBytes`。
   .refine((config) => config.maxBytes <= config.maxTitleBytes, {
     message: 'maxBytes 不能大於 maxTitleBytes',
     path: ['maxBytes'],
@@ -81,7 +75,7 @@ export const threadTitlePlugin: NexusPlugin<ThreadTitleConfig> = {
   name: THREAD_TITLE_PLUGIN_NAME,
   Config: threadTitleConfigSchema,
   apply: (_registry: PluginRegistry, _config: ThreadTitleConfig): void => {
-    // 空的，見檔頭偏離 2：組裝期沒有消費者。
+    // 空的，見檔頭「擁有者與 apply」第 2 項：組裝期沒有消費者。
   },
 };
 
