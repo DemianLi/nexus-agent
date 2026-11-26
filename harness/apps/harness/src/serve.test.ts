@@ -441,7 +441,7 @@ describe('核准那份清單', () => {
     const pending = approvalAt(state.pendings);
     expect(pending.actions.map((action) => action.name)).toEqual(['echo']);
     expect(pending.allowedDecisions).toEqual(['approve', 'reject']);
-    // 停住的時候工具還沒跑——不然這條驗的只是「畫面上有張卡片」。卡本身是有的：照 dsh，`tool/call`
+    // 停住的時候工具還沒跑——不然這條驗的只是「畫面上有張卡片」。卡本身是有的：`tool/call`
     // 在核准之前就記，pump 照它開卡（#297）；還沒跑的樣子是執行中、沒有結果文字。
     expect(
       state.entries

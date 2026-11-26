@@ -6,7 +6,7 @@
  * `assertSameCwd` 被擋下，測到的就不是歸屬核對（PM 審查 #1706 抓到的）。
  *
  * 探針（卡上情境 B）是把子代理 id 當 thread_id 送一句話：以前整條通、回 success、子代理日誌被續寫。這一檔釘的是：
- * **碰日誌之前就拒絕、日誌一個位元組都不動**，而且 `run.cancel` 也一樣（照 dsh `session-controller/src/commands.ts:506-507`）。
+ * **碰日誌之前就拒絕、日誌一個位元組都不動**，而且 `run.cancel` 也一樣。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */
@@ -181,7 +181,7 @@ describe('子代理的會話不是 thread（#1544 驗收 1、2）', () => {
       type: 'error',
       error: THREAD_IS_SUBAGENT,
     });
-    // run.cancel 不經 `threadFor`，另外閘（dsh `commands.ts:506-507`）。以前對任何 id 都回 `accepted: true`。
+    // run.cancel 不經 `threadFor`，另外閘。以前對任何 id 都回 `accepted: true`。
     expect(await client.runCancel(subagent.sessionId)).toMatchObject({
       type: 'error',
       error: THREAD_IS_SUBAGENT,

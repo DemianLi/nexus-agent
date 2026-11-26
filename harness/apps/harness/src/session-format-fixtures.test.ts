@@ -258,7 +258,7 @@ describe.each(names)('夾具 %s', (name) => {
   it.each(ids)('唯讀打開 %s：事件、版本與推回模型的歷史等於 expected.json', async (id) => {
     const session = expected.sessions[id]!;
     const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(id, 'read');
-    // header 轉譯成這一版，磁碟上那個版號另交（#1856，照 dsh `types.ts:96-100` 加上登記的偏離）。
+    // header 轉譯成這一版，磁碟上那個版號另交（#1856）。
     expect(opened.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(opened.storedFormatVersion).toBe(session.headerVersion);
     const events = await opened.read();

@@ -6,7 +6,7 @@
  * 三件事，而三件都不是 CLI 那條路上存在的問題：
  *
  * 1. **一個專案目錄一格、一條 thread 一個檔，重開 server 之後接得回來。** 會話根按目錄分
- *    （照 dsh 的 `projectDir(root, cwd)`，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ *    （[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  *    拍板的第 3 件），檔名就是 thread id，所以同一條 thread 重開之後找得回自己那一份。CLI 的
  *    root 固定叫 `cli`，放在固定的地方會每次都撞，所以它仍然每次一個 run 目錄。
  * 2. **thread id 是呼叫端給的。** 它會出現在檔名裡，所以兩個壓平後同名的 id 必須落成
@@ -196,7 +196,7 @@ describe('serve 的 --session-log', () => {
   });
 
   /**
-   * **翻面來的**（#444）：以前這裡守「沒給旗標就什麼都不落盤」。照 dsh 改成預設落在 harness home
+   * **翻面來的**（#444）：以前這裡守「沒給旗標就什麼都不落盤」。改成預設落在 harness home
    * 底下的 `sessions` 之後，同一個位置改守「沒給就寫進那裡，畫面上講得出那一格」。
    *
    * `env: {}` 沒有 `NEXUS_AGENT_HOME`，所以走的是 `~/.nexus-agent` 那條退路——`HOME` 由
@@ -292,7 +292,7 @@ const PERSISTENCE_OFF_PATCH = fileURLToPath(
 );
 
 /**
- * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)），serve 那一半。照 dsh
+ * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)），serve 那一半。
  * 不掛 `session-persistence-jsonl`：一條 thread 都不寫、列表列不出來、以前寫過的也不接回來。
  */
 describe('serve：清單把落盤關掉', () => {
@@ -377,7 +377,7 @@ describe('serve：清單把落盤關掉', () => {
 });
 
 /**
- * 重開 server、同一條 thread——serve 那一半的續接（照 dsh：碰到一個已存的 session id 就
+ * 重開 server、同一條 thread——serve 那一半的續接（碰到一個已存的 session id 就
  * resume）。回來的是日誌上推得出來的，對話也從日誌推回模型（門 B 照舊不開；那一半的驗收在
  * `conversation-restore.test.ts`）。
  *
@@ -748,7 +748,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
   });
 
   /**
-   * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）：照 dsh 讀回時
+   * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）：讀回時
    * 不擋，接得回來；sandbox-policy 的配套入口在重播時報違規。serve 不傳違規去處，走 runner 預設的
    * `console.error`，進的是伺服器日誌——所以收的是它。
    */

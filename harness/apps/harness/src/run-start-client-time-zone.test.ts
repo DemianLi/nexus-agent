@@ -1,7 +1,7 @@
 /**
  * **`run.start` 的 `client_time_zone`：瀏覽器時區記在人話的來源上**——[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)。
  *
- * 照 dsh 的 `session.prompt { clientTimeZone }`（`packages/api/session-controller/src/index.ts:467-482`，`687f282e`）：伺服器驗過、正規化，
+ * 伺服器驗過、正規化，
  * 記在使用者訊息的來源上，不進 thread 設定（那樣會是整條 thread 共用的一個值，同一條 thread 換了時區就說謊）。
  *
  * 兩層（跟 `run-start-request-id.test.ts` 同形）：

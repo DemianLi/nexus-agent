@@ -162,7 +162,6 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
       expect(text).toContain(hit('b', 50));
       expect(text).not.toContain(hit('b', 51));
       expect(text).toContain(`Full grep result stored at: ${TOOL_RESULT_STASH_PREFIX}/`);
-      // 建議檔名照 dsh `grep.ts:354`。
       expect(locatorOf(text)).toMatch(/\/[0-9a-f]{12}-grep-results\.txt$/u);
       expect(results[0]?.status).not.toBe('error');
       // 基座那句「the search stopped early … raise max_count」不該出現：截的是我們，不是 backend。

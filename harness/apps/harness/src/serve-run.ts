@@ -575,8 +575,8 @@ export interface RunServeOptions {
   readonly log?: (line: string) => void;
   readonly env?: NodeJS.ProcessEnv;
   /**
-   * 網頁 `dist` 的目錄，只給測試用。產品路徑不設：照 dsh `web-app` 的 `resolveDistIndex`，
-   * 位置由前端套件的 manifest 反查，不是設定（dsh 同樣有一個「production never mutates」的測試鉤子）。
+   * 網頁 `dist` 的目錄，只給測試用。產品路徑不設：
+   * 位置由前端套件的 manifest 反查，不是設定。
    */
   readonly webDist?: string;
   /**
@@ -680,7 +680,7 @@ export interface RunningServe {
 }
 
 /**
- * 網頁 `dist` 的位置：照 dsh `packages/bundle/web-app/src/index.ts` 的 `resolveDistIndex`（`ddefc45`），
+ * 網頁 `dist` 的位置：
  * 從前端套件的 manifest 反查，不做成設定。**存不存在是請求當下的事**（`web-static.ts`）。
  */
 function resolveWebDist(): string {
@@ -703,8 +703,8 @@ function frontAuth(browser: BrowserAuth, embed: EmbedSessionCookies | undefined)
  *
  * `/livez`、`/readyz`、`/metrics` 給探針與指標（先過信任圍欄，見 `ops-endpoints.ts`）——**排在 `/threads` 的判斷之前**；
  * `/threads` 與它底下的路徑給 wire——圍欄、會話 cookie、JSON 閘門都在那裡；其他給網頁的靜態服務。
- * 換 token 的 `GET /?token=` 因此碰不到 wire 的 JSON 閘門（瀏覽器導覽不帶 `content-type`），照 dsh：
- * index 走 `frontend-static` 的 `authorizeIndex`，API 走 `requestRejection`。
+ * 換 token 的 `GET /?token=` 因此碰不到 wire 的 JSON 閘門（瀏覽器導覽不帶 `content-type`）：
+ * index 走 `web-static.ts` 的 `authorizeIndex`，API 走 wire 的 JSON 閘門。
  */
 function routeBySurface(
   wire: WireHandler,
@@ -839,7 +839,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     options.conversation === undefined
       ? await acquireHomeLock(resolveHarnessHome(env), options.homeLock)
       : { unavailable: '對話行程不拿 home 鎖' };
-  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`；它的 logger 是伺服器日誌的出口（#1534），所以**在第一行日誌之前**就要在：
+  // **Cordis 根由這裡持有**（#1401）；它的 logger 是伺服器日誌的出口（#1534），所以**在第一行日誌之前**就要在：
   // 樹的 context 是第一次叫才建（`plugin-tree.ts` 的 `context()`），這裡先叫。exporter 要讀完清單才知道設定，
   // 晚掛上時先回放緩衝，所以排在它前面的幾行（home 鎖、代理、變更紀錄遷移）一樣印得出來；起不來的路徑掛出廠設定（`mountDefault`）。
   // 預設答題管道由入口給（#1458 Q1 (c)）：serve 有人在（web 收得到問題），組裝時也不傳 `approvals`——同一個決定。
@@ -915,7 +915,6 @@ async function startUnderHomeLock(
     log: (message) => {
       serverLog.logger('mcp').warn(message);
     },
-    // dsh 是 error 級的那幾句（關閉確認不到）：伺服器日誌有 error，照 dsh 接過去（`supervisor.ts` 檔頭偏離 6）。
     error: (message) => {
       serverLog.logger('mcp').error(message);
     },
@@ -1054,7 +1053,7 @@ async function startServer(
   // 落盤的批次窗口（#529）。**同樣是 server 的性質**：`sessionStore` 一台伺服器一份，而窗口
   // 講的是那一顆 store 的寫入節奏——下面每一條 thread 各自接上去的協調器都吃這同一個數字。
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
-  // **落盤掛不掛也由清單講**（#612，照 dsh 的 `session-persistence-jsonl` 那一列）。關掉的話
+  // **落盤掛不掛也由清單講**（#612）。關掉的話
   // 下面一個 store 都不建、日誌根也不解析，`--session-log` 跟它矛盾就當場拋——同 CLI 那一份檢查。
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
   assertPersistenceFlags(
@@ -1072,7 +1071,7 @@ async function startServer(
   // 插件投影 frame 的合併視窗（#1071）。同樣是 server 的性質：每條 thread 的 pump 吃同一個數字。
   const projectionFlush = startupSetting(plugins, projectionFlushPlugin);
   // 過大工具結果的暫存（#734）：根與保留天數是 server 的性質，解一次；啟動時清一次超過保留期的檔，
-  // 別人改得動的根不清，失敗只記一筆不擋啟動。**清掃在背景跑**（#1553 N0952，照 dsh `spill-local/src/index.ts:90-101`）：
+  // 別人改得動的根不清，失敗只記一筆不擋啟動。**清掃在背景跑**（#1553 N0952）：
   // 歸根所有，server 不等它就開始服務；卸載根（`close()` 與起不來的那幾條路）時等它收斂。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, env);
@@ -1183,11 +1182,9 @@ async function startServer(
   // 跟下面 `createAgent` 同一個函式、同一組參數，不帶續接，失敗的處理跟 CLI 那一刻（`assembly-root.ts` 的 `createCliAgent`）
   // 同一套：可少掛的列掉了印警告、照樣起來，其餘原樣拋（見下面「判第二次」那段）。
   //
-  // **偏離登記**：dsh 的 `boot()` 把 plugin 樹掛一次、一直用下去，驗證是掛載順帶發生的
-  // （dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。我們的 Cordis 樹（#1401）上只有相容層與入口兩列，清單上的
+  // **偏離登記**：我們的 Cordis 樹（#1401）上只有相容層與入口兩列，清單上的
   // 列不在樹上：agent 一條 thread 一份（見檔頭），這個形狀在這之前就在，不是基座表達不出來。退到這裡：形狀不動，
-  // 啟動時多組一次、驗完就收，錯誤出現的時刻跟 dsh
-  // 一樣在啟動時，代價是每一列的 `apply` 多跑一遍。
+  // 啟動時多組一次、驗完就收，代價是每一列的 `apply` 多跑一遍。
   //
   // **位置是承重的**：在讀或建瀏覽器會話密鑰與開始聽之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
   // 那條：組得起來卻收不乾淨，可能有子行程還活著（`cli-dispose-failure.fixture.ts`）。
@@ -1260,8 +1257,8 @@ async function startServer(
   )) {
     warn(line);
   }
-  // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。照 dsh：樹只掛
-  // 一次，沒起來的條目一直不在，直到改設定重載。我們的「重載」是每條 thread 重讀清單（#1405）：那一列的設定一改，
+  // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。
+  // 每條 thread 重讀清單（#1405）：那一列的設定一改，
   // 下一條 thread 重新試它；沒改就照樣標成 `disabled: true`，跟讀清單那一次設定驗不過的列同一個做法。
   const trialDropped = new Set(trial.dropped.map(({ entry }) => entry));
   // **每條 thread 組裝時重讀清單**（#1405）：同一個函式、同一組參數，新 thread 看得到 home 層改過的列與組裝期設定。
@@ -1427,7 +1424,7 @@ async function startServer(
     imageCompressionConcurrency: attachmentImages.imageCompressionConcurrency,
   });
 
-  // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
+  // **會話根按目錄分，一個專案一格**
   // （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 3 件）。一條
   // thread 一個檔落在那一格裡，檔名就是 thread id，所以重開 server 之後同一條 thread 找得
   // 回自己那一份。CLI 那條仍然每次開一個 run 目錄：它的 root 固定叫 `cli`，放在固定的
@@ -1579,8 +1576,8 @@ async function startServer(
           liveEvents: (sessionId) => handler.liveSessionEvents(sessionId),
         });
 
-  // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619，
-  // 照 dsh `unattendedTimeoutMs` 的 0）。兩種都不把 T 傳下去——handler 收到 0 會把每條閒著的 thread 在下一次掃描就撤掉。
+  // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619）。
+  // 兩種都不把 T 傳下去——handler 收到 0 會把每條閒著的 thread 在下一次掃描就撤掉。
   // 下面啟動那一段會講是哪一種。
   const idleEvictMs =
     sessionStore === undefined || threadCapacity.idleEvictAfterMs === 0
@@ -1817,7 +1814,7 @@ async function startServer(
           throw new SubagentSessionError(threadId);
         }
       }
-      // **以前寫過就接回來**（照 dsh：碰到一個已存的 session id 就 resume，不另開）。續接在讀
+      // **以前寫過就接回來**：碰到一個已存的 session id 就 resume，不另開。續接在讀
       // 之前就拿了寫租約，要到落盤接上之後才歸協調器收；這中間拋錯要先放掉，不然
       // `wire-handler.ts` 說好的「下一次請求重試」會撞上自己上一次留下的租約。
       const resumed =
@@ -1827,7 +1824,7 @@ async function startServer(
       // **這條 thread 從哪一份日誌長出來**：續接的是磁碟上那一份，分叉的是記憶體裡的 seed（#1580）。下面從日誌推的每一樣（目錄守衛、
       // 可寫根、沙箱模式、核准政策、模型選擇、對話重播、交付的錨）都讀這一份，所以分叉出來的子 thread 第一次組裝與重啟後續接走同一套規則。
       // 分叉的 header 是給 placer 與守衛看的：根照抄來源（`thread-roots.ts` 那張表的「分叉的子 thread」那一列），`cwd` 也是來源的。
-      // 真正落盤的 header 由落盤接線建（下面的 `rootLineage`），同 dsh 由 `agents.create` 的 `meta` 建。
+      // 真正落盤的 header 由落盤接線建（下面的 `rootLineage`）。
       const history:
         | { readonly header: StoredSessionHeader; readonly events: readonly SessionEvent[] }
         | undefined =
@@ -1886,7 +1883,7 @@ async function startServer(
       // 組裝失敗時 catch 要用這一份清單換算掉了的列（`threadList` 在 catch 裡還沒有保證已賦值）。
       let assembledFrom: typeof threadList | undefined;
       try {
-        // 冷讀與續接之間檔案被換掉的窄縫：接回來的那份再核一次（照 dsh `session-controller/src/agent.ts:231-234`，續接之後核對）。
+        // 冷讀與續接之間檔案被換掉的窄縫：接回來的那份再核一次。
         // **撞上這道縫時，日誌在被拒絕之前已經被動過**：`resumeThread` 已拿了寫租約、把當掉那一輪的補結寫回檔上（#721）；
         // 這一道只保證不往下組裝、不開出一條 thread，並由下面的 catch 放掉租約。要日誌一個位元組都不動只有第一道（冷讀）做得到。
         if (resumed !== undefined && isSubagentSessionHeader(resumed.header)) {
@@ -2169,7 +2166,7 @@ async function startServer(
         // 清單，所以在這個閉包裡接（見 `wire-handler.ts` 的 `attachPersistence`）。
         // **旗標決定給不給，不是給一個關著的**：`goalDriver` 缺席就是「這條 thread 不
         // 自己排輪次」，同 `attachPersistence` 用缺席表達「沒開落盤」的規矩。
-        // 人改目標的把手（`goal.pause`，#1516）：**不看 `--no-goal-driver`**，暫停是 goal 服務自己的事，不經排程器（dsh 同）。
+        // 人改目標的把手（`goal.pause`，#1516）：**不看 `--no-goal-driver`**，暫停是 goal 服務自己的事，不經排程器。
         ...(goals !== undefined && {
           goalControl: (log: () => SessionLog) => {
             const port = goalDriverPort(
@@ -2216,8 +2213,7 @@ async function startServer(
                       header: resumed.header,
                     },
                   }),
-                  // 分叉（#1580）：新建的 header 標來源與 `isSeeded`。seed 不另外寫：協調器沒有已存筆數，第一次 flush 把整份寫出去
-                  // （同 dsh 發佈時 `appendUnstoredSuffix` 從 0 寫起）。
+                  // 分叉（#1580）：新建的 header 標來源與 `isSeeded`。seed 不另外寫：協調器沒有已存筆數，第一次 flush 把整份寫出去。
                   ...(fork !== undefined && {
                     rootLineage: { parentSession: fork.sourceHeader.id, isSeeded: true },
                   }),
@@ -2395,7 +2391,7 @@ async function startServer(
       ? `網頁：${webDist}`
       : `網頁：${webDist}（還沒 build——先跑 pnpm build，不然開網址只會看到 404）`,
   );
-  // grep 用的是產物內附的 ripgrep（#1502 刀 4）：講出是哪一支。缺了壞了不讓啟動失敗（照 dsh，rg 路徑是延遲解析的），
+  // grep 用的是產物內附的 ripgrep（#1502 刀 4）：講出是哪一支。缺了壞了不讓啟動失敗，
   // 但每一次 grep 都會以 SEARCH_FAILED 失敗、沒有退路——管理者要在啟動這一行就看得到，不必等模型第一次搜尋。
   disclose(formatRipgrepDisclosure(await ripgrepStatus()));
   reportSandboxTo(disclose);
@@ -2593,8 +2589,7 @@ export interface ServeProcessLifecycle {
 }
 
 /**
- * 行程層的收尾：**訊號與致命例外共用同一份、記住自己的 dispose**（[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)，
- * 照 dsh `apps/cli/src/profile-boot.ts:282-311`）。
+ * 行程層的收尾：**訊號與致命例外共用同一份、記住自己的 dispose**（[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）。
  *
  * - 訊號（`SIGTERM` 回 0、`SIGINT` 回 130）走 {@link createProcessShutdown}：5 秒上限、收尾中再來一次就當場結束（#599）。
  *   **`close()` 拒絕時兩者都回 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：有東西沒收好（會話日誌沒落盤這類），監管程式要從退出碼看得出來。
@@ -2604,7 +2599,7 @@ export interface ServeProcessLifecycle {
  * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
  *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
- *   （誰先開始收尾，誰的 `.then` 先掛在那顆 promise 上、先叫 `exit`；兩個 handler 的註冊順序不影響，同 dsh）。
+ *   （誰先開始收尾，誰的 `.then` 先掛在那顆 promise 上、先叫 `exit`；兩個 handler 的註冊順序不影響）。
  *
  * **在 `serveMain` 裡、`runServe` 之前裝，不在 `runServe` 裡裝**：`runServe` 被許多測試在 vitest 行程裡直接叫，它們自己掛
  * `unhandledRejection` 計數，裝在裡面會搶走那些測試的判準、還會叫真的 `process.exit`。
@@ -2631,7 +2626,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       }
     })());
   // Ctrl-C 要走完 dispose：子行程與檔案控制代碼都掛在那裡。**第二次訊號當場結束**、
-  // 收尾有上限，照 dsh（`process-shutdown.ts`，#599）。所以用 `on` 不用 `once`：`once`
+  // 收尾有上限（#599）。所以用 `on` 不用 `once`：`once`
   // 用掉之後第二次落回預設動作，是同一個結果但不是政策。
   const shutdown = createProcessShutdown(
     () => disposeWith(true),
@@ -2649,7 +2644,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
     },
   );
   let stopping = false;
-  // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
+  // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130。
   proc.on('SIGTERM', () => {
     stopping = true;
     shutdown.interrupt(0);

@@ -1,6 +1,5 @@
 /**
- * 寫租約——[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 2 件，照 dsh 的
- * `session-persistence-jsonl/src/lease.ts`。
+ * 寫租約——[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 2 件。
  *
  * **搶鎖那幾條測的是真的 kernel 鎖**，沒有替身：同一個行程開兩次同一個鎖檔，flock 一樣互斥
  * （以 open file description 為單位），所以兩個把手就是兩個行程的縮影。只有「這個平台拿不到」
