@@ -1,6 +1,5 @@
 /**
- * `session-reference` 那一列的 schema（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 D 的 schema 那一半）：
- * 範圍同 dsh `SessionReferenceResolver.Config`（`packages/context/session-reference/src/index.ts:90-95`，`1517a4db`／`687f282e`／`22ddee37`）。
+ * `session-reference` 那一列的 schema（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 D 的 schema 那一半）。
  * 起動期「寫壞整個起不來」那一半走 `runServe`，在 `startup-audit.test.ts`。
  */
 

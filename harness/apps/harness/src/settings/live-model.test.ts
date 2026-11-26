@@ -138,8 +138,7 @@ describe('live-model 的 schema', () => {
   });
 
   /**
-   * #1427：首事件之前與之後共用的重試政策。形狀與驗證逐條照 dsh 的 `resolveRetryPolicy`／`resolveBackoff`
-   * （`packages/llm/llm/src/retry-policy.ts`）：出廠 6 次（demian 拍板，dsh 預設是 5）、500 毫秒起、封頂 10 秒、抖動 0.1。
+   * #1427：首事件之前與之後共用的重試政策。出廠 6 次（demian 拍板）、500 毫秒起、封頂 10 秒、抖動 0.1。
    */
   it('retryPolicy：整個不寫就是出廠值；寫了就必填 mode；數值逐條驗', () => {
     const parse = (retryPolicy: unknown) => liveModelConfigSchema.parse({ retryPolicy });
@@ -150,16 +149,16 @@ describe('live-model 的 schema', () => {
       retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
       backoff: { initialDelayMs: 500, maxDelayMs: 10_000, jitterRatio: 0.1 },
     });
-    // 只寫 mode：其餘各自補預設（dsh 的 `?? DEFAULT_*`）。
+    // 只寫 mode：其餘各自補預設。
     expect(parse(normal).retryPolicy.maxRetries).toBe(6);
     expect(parse(normal).retryPolicy.backoff.maxDelayMs).toBe(10_000);
-    // 0 次合法（等於關掉）、沒有上限（同 dsh 的 `Number.MAX_SAFE_INTEGER`）。
+    // 0 次合法（等於關掉）、沒有上限（`Number.MAX_SAFE_INTEGER` 合法）。
     expect(parse({ ...normal, maxRetries: 0 }).retryPolicy.maxRetries).toBe(0);
     expect(parse({ ...normal, maxRetries: 50 }).retryPolicy.maxRetries).toBe(50);
     expect(parse({ ...normal, maxRetries: Number.MAX_SAFE_INTEGER }).retryPolicy.maxRetries).toBe(
       Number.MAX_SAFE_INTEGER,
     );
-    // dsh 要的是「大於 0」，不是「至少 1」：0.5 毫秒合法。
+    // 要的是「大於 0」，不是「至少 1」：0.5 毫秒合法。
     expect(
       parse({ ...normal, backoff: { initialDelayMs: 0.5 } }).retryPolicy.backoff,
     ).toMatchObject({
@@ -706,7 +705,7 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
 
   /**
    * 帶 `--live`：**兩個入口都起不來，不退回設定格式的預設值**（#751）。那份預設的網址是對外的公開端點，退回去就連同金鑰
-   * 一起送出去；照 dsh 的連鎖，使用方（帶 `--live` 的組裝）硬要這一份，提供方掉了使用方起不來。
+   * 一起送出去；使用方（帶 `--live` 的組裝）硬要這一份，提供方掉了使用方起不來。
    *
    * CLI 那條不給題目、輸入一開始就結束：萬一檢查被拿掉，它也只會進對話迴圈就收，不會真的對外送請求。
    */

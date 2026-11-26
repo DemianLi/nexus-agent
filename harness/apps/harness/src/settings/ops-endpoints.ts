@@ -11,9 +11,8 @@
  *
  * 關掉這一列（`disabled: true`）等於沒有這一列、值回到預設：探針開、指標關。要連探針也關，把 `probes.enabled` 設成 `false`。
  *
- * ## 偏離 dsh：產品需求超出 dsh
+ * ## 判準
  *
- * dsh 沒有探針端點，也沒有指標出口（`687f282e`：唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除），所以這一列沒有對照。判準取公開的慣例：
  * 探針語意取 Kubernetes 的 `livez`／`readyz` 分法，指標格式取 Prometheus 文字格式 0.0.4（手寫，不加相依）。
  *
  * @module
