@@ -115,7 +115,6 @@ import type { ThreadSearchConfig } from './settings/thread-search.js';
 
 /**
  * 搜尋失敗的種類。
- * 線上怎麼講見 `wire-handler.ts`（新的四種一律 `unknown_error`）。
  *
  * - `invalid`：查詢空白、太長、含 NUL。
  * - `disabled`：那一列設成 `openAt: never`，而且有東西可搜。
@@ -138,7 +137,6 @@ export class ThreadSearchError extends Error {
   }
 }
 
-/** 中止；`cause` 帶訊號的 `reason`。 */
 function abortedError(signal: AbortSignal): ThreadSearchError {
   return new ThreadSearchError('aborted', '搜尋被中止了', { cause: signal.reason });
 }
@@ -147,12 +145,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw abortedError(signal);
 }
 
-/** 已經收掉。 */
 function closedError(): ThreadSearchError {
   return new ThreadSearchError('index-failed', '搜尋已經收掉了');
 }
 
-/** 等一個 promise，`signal` 中止就先走（那個 promise 照跑）。 */
 function waitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return promise;
   if (signal.aborted) return Promise.reject(abortedError(signal));
@@ -174,7 +170,6 @@ function waitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined):
   });
 }
 
-/** `openAt: never` 時的失敗。 */
 export const THREAD_SEARCH_DISABLED_MESSAGE =
   '這個部署沒開會話內容搜尋（清單上 thread-search 那一列是 openAt: never），只能比標題';
 
@@ -198,7 +193,6 @@ export function normalizeThreadSearchQuery(query: unknown): string {
   return trimmed;
 }
 
-/** 連續的空白壓成一格、去頭尾。 */
 export function collapseWhitespace(text: string): string {
   return text.replace(/\s+/gu, ' ').trim();
 }
@@ -274,7 +268,6 @@ function isModelOnlyBlock(block: unknown): boolean {
   return isMentionHintBlock(block) || isPageContextBlock(block);
 }
 
-/** 一則訊息裡搜得到的字：文字區塊，回覆再加上要叫的工具。各段去頭尾、空的丟掉。 */
 function messageText(message: BaseMessage): string {
   const parts = [textWithoutModelOnlyBlocks(message)];
   if (AIMessage.isInstance(message)) {
@@ -327,7 +320,6 @@ export function searchDocuments(events: readonly SessionEvent[]): SearchDocument
   const documents: SearchDocument[] = [];
   for (const [message, event] of current) {
     if (ToolMessage.isInstance(message)) continue;
-    // NUL 換成 U+FFFD。
     const text = messageText(message).replaceAll('\0', '\uFFFD');
     if (text !== '') documents.push({ seq: event.seq, time: event.time, text });
   }
@@ -347,7 +339,6 @@ export interface LiveThread {
   readonly header: StoredSessionHeader | undefined;
 }
 
-/** 穩定觀察最多幾次：一次改變給一次重來。 */
 const STABLE_OBSERVATION_ATTEMPTS = 2;
 
 export interface ThreadSearchOptions {
@@ -445,7 +436,6 @@ export class ThreadSearch {
     }
     return this.#serialized(signal, async () => {
       try {
-        // 開索引也在隊伍裡、可中止；開不起來是 `index-failed`。
         const prepared = await this.#ready(signal);
         await this.#reconcile(prepared, store, visible, signal);
         throwIfAborted(signal);
@@ -497,7 +487,6 @@ export class ThreadSearch {
       release();
       throw error;
     }
-    // 等的時候收掉了：先講收掉，再看中止。
     if (this.#closed) {
       release();
       throw closedError();
@@ -539,7 +528,6 @@ export class ThreadSearch {
         remove: db.prepare('DELETE FROM docs WHERE rowid = ?'),
       };
     } catch (error: unknown) {
-      // 開到一半失敗：關掉自己開的 db 再拋。
       db.close();
       throw error;
     }
@@ -624,7 +612,6 @@ export class ThreadSearch {
       for (const { header, revision } of visible) {
         throwIfAborted(signal);
         const threadId = header.id;
-        // **活的讀記憶體**（#1599）：批次窗口還沒寫出去的那一句也在。header 每次都跟盤上那份比；比的欄位同冷讀那一道。
         const live = initiallyLive.get(threadId);
         if (live !== undefined) {
           if (live.header !== undefined) assertSameSource(header, live.header);
@@ -649,7 +636,6 @@ export class ThreadSearch {
             { cause: error },
           );
         }
-        // 讀的時候中止了：不寫、不 COMMIT。
         throwIfAborted(signal);
         // 列與讀之間變了：這一次不動它，下一次對帳再看（被刪掉的那時就在「不見了的」那一邊）。
         if (loaded === undefined) continue;
@@ -678,7 +664,6 @@ export class ThreadSearch {
         cause: error,
       });
     }
-    // 交易成功之後才記，失敗的那幾條下一次搜尋再讀一次。
     for (const threadId of gone) {
       this.#stamps.delete(threadId);
       this.#rows.delete(threadId);
@@ -781,9 +766,6 @@ async function readForSearch(
   }
 }
 
-/**
- * {@link assertSameSource} 比的那幾格；兩次列表之間比 header 也用它。
- */
 function sameSource(a: StoredSessionHeader, b: StoredSessionHeader): boolean {
   return (
     a.id === b.id &&

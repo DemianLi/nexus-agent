@@ -374,7 +374,6 @@ describe('ThreadSearch', () => {
     const result = await engine.search('同一句');
     expect(result.items).toHaveLength(THREAD_SEARCH_RESULT_LIMIT);
     expect(result.hasMore).toBe(true);
-    // 什麼都一樣時照 id。
     expect(result.items[0]?.threadId).toBe('t00');
     await engine.close();
   });
@@ -779,7 +778,6 @@ describe('隊伍、收尾與失敗的種類（#1552）', () => {
       kind: 'index-failed',
       message: expect.stringContaining('fts5'),
     });
-    // 開到一半失敗的那個 db 當下就關掉。
     expect(closed).toBe(1);
     await engine.close();
     expect(closed).toBe(1);

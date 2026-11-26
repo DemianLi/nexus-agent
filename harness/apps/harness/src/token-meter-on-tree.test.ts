@@ -335,7 +335,6 @@ describe('E：同一個 key 由兩列登記（provider 這一層共用）', () =
       openWith(root, dir, overlayOf(dir, [['twin', twin]], extra, name));
     const both = await open('', 'both.yml');
     expect(both.keys).toContain(KEY);
-    // 停掉先登記的那一列：key 還在，由留下的那一列（twin）折進來；引用計數沒歸零，單元照舊是第一個登記者的定義。
     const firstOff = await open(`- id: ${KEY}\n  disabled: true\n`, 'first-off.yml');
     expect(firstOff.keys.filter((key) => key === KEY)).toHaveLength(1);
     expect(firstOff.units.find((unit) => unit.key === KEY)?.apply).toBe(tokenMeterUnit.apply);
