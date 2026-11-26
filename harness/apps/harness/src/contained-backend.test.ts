@@ -302,7 +302,7 @@ describe('三個 mode', () => {
   });
 
   // 標題刻意不寫「真的不設防」：基座的 lexical `..` 檢查仍在（`virtualMode` 不給關），
-  // 所以這個 mode 放行的是 symlink 逃逸，不是 dsh 那種全開。
+  // 所以這個 mode 放行的是 symlink 逃逸，不是全開。
   it('danger-full-access 放行 symlink 逃逸', async () => {
     const backend = contained(terrain.root, 'danger-full-access');
 

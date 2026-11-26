@@ -1,9 +1,9 @@
 /**
  * 命令列入口：從原始碼抽出會話日誌落盤的型別圖，重新生成 `docs/persistence-schema.json`
- * （[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1，照 dsh `scripts/gen-persistence-catalog.ts`）。
+ * （[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1）。
  *
  * 抽取規則在 {@link ./persistence-schema.ts}；新鮮度由 `persistence-schema.test.ts` 在 CI 驗。`--check` 只比對、不寫檔，
- * 過期就以非零碼結束（照 dsh 的 `--check`）。抽取失敗時不寫檔、印出原因並以非零碼結束。
+ * 過期就以非零碼結束。抽取失敗時不寫檔、印出原因並以非零碼結束。
  *
  * @module
  */

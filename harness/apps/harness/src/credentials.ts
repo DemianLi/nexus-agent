@@ -11,7 +11,7 @@
  *
  * 兩邊都以 `store` 旗標區分，沒有預設值（{@link CredentialServiceOptions.store}）。
  *
- * 受管檔的格式、拒絕與警告的規則、重讀、權限都寫在 `docs/credentials-file.md`（Rust 端照同一份），與 dsh 的對照也在那裡。
+ * 受管檔的格式、拒絕與警告的規則、重讀、權限都寫在 `docs/credentials-file.md`（Rust 端照同一份）。
  * 這裡只記程式要守的幾件事：
  *
  * - **`refs` 裡面**一律拒絕、不跳過：被靜靜忽略的條目讀起來就是「我存的憑證沒作用」。

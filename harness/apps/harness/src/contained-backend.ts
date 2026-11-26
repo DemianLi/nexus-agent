@@ -21,16 +21,14 @@
  *
  * 所以這個 class 要補的是 `write` 與 `edit`，以及讀（見下面〈讀取面的圍堵〉）。**`delete` 也一起覆寫**，理由不是基座那邊有錯，
  * 而是**拒絕的措辭要只有一種**：基座擋下來時說的是 `Symlink parent not allowed`，我們說的是
- * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。dsh 讓所有拒絕共用一個
- * `FS_SANDBOX_DENIED` 正是這個理由。
+ * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。
  *
  * ## `write` 與 `edit` 是暫存檔加 `rename` 的原子取代（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）
  *
  * 基座的兩條寫入路都是 `O_TRUNC` 就地覆寫：寫到一半被 `kill -9`、斷電、磁碟寫滿，使用者打開的是截斷的檔；平行的 `edit`
  * 後寫蓋掉先寫；工作區裡指向根外的硬連結被寫穿。所以這兩個方法**過完 fence 就自己做完**（`super.write`／`super.edit`
  * 會 `O_TRUNC`，不能前後包一層）：同目錄 `0700` 暫存目錄、`wx` `0600` 暫存檔、`sync`、補回原檔 mode、`rename`；
- * 整段（`edit` 連讀與替換）在以 canonical 路徑為鍵的**行程層級**逐目標鎖裡。實作與 dsh 出處、偏離 1（不做
- * `createIfAbsent` 的 hard link 發佈，理由 1）與偏離 2（不做 Windows，理由 2）見 `atomic-workspace-write.ts`。
+ * 整段（`edit` 連讀與替換）在以 canonical 路徑為鍵的**行程層級**逐目標鎖裡。實作見 `atomic-workspace-write.ts`。
  * 路徑仍走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根）：`danger-full-access` 下 `verdict` 不檢查，那是唯一一道。
  * 結果形狀與錯誤字句照基座，`edit` 的字串替換逐字照抄 `performStringReplacement`；唯一不同的一句是寫到目錄上，
  * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）；另外 errno 的訊息不帶主機路徑（{@link pathlessReason}）。
@@ -39,12 +37,12 @@
  *
  * 基座的 `read` 整份讀進來、整份 `split`，`read_file` 之外的「先讀後改」再 `readRaw` 一次，一個 191 MB 的檔在一次工具呼叫裡
  * 變成好幾份常駐的字串；單行 3 MB 的檔也整行送出。所以 `read` 也**自己做完**（不 `super.read`）：開檔後用同一個 fd 的 `stat` 定路由，
- * 小於 {@link READ_STREAM_MIN_SIZE}（同 dsh 的 `STREAM_MIN_SIZE`）一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
- * `scanWindow`。**在 `read_file` 裡**照 dsh 的 `buildWindow` 建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
+ * 小於 {@link READ_STREAM_MIN_SIZE} 一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
+ * `scanWindow`。**在 `read_file` 裡**建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
  * 並把頁的範圍與同一個 fd 的 stat 版本回報給 `@nexus/core`（#2030）；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
- * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM，理由 1 基座表達不出來）**：開頭的 BOM 保留，不照 dsh 去掉——
- * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
+ * 不看副檔名（見 `binary-read.ts`）。**開頭的 BOM 保留**：
+ * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在。行尾 `\r` 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
+ * N0335），只在 `read_file` 裡。
  *
  * 另一個會改檔案的方法是 **`uploadFiles`**——`BackendProtocolV2` 上的，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
@@ -56,26 +54,18 @@
  * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點，根內的連結也搜不到（#2193）。判法與例外見 `readDenial`。
  * 讀能看到什麼的其餘策略仍歸 `permissions`。
  *
- * ## 形狀照 dsh 的 `fs-sandbox`
- *
- * [#34](https://github.com/DemianLi/nexus-agent/issues/34) 的定案，逐條對應
- * （`references/deepseek-harness/packages/fs/fs-sandbox/`）：**繼承**而不是平行實作、
- * 變更的 fence 只掛在寫入路徑、canonicalize-then-contain 且在委派前重新
- * canonicalize、三個 mode 留一個不設防的逃生口。
- *
  * ## 威脅模型：這是 policy fence，不是 kernel boundary
  *
- * 照抄 dsh 的誠實標準：這是**信任的程式碼**對一條**模型控制的路徑**做檢查，操作本身
+ * 這是**信任的程式碼**對一條**模型控制的路徑**做檢查，操作本身
  * （open、rename）是我們自己的，只有目標路徑不可信，所以 canonicalize-then-contain 對
  * 這個面向是完整的答案。這是 containment，不是 security boundary。殘留的 TOCTOU
  * （檢查與 syscall 之間祖先 symlink 被抽換）被接受——核心級的隔離是 shell sandbox 的事
  * （`feat/sandbox-plugin`）。
  *
- * **我們的 TOCTOU 窗口比 dsh 寬一點，這件事要說明白。** dsh 的 `checkedTarget()` 回傳
- * 那個新鮮的 canonical target，變更就用**它**去寫，所以檢查的與寫入的是同一個身分。我們
- * 做不到同一件事（`delete`／`uploadFiles` 仍如此；`write`／`edit` 自己做完之後改走 `resolvePath`，見上）：`super.write()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
- * 傳一個 realpath 進去只會被當成虛擬路徑接到 `cwd` 底下。所以這裡回傳的是「canonical 之後
- * 再表達回去的虛擬路徑」——祖先的 symlink 已經被解掉，但基座那一次 lexical resolve 仍在
+ * **TOCTOU 窗口要說明白。** 檢查的 canonical 目標與實際寫入用的路徑不是同一個身分：`checkedPath` 回傳的是「canonical 之後
+ * 再表達回去的虛擬路徑」，祖先的 symlink 已經被解掉，但 `write`／`edit` 的 `resolveVirtual`，與 `delete`／`uploadFiles`
+ * 交給基座的 `super.delete()`／`super.uploadFiles()`，都會再 `resolvePath()` 一次；傳一個 realpath 進去
+ * 只會被當成虛擬路徑接到 `cwd` 底下，所以回傳的只能是虛擬路徑。那一次 lexical resolve 仍在
  * 我們的檢查之後發生。
  */
 
@@ -169,7 +159,7 @@ function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text')
 
 /**
  * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`
- * （**依卡面要求，不是照 dsh**：dsh 只在 `listDirectory` 轉這個碼，`fsio.ts:282`，這裡 `read`／`write`／`edit` 碰到也記）；
+ * （`read`／`write`／`edit` 碰到都記）；
  * `ENOENT`／`ENOTDIR` 是 `FS_NOT_FOUND`，但只有 `missing` 為真（呼叫端的目標本來就該存在：`read`、`edit`）時才算——`write` 會自己建父目錄，
  * 碰到它們是別的原因。`ENOSPC`／`EDQUOT` 是 `FS_NO_SPACE`。認不得的不記碼。
  */
@@ -200,7 +190,7 @@ export function pathlessReason(error: unknown): string {
   return end === -1 ? code : message.slice(0, end);
 }
 
-/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
+/** 整份位元組 fatal 解碼；開頭的 BOM 留著（見檔頭）。 */
 function decodeWhole(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -220,11 +210,11 @@ function searchFailure(
   return { error: message, errorCode: code };
 }
 
-/** dsh `GLOB_VCS_EXCLUDES`（`glob.ts:21-107`，`687f282e`）：版本控制的中繼目錄，`glob` 一律不列。 */
+/** 版本控制的中繼目錄，`glob` 一律不列。 */
 const GLOB_VCS_EXCLUDES: readonly string[] = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'];
 
 /**
- * `relative(cwd, …)` 的結果跑出根了嗎？照 dsh `toWorkdirRelative`：只有 `..` 本身與 `..` 加分隔符開頭才算。
+ * `relative(cwd, …)` 的結果跑出根了嗎？只有 `..` 本身與 `..` 加分隔符開頭才算。
  * 不能用 `startsWith('..')`——檔名 `..foo` 的相對路徑就是 `..foo`，會被誤判成根外而整個漏掉。
  */
 function escapesRoot(rel: string): boolean {
@@ -235,11 +225,11 @@ function escapesRoot(rel: string): boolean {
 const GLOB_LSTAT_BATCH = 64;
 
 /**
- * 驗 `grep` 的檔案篩選（dsh 叫 `include`，基座的參數叫 `glob`）。照 dsh `validateInclude`（`grep.ts:24-116`，`687f282e`）：
+ * 驗 `grep` 的檔案篩選（參數叫 `glob`）：
  * 只收**單一正向 glob**——空字串、`!` 開頭、大括號外的逗號清單都拒絕；`*.{ts,tsx}` 的逗號在括號內，是同一個 glob 的選擇，放行。
  *
- * **偏離 dsh 的只有載體**：dsh 在工具參數驗證丟一般 `Error`，這裡的工具是基座的、驗證點只能在 backend，所以回
- * `SEARCH_INVALID_PATTERN`（卡面指定的碼，#1605）。字句照 dsh，把 `include` 換成基座工具實際的參數名 `glob`。
+ * 這裡的工具是基座的、驗證點只能在 backend，所以不合格回
+ * `SEARCH_INVALID_PATTERN`（卡面指定的碼，#1605）。
  *
  * @returns 不合格時的訊息；合格是 `undefined`。
  */
@@ -269,7 +259,7 @@ export type GrepPathsResult = GrepResult & { readonly errorCode?: SearchErrorCod
 export type GlobPathsResult = GlobResult & { readonly errorCode?: SearchErrorCode };
 
 /**
- * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
+ * 圍堵的強度。
  *
  * `read-only` 只擋得住**變更**：「read-only」講的是這個 backend 不改東西，不是「這個 agent 看不到東西」。
  * 讀在 `read-only` 與 `workspace-write` 下一樣，只擋經符號連結落到根外的（檔頭〈讀取面的圍堵〉）；
@@ -315,9 +305,9 @@ export type GlobPathsResult = GlobResult & { readonly errorCode?: SearchErrorCod
  * 存不進去才退回 graph state），所以那次 write 不再經過這道 fence。
  * **上面那句「明著接受」只涵蓋對話歷史，不要擴大解釋。**
  *
- * **`danger-full-access` 比 dsh 的同名 mode 弱，這是一條偏離。** 它放行 symlink 逃逸，但
+ * **`danger-full-access` 不是完全不設防。** 它放行 symlink 逃逸，但
  * 基座那道 lexical 的 `..` 檢查仍在——這個 class 不給關 `virtualMode`（見下面的 class 註解），
- * 所以它結構上就不可能是 dsh 那種真正的不設防。想要完全不設防，用原生的 `FilesystemBackend`。
+ * 所以它結構上就不可能完全不設防。想要完全不設防，用原生的 `FilesystemBackend`。
  */
 export type { SandboxMode } from '@nexus/core';
 
@@ -335,8 +325,7 @@ export { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
  *
  * 搬過去的理由與 {@link SandboxMode} 同型，只是對面換了人：實作 {@link SandboxGrantLedger}
  * 的是 `@nexus/plugin-sandbox-policy` 的 `SandboxModeController`，跟這道 fence 分屬兩個
- * 套件。合約放在其中一邊，另一邊就得反向依賴。dsh 也是這樣分的——基底套件
- * `@deepseek-ai/dsh-sandbox` 出詞彙**加上**升級協定，policy 與執行端各自依賴它。
+ * 套件。合約放在其中一邊，另一邊就得反向依賴。
  *
  * 從這個檔案 re-export 是為了讓 fence 的使用者仍然只需要認得一個門。
  */
@@ -387,12 +376,12 @@ const BASE_ERROR_WORD = 'Error';
 /** 行尾的寫法。 */
 type LineEndings = 'LF' | 'CRLF';
 
-/** `\r\n` 收成 `\n`；單獨的 `\r` 不動。照 dsh `normalizeLineEndings`（`fsio.ts:683`，`687f282e`）。 */
+/** `\r\n` 收成 `\n`；單獨的 `\r` 不動。 */
 function normalizeLineEndings(content: string): string {
   return content.replaceAll('\r\n', '\n');
 }
 
-/** 前 4096 個字元裡 `\r\n` 比單獨 `\n` 多就是 CRLF。照 dsh `detectLineEndings`（`fsio.ts:687`）。 */
+/** 前 4096 個字元裡 `\r\n` 比單獨 `\n` 多就是 CRLF。 */
 function detectLineEndings(raw: string): LineEndings {
   const sample = raw.slice(0, 4096);
   const crlfCount = sample.split('\r\n').length - 1;
@@ -400,7 +389,7 @@ function detectLineEndings(raw: string): LineEndings {
   return crlfCount > lfCount ? 'CRLF' : 'LF';
 }
 
-/** 把 LF 的內容還原成原檔的行尾；CRLF 先正規化再轉，已經是 `\r\n` 的不會變成 `\r\r\n`。照 dsh `restoreLineEndings`（`fsio.ts:702`）。 */
+/** 把 LF 的內容還原成原檔的行尾；CRLF 先正規化再轉，已經是 `\r\n` 的不會變成 `\r\r\n`。 */
 function restoreLineEndings(content: string, lineEndings: LineEndings): string {
   return lineEndings === 'LF' ? content : normalizeLineEndings(content).split('\n').join('\r\n');
 }
@@ -413,11 +402,11 @@ interface EditFailure {
 
 /**
  * 字串替換。**錯誤字句逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：模型看到的拒絕理由不因為這個 backend
- * 自己寫檔而換了一套話；`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 釘住字句。**行尾照 dsh 的 `applyLiteralEdit`**
- * （`packages/fs/fs-local/src/fsio.ts:814-834`，`687f282e`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：
+ * 自己寫檔而換了一套話；`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 釘住字句。**行尾的處理**
+ * （[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：
  * `content` 要已經正規化成 LF，`oldString`／`newString` 裡的 `\r\n` 在比對前收成 `\n`；字句裡回顯的仍是模型給的原字串。
  *
- * 碼的歸類照 dsh：`old_string` 是空的或找不到是 `FS_EDIT_NOT_FOUND`，命中好幾處又沒有 `replaceAll` 是 `FS_AMBIGUOUS_EDIT`。
+ * 碼的歸類：`old_string` 是空的或找不到是 `FS_EDIT_NOT_FOUND`，命中好幾處又沒有 `replaceAll` 是 `FS_AMBIGUOUS_EDIT`。
  *
  * @returns 新內容（LF）與取代次數，或失敗。
  */
@@ -429,7 +418,7 @@ function applyLiteralEdit(
 ): { readonly content: string; readonly occurrences: number } | EditFailure {
   const oldNorm = normalizeLineEndings(oldString);
   const newNorm = normalizeLineEndings(newString);
-  // 空的 `old_string` 一律是 `FS_EDIT_NOT_FOUND`，連空檔也一樣（照 dsh `applyLiteralEdit`，`fsio.ts:820-823`；基座對空檔配空字串是直接寫入）。
+  // 空的 `old_string` 一律是 `FS_EDIT_NOT_FOUND`，連空檔也一樣（基座對空檔配空字串是直接寫入）。
   if (oldNorm === '') {
     return {
       code: FS_EDIT_NOT_FOUND,
@@ -484,12 +473,11 @@ export interface ContainedFilesystemBackendOptions {
   readonly atomicInternals?: AtomicWriteInternals;
   /**
    * 讀檔：檔案大小**達到**這個位元組數就串流讀，邊讀邊掃，不整份留在記憶體；比它小的一次讀進來。預設 {@link READ_STREAM_MIN_SIZE}。
-   * 名字與預設照 dsh 的 `readStreamMinSize`（`packages/fs/tool-fs/src/read.ts:21`、`index.ts:42`）。
    */
   readonly streamMinSize?: number;
   /**
-   * 搜尋（`grep`／`glob`）時，起點底下有些路徑讀不到，其餘照常交出並註明數量（偏離 dsh，理由 2，[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）。
-   * **預設 `false`＝ dsh 的做法（整次失敗）**：只有多人共用主機上的使用者工作區明確打開；暫存目錄是 serve 自己的目錄，附件路由的
+   * 搜尋（`grep`／`glob`）時，起點底下有些路徑讀不到，其餘照常交出並註明數量（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）。
+   * **預設 `false`（整次失敗）**：只有多人共用主機上的使用者工作區明確打開；暫存目錄是 serve 自己的目錄，附件路由的
    * 讀不到的檔屬於別的 thread（#1822），都不開。判準與起點讀不到的規則見 `ripgrep-runner.ts` 檔頭。
    */
   readonly tolerateUnreadable?: boolean;
@@ -516,7 +504,7 @@ export interface ReservedWrite {
   readonly reason: string;
 }
 
-/** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
+/** 讀檔改用串流的檔案大小門檻（位元組）。 */
 export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
 
 /**
@@ -602,8 +590,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly grants: SandboxGrantLedger | undefined;
 
   /**
-   * 搜尋時起點底下有些路徑讀不到，要不要照樣交出其餘的結果（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭）。**預設 `false`
-   * ＝ dsh 的做法**，只有多人共用主機上的工作區明確打開（`assembly-root.ts`）；讀不到的是搜尋起點本身時不論如何都判錯。
+   * 搜尋時起點底下有些路徑讀不到，要不要照樣交出其餘的結果（#1704，見 `ripgrep-runner.ts` 檔頭）。**預設 `false`**，只有多人共用主機上的工作區明確打開（`assembly-root.ts`）；讀不到的是搜尋起點本身時不論如何都判錯。
    */
   protected readonly tolerateUnreadable: boolean;
 
@@ -671,7 +658,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
    * `File '…' not found`，其餘例外回 `Error reading file '…': …`。開檔用 `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，開好之後再用同一個把手判一次一般檔：
    * 路徑判完之後、開檔之前被換成 FIFO，開檔不會卡住，回的也是 `not found`（[#2312](https://github.com/DemianLi/nexus-agent/issues/2312)）。
-   * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
+   * 判二進位：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
    * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
    *
    * **大小決定路由**：用開檔後同一個 fd 的 `stat`，`size` 小於 `streamMinSize` 就 `readFile` 一次，否則 `createReadStream` 逐 chunk
@@ -683,8 +670,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * 取消：`currentToolCallSignal()` 接進讀取，中止時回 `{ error: 'read aborted' }`，不拋。
    *
-   * **與 dsh 的偏離**：開頭的 BOM 不吃掉（偏離 2，理由 1，見檔頭與 `utf8-stream.ts`）；另外視窗經旁路回報，
-   * 不經工具回傳值（偏離 1，見 `read-continuation.ts`）。
+   * 開頭的 BOM 不吃掉（見檔頭與 `utf8-stream.ts`）；視窗經旁路回報，
+   * 不經工具回傳值（見 `read-continuation.ts`）。
    *
    * @param filePath - 虛擬路徑。
    * @param offset - 從第幾行起（0 起算）。
@@ -735,7 +722,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       return { error: `File '${filePath}' not found` };
     }
     const window = currentReadWindow();
-    // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
+    // `read_file` 裡行尾的 `\r` 去掉（#1563 N0335）；其餘呼叫維持基座的切片語意。
     const params = window
       ? {
           offset: window.offset,
@@ -938,11 +925,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * 基座的 `write` 是 `O_TRUNC` 就地覆寫，所以不能前後包一層，這裡自己做完：結果形狀與錯誤字句照基座
    * （成功 `{ path, filesUpdate: null }`，失敗 `{ error: "Error writing file '…': …" }`，symlink 的原句）。
-   * **內容一律當 UTF-8 文字寫，不看副檔名**（[#1813](https://github.com/DemianLi/nexus-agent/issues/1813)，見下面的偏離）。整段在逐目標的鎖裡。
+   * **內容一律當 UTF-8 文字寫，不看副檔名**（[#1813](https://github.com/DemianLi/nexus-agent/issues/1813)）。整段在逐目標的鎖裡。
    *
-   * **與 dsh 的偏離已撤銷：** 基座的 `write` 對非文字副檔名（圖、音、影、pdf、ppt）把內容當 base64 解碼成位元組再寫，工具描述沒講，模型寫的純文字落成亂碼
-   * 還回「Successfully wrote」。dsh 沒有任何依副檔名的分支（`packages/fs/tool-fs/src/write.ts:75/:82/:124`：UTF-8 文字，`fs-local` 的
-   * `writeFile(content, { encoding: 'utf8' })`），這裡照 dsh。要寫位元組的內部呼叫端走 `uploadFiles`（見下），不經過這支。
+   * **為什麼：** 基座的 `write` 對非文字副檔名（圖、音、影、pdf、ppt）把內容當 base64 解碼成位元組再寫，工具描述沒講，模型寫的純文字落成亂碼
+   * 還回「Successfully wrote」，所以這裡一律寫 UTF-8 文字。要寫位元組的內部呼叫端走 `uploadFiles`（見下），不經過這支。
    *
    * @param filePath - 虛擬路徑。
    * @param content - 檔案內容。
@@ -1098,10 +1084,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 編輯檔案，先過 fence，**自己讀、自己替換、經暫存檔加 `rename` 寫回**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
    *
-   * 讀：用路徑 `stat` 判一般檔，`O_RDONLY|O_NOFOLLOW|O_NONBLOCK` 開檔，開好再用把手判一次（#2312）；再照 dsh 的 `readForEdit`：含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
+   * 讀：用路徑 `stat` 判一般檔，`O_RDONLY|O_NOFOLLOW|O_NONBLOCK` 開檔，開好再用把手判一次（#2312）；含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
    * （[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）。替換用 {@link applyLiteralEdit}（錯誤字句逐字照基座，`old_string`／
    * `new_string` 的 `\r\n` 也收成 `\n`），寫回前還原原檔的行尾；保留既有 mode。失敗的原因碼見 `fs-tool-errors.ts` 的 {@link noteFsError}。
-   * **已知的界線（照 dsh）：** 混合行尾的檔以前 4096 個字元的多數為準，整份被統一成那一種。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
+   * **已知的界線：** 混合行尾的檔以前 4096 個字元的多數為準，整份被統一成那一種。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
    *
    * @param filePath - 虛擬路徑。
    * @param oldString - 要被換掉的字串。
@@ -1146,8 +1132,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         } finally {
           await handle.close();
         }
-        // 二進位與壞掉的 UTF-8 不改：有損解碼再寫回會把原本的位元組換成 U+FFFD（照 dsh `readForEdit`，`fsio.ts:725-736`）。
-        // **NUL 掃整份**，不像讀檔那條取樣前 {@link BINARY_SAMPLE_BYTES}（dsh `fsio.ts:733` 是 `buffer.includes(0)`；取樣是 `read` 的 `fsio.ts:396`）：
+        // 二進位與壞掉的 UTF-8 不改：有損解碼再寫回會把原本的位元組換成 U+FFFD。
+        // **NUL 掃整份**，不像讀檔那條取樣前 {@link BINARY_SAMPLE_BYTES}：
         // 這裡整份本來就在記憶體裡，而且改錯的代價是把檔案寫壞。
         if (bytes.includes(0)) {
           noteFsError(FS_NOT_TEXT);
@@ -1243,15 +1229,14 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 搜尋檔案內容。**rg 由這裡自己起**（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)），照 dsh
-   * `packages/fs/tool-fs-search/src/search-core.ts:222-287`（`687f282e`）：`--no-config`、`cwd` 是工作區根、stdout 上限、
+   * 搜尋檔案內容。**rg 由這裡自己起**（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）：`--no-config`、`cwd` 是工作區根、stdout 上限、
    * 取消與逾時、錯誤分類，細節在 `ripgrep-runner.ts`。
    *
    * **基座的做法有四個洞**（`deepagents@1.13.1`，`dist/src-C9o7b5C6.js:935-984`）：`spawn("rg", …)` 沒有 `--no-config`，
    * 所以管理者的 `~/.ripgreprc`、專案 `.env` 帶進來的 `RIPGREP_CONFIG_PATH` 能濾掉結果，`--pre` 還能讓 rg 對每個命中的檔
    * 執行任意程式；stdout 不設上限；沒有取消；結束碼不是 0／1、逾時、spawn 失敗一律改走結果不同的 `literalSearch`。
    * 帶目錄的 glob 回 0 筆那個缺陷（rg 的錨點是行程的工作目錄，不是工作區根）也是同一處：`cwd` 現在直接給工作區根，
-   * glob 原樣以 `--glob` 傳下去，錨點語意同 dsh。
+   * glob 原樣以 `--glob` 傳下去。
    *
    * 流程：解出搜尋的起點並 `stat`（不存在就 `{ matches: [] }`，同基座）→ 確認工作區根存在 → 跑 rg →
    * 解析 `--json`、換算虛擬路徑（邏輯照基座 `:951-978`）→ `maxCount` 截斷。失敗一律回 `{ error }`，並替這一次工具呼叫記下
@@ -1272,10 +1257,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * ## 正規式，不是字面字串（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）
    *
-   * 基座與 #1532 起 rg 時都帶 `-F`（字面字串）：`foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。#1563 Q1 (a) 拍板照 dsh 改成
-   * 正規式（`--regexp=`，rg 的語法），本卡接手 #1532 PR 內文那句「暫留，見 #1605 Q1」。不合法的正規式 rg 回 `regex parse error`，
+   * pattern 是正規式（`--regexp=`，rg 的語法）：字面比對（`-F`）下 `foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。
+   * 不合法的正規式 rg 回 `regex parse error`，
    * 歸類成 `SEARCH_INVALID_PATTERN`（`ripgrep-runner.ts` 的 `classifyExit`）。檔案篩選（`glob`）先驗過：空字串、`!` 開頭、大括號外的
-   * 逗號清單回 `SEARCH_INVALID_PATTERN`（{@link invalidGrepGlob}）。每行文字的截斷（dsh `previewLine`）在 `search-overflow.ts`，
+   * 逗號清單回 `SEARCH_INVALID_PATTERN`（{@link invalidGrepGlob}）。每行文字的截斷在 `search-overflow.ts`，
    * 跟筆數上限同一對包裝，上限來自 `grepMaxLineBytes`。
    *
    * ## 與基座一樣的
@@ -1303,8 +1288,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 其餘（`--no-config`、上限、取消、錯誤分類、`maxCount` 在解析之後才套）與單一起點完全一樣。
    * 給「要搜的是一堆分散的子目錄」的子類用，免得一個目錄起一次 rg（[#1782](https://github.com/DemianLi/nexus-agent/issues/1782)）。
    *
-   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 2）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
-   * 「只搜這條 thread 引用過的目錄」那條偏離帶出來的，這裡不為別的用途開放。
+   * 多起點是附件路由「只搜這條 thread 引用過的目錄」帶出來的，這裡不為別的用途開放。
    *
    * **呼叫端負責去重**：起點不能重複、也不能互相包含（`['/a', '/a']`、`['/', '/a']` 會讓同一份檔的命中出現兩次）。附件路由給的是
    * `Set` 裡互不重疊的第三層目錄，所以今天不會發生。
@@ -1322,7 +1306,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepPathsResult> {
-    // 空 pattern 先擋（dsh `parseGrepArgs`，`grep.ts:90`）：`--regexp=` 會命中每一行。只有「空」才擋，空白字元本身是合法的正規式。
+    // 空 pattern 先擋：`--regexp=` 會命中每一行。只有「空」才擋，空白字元本身是合法的正規式。
     if (pattern.length === 0) {
       return searchFailure(SEARCH_INVALID_PATTERN, 'pattern must be a non-empty string');
     }
@@ -1336,11 +1320,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     if (prepared.kind === 'failed') return prepared.failure;
     const outcome = await runRipgrep({
       executable: prepared.executable,
-      // **形式照 dsh `buildGrepCommand`**（`packages/fs/tool-fs-search/src/grep.ts:112`，`687f282e`）：pattern 與 glob 走
-      // `--flag=value` 形式、起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。pattern 是
-      // **正規式**（#1605，沒有 `-F`）。差別：dsh 是 `--json`、`--regexp=`、`--glob=`、（有 path 才）`--`＋一個 path；這裡是
-      // `--json`、`--glob=`、`--regexp=`（glob 與 regexp 的順序相反，rg 不在意）、**一定帶 `--`**、起點多個且都有 `./` 前綴
-      // （理由見 `existingSearchArgs`）。
+      // pattern 與 glob 走 `--flag=value` 形式、起點放在 `--` 後面、帶 `./` 前綴（理由見 `existingSearchArgs`），
+      // 模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。pattern 是
+      // **正規式**（#1605，沒有 `-F`）。
+      // 起點可以有多個（見 {@link grepPaths}）；
+      // 空的 pattern 與不合格的 glob 在上面先擋掉。
       argv: [
         '--json',
         ...(glob !== undefined && glob !== null ? [`--glob=${glob}`] : []),
@@ -1370,8 +1354,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 列出符合 glob 的檔案。**rg 由這裡自己起**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)），共用 `grep` 的
-   * 起法（`ripgrep-runner.ts`：不經 shell、`--no-config`、輸出上限、取消與逾時、錯誤分類），argv 照 dsh
-   * `buildGlobCommand`（`packages/fs/tool-fs-search/src/glob.ts:89-92`，`687f282e`）：
+   * 起法（`ripgrep-runner.ts`：不經 shell、`--no-config`、輸出上限、取消與逾時、錯誤分類），argv 是
    * `--files --glob=<pattern> --sort=modified --no-ignore --hidden`，再為 {@link GLOB_VCS_EXCLUDES} 每個名字各加兩條否定 glob
    * （一條剪掉目錄，一條在搜尋起點就在那個目錄裡面時排除內容），起點放在 `--` 後面。
    *
@@ -1383,9 +1366,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * - **排序**：修改時間，舊的在前（rg `--sort=modified`）；基座是路徑字典序。
    * - **版本控制目錄不列**：`.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl`，任何深度。
    * - **pattern 是 rg 的 glob 語意**：沒有 `/` 的 pattern 比檔名、任何深度都對得上（`*.ts` 找整棵樹），帶 `/` 的對**工作區根**錨定
-   *   （不是對 `path`）。基座的 `*.ts` 只比搜尋起點那一層。這是 dsh 的語意（`glob.ts` 工具描述），不是我們挑的。
+   *   （不是對 `path`）。基座的 `*.ts` 只比搜尋起點那一層。
    * - **symlink 不列**：rg 預設不跟 symlink，指向檔案的連結也不出現在結果裡；基座會列。
-   * - 空白 pattern 回 `SEARCH_INVALID_PATTERN`：`--glob=` 空字串會讓 rg 列出全部（含 `.git`），dsh 同樣拒絕。
+   * - 空白 pattern 回 `SEARCH_INVALID_PATTERN`：`--glob=` 空字串會讓 rg 列出全部（含 `.git`）。
    *
    * ## 沒有 rg 就是錯誤，沒有退路
    *
@@ -1425,7 +1408,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       executable: prepared.executable,
       argv: [
         '--files',
-        // 檔名可以含換行：用 NUL 分隔，不靠換行切（偏離 dsh 的只有這一個旗標，理由 2：工作區內容是不可信輸入）。
+        // 檔名可以含換行：用 NUL 分隔，不靠換行切（工作區內容是不可信輸入）。
         '--null',
         `--glob=${pattern}`,
         '--sort=modified',
@@ -1637,7 +1620,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     payload: readonly unknown[],
   ): Promise<string | { error: string }> {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
-    // 指向兩個不同的模式。dsh 的「一次呼叫一份政策」在這個形狀底下就是這一行。
+    // 指向兩個不同的模式。
     const standing = this.mode;
     // 保留的地方排在模式之前：全開與核准來的 grant 都蓋不過它，所以不記拒絕、不接指引。
     const reserved = await this.reservedDenial(standing, filePath, operation);
@@ -1660,8 +1643,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
     const claim = await this.claimGrant(denial);
     if (claim.kind === 'granted') {
-      // 核准來的模式**只蓋這一次**，判斷與拒絕訊息都用它——照 dsh 把核准的模式蓋到那一次
-      // 呼叫上，拒絕標記印的也是那一格。還是被擋的話 grant 照樣用掉了，同 dsh：它屬於這一次。
+      // 核准來的模式**只蓋這一次**，判斷與拒絕訊息都用它，
+      // 拒絕標記印的也是那一格。還是被擋的話 grant 照樣用掉了：它屬於這一次。
       const second = await this.verdict(claim.mode, filePath, operation);
       if (typeof second === 'string') return second;
       // 再記一次同一顆：grant 已經用掉，模型要升到更寬那格就得再叫一次升級、再問一次人，
@@ -1959,7 +1942,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 被擋下時接上升級指引——**只在這個組裝真的有升級工具時**（見 {@link SandboxGrantLedger}）。
    *
-   * 指引騎在拒絕上，照 dsh 的 `escalationHintMarker`：推力放在決定點上，模型不必記得工具描述。
+   * 指引騎在拒絕上：推力放在決定點上，模型不必記得工具描述。
    * **每次都重讀**，不在建構期快照：掛上工具的那一步發生在 fence 建好之後。
    */
   private withHint(denied: { error: string }): { error: string } {

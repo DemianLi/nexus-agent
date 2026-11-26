@@ -1,7 +1,7 @@
 /**
  * 續接時把對話灌回模型（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）。
  *
- * 照 dsh：日誌是對話的真相，模型歷史由日誌推出來（推的規則在 `@nexus/core` 的
+ * 日誌是對話的真相，模型歷史由日誌推出來（推的規則在 `@nexus/core` 的
  * {@link replayConversation}），**不是把 checkpointer 落盤**——所以門 B 照舊不開
  * （`session-resume-doors.test.ts` 的 `THE_ONLY_SAVER`）。#251 反對門 B 的理由是兩份耐久來源的寫入順序會
  * 分岔；這條路只有一份耐久來源，graph state 是從它推的。
@@ -23,9 +23,9 @@
  *
  * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、
  * 摘要器的會話歷史檔（[#348](https://github.com/DemianLi/nexus-agent/issues/348)：灌回去的摘要仍寫著
- * 「完整歷史存在某某路徑」，那時讀不到）與停在核准點還沒答的那張卡都在 graph state 裡，而那一軸（`stateSchema`＋checkpointer）是我們偏離 dsh 的產物
- * （[#155](https://github.com/DemianLi/nexus-agent/issues/155)），日誌上沒有它們。沒答的那張卡推回來是一則補上的
- * 錯誤結果（dsh 的 `repair.ts`），見 `conversation-replay.ts`。
+ * 「完整歷史存在某某路徑」，那時讀不到）與停在核准點還沒答的那張卡都在 graph state 裡，而那一軸（`stateSchema`＋checkpointer，
+ * [#155](https://github.com/DemianLi/nexus-agent/issues/155)）日誌上沒有它們。沒答的那張卡推回來是一則補上的
+ * 錯誤結果，見 `conversation-replay.ts`。
  *
  * **工具結果暫存回得來**（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）：它存在主機的私有目錄、
  * 按會話分目錄（`tool-result-stash.ts`），不在 graph state 裡，所以這一條路灌回去的預覽指的路徑讀得到。

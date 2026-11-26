@@ -9,7 +9,7 @@
  * 2. 供應商沒報：**沒有** `model/usage`——不是 0；`model/end.outcome` 表態那次呼叫沒有正常回來。「未知」與 0 分得開。
  * 3. 使用者按了停止：同上，`outcome` 是 `aborted`。
  *
- * 另外釘：總帳與「目前大小」即時與歷史一致（失敗的呼叫在兩處都算一筆樣本，同 dsh）。
+ * 另外釘：總帳與「目前大小」即時與歷史一致（失敗的呼叫在兩處都算一筆樣本）。
  *
  * **零憑證**：對手方是本機的假端點。
  */
@@ -223,7 +223,7 @@ describe('供應商報了用量、呼叫之後沒有正常回來', () => {
       WIRE_LEDGER,
     );
 
-    // 「目前大小」：失敗的那份請求也是一筆樣本（同 dsh 的 `contextPressure`，連 `assistant/attempt` 的用量也取樣），
+    // 「目前大小」：失敗的那份請求也是一筆樣本（連 `assistant/attempt` 的用量也取樣），
     // 即時與歷史兩條路拿到同一個數。
     expect(reduceAll(emptyConversation(), frames).contextPressure?.inputTokens).toBe(321);
     expect(

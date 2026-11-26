@@ -1,6 +1,5 @@
 /**
- * `@` 引用的列檔（#651）。前半逐條移植 dsh 的 `packages/context/file-reference-local/tests/search.spec.ts`
- * （`477b4f4`，文法那一段歸 web），後半是我們加的位址翻譯。
+ * `@` 引用的列檔（#651）。前半是索引與搜尋，後半是位址翻譯。
  */
 
 import { chmod, mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -18,7 +17,7 @@ import {
 } from './file-references.js';
 
 const fsControl = vi.hoisted(() => ({
-  /** `readdir` 會拒絕的那個絕對路徑：chmod 0 的替身，可以注入。同 dsh。 */
+  /** `readdir` 會拒絕的那個絕對路徑：chmod 0 的替身，可以注入。 */
   denyReaddir: undefined as string | undefined,
 }));
 

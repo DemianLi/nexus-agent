@@ -344,9 +344,9 @@ describe('跟基座同一套字句與位元組', () => {
     expect((await stat(join(root, 'd'))).isDirectory()).toBe(true);
   });
 
-  // #1813：照 dsh（`write.ts:75/:82/:124`，沒有依副檔名的分支）一律寫 UTF-8 文字。基座的 `write` 對非文字副檔名把內容當 base64
-  // 解碼，那是已撤銷的偏離（`contained-backend.ts` 的 `write` 註解）：這裡同時釘住「我們寫文字」與「基座仍在解碼」——
-  // 後一半翻了（基座升版改了語意），這條紅，提醒回頭看這個偏離還需不需要。
+  // #1813：一律寫 UTF-8 文字。基座的 `write` 對非文字副檔名把內容當 base64
+  // 解碼（`contained-backend.ts` 的 `write` 註解）：這裡同時釘住「我們寫文字」與「基座仍在解碼」——
+  // 後一半翻了（基座升版改了語意），這條紅，提醒回頭看這個寫法還需不需要。
   it('一律寫 UTF-8 文字，不看副檔名；基座對非文字副檔名仍把內容當 base64（偏離的證據）', async () => {
     const { bare, ours, bareRoot } = await twin();
     const bytes = Buffer.from([0, 1, 2, 250, 251, 255, 0x89, 0x50]);
