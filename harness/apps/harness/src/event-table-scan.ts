@@ -2,7 +2,7 @@
  * 掃事件表：整棵樹所有宣告在 `Events` interface 上的成員（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)）。
  *
  * 事件表是 `@nexus/core` 的 `events.ts` 裡那個空 interface，各套件靠 declaration merging 擴充。「每個事件要有 JSDoc、
- * 標 `@mode`、參數有說明」由這個檔案這側的掃描器檢查，
+ * 標 `@mode`、參數有說明」由這個檔案的掃描器檢查，
  * `event-table.test.ts` 拿它當閘門，`interception-index.test.ts` 拿它驗「現在由哪個事件佔住」寫的名字真的存在。
  *
  * **只掃產品碼**（排除 `*.test.ts`）：測試為了驗機制而宣告的 `test/*` 事件不是事件表的一部分。

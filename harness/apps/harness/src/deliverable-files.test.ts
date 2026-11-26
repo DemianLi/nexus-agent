@@ -492,7 +492,7 @@ describe('預覽', () => {
     });
 
     /**
-     * **行為變了，而且是照標準變的**：NUL 只掃這一頁。從前整檔掃，前段那一頁也拒。
+     * **NUL 只掃這一頁**：前段的頁讀得到，有 NUL 的那一頁才 not-text。
      */
     it('NUL 只掃這一頁：前段讀得到，有 NUL 的那一頁才 not-text', async () => {
       const outcome = await present({ 'a.md': 'a\nb\n\u0000\n' }, ['a.md']);

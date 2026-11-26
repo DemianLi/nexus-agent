@@ -50,7 +50,7 @@ export type FailureReason =
    * 這一類**跟 `budget` 一樣是資料損失，不是低分**，但要做的事是「跑慢一點」或
    * 「把重試次數調高」，不是「這個模型不適合」。
    *
-   * 配額耗盡的 429 因此**不算這一類**，它落在 `rejected`。
+   * 配額耗盡的 429 等多久都重試無效，所以**不算這一類**，它落在 `rejected`。
    */
   | 'throttled'
   /** 逾時，也就是 [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個永遠不回來。 */

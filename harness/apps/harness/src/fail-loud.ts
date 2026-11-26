@@ -17,7 +17,7 @@
  * - latch：第一顆失敗是被回報的那顆；`release` 期間 handler 保持安裝，之後來的（含 `release` 自己的）一律吞掉，
  *   不讓 Node 在收尾中途殺掉行程。
  *
- * **Loader 衍生 rejection 去重沒有做**：#1501 驗收 5 量過，vendor rc.11 底下，試組掉一列沒有衍生的未處理 rejection，
+ * **不對 Loader 衍生的 rejection 去重**：#1501 驗收 5 量過，vendor rc.11 底下試組掉一列不會衍生未處理 rejection，
  * 結果見該 PR。
  *
  * @module

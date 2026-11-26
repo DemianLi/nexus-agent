@@ -4,7 +4,7 @@
  *
  * ## 這一份釘的是什麼
  *
- * 升級的兩個欄位（`sandbox_permissions` ＋ `justification`）攤進 `write`／`edit` 的 schema、
+ * 升級的兩個欄位（`sandbox_permissions` ＋ `justification`）攤進 `write_file`／`edit_file` 的 schema、
  * 編排成「**同一顆呼叫重試一次**」，我們做不到。
  * **卡上原本寫的理由是錯的**：它說擋住的是 `createDeepAgent()` 開頭那條
  * `TOOL_NAME_COLLISION`。那條擋的是**名字**。真正擋住「把欄位攤進 `write_file`」的是

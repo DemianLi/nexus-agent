@@ -20,14 +20,14 @@
  *
  * ## 預覽串流，整檔沒有大小上限
  *
- * 檔案本身沒有大小上限：預覽從串流切頁，讀到頁尾之後的第一個字元就停
+ * 預覽不受檔案大小限制：從串流切頁，讀到頁尾之後的第一個字元就停
  * （[#544](https://github.com/DemianLi/nexus-agent/issues/544)），見 {@link readDeliverablePage}。
  * **`maxFileBytes` 只管整檔讀**（`deliverable.readBytes` 不給範圍）。
  *
  * 從前這裡登記過一條偏離：「整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了」。那條
  * 偏離的理由是實作選擇，不是基礎建設表達不出來，#544 把它收掉了。
  *
- * ## 偏離
+ * ## 這條路刻意不做的
  *
  * 1. **不回 `absolutePath`**，理由見 `@nexus/wire` 的 `DeliverableFileStat`。
  * 2. **`/conversation_history` 那層 overlay 不在這條路上**（`agent-factory.ts` 的 `foldRegistry`）：
@@ -363,7 +363,7 @@ async function cutPage(
  *
  * **NUL 只掃這一頁**。串流讀看不到還沒讀的部分，
  * 所以一個後段才出現 NUL 的檔，前面的頁讀得到、有 NUL 的那一頁才回 `not-text`。從前整檔讀進來時
- * 是整份掃，那個「第 0 頁說是文字、第 3 頁才說不是」的不一致因此是**接受的**，不是疏漏。
+ * 是整份掃，那個「第 0 頁說是文字、第 3 頁才說不是」的不一致因此是**刻意接受的**，不是疏漏。
  *
  * @param located - 已經通過閘門的檔。
  * @param limits - 這台 server 的三個上限，起動期從 `#settings/deliverable-files` 那一列解出來。

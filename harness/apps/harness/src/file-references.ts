@@ -23,12 +23,12 @@
  *
  * **不用 backend 的 `ls`／`glob`**：基座的 `glob` 沒有排除也沒有上限，會走進 `node_modules`。
  *
- * ## 偏離
+ * ## 這條路刻意不做的
  *
  * 1. **路徑以 `/` 開頭**：見 `@nexus/wire` 的 `file-references.ts`。
  * 2. **提示句只在有工作區時注入**：沒有工作區時不提供列檔（web 不開選單），使用者
  *    插不出 `@` 路徑，這句就沒有對象；檔案工具那時讀的也不是磁碟。所以跟 `@nexus/plugin-sandbox-policy` 同一個條件掛。
- * 3. **三個上限是常數，不是設定**：`maxResults`／`maxEntries`／`excludedDirectories` 不給部署覆寫，少的是那個旋鈕。
+ * 3. **三個上限是常數，不是設定**：`maxResults`／`maxEntries`／`excludedDirectories` 寫死在這裡，部署改不了。
  *
  * @module
  */
@@ -79,7 +79,7 @@ export interface FileSearchConfig {
   readonly excludedDirectories: readonly string[];
 }
 
-/** 出廠那一份：三個上限的預設值。 */
+/** 出廠那一份：兩個上限與排除清單的預設值。 */
 export const FILE_SEARCH_DEFAULTS: FileSearchConfig = {
   maxResults: FILE_SEARCH_MAX_RESULTS,
   maxEntries: FILE_SEARCH_MAX_ENTRIES,
