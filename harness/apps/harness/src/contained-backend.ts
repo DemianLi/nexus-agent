@@ -40,7 +40,7 @@
  * 小於 {@link READ_STREAM_MIN_SIZE} 一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
  * `scanWindow`。**在 `read_file` 裡**建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
  * 並把頁的範圍與同一個 fd 的 stat 版本回報給 `@nexus/core`（#2030）；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
- * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**開頭的 BOM 保留**：
+ * 不看副檔名（見 `binary-read.ts`）。**開頭的 BOM 保留**：
  * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在。行尾 `\r` 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
  * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
  *
@@ -63,7 +63,7 @@
  * （`feat/sandbox-plugin`）。
  *
  * **TOCTOU 窗口要說明白。** 檢查的 canonical 目標與實際寫入用的路徑不是同一個身分
- * （`delete`／`uploadFiles` 仍如此；`write`／`edit` 自己做完之後改走 `resolvePath`，見上）：`super.write()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
+ * `delete`／`uploadFiles` 走基座：`super.delete()`／`super.uploadFiles()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
  * 傳一個 realpath 進去只會被當成虛擬路徑接到 `cwd` 底下。所以這裡回傳的是「canonical 之後
  * 再表達回去的虛擬路徑」——祖先的 symlink 已經被解掉，但基座那一次 lexical resolve 仍在
  * 我們的檢查之後發生。
@@ -159,7 +159,7 @@ function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text')
 
 /**
  * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`
- * （`read`／`write`／`edit` 碰到也記）；
+ * （`read`／`write`／`edit` 碰到都記）；
  * `ENOENT`／`ENOTDIR` 是 `FS_NOT_FOUND`，但只有 `missing` 為真（呼叫端的目標本來就該存在：`read`、`edit`）時才算——`write` 會自己建父目錄，
  * 碰到它們是別的原因。`ENOSPC`／`EDQUOT` 是 `FS_NO_SPACE`。認不得的不記碼。
  */
@@ -190,7 +190,7 @@ export function pathlessReason(error: unknown): string {
   return end === -1 ? code : message.slice(0, end);
 }
 
-/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
+/** 整份位元組 fatal 解碼；開頭的 BOM 留著（見檔頭）。 */
 function decodeWhole(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -402,7 +402,7 @@ interface EditFailure {
 
 /**
  * 字串替換。**錯誤字句逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：模型看到的拒絕理由不因為這個 backend
- * 自己寫檔而換了一套話；`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 釘住字句。**行尾**
+ * 自己寫檔而換了一套話；`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 釘住字句。**行尾的處理**
  * （[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：
  * `content` 要已經正規化成 LF，`oldString`／`newString` 裡的 `\r\n` 在比對前收成 `\n`；字句裡回顯的仍是模型給的原字串。
  *
@@ -927,7 +927,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * （成功 `{ path, filesUpdate: null }`，失敗 `{ error: "Error writing file '…': …" }`，symlink 的原句）。
    * **內容一律當 UTF-8 文字寫，不看副檔名**（[#1813](https://github.com/DemianLi/nexus-agent/issues/1813)）。整段在逐目標的鎖裡。
    *
-   * **不看副檔名：** 基座的 `write` 對非文字副檔名（圖、音、影、pdf、ppt）把內容當 base64 解碼成位元組再寫，工具描述沒講，模型寫的純文字落成亂碼
+   * **為什麼：** 基座的 `write` 對非文字副檔名（圖、音、影、pdf、ppt）把內容當 base64 解碼成位元組再寫，工具描述沒講，模型寫的純文字落成亂碼
    * 還回「Successfully wrote」，所以這裡一律寫 UTF-8 文字。要寫位元組的內部呼叫端走 `uploadFiles`（見下），不經過這支。
    *
    * @param filePath - 虛擬路徑。
@@ -1257,8 +1257,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * ## 正規式，不是字面字串（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）
    *
-   * 基座與 #1532 起 rg 時都帶 `-F`（字面字串）：`foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。#1563 Q1 (a) 拍板改成
-   * 正規式（`--regexp=`，rg 的語法），本卡接手 #1532 PR 內文那句「暫留，見 #1605 Q1」。不合法的正規式 rg 回 `regex parse error`，
+   * 基座與 #1532 起 rg 時都帶 `-F`（字面字串）：`foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。所以改成
+   * 正規式（`--regexp=`，rg 的語法）。不合法的正規式 rg 回 `regex parse error`，
    * 歸類成 `SEARCH_INVALID_PATTERN`（`ripgrep-runner.ts` 的 `classifyExit`）。檔案篩選（`glob`）先驗過：空字串、`!` 開頭、大括號外的
    * 逗號清單回 `SEARCH_INVALID_PATTERN`（{@link invalidGrepGlob}）。每行文字的截斷在 `search-overflow.ts`，
    * 跟筆數上限同一對包裝，上限來自 `grepMaxLineBytes`。
@@ -1322,8 +1322,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       executable: prepared.executable,
       // pattern 與 glob 走
       // `--flag=value` 形式、起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。pattern 是
-      // **正規式**（#1605，沒有 `-F`）。argv 是
-      // `--json`、`--glob=`、`--regexp=`、**一定帶 `--`**、起點多個且都有 `./` 前綴
+      // **正規式**（#1605，沒有 `-F`）。
+      // 起點多個，都有 `./` 前綴
       // （理由見 `existingSearchArgs`）。
       argv: [
         '--json',
@@ -1620,7 +1620,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     payload: readonly unknown[],
   ): Promise<string | { error: string }> {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
-    // 指向兩個不同的模式
+    // 指向兩個不同的模式。
     const standing = this.mode;
     // 保留的地方排在模式之前：全開與核准來的 grant 都蓋不過它，所以不記拒絕、不接指引。
     const reserved = await this.reservedDenial(standing, filePath, operation);
@@ -1643,8 +1643,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
     const claim = await this.claimGrant(denial);
     if (claim.kind === 'granted') {
-      // 核准來的模式**只蓋這一次**，判斷與拒絕訊息都用它——把核准的模式蓋到那一次
-      // 呼叫上，拒絕標記印的也是那一格。還是被擋的話 grant 照樣用掉了：它屬於這一次。
+      // 核准來的模式**只蓋這一次**，判斷與拒絕訊息都用它，
+      // 拒絕標記印的也是那一格。還是被擋的話 grant 照樣用掉了：它屬於這一次。
       const second = await this.verdict(claim.mode, filePath, operation);
       if (typeof second === 'string') return second;
       // 再記一次同一顆：grant 已經用掉，模型要升到更寬那格就得再叫一次升級、再問一次人，

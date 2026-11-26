@@ -922,7 +922,7 @@ export interface AwaitingInput {
  *   在下行接上時補送（`ThreadPump.subscribe`，[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。行程重開過的話
  *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
  * @param inherited - 分叉繼承來的前綴有幾顆（`inheritedEventCount`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），
- *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉 frame（這顆 frame 的定義在 `@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
+ *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉成 `subagent-catalog` frame（`@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
  */
 export function historyFrames(
   events: readonly SessionEvent[],
@@ -1424,7 +1424,7 @@ export function historyPage(
     if (counted < maxMessages) continue;
     cut = at;
     // 退到那一輪的開頭，一輪不拆兩頁。
-    // **不收 `maxMessages: 500` 的硬上限（#1555 N1372）**：一輪超過 500 則時，硬上限會把那一輪切在中間。
+    // **頁不設則數的硬上限（#1555 N1372）**：一輪很長時，硬上限會把那一輪切在中間。
     // 我們的較早頁是「自己從空的折、再接在前面」（`use-conversation.ts` 的 `prependEntries`），這是已登記偏離「歷史送線上 `Event`、不送
     // 日誌事件」的後果（`@nexus/wire` `protocol.ts` 的「偏離：送的是線上的 `Event`」段）：從半輪開始的頁折不出來，所以頁不能切在一輪中間。
     // 退到位元組上限 {@link HISTORY_PAGE_MAX_BYTES}（軟的，`fitBytes`，單獨一輪超標時 `onOversize` 叫一次）。
