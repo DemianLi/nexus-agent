@@ -111,7 +111,7 @@ describe('版號', () => {
     expect(() => nextVersion(current, spec)).toThrow();
   });
 
-  it('compareVersions 照 semver 優先序（對照 dsh）', () => {
+  it('compareVersions 照 semver 優先序', () => {
     const ascending = [
       '0.1.0-alpha',
       '0.1.0-alpha.1',
@@ -201,7 +201,7 @@ describe('出貨清單的 name', () => {
     expect(shippedNames(text)).toEqual(['@nexus/plugin-a', '@nexus/core/sub', '#settings/x']);
   });
 
-  it('停用的列不取（照 dsh 的 activeBarePluginPackages）；disabled: false 照取', () => {
+  it('停用的列不取；disabled: false 照取', () => {
     const text = [
       '- id: a',
       "  name: '@nexus/plugin-a'",
@@ -223,7 +223,7 @@ describe('出貨清單的 name', () => {
     ],
     ['沒有 name', '- id: a'],
     [
-      'disabled 不是布林（dsh 的 __jsExpr 我們不接）',
+      'disabled 不是布林（__jsExpr 不接）',
       "- id: a\n  name: '@nexus/a'\n  disabled:\n    __jsExpr: x",
     ],
   ])('認不得的結構報錯、不跳過：%s', (_label, text) => {

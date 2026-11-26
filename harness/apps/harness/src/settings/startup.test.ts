@@ -202,7 +202,7 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
  * 沒掛。拿錯一支，關掉就讀成「開著」。
  */
 describe('startupEntryMounted', () => {
-  it('掛著：true；關掉：false；沒有那一列：照 dsh 算沒掛', () => {
+  it('掛著：true；關掉：false；沒有那一列：算沒掛', () => {
     const entry = { plugin: sessionPersistencePlugin, id: 'session-persistence' };
     expect(startupEntryMounted([entry], sessionPersistencePlugin)).toBe(true);
     expect(startupEntryMounted([{ ...entry, disabled: false }], sessionPersistencePlugin)).toBe(

@@ -124,7 +124,7 @@ async function snapshot(): Promise<Record<string, string>> {
 }
 
 describe('list', () => {
-  it('列落了盤的每一份，root 與 subagent 都列；還沒實體化的不列（偏離 dsh，見 session-store.ts）', async () => {
+  it('列落了盤的每一份，root 與 subagent 都列；還沒實體化的不列（見 session-store.ts）', async () => {
     await written('Alpha');
     await written('Alpha/sub-1', 1, { parentSession: 'Alpha' });
     // create 了、一筆都還沒寫：檔案系統上沒有足跡。
@@ -543,7 +543,7 @@ describe('不認得的事件種類', () => {
     }
   });
 
-  it('同一行既不認得又 seq 對不上：strict 先報壞檔（那一種更需要人看）；預設讀取（recoverable）照 dsh 准入先於復原，先報不認得', async () => {
+  it('同一行既不認得又 seq 對不上：strict 先報壞檔（那一種更需要人看）；預設讀取（recoverable）准入先於復原，先報不認得', async () => {
     await plant('both', [futureEvent(7)]);
     const body = Buffer.from(`${futureEvent(7)}\n`);
     expect(() =>

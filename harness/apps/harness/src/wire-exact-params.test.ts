@@ -261,7 +261,7 @@ describe('wire：params 多一格就拒', () => {
   );
 
   it.each([null, 5, 'x', [1], true])(
-    '有給 params 卻不是物件（%j）：每一支命令都回 invalid_argument（dsh `args must be a plain object`）',
+    '有給 params 卻不是物件（%j）：每一支命令都回 invalid_argument（`args must be a plain object`）',
     async (params) => {
       const { post } = wire();
       for (const method of Object.keys(RPC_PARAM_KEYS) as RpcMethod[]) {

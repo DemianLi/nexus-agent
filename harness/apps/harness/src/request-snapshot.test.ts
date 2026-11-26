@@ -410,7 +410,7 @@ describe('記錄點在模型呼叫上，不在 middleware 這一層', () => {
   });
 });
 
-describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650）', () => {
+describe('記不進去，這次請求不送（#1726）', () => {
   const quiet = { log: () => {}, error: () => {} };
   /** 掛上重打（產品路徑由 `retryPolicy` 給），「沒有 `llm/retry`」那一格才不是空的。 */
   const retrying: Extra = { streamRetry: { maxRetries: 2, initialDelayMs: 1 } };

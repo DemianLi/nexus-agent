@@ -473,7 +473,7 @@ describe('I：對背景子代理說話帶時區（#1734）：子代理自己的�
     return { thread, worker, log: entry().log, runId: address.runId, background };
   }
 
-  it('派出去那一刻沒有人說話：讀數的時區行是 unavailable（對照 dsh manager.ts 的 { kind: user } 不帶時區）', async () => {
+  it('派出去那一刻沒有人說話：讀數的時區行是 unavailable（`{ kind: user }` 不帶時區）', async () => {
     const { thread, worker, log } = await delegated([{ content: '背景收工。' }], 'i-dispatch');
     expect(readingsOf(worker.prompts[0] ?? [])[0]).toContain(UNAVAILABLE_ZONE);
     expect(log.events.filter((e) => e.type === 'turn/start').map((e) => e.data)).toEqual([

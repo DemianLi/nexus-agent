@@ -172,7 +172,7 @@ describe('有效路由：要求 > 定義釘的 > 父代理當下的', () => {
     ).toEqual({ model: 'cheap', effort: 'off' });
   });
 
-  it('要求換了模型、沒給強度：釘的強度丟掉，用新模型的預設（dsh 的 routeChanged）', () => {
+  it('要求換了模型、沒給強度：釘的強度丟掉，用新模型的預設（routeChanged）', () => {
     const pinned = baseline({ model: 'strong' }, { model: 'cheap', reasoningEffort: 'off' });
     expect(effectiveRoute(pinned, { model: 'silent' })).toEqual({ model: 'silent' });
     // 要求的就是釘的那顆＝沒換路由，釘的強度留著。

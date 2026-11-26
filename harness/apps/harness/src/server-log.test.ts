@@ -133,7 +133,7 @@ describe('format: json：一則一行', () => {
   });
 });
 
-describe('format: text：照 dsh 的 render', () => {
+describe('format: text：一行一則的文字輸出', () => {
   it('預設有時間前綴，showTime 設成空字串就沒有；多行訊息的續行縮排對齊', () => {
     const ctx = new Context();
     const lines: string[] = [];

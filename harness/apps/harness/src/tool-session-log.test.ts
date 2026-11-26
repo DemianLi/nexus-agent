@@ -157,7 +157,7 @@ describe('模型工具與會話日誌', () => {
    * 兩件都補上了，所以它反過來寫。**留著這條而不是刪掉**：哪天有人把身分那一層拆掉，
    * 兩筆會重新落回同一份，而紅的就是這裡。
    */
-  it('root 與 subagent 各寫各的一份——照 dsh 的單一所有者規則', async () => {
+  it('root 與 subagent 各寫各的一份——單一所有者', async () => {
     const model = new ScriptedChatModel({
       turns: [
         { content: '根記一筆。', toolCalls: [{ name: WRITER_TOOL_NAME, args: { note: '根' } }] },

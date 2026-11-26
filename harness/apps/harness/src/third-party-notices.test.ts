@@ -66,7 +66,7 @@ describe('執行期授權', () => {
     expect(() => assertRuntimeLicenses([{ name: 'copyleft-lib', license: 'MIT' }])).not.toThrow();
   });
 
-  it('OFL 字型的例外只限審過的三個套件名、而且授權剛好是 OFL-1.1（照 dsh spec :56-75）', () => {
+  it('OFL 字型的例外只限審過的三個套件名、而且授權剛好是 OFL-1.1', () => {
     for (const name of [
       '@fontsource-variable/geist',
       '@fontsource-variable/geist-mono',
@@ -101,7 +101,7 @@ describe('執行期授權', () => {
   });
 });
 
-describe('isPermissive（照 dsh spec :369-399）', () => {
+describe('isPermissive', () => {
   it('收這個專案出貨的授權，拒絕 copyleft 與認不得的', () => {
     for (const license of ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause', '0BSD', 'BlueOak-1.0.0']) {
       expect(isPermissive(license), license).toBe(true);

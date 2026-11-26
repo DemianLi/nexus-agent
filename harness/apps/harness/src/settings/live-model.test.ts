@@ -141,7 +141,7 @@ describe('live-model 的 schema', () => {
    * #1427：首事件之前與之後共用的重試政策。形狀與驗證逐條照 dsh 的 `resolveRetryPolicy`／`resolveBackoff`
    * （`packages/llm/llm/src/retry-policy.ts`）：出廠 6 次（demian 拍板，dsh 預設是 5）、500 毫秒起、封頂 10 秒、抖動 0.1。
    */
-  it('retryPolicy：整個不寫就是出廠值；寫了就必填 mode；數值逐條照 dsh 驗', () => {
+  it('retryPolicy：整個不寫就是出廠值；寫了就必填 mode；數值逐條驗', () => {
     const parse = (retryPolicy: unknown) => liveModelConfigSchema.parse({ retryPolicy });
     const normal = { mode: 'normal' };
     expect(parse(undefined).retryPolicy).toEqual({
@@ -232,7 +232,7 @@ describe('live-model 的 schema', () => {
 
   it.each([
     ['https 的根', 'https://integrate.api.nvidia.com/v1'],
-    ['http 也放行（照 dsh）', 'http://10.0.0.5:8000/v1'],
+    ['http 也放行', 'http://10.0.0.5:8000/v1'],
     ['沒有路徑', 'https://gateway.internal'],
   ])('端點合格：%s', (_label, baseUrl) => {
     expect(liveModelConfigSchema.parse({ baseUrl }).baseUrl).toBe(baseUrl);

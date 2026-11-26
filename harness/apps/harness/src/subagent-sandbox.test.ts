@@ -362,7 +362,7 @@ describe('子代理的沙箱模式', () => {
     }
   }, 20000);
 
-  it('委派之後 root 收緊：子代理照委派那一格照樣寫得進去（照 dsh，root 之後的切換不屬於它）', async () => {
+  it('委派之後 root 收緊：子代理照委派那一格照樣寫得進去（root 之後的切換不屬於它）', async () => {
     const run = await runWithLogs('workspace-write', [
       delegate,
       flip('read-only'),

@@ -155,7 +155,7 @@ describe('N0478：額度與超窗的供應商措辭（只在模型呼叫的錯�
     expect(classifyTurnFailure(error).code).toBe('RATE_LIMIT');
   });
 
-  it('401 帶 insufficient quota 字樣仍是 AUTH（AUTH 排在額度前面，同 dsh）', () => {
+  it('401 帶 insufficient quota 字樣仍是 AUTH（AUTH 排在額度前面）', () => {
     const error = withStatus(401, 'Incorrect API key. insufficient quota');
     markModelCallFailure(error);
     expect(classifyTurnFailure(error).code).toBe('AUTH');

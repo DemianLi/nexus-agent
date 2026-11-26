@@ -86,7 +86,7 @@ describe('ThreadOrganization：釘選', () => {
     expect(after.ino).toBe(before.ino);
   });
 
-  it('已經釘的會話即使已不存在也回成功（dsh 的檢查先後）；沒釘過的不存在才拋', async () => {
+  it('已經釘的會話即使已不存在也回成功；沒釘過的不存在才拋', async () => {
     const home = await freshHome();
     const organization = await ThreadOrganization.open(home);
     await organization.pin('a', exists);
