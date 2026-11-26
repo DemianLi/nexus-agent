@@ -6,7 +6,7 @@
  * 卡也真的收在日誌補的那一顆上，不是停在「執行中」或折疊器自己補的那一格。
  *
  * 拒收是真的：工具的 artifact 比 {@link SESSION_EVENT_MAX_DEPTH} 深，`SessionLog.append` 自己拋，不是 spy 造的。
- * 照 dsh `agent.ts:344-355`：結果記不進去先補一顆 UNKNOWN 的錯誤結果，再拋原錯。
+ * 結果記不進去先補一顆 UNKNOWN 的錯誤結果，再拋原錯。
  */
 
 import { tool } from '@langchain/core/tools';

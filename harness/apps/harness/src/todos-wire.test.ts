@@ -3,7 +3,7 @@
  * harness 那一半。
  *
  * 真的圖、真的 pump、真的 `todo_write`（`@nexus/plugin-todo`），模型是腳本。每一個檢查點都比兩條路：即時的 frame
- * 與歷史路由各折一次，`todos` 要相等。規則照 dsh 的 `todos` 投影：
+ * 與歷史路由各折一次，`todos` 要相等。規則：
  *
  * 1. 寫一次換一次，一輪結束時保留。
  * 2. **停在核准點、人批准之後不清**：那是同一輪接著跑（`turn/start {kind:'resume'}`），不是新的一輪。

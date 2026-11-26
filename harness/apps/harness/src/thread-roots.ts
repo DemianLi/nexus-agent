@@ -15,13 +15,11 @@
  *
  * **續接一律讀 header，不用 thread id 重算**：雜湊規則或基底以後變了，已經配出去的根照樣找得回來。
  *
- * ## 偏離登記（與 dsh 的偏離，理由 2：產品需求超出 dsh 的射程；PM 2026-10-20 核定共兩條）
+ * ## 偏離登記（理由 2：產品需求超出單人桌面的射程；PM 2026-10-20 核定共兩條）
  *
  * 1. **系統替每條新 thread 配根，不由人選、也不按專案共用。**
- *    dsh 是單人桌面：根是會話 header 的 `cwd`，逐次從 header 取（`packages/sandbox/sandbox-policy/src/index.ts:83`、`:164-171`，`687f282e`），
- *    子代理沿用父會話的 `cwd`（`packages/subagent/subagent/src/child-agent.ts:144`），分叉照抄來源（`packages/api/session-controller/src/commands.ts:281`）；
- *    新會話的 `cwd` 由建立者給（`commands.ts:112-113`、`:124`）。同專案的會話共用根沒有隱私問題。nexus 一台主機多人共用，共用根就是盤點 `:64` 的失敗。
- *    機制照 dsh：根記在 header、逐次從 header 取、子代理沿用、分叉照抄。**補的是出生配根那一步**，dsh 沒有「系統替每個會話配一個目錄」。
+ *    nexus 一台主機多人共用，共用根就是盤點 `:64` 的失敗。
+ *    機制：根記在 header、逐次從 header 取、子代理沿用、分叉照抄。**補的是出生配根那一步**：系統替每個會話配一個目錄。
  * 2. **`--workspace` 退成唯讀共用區，且不吃升級**（登記在掛這條路由的地方，`agent-factory.ts` 的 `sharedWorkspace`）。**這一條有兩個延伸，都併在這裡**：
  *    - **工作區指示檔從共用區讀**（卡第 10 項；agent-instructions 檔頭同一句）：部署方放在 `--workspace` 的指示照舊生效，模型寫進自己私有根的
  *      `AGENTS.md` 不會變成系統指示。
@@ -32,7 +30,7 @@
  *      代價：**重啟就沒了**；這種 thread 沒有磁碟上的可寫根，所以沒有圍堵（`--sandbox`、`/permission` 的檔案政策、`present`、`@` 列檔、改動摘要都跟沒給
  *      `--workspace` 一樣不適用）。啟動 warn、`docs/operations.md`、PR 內文三處都寫「偏離 2 的延伸」。
  *
- * ## 對卡的選擇（不是對 dsh 的偏離）
+ * ## 對卡的選擇
  *
  * - **基底寫死在 `<home>/thread-roots`，不開成設定列。** 卡第 1 項寫「可由設定列改」，PM 補充第 3 件給了兩條路，這裡選「寫死」。
  *   設定列可以把基底設成 home 本身或 home 的上層，home 根目錄那一層的狀態檔（設定雜湊鍵檔、量測記錄、瀏覽器會話密鑰、home 的 `.env`、
@@ -277,7 +275,7 @@ export interface ThreadRootsOverlapCheck {
  * - 工具結果暫存根：暫存清掃會碰合 `^session-…` 的目錄，而它的根可由設定列改。
  * - 附件根、會話日誌目錄：都是基礎建設，不是任何一條 thread 的工作區。
  *
- * 基底寫死在 home 底下，所以 home 本身與 home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根（對卡的選擇：基底寫死，見上面〈對卡的選擇〉；不是對 dsh 的偏離）。
+ * 基底寫死在 home 底下，所以 home 本身與 home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根（對卡的選擇：基底寫死，見上面〈對卡的選擇〉）。
  */
 export async function assertThreadRootsBaseSeparate(check: ThreadRootsOverlapCheck): Promise<void> {
   const base = await canonicalize(resolve(check.base));
