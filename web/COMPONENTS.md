@@ -20,7 +20,7 @@
 
 - **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-muted`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。浮層的遮罩走 `--scrim`（vendor 的 dialog、alert-dialog、sheet 已由覆寫檔接上，自己寫的遮罩用 `bg-(--scrim)`）。
 - **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。`vendor/` 裡 SG 元件現有的任意值字級釘在測試的 `VENDOR_PINNED`。
-- **停用的透明度**：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50`；這顆不靠透明度變淡時寫 `opacity-100`。
+- **停用的透明度**：規則見 [`docs/web-ui.md`](../docs/web-ui.md) §5「互動狀態」。
 - **表面**：卡片與內層底用 `Surface`，不手寫 `bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
 - **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-muted … w-full … text-left … min-h-11`。
