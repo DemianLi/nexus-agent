@@ -90,10 +90,6 @@
  *   （`agent-instructions.test.ts` 的兩輪那條、`probe` 的三組 super-step 對照）。`beforeModel` 仍然是
  *   圖裡每步一格的節點（`repeat-reminder.ts` 掛在上面），但它不是 pre-step 注入。
  *
- * **plan-mode 在 [#652](https://github.com/DemianLi/nexus-agent/issues/652) 又回到這一格，佔的是邊界提交那半**：
- * `exit_plan_mode` 改走提問通道之後，同意不當場寫 `plan/mode`，排一格待關到下一步之前才交。這一次載體是它本來就有的 `wrapModelCall`，不是當年的 `beforeAgent`——所以節奏是每一步，
- * 不是每次 agent 呼叫；下面那條 `beforeAgent:` 掃描把它列成明寫的例外。
- *
  * **九格之外的縫也沒有列。** 規矩是一句話：**軸就是那九格，九格之外的東西只能掛在有關係的那一列上，不另開列。**
  */
 
@@ -342,8 +338,7 @@ const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
  * 掃描會找到、但**不是**第 2 列佔用者的 `beforeAgent:` 實作。
  *
  * `patch-tool-calls.ts`（補懸空的工具呼叫，接縫 6）：載體是 `beforeAgent`，卻不是 `agent/pre-step`
- * 的佔用者——它**修復歷史**（整串訊息換掉），不注入內容、不提交待辦。我們的版本只在
- * 每次 invoke 開頭改圖裡的狀態、不寫日誌，這個差距與接縫 6 同批登記在 PR 內文，不在這份索引的軸上。
+ * 的佔用者——它**修復歷史**（整串訊息換掉），不注入內容、不提交待辦。
  *
  * 它從基座時代就是 `beforeAgent` 載體，只是住在 `node_modules`，這一條掃描看不到；搬進我們的樹才現形。
  *
