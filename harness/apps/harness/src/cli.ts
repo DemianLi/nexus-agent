@@ -260,12 +260,12 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 
   const dumpConfig = values['dump-config'] === true;
   if (dumpConfig) {
-    // **照 dsh：dump 旗標拒絕只在啟動時才有意義的旗標。** 靜靜收下的下場是印出一棵設定樹，
+    // **dump 旗標拒絕只在啟動時才有意義的旗標。** 靜靜收下的下場是印出一棵設定樹，
     // 而那個人以為自己驗證的是接回上一次那條路——他要的答案根本不在裡面。
     if (resume !== undefined) {
       throw new Error(`--dump-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
     }
-    // 要說的話同理（照 dsh）：印完就退出，那句話永遠不會被說出去。以前這裡靜靜收下（#740 補上）。
+    // 要說的話同理：印完就退出，那句話永遠不會被說出去。
     if (positionals.join(' ').trim().length > 0) {
       throw new Error(`--dump-config 不能配要說的話：印設定不跑任何一輪。\n\n${USAGE}`);
     }
@@ -285,7 +285,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     }
   }
 
-  // **只印出貨那一層**（#740）：照 dsh，三種印法互斥；不讀 home 覆寫檔，所以帶 `--patch` 沒有意思——
+  // **只印出貨那一層**（#740）：三種印法互斥；不讀 home 覆寫檔，所以帶 `--patch` 沒有意思——
   // 靜靜收下的下場是那個人以為自己看的是疊過他那個 patch 的樣子。
   const dumpDefaultConfig = values['dump-default-config'] === true;
   if (dumpDefaultConfig) {
@@ -593,7 +593,7 @@ export async function runTurn(
   sessionLog.append('turn/start', turnStart);
   try {
     // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
-    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
+    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），每一種組裝都寫。
     if (typeof input === 'string') {
       try {
         ensureFallbackTitle(sessionLog, titleLimits);
@@ -679,15 +679,12 @@ export async function driveGoalRounds(
 /**
  * REPL 自己擁有的兩個名字——**不在註冊表裡**。
  *
- * `/exit` 控制的是這條 REPL 不是 agent（`CommandResult` 沒有「結束發派面」這一格，
- * dsh 那邊也沒有）；`/help` 是探索面，同理。
+ * `/exit` 控制的是這條 REPL 不是 agent（`CommandResult` 沒有「結束發派面」這一格）；`/help` 是探索面，同理。
  *
  * **為什麼 `/help` 不註冊成一個真的命令**：一份清單該長什麼樣，是**發派面自己的問題**。
- * 這條 REPL 的答案必須含 `/exit`（不然清單漏掉一個真的打得出去的東西）；dsh 那種 composer
- * 選單的答案則**不該含 `/help`**（選單自己就是 help）。同一個註冊上去的 handler 生不出
- * 這兩份。而出貨的那份清單（`harness/apps/harness/cordis.yml`）正是 `cli.ts` 與
- * [`serve-run.ts`](./serve-run.ts) 共用的那一份——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側，這也正是 dsh
- * 的切法（見 {@link formatCommandHelp}）。
+ * 這條 REPL 的答案必須含 `/exit`（不然清單漏掉一個真的打得出去的東西）。
+ * 出貨的那份清單（`harness/apps/harness/cordis.yml`）正是 `cli.ts` 與
+ * [`serve-run.ts`](./serve-run.ts) 共用的那一份——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側（見 {@link formatCommandHelp}）。
  *
  * 描述的口氣跟 plugin 註冊的那些對齊：一句話，說它做什麼。
  */
@@ -708,19 +705,11 @@ const HELP_LINE_PATTERN = /^\/help(?:\s.*)?$/u;
 /**
  * 把命令清單排成給人看的幾行。
  *
- * **dsh 沒有 `/help`。** 它的探索面是 web composer 打 `/` 跳出來的候選選單
- * （`references/deepseek-harness/packages/client/ui-commands/src/client/service.ts:142`，
- * 對讀版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`），資料來源是同一個
- * `commands.list()`；而 dsh 自己的 CLI（`apps/cli/`）**一個命令發派面都沒有**——
- * commands 那包的 README（`packages/interaction/commands/README.zh.md:28`）明說：無 UI 的
- * 演示主幹與 ACP 自動化不提供命令適配器，也不需要它。
- *
- * **所以這不是 docs/plugin-contract.md〈偏離〉 那條「基礎建設表達不出來」的偏離**——deepagents 與 LangChain
- * 都沒參與這件事。準確的說法是：真相來源照抄（`list()`），呈現形式因為我們的發派面是
+ * 真相來源是 `commands.list()`，呈現形式因為我們的發派面是
  * 一行一行的 `readline` 而不是 composer，換成一個命令。`readline` 的 `completer` 日後
  * 承得起選單那個形狀，要換不必推翻這裡。
  *
- * **註冊表的那些與 REPL 自己的那兩個併成一張表排序**，理由跟 dsh 的選單同源：打字的人
+ * **註冊表的那些與 REPL 自己的那兩個併成一張表排序**：打字的人
  * 要知道的是「我現在能打什麼」，不是「這一行歸誰管」。
  *
  * @param registered - `commands.list()` 交出來的 descriptor，已經按名字排好。
@@ -745,9 +734,7 @@ function formatCommandHelp(registered: readonly CommandDescriptor[]): readonly s
  * 撞名就當場拋。
  *
  * REPL 在執行器之前攔 `/exit` 與 `/help`，所以 plugin 註冊了同名命令時，那份註冊
- * **永遠不會被叫到**——而且沒有任何徵兆。dsh 在同一個位置也是明確報錯（客戶端貢獻
- * 與宿主命令同名 → `duplicate contribution for /<name>`，`ui-commands` 的
- * `service.ts:175`）。
+ * **永遠不會被叫到**——而且沒有任何徵兆。
  *
  * 這順帶補掉一個本來就在的洞：在 `/help` 之前，註冊 `exit` 就已經是靜默被遮蔽了。
  *
@@ -870,7 +857,7 @@ export async function runRepl(
         // 撞到迴圈上限也落在這裡：印一行、等下一句，**不退出**——所以 `exitCodeFor` 的
         // 退出碼 2 只在一次性路徑上存在。
         printer.error(errorMessage(error));
-        // **跑壞的那一輪要收回續行授權**（#660，同 dsh 收到 `agent/error` 就 disarm）。`driveGoalRounds`
+        // **跑壞的那一輪要收回續行授權**（#660）。`driveGoalRounds`
         // 在輪次拋錯時不會再問一次排程器，不在這裡問的話，人再講一句話、那一輪正常收工，續行就接回來了。
         // 結果丟掉：這一問只為了收回；日誌最後一輪不是跑壞的就什麼都不做。
         if (driver !== undefined) {
@@ -987,7 +974,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     liveLaunch?.launchEnv ?? processLaunchEnv(),
     (message) => printer.error(message),
   );
-  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`runLaunched` 載完清單才建它，但起不來、跑壞了、
+  // **Cordis 根由這裡持有**（#1401）：`runLaunched` 載完清單才建它，但起不來、跑壞了、
   // 跑完了都在這裡卸載。跑壞了的那一條先保住原本的錯誤，同下面 `runLaunched` 收尾的規則。
   // 預設答題管道由入口給（#1458 Q1 (c)）：這個入口沒有人在，與下面組裝時傳的 `HEADLESS_APPROVALS` 是同一個決定。
   // 「有沒有圍堵」也由入口給（#1491 Q4 (a)、#1774）：照 `resolveWorkspaceRoot` 算，跟組裝點與 `--resume` 的同工作區檢查（下面 `assertSameWorkspaceRoot`）
@@ -1124,7 +1111,7 @@ async function runLaunched(
   // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
   if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
   // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的檔（別人改得動的根
-  // 不清）。清理失敗只講一聲，不擋啟動。**清掃在背景跑**（#1553 N0952，照 dsh `spill-local/src/index.ts:90-101`）：
+  // 不清）。清理失敗只講一聲，不擋啟動。**清掃在背景跑**（#1553 N0952）：
   // 歸根所有，這一輪不等它；`runCli` 卸載根（跑完或跑壞）時等它收斂。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, options.env ?? process.env);
@@ -1341,7 +1328,7 @@ async function runLaunched(
           },
         });
   // **LLM 標題（#650）接在落盤之後**，所以它寫的兩顆照常落地。它自己不在任何一輪裡，失敗只講一聲。收尾時先拆它
-  // 再收落盤：拆掉會中止還在跑的那一次（一次性路徑上行程多半比標題先結束），之後回來的寫不進去，同 dsh 的拆卸。
+  // 再收落盤：拆掉會中止還在跑的那一次（一次性路徑上行程多半比標題先結束），之後回來的寫不進去。
   const detachTitle = built.attachTitle?.(sessionLog, (message) => {
     printer.error(`[標題] ${message}`);
   });
@@ -1473,8 +1460,7 @@ export const RECURSION_LIMIT_EXIT_CODE = 2;
  *
  * **撞到迴圈上限是 {@link RECURSION_LIMIT_EXIT_CODE}，其餘一律 1**（[#362](https://github.com/DemianLi/nexus-agent/issues/362)）。
  * 分開的理由在呼叫端：Proteus 的 adapter 要把「這個 phase 被護欄切掉」與「容器自己死掉」
- * 當成兩種終態，而 stderr 裡只剩一行散文。照 dsh 的做法，上限用盡是一等的終態不是錯誤
- * （`tool-ralph` 的 `budget-limited`、`subagent-claude-code` 的 category `'limit'`）。
+ * 當成兩種終態，而 stderr 裡只剩一行散文。上限用盡是一等的終態，不是錯誤。
  *
  * **判準是 `lc_error_code`，不是比對 `message`。** langgraph 路徑的 `GraphRecursionError` 帶著
  * `GRAPH_RECURSION_LIMIT`——那是 LangGraph 封閉字串聯集裡的一員、有維護承諾的識別碼；native 路徑帶我們自己的

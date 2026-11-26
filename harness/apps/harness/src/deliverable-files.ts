@@ -4,8 +4,6 @@
  * 兩支方法（`deliverable.read`、`deliverable.readBytes`）共用的那一半：把 `(seq, index)` 這個座標換成磁碟上的一個檔，或是一個
  * 講得出理由的拒絕。命令通道那一半在 {@link ./wire-handler.ts}（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）。
  *
- * 照 dsh 的 `workspace-files`（`packages/api/workspace-files/src/index.ts`，`ddefc45`）。
- *
  * ## 錨怎麼選的：**不在這裡**
  *
  * 這個模組不挑錨，也不認得續接線。錨是呼叫端交出來的一個目錄
@@ -20,18 +18,16 @@
  * 上一個行程宣告的路徑，讀到的會是另一個工作區裡的同名檔，而畫面上跟讀對了一模一樣。**不猜、
  * 直接拒**不是新發明：`assertSameCwd` 對 `header.cwd === undefined` 的處置就是拒絕。
  *
- * ## 預覽照 dsh 串流，整檔沒有大小上限
+ * ## 預覽串流，整檔沒有大小上限
  *
- * dsh 的檔案本身沒有大小上限（`Config.maxBytes` 的檔頭：「The file itself has no size cap: a caller
- * pages through it」），因為它的 `read` 從 `streamText` 切頁，讀到頁尾之後的第一個字元就停。預覽
- * 照做（[#544](https://github.com/DemianLi/nexus-agent/issues/544)），見 {@link readDeliverablePage}。
- * **`maxFileBytes` 只管整檔讀**（`deliverable.readBytes` 不給範圍），同 dsh：整檔讀是不帶範圍的 `readBytes`，上限同樣是 `maxFileBytes`
- * （dsh `477b4f4` 的 `packages/api/workspace-files/src/index.ts:272-275`；那個版本的讀檔服務已經沒有 readAll 這支方法）。
+ * 預覽不受檔案大小限制：從串流切頁，讀到頁尾之後的第一個字元就停
+ * （[#544](https://github.com/DemianLi/nexus-agent/issues/544)），見 {@link readDeliverablePage}。
+ * **`maxFileBytes` 只管整檔讀**（`deliverable.readBytes` 不給範圍）。
  *
  * 從前這裡登記過一條偏離：「整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了」。那條
  * 偏離的理由是實作選擇，不是基礎建設表達不出來，#544 把它收掉了。
  *
- * ## 與 dsh 的偏離
+ * ## 偏離
  *
  * 1. **不回 `absolutePath`**，理由見 `@nexus/wire` 的 `DeliverableFileStat`。
  * 2. **`/conversation_history` 那層 overlay 不在這條路上**（`agent-factory.ts` 的 `foldRegistry`）：
@@ -57,7 +53,7 @@ import { isWithin } from './canonical-path.js';
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 
-/** 文字不會帶的那個位元組；它在就代表這個檔不是文字。照 dsh 的 `NUL`。 */
+/** 文字不會帶的那個位元組；它在就代表這個檔不是文字。 */
 const NUL = String.fromCharCode(0);
 
 /**
@@ -89,7 +85,7 @@ export type DeliverableResult<T> =
       readonly reason: DeliverableRefusal;
       readonly message: string;
       /**
-       * `too-large` 才有：被超過的那個上限（位元組）。命令通道上 `deliverable/too-large` 帶它，照 dsh（#747）；
+       * `too-large` 才有：被超過的那個上限（位元組）。命令通道上 `deliverable/too-large` 帶它（#747）；
        * 舊的 `GET` 路由只講 `message`，用不到。
        */
       readonly maxBytes?: number;
@@ -145,7 +141,7 @@ export interface LocatedDeliverable {
 /**
  * 走完一個一般檔的所有閘門，最後那一次 `stat` 就是 `version` 與 `bytes` 的來源。
  *
- * 順序照 dsh 的 `locateFile`／`inspect`：**先擋路徑本身，再讓任何東西跟著它走**。
+ * 順序：**先擋路徑本身，再讓任何東西跟著它走**。
  *
  * - `virtualPathOf` 把模型給的原字串正規化成一條虛擬絕對路徑（`..` 在這一步被 `posix.normalize`
  *   吃掉，所以它不可能往上逃），接根那一步是 `hostPathOf`。**兩支都是 `@nexus/core` 的共用那一份**，
@@ -153,8 +149,7 @@ export interface LocatedDeliverable {
  * - **父目錄先 `realpath`**，然後要求它落在工作區根的 realpath 之內。這一步擋的是中途某一層
  *   目錄是符號連結、指到工作區外的情況——`virtualMode` 的圍堵是 lexical 的（基座 `resolvePath`
  *   的檔頭自己寫著），lexical 擋不到它。
- * - **最後一段 `lstat`**：是符號連結就拒，照 dsh 的 `inspect`（「Gate on the path itself before
- *   anything follows it」）——**不是** `openVerified`，那支是 dsh 桌面端的路徑往返對映，跟讀檔無關。
+ * - **最後一段 `lstat`**：是符號連結就拒。
  *
  * @param rootDir - 這一次的工作區根，呼叫端交出來的錨。
  * @param declaredPath - 模型宣告時給的原字串。
@@ -191,8 +186,7 @@ export async function locateDeliverableFile(
   if (!link.isFile()) {
     return refuse('not-regular-file', `讀不到：${declaredPath} 不是一般檔案。`);
   }
-  // **再 stat 一次**，同 dsh 的理由逐字：「The stat re-checks what `lstat` saw: the file may have
-  // gone or changed kind in between.」
+  // **再 stat 一次**：`lstat` 看過之後，檔可能已經不見或換了種類。
   let info: Awaited<ReturnType<typeof stat>>;
   try {
     info = await stat(target);
@@ -208,7 +202,7 @@ export async function locateDeliverableFile(
       target,
       stat: {
         path: declaredPath,
-        // **不透明的新鮮度標記，前端不解析**（同 dsh 的 `version`）。內容換了就變，是它唯一的契約。
+        // **不透明的新鮮度標記，前端不解析**。內容換了就變，是它唯一的契約。
         version: `${info.mtimeMs.toString(36)}-${info.size.toString(36)}`,
         bytes: info.size,
       },
@@ -217,7 +211,7 @@ export async function locateDeliverableFile(
 }
 
 /**
- * 讀整份位元組，**吃整檔上限**。只有整檔讀（不帶範圍的 `readBytes`）走這裡，同 dsh；預覽串流，見
+ * 讀整份位元組，**吃整檔上限**。只有整檔讀（不帶範圍的 `readBytes`）走這裡；預覽串流，見
  * {@link readDeliverablePage}。
  *
  * ## 為什麼不經基座的 `readRaw`
@@ -259,7 +253,7 @@ export async function readDeliverableBytes(
   }
   // **上限綁在讀本身，不是只綁在前面那次 stat 上。** 只看 stat 的話，兩次之間長大的檔就整份
   // 進記憶體了——這台機器是多人共用的。緩衝區開 `min(當時的大小, 上限) + 1`：那個 +1 就是
-  // 「它長大了」的偵測器。dsh 同樣把上限傳進讀裡（不帶範圍的 `readBytes` 的 `maxFileBytes`）。
+  // 「它長大了」的偵測器。
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(located.target, 'r');
@@ -295,10 +289,9 @@ interface CutPage {
 
 /**
  * 從解碼過的串流切出第 `offset` 到 `offset + limit - 1` 行（0 起算），**讀到頁尾之後的第一個字元
- * 就停**，檔案其餘部分不讀。照 dsh `workspace-files` 的 `cutPage`（`src/index.ts:103-158`，`ddefc45`），
- * 差在 dsh 的行號 1 起算、我們 0 起算。
+ * 就停**，檔案其餘部分不讀。行號 0 起算。
  *
- * **記憶體有兩道界限，兩道都是 dsh 的**：頁之前的行只數不留；頁內的位元組一超過 `maxBytes`
+ * **記憶體有兩道界限**：頁之前的行只數不留；頁內的位元組一超過 `maxBytes`
  * 就當場丟出，不是先攢完再比——所以一條巨大的長行也撐不大記憶體。這台機器是多人共用的。
  *
  * **最後一行後面的換行不算一行**：串流結束時手上沒有半行，就不補一行空的。
@@ -356,22 +349,21 @@ async function cutPage(
  * 切一頁文字出來，**串流讀、只讀到這一頁為止**（#544）。
  *
  * `offset` 是行偏移（0 起算），`limit` 是這一頁最多幾行。**要超過 `limits.maxLines` 是拒絕**，
- * 不是給到上限為止——同 dsh 的 `maxLines`（「a request asking for more is refused」）。
+ * 不是給到上限為止。
  *
  * **`limits.maxLines` 是雙用的**：這裡當「不准超過」的上限，而「呼叫端沒給 `limit` 時用什麼」
- * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableCommand`。dsh 一樣
- * （`workspace-files/src/index.ts:371-373`，兩處讀同一個 `this.config.maxLines`）。**兩處必須
+ * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableCommand`。**兩處必須
  * 一起吃到設定值**：只接一處的話兩個方向都會壞——設定高於這裡寫死的上限，不帶 `limit` 的請求
  * 全部被拒；設定低於那邊寫死的預設，一樣。
  *
- * **整檔沒有大小上限**，`limits.maxFileBytes` 不在這條路上（見檔頭）。**頁的上限照 dsh：拒絕，
- * 不截斷**——「a silently cut page reads as the whole page」。
+ * **整檔沒有大小上限**，`limits.maxFileBytes` 不在這條路上（見檔頭）。**頁的上限是拒絕，
+ * 不截斷**：靜靜切短的一頁會被當成整頁。
  *
- * **不是 UTF-8 就是 `not-text`**，照 dsh；讀到哪裡判到哪裡，同下一段 NUL 的道理。
+ * **不是 UTF-8 就是 `not-text`**；讀到哪裡判到哪裡，同下一段 NUL 的道理。
  *
- * **NUL 只掃這一頁**，照 dsh（「the NUL scan runs on the page itself」）。串流讀看不到還沒讀的部分，
+ * **NUL 只掃這一頁**。串流讀看不到還沒讀的部分，
  * 所以一個後段才出現 NUL 的檔，前面的頁讀得到、有 NUL 的那一頁才回 `not-text`。從前整檔讀進來時
- * 是整份掃，那個「第 0 頁說是文字、第 3 頁才說不是」的不一致因此是**照標準接受的**，不是疏漏。
+ * 是整份掃，那個「第 0 頁說是文字、第 3 頁才說不是」的不一致因此是**刻意接受的**，不是疏漏。
  *
  * @param located - 已經通過閘門的檔。
  * @param limits - 這台 server 的三個上限，起動期從 `#settings/deliverable-files` 那一列解出來。

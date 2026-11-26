@@ -282,8 +282,7 @@ describe('供應商回上下文溢出', () => {
 });
 
 /**
- * **端點真的回超窗：緊急摘要不保留尾巴**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)，dsh
- * `compaction-basic/src/index.ts:262`、`:294`：overflow 繞過保留政策、`selectCompactableRange(..., 0)`）。
+ * **端點真的回超窗：緊急摘要不保留尾巴**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)）。
  *
  * 沒有型錄時保留量退到 20 則，4 句話才 8 則，**尾巴原本蓋住全部**：照保留量算沒有東西可摘，基座只能把同一個請求
  * 再送一次（端點已經說裝不下了）。retain 0 之後，端點超窗那一次照樣摘要、只留最新一則。
@@ -336,7 +335,7 @@ describe('尾巴蓋住全部', () => {
  * **生摘要那次呼叫壞掉時，整場怎麼走**（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)，單元級的釘在
  * `harness/packages/nexus-core/src/summary-failure.test.ts`；這裡走整棵樹，確認走到的是同一個處理）。
  *
- * 照 dsh `compaction-basic`：我們自己的門檻觸發 ＝ pressure（warn、照原請求送出）；端點真的回超窗 ＝ overflow
+ * 我們自己的門檻觸發 ＝ pressure（warn、照原請求送出）；端點真的回超窗 ＝ overflow
  * （warn、保留原本的請求錯誤）。
  */
 describe('摘要那次呼叫失敗', () => {

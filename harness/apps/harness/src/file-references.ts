@@ -1,20 +1,18 @@
 /**
  * `@` 引用的列檔與它那一句提示（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）。
  *
- * 照 dsh 的 `file-reference-local`（`packages/context/file-reference-local/src/{search,index}.ts`，`477b4f4`）：
- *
- * - {@link WorkspaceFileSearch} **逐字移植** dsh 的同名 class：不讀 `.gitignore`、用固定清單按 basename 排除目錄、
+ * - {@link WorkspaceFileSearch}：不讀 `.gitignore`、用固定清單按 basename 排除目錄、
  *   隱藏檔預設不列、不跟符號連結、不出工作區；一次最多 20 筆，索引上限 5 萬筆。空 query 或含 `/` 的即時列那一層，
  *   其他的對快取索引做模糊比對。索引被標過期之後先用舊的回答，同時在背景重建；每個呼叫者自己取消，不殺共用的走訪。
- * - {@link listFileReferences} 是**我們加的那一層位址翻譯**，只做這一件事：查詢開頭的 `/` 剝掉一個再交給 dsh 的分派，
+ * - {@link listFileReferences} 是**位址翻譯**這一層，只做這一件事：查詢開頭的 `/` 剝掉一個再交給 {@link WorkspaceFileSearch}，
  *   回來的路徑補回 `/`。理由見 `@nexus/wire` 的 `file-references.ts`。
- * - {@link createFileReferencePlugin} 是 dsh `context:file-reference` 那段提示的對應物。
+ * - {@link createFileReferencePlugin} 掛那段提示。
  *
- * **只給路徑，不讀內容**：同 dsh README 的「never reads or attaches file contents」。
+ * **只給路徑，不讀內容**。
  *
  * ## 圍堵
  *
- * 這是第一條「由客戶端給路徑、去讀磁碟」的路由。dsh 的做法（`resolveDisplayDirectory`）是 `resolve` → `relative` 判出界，
+ * 這是第一條「由客戶端給路徑、去讀磁碟」的路由。做法是 `resolve` → `relative` 判出界，
  * 再從根往下**逐段 `lstat`**，任何一段是符號連結或不是資料夾就回空。路徑上沒有符號連結時，realpath 就等於根接上那段
  * 相對路徑，所以這一套已經蓋住「realpath 必須在根之內」那一條（同 `deliverable-files.ts` 的
  * `locateDeliverableFile`），不另疊一套 realpath 比較——疊的話兩側都得 realpath，macOS 的暫存目錄在
@@ -28,11 +26,9 @@
  * ## 偏離
  *
  * 1. **路徑以 `/` 開頭**：見 `@nexus/wire` 的 `file-references.ts`。
- * 2. **提示句只在有工作區時注入**：dsh 是「有 `read` 工具就注入」。我們沒有工作區時不提供列檔（web 不開選單），使用者
+ * 2. **提示句只在有工作區時注入**：沒有工作區時不提供列檔（web 不開選單），使用者
  *    插不出 `@` 路徑，這句就沒有對象；檔案工具那時讀的也不是磁碟。所以跟 `@nexus/plugin-sandbox-policy` 同一個條件掛。
- * 3. **三個上限是常數，不是設定**：dsh 的 `maxResults`／`maxEntries`／`excludedDirectories` 是部署可覆寫的 Config。
- *    出廠值一樣，dsh 的 web-app bundle 也沒覆寫（`packages/bundle/web-app/cordis.patch.yml`），所以出廠行為不變，
- *    少的是那個旋鈕。
+ * 3. **三個上限是常數，不是設定**：`maxResults`／`maxEntries`／`excludedDirectories` 寫死在這裡，部署改不了。
  *
  * @module
  */
@@ -44,12 +40,12 @@ import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
 import type { FileReferenceCandidate } from '@nexus/wire';
 
-/** 一次查詢最多回幾筆。同 dsh 的 `DEFAULT_FILE_SEARCH_MAX_RESULTS`。 */
+/** 一次查詢最多回幾筆。 */
 export const FILE_SEARCH_MAX_RESULTS = 20;
-/** 一份索引最多收幾筆。同 dsh 的 `DEFAULT_FILE_SEARCH_MAX_ENTRIES`。 */
+/** 一份索引最多收幾筆。 */
 export const FILE_SEARCH_MAX_ENTRIES = 50_000;
 /**
- * 按 basename 排除、不走也不列的目錄，同 dsh 的 `DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES`：版本控制、相依，
+ * 按 basename 排除、不走也不列的目錄：版本控制、相依，
  * 以及沒有哪個生態拿來放原始碼的建置產物。產物帶著產生它的原始碼的 basename，不排除的話索引額度花兩次，
  * 而且每次查詢 `dist/x.js` 都跟 `src/x.ts` 排在一起。
  *
@@ -73,7 +69,7 @@ export const FILE_SEARCH_EXCLUDED_DIRECTORIES = [
   '.gradle',
 ] as const;
 
-/** 一份索引的上限與排除。同 dsh 的 `FileSearchConfig`。 */
+/** 一份索引的上限與排除。 */
 export interface FileSearchConfig {
   /** 一次查詢最多回幾筆。 */
   readonly maxResults: number;
@@ -83,7 +79,7 @@ export interface FileSearchConfig {
   readonly excludedDirectories: readonly string[];
 }
 
-/** 出廠那一份：三個都是 dsh 的預設值。 */
+/** 出廠那一份：兩個上限與排除清單的預設值。 */
 export const FILE_SEARCH_DEFAULTS: FileSearchConfig = {
   maxResults: FILE_SEARCH_MAX_RESULTS,
   maxEntries: FILE_SEARCH_MAX_ENTRIES,
@@ -91,7 +87,7 @@ export const FILE_SEARCH_DEFAULTS: FileSearchConfig = {
 };
 
 /**
- * dsh 那一層的候選：**相對工作區根、不帶開頭的 `/`**。上線之前由 {@link listFileReferences} 補上。
+ * 索引那一層的候選：**相對工作區根、不帶開頭的 `/`**。上線之前由 {@link listFileReferences} 補上。
  */
 export interface RelativeCandidate {
   readonly path: string;
@@ -115,7 +111,7 @@ interface SettledIndex {
 }
 
 /**
- * 一個工作區根上可取消、可重用的模糊索引。同 dsh 的 `WorkspaceFileSearch`。
+ * 一個工作區根上可取消、可重用的模糊索引。
  *
  * 指名資料夾的查詢列即時的那一層；裸字的查詢共用一次有上限的走訪。**只有一個工作區的第一次裸查詢會等那次走訪**
  * ——失效之後，舊的索引照答，替代品在背景建。
@@ -223,14 +219,14 @@ export class WorkspaceFileSearch {
     generation.promise = this.#scanWorkspace(controller.signal).then(
       (entries) => {
         /* v8 ignore next -- dispose 會中止這次走訪，走的是 rejection 那一支；這一道只擋「最後一個目錄剛好在中止落地前
-         * 讀完」那一瞬間，不能把條目交還給一個已經收掉的索引。同 dsh。 */
+         * 讀完」那一瞬間，不能把條目交還給一個已經收掉的索引。 */
         if (this.#disposed) return entries;
         this.#generation = undefined;
         this.#settled = { entries, startedAt };
         return entries;
       },
       (error: unknown) => {
-        /* v8 ignore next -- dispose 同步清掉 `generation`；這一道只擋預期之外的走訪失敗。同 dsh。 */
+        /* v8 ignore next -- dispose 同步清掉 `generation`；這一道只擋預期之外的走訪失敗。 */
         if (this.#generation === generation) this.#generation = undefined;
         throw error;
       },
@@ -256,7 +252,7 @@ export class WorkspaceFileSearch {
         throw new Error('file search selected a missing directory');
       }
       // **根不是一棵子樹**：讀不到的分支只少掉它自己的候選，但讀不到根代表這次走訪什麼都沒學到。讓它落定的話，
-      // 一份空索引會蓋掉還好好的條目，而且不留任何失效可以重試。同 dsh。
+      // 一份空索引會蓋掉還好好的條目，而且不留任何失效可以重試。
       const entries =
         cursor === 0
           ? await readWorkspaceRoot(directory.absolute, signal)
@@ -305,7 +301,7 @@ export class WorkspaceFileSearch {
 /**
  * 上線的那一層：**剝掉查詢開頭的一個 `/`、補回結果開頭的 `/`**，其餘原樣交給 {@link WorkspaceFileSearch}。
  *
- * **先換反斜線、再剝**：反過來的話 `\src` 與 `/src` 會是兩種行為——前者留著 `/` 進 dsh 的分派，變成「列根目錄再過濾」，
+ * **先換反斜線、再剝**：反過來的話 `\src` 與 `/src` 會是兩種行為——前者留著 `/` 進索引，變成「列根目錄再過濾」，
  * 後者是全域模糊比對。那正是這一層要消掉的東西（`sr` 與 `/sr` 是同一個查詢）。
  *
  * @param search - 這條 thread 的索引。
@@ -333,7 +329,7 @@ async function resolveDisplayDirectory(
   const absolute = resolve(resolvedRoot, displayDirectory === '' ? '.' : displayDirectory);
   const fromRoot = relative(resolvedRoot, absolute);
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`)) return undefined;
-  /* v8 ignore next -- 只有 Windows 會生出跨磁碟區的絕對相對路徑。同 dsh。 */
+  /* v8 ignore next -- 只有 Windows 會生出跨磁碟區的絕對相對路徑。 */
   if (isAbsolute(fromRoot)) return undefined;
   let current = resolvedRoot;
   for (const segment of fromRoot.split(sep).filter(Boolean)) {
@@ -343,7 +339,7 @@ async function resolveDisplayDirectory(
       const status = await lstat(current);
       signal.throwIfAborted();
       // `lstat` 不跟隨連結，連結的 `isDirectory()` 本來就是 `false`，所以前半句是多餘的：突變量過，拿掉它測試全綠。
-      // 照 dsh 逐字留著，它把「連結一律拒」寫明在這一行，不靠讀的人知道 `lstat` 的語意。
+      // 留著它，把「連結一律拒」寫明在這一行，不靠讀的人知道 `lstat` 的語意。
       if (status.isSymbolicLink() || !status.isDirectory()) return undefined;
     } catch {
       signal.throwIfAborted();
@@ -368,7 +364,7 @@ async function readDirectory(absolute: string, signal: AbortSignal) {
     return entries.sort((left, right) => compareText(left.name, right.name));
   } catch {
     signal.throwIfAborted();
-    // 讀不到或不見了的子樹不貢獻候選；其他讀得到的分支照樣有用，補全本來就只是建議。同 dsh。
+    // 讀不到或不見了的子樹不貢獻候選；其他讀得到的分支照樣有用，補全本來就只是建議。
     return [];
   }
 }
@@ -429,12 +425,12 @@ function kindRank(kind: RelativeCandidate['kind']): number {
 }
 
 function compareText(left: string, right: string): number {
-  /* v8 ignore next -- 條目與候選都不重複；誰跟誰比由主機列舉的順序決定。同 dsh。 */
+  /* v8 ignore next -- 條目與候選都不重複；誰跟誰比由主機列舉的順序決定。 */
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function waitForPromise<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  /* v8 ignore next -- `list()` 在同步呼叫進來之前剛查過這顆 signal。同 dsh。 */
+  /* v8 ignore next -- `list()` 在同步呼叫進來之前剛查過這顆 signal。 */
   if (signal.aborted) return Promise.reject(errorReason(signal.reason, 'file search aborted'));
   return new Promise<T>((resolvePromise, rejectPromise) => {
     const onAbort = (): void => {
@@ -459,10 +455,9 @@ function errorReason(reason: unknown, fallback: string): Error {
 }
 
 /**
- * 講給模型聽的那一句，dsh `FILE_REFERENCE_PROMPT` 的對應物。
+ * 講給模型聽的那一句：只給路徑、叫模型自己讀、讀之前不要說看過了、`@"…"` 是含空白的路徑。
  *
- * **語意照 dsh**（只給路徑、叫模型自己讀、讀之前不要說看過了、`@"…"` 是含空白的路徑）；**位址照我們的**：dsh 說「相對路徑
- * 從工作區根解析、絕對路徑是主機上的檔」，而我們的檔案工具收的是 `/` 開頭的虛擬路徑，照抄那半句會把模型帶去傳主機路徑
+ * **位址用虛擬路徑**：我們的檔案工具收的是 `/` 開頭的虛擬路徑，說成「相對路徑從工作區根解析、絕對路徑是主機上的檔」會把模型帶去傳主機路徑
  * （`@nexus/plugin-sandbox-policy` 模組註解裡量過的那次：30 輪裡 23 輪用錯）。工具名是這個組裝真的註冊的那兩顆
  * （`base-tools.ts`）。
  */

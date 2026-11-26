@@ -514,9 +514,9 @@ export function resolveInvariantLogPath(
  * | 檢查 | 呼叫點 | 比什麼 | 判斷 |
  * | --- | --- | --- | --- |
  * | `assertLaunchPathsOutsideWorkspace` | `serve-run.ts` 的 `runServe` | 目前資料夾的 `.env`、home、home 的 `.env`、舊 `.env` ⇄ `--workspace` | 不改。讀得到就洩漏 key 與金鑰；檔頭補了私有根的 Q3 例外 |
- * | `resolveSessionLogDir`（本體 `:316`，走本函式） | `serve-run.ts` 的 `runServe`、`cli.ts:1016` | `--session-log`／預設日誌根 ⇄ `--workspace` | 不改。日誌在共用區 ＝ 所有人讀得到整份對話史 |
- * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve-run.ts` 的 `runServe`、`cli.ts:1004` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
- * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve-run.ts` 的 `runServe`（直接一次、經 `createSessionHeaderMetadataResolver` 一次）、`cli.ts:1183`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
+ * | `resolveSessionLogDir`（本體 `:316`，走本函式） | `serve-run.ts` 的 `runServe`、`cli.ts:1003` | `--session-log`／預設日誌根 ⇄ `--workspace` | 不改。日誌在共用區 ＝ 所有人讀得到整份對話史 |
+ * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve-run.ts` 的 `runServe`、`cli.ts:991` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
+ * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve-run.ts` 的 `runServe`（直接一次、經 `createSessionHeaderMetadataResolver` 一次）、`cli.ts:1170`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
  * | `--resume` 的日誌路徑 | `cli.ts:354` | 續接的日誌 ⇄ `--workspace` | 不改，CLI 的可寫根仍是 `--workspace` |
  * | `assertPatchesOutsideWorkspace` | `runServe`、`runCli`、`plugin` | 每份 `--patch` ⇄ `--workspace` | 例外：判準是寫得到，不是讀得到；覆寫檔能換 MCP 的 `command`。不比新 thread 的私有根 |
  */

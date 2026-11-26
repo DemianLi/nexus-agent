@@ -1,15 +1,15 @@
 /**
- * **受管憑證檔的優先序，走真的入口**（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540)，照 dsh 分兩邊）。
+ * **受管憑證檔的優先序，走真的入口**（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540)，分兩邊）。
  *
  * `credentials.test.ts` 與 `live-model-credentials.test.ts` 都是自己建 `createCredentialService`、自己傳 `store`，
  * 所以把入口那一處傳 `store` 的值換掉，它們不會紅——產品只是**靜靜換了一邊的優先序**。這一檔從 `runServe --live` 與 `runCli --live`
  * 起量，對手方是 loopback 上的假端點，記每個請求帶的 `Authorization`：
  *
- * | 入口 | 對應 dsh | 受管檔（`fake-from-file`）與啟動環境（`fake-from-env`）同時有 | 拿掉哪一處會紅 |
- * | --- | --- | --- | --- |
- * | `runServe --live` | Web profile | 端點收到 `Bearer fake-from-file`；起動訊息講來自受管檔 | `serve-run.ts` 的 `store: true`、`credentials.ts` 的 `resolve` 順序 |
- * | `runServe --live`，受管檔多一個頂層鍵或只剩註解（#1507） | Web profile | 起得來；stderr 講個數與行號、不帶鍵名與值；`records` 仍然起不來 | `credentials.ts` 的 `ignoredKeys` 與空文件那兩段 |
- * | `runCli --live` | headless profile | 端點收到 `Bearer fake-from-env`；受管檔 0644 也照樣起得來（不讀它），serve 則起不來 | `cli.ts` 的 `store: false` |
+ * | 入口 | 受管檔（`fake-from-file`）與啟動環境（`fake-from-env`）同時有 | 拿掉哪一處會紅 |
+ * | --- | --- | --- |
+ * | `runServe --live` | 端點收到 `Bearer fake-from-file`；起動訊息講來自受管檔 | `serve-run.ts` 的 `store: true`、`credentials.ts` 的 `resolve` 順序 |
+ * | `runServe --live`，受管檔多一個頂層鍵或只剩註解（#1507） | 起得來；stderr 講個數與行號、不帶鍵名與值；`records` 仍然起不來 | `credentials.ts` 的 `ignoredKeys` 與空文件那兩段 |
+ * | `runCli --live` | 端點收到 `Bearer fake-from-env`；受管檔 0644 也照樣起得來（不讀它），serve 則起不來 | `cli.ts` 的 `store: false` |
  *
  * **零憑證、零外部連線**：key 是假值，端點在 loopback。
  */

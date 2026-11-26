@@ -1,6 +1,6 @@
 /**
  * **改檔保留 CRLF**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：Windows 行尾的檔，模型照讀到的內容去改就改得成功，
- * 而且行尾保持原樣。照 dsh `fs-local` 的 `readForEdit`／`applyLiteralEdit`／`restoreLineEndings`（`fsio.ts:683-836`，`687f282e`）。
+ * 而且行尾保持原樣。
  *
  * 每一條都**看磁碟上的位元組**：行尾對不對的答案在檔案內容上，不在回傳值的措辭上。拿掉正規化，CRLF 檔裡 LF 寫的 `old_string` 就回「找不到」；
  * 拿掉還原，LF 的新內容會混進 CRLF 檔裡。

@@ -4,11 +4,9 @@
  *
  * ## 這一份釘的是什麼
  *
- * dsh 把升級的兩個欄位（`sandbox_permissions` ＋ `justification`）攤進**它自己擁有的**
- * `write`／`edit` schema，而且編排是「**同一顆呼叫重試一次**」
- * （`references/deepseek-harness/packages/sandbox/sandbox/src/escalation.ts` 的
- * `escalationHintMarker()`：retry this exact ⟨operation⟩ once with …）。我們照抄不了，
- * 而**卡上原本寫的理由是錯的**：它說擋住的是 `createDeepAgent()` 開頭那條
+ * 升級的兩個欄位（`sandbox_permissions` ＋ `justification`）攤進 `write_file`／`edit_file` 的 schema、
+ * 編排成「**同一顆呼叫重試一次**」，我們做不到。
+ * **卡上原本寫的理由是錯的**：它說擋住的是 `createDeepAgent()` 開頭那條
  * `TOOL_NAME_COLLISION`。那條擋的是**名字**。真正擋住「把欄位攤進 `write_file`」的是
  * langchain 自己的一條執行期檢查，在 `wrapModelCall` 的回程上（`langchain@1.5.10`，
  * `src/agents/nodes/AgentNode.ts:556-609`；dist 不附 src，從
