@@ -389,7 +389,7 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     const h = home();
     const lines: string[] = [];
     const server = await start(h.env, lines);
-    // 寫入口不會為不存在的 id 追加；紀錄被手動改成這樣時，疊層照 dsh 警告後跳過。
+    // 寫入口不會為不存在的 id 追加；紀錄被手動改成這樣時，疊層警告後跳過。
     await h.raw({ op: 'disable', id: 'no-such-row', name: 'x', before: false, after: true });
     expect(await say(server, 'a')).toBeUndefined();
     expect(await say(server, 'b')).toBeUndefined();

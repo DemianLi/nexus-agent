@@ -23,14 +23,6 @@
  * （`browser-session-secret.ts`），但是另一把：刪掉瀏覽器那一把是撤銷會話的開關，不該順便換掉每一份日誌的設定雜湊。
  * 鍵讀不到（權限過寬、內容認不得、建不出來）只少雜湊那一格並講一聲，不擋啟動——它是描述，不是功能。
  *
- * ## 與 dsh 的關係
- *
- * dsh 的 `SessionHeader`（`packages/core/session/src/types.ts:94-131`，`5badb15`）只有 `version`、`id`、`createdAt`、`cwd`、
- * `parentSession`、`isSeeded`、`origin`、`delegationDepth`、`agentPreset`，**沒有建置版本、插件清單或設定雜湊**；它唯一記
- * 程式版本的地方是啟動失敗的診斷報告（`apps/cli/src/startup-diagnostics.ts`，`dshVersion`），而那份報告明寫「不收環境變數與
- * plugin 設定」——不放設定內容是同一個立場。所以這三格是標準沒有的功能，照卡片要求加；形狀上比照 `agentPreset`：建立時定下、
- * 之後不變的組成身分。
- *
  * @module
  */
 

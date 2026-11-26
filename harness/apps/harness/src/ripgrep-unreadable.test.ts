@@ -1,7 +1,7 @@
 /**
- * 有些檔讀不到時，`grep`／`glob` 不整次失敗（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)，偏離 dsh 的理由 2）。
+ * 有些檔讀不到時，`grep`／`glob` 不整次失敗（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)，理由 2：多人共用主機）。
  *
- * rg 碰到讀不到的檔會回 2，stdout 其實已經有其餘檔的命中。dsh 一律判成 `SEARCH_FAILED`；多人共用一台主機時，
+ * rg 碰到讀不到的檔會回 2，stdout 其實已經有其餘檔的命中。一律判成 `SEARCH_FAILED` 的話，多人共用一台主機時，
  * 工作區裡一個別人的 0600 檔就能讓搜根的 grep 整個不能用。`ripgrep-runner.ts` 檔頭「偏離 1」寫了判準：結束碼 2、
  * stderr 沒被截尾、每個非空行都是 `rg: <路徑>: Permission denied (os error 13)`。
  *

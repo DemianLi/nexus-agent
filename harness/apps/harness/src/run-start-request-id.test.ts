@@ -1,10 +1,10 @@
 /**
  * **`run.start` 的客戶端請求編號：重送同一句不會排兩次**——[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)。
  *
- * 照 dsh 的 `session.prompt { requestId }`（`packages/api/session-controller/src/commands.ts:330`，`d7432673886`）：收到時先查這個
+ * 收到時先查這個
  * 編號收過沒有，收過就不再排。三個階段都認得——排著、已領走、已落日誌（含重啟之後）。
  *
- * **和 dsh 不同的一處**：dsh 回 `{ accepted: true }`，我們回原本那一件的 `run_id`（它兼作佇列項目的 id，畫面靠它對上
+ * 重送時回原本那一件的 `run_id`（它兼作佇列項目的 id，畫面靠它對上
  * 自己送出的那一句），所以重送與第一次的回應形狀相同。
  *
  * 兩層：

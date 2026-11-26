@@ -2,7 +2,7 @@
  * **在真的 serve 上，用 patch 換掉模型提供者，跑一條自訂的工具回合**——[#670](https://github.com/DemianLi/nexus-agent/issues/670)
  * 的產品路徑驗收。
  *
- * 做法照 dsh 的 headless e2e（`apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts:36-42`）：一份 patch
+ * 做法：一份 patch
  * `insert` 一列腳本提供者（`#settings/scripted-model`，腳本是它的 config）、再把 `agent-default-model` 指過去。整條路是
  * 真的——`runServe` 讀 patch、每條 thread 的 `createCliAgent` 解析選擇列、真的 `present` 工具、真的 wire handler——
  * 唯一換掉的是模型。

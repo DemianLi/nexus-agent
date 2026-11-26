@@ -1,7 +1,7 @@
 /**
  * `serve` 收到 SIGINT 時的收尾（[#599](https://github.com/DemianLi/nexus-agent/issues/599)），對著**另起的
  * 一個行程**量：退出碼與訊號只存在於行程上，同 `cli.test.ts` 的「CLI 行程」那一組（也同它的偏離：
- * 沒有建構產物，用 tsx 跑原始碼入口）。dsh 同型的測試是 `apps/cli/tests/headless-shutdown.e2e.ts`。
+ * 沒有建構產物，用 tsx 跑原始碼入口）。
  *
  * **直接起 node，不經 `pnpm run serve`**：tsx 的 CLI 會再包一層轉發訊號的父行程，那一層的時序
  * 不是這裡要量的東西，而且讓「送一次」變得不確定。

@@ -417,7 +417,7 @@ describe('升級', () => {
         MISSING_TARGET_REFUSAL,
         'read-only',
       ],
-      // **欄位先判，加寬後判**（照 dsh 的 `validateEscalationArgs` 在 `approveEscalation` 之前）：
+      // **欄位先判，加寬後判**：
       // 既不加寬、理由又空白的這一筆，拿到的是欄位那句。少了它，兩條判斷對調也全綠。
       [
         { file_path: '/a.txt', sandbox_permissions: 'workspace-write', justification: '' },
@@ -439,8 +439,7 @@ describe('升級', () => {
   });
 
   /**
-   * [#700](https://github.com/DemianLi/nexus-agent/issues/700)：**問人放在工具本體裡**，照 dsh 的
-   * `approveEscalation`。以前「有人看過」只靠一顆只認這個名字的閘門，排在它前面的一顆寬鬆閘門
+   * [#700](https://github.com/DemianLi/nexus-agent/issues/700)：**問人放在工具本體裡**。以前「有人看過」只靠一顆只認這個名字的閘門，排在它前面的一顆寬鬆閘門
    * 不呼叫 `next()` 就把它整個短路掉——工具回「核准了」，畫面上一張卡都沒有。
    */
   describe('核准在工具本體裡，閘門怎麼排都跳不過', () => {

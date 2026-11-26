@@ -3,8 +3,7 @@
  * （[#670](https://github.com/DemianLi/nexus-agent/issues/670)）。
  *
  * 做法就是 `serve-scripted-provider.test.ts` 示範的那一份 patch：`insert` 一列腳本提供者
- * （`#settings/scripted-model`，腳本當 config）、把 `agent-default-model` 指過去，形狀照 dsh 的 headless e2e
- * （`source-tool.built.e2e.ts:36-42`）。其餘一律是真的——`runServe`、每條 thread 的 `createCliAgent`、
+ * （`#settings/scripted-model`，腳本當 config）、把 `agent-default-model` 指過去。其餘一律是真的——`runServe`、每條 thread 的 `createCliAgent`、
  * 出貨清單、wire handler——唯一換掉的是模型。
  *
  * **零憑證、零外部連線**：腳本是資料，工作區由呼叫端給（暫存目錄）。
