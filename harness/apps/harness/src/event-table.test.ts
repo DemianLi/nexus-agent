@@ -1,6 +1,6 @@
 /**
  * 事件表的閘門（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，S0）：每個宣告在 `Events` 上的事件要有 JSDoc、
- * 標 `@mode emit | serial | waterfall`、每個參數有 `@param`、waterfall 的最後一個參數叫 `next`。照 dsh 的規矩。
+ * 標 `@mode emit | serial | waterfall`、每個參數有 `@param`、waterfall 的最後一個參數叫 `next`。
  *
  * S0 的事件表是空的，那時這條閘門對真實的樹是空轉的，所以它有一組**正向對照**：拿合成的原始碼餵同一個掃描器，每一種違規
  * 各一條，確認它真的報得出來。S1a（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了第一批事件之後，真實的樹那條開始有東西可驗；

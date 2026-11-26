@@ -293,8 +293,7 @@ describe('預覽', () => {
    * **`maxLines` 是雙用的，這兩條一起釘住它**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
    *
    * 那一格同時是「沒給 `limit` 時用的預設」（`wire-handler.ts` 的 `handleDeliverableCommand`）與
-   * 「給了就不准超過的上限」（`deliverable-files.ts` 的 `readDeliverablePage`）。dsh 同形，兩處讀同一個
-   * `this.config.maxLines`。
+   * 「給了就不准超過的上限」（`deliverable-files.ts` 的 `readDeliverablePage`），兩處讀同一個設定。
    *
    * **只接其中一處的話，兩個方向都會壞**：設定高於另一邊寫死的上限 → 不帶 `limit` 的請求全部
    * 被拒；設定低於另一邊寫死的預設 → 一樣。所以第一條刻意**不帶 `limit`**——一條每次都明著傳
@@ -339,9 +338,8 @@ describe('預覽', () => {
     });
 
     /**
-     * **翻面過的絆索**（#544）：原本這一條斷言的是**預覽**被整檔上限拒。預覽改成串流、整檔不設上限之後
-     * （照 dsh：「The file itself has no size cap: a caller pages through it」），那一格只剩整檔讀在用
-     * ——dsh 的不帶範圍的 `readBytes`。所以兩臂都要釘：同一個上限底下，預覽讀得到、整檔讀拒。
+     * **翻面過的絆索**（#544）：原本這一條斷言的是**預覽**被整檔上限拒。預覽改成串流、整檔不設上限之後，
+     * 那一格只剩整檔讀在用。所以兩臂都要釘：同一個上限底下，預覽讀得到、整檔讀拒。
      */
     it('整檔上限只管整檔讀：預覽照樣讀得到，整檔讀拒而且講得出是幾', async () => {
       const outcome = await present({ 'a.md': twenty }, ['a.md'], {
@@ -494,8 +492,7 @@ describe('預覽', () => {
     });
 
     /**
-     * **行為變了，而且是照標準變的**：NUL 只掃這一頁，照 dsh（「the NUL scan runs on the page
-     * itself」）。從前整檔掃，前段那一頁也拒。
+     * **行為變了，而且是照標準變的**：NUL 只掃這一頁。從前整檔掃，前段那一頁也拒。
      */
     it('NUL 只掃這一頁：前段讀得到，有 NUL 的那一頁才 not-text', async () => {
       const outcome = await present({ 'a.md': 'a\nb\n\u0000\n' }, ['a.md']);
@@ -906,7 +903,7 @@ async function seedWithDeliverable(): Promise<readonly SessionEvent[]> {
 }
 
 /**
- * **位元組窗口**（#544 的 B，照 dsh 的 `readBytes`）。它存在是為了文字頁讀不動的那種檔：一行本身
+ * **位元組窗口**（#544 的 B）。它存在是為了文字頁讀不動的那種檔：一行本身
  * 就超過頁的位元組上限，按行切永遠是 too-large。頁的拒絕不動，讀不動的改用窗口一段一段讀。
  */
 describe('位元組窗口', () => {

@@ -129,10 +129,9 @@ export class GatedChatOpenAI extends GuardedChatOpenAI {
    * 消費者提早結束（`break` 觸發 `return()`，或呼叫 `throw()`）時**先中止底下的請求**，名額與連線一起收
    * （[#1546](https://github.com/DemianLi/nexus-agent/issues/1546) 換主版本 Node 24 時出現）。
    *
-   * 照 dsh `packages/llm/llm-deepseek/src/adapter.ts:65-89`（`687f282e`）：一顆 `consumer` 訊號跟呼叫端的 `signal` 合併，消費者停下就
-   * `abort()`；原本的收尾不等，因為它排在還沒到的那一段後面。
+   * 一顆 `consumer` 訊號跟呼叫端的 `signal` 合併，消費者停下就 `abort()`；原本的收尾不等，因為它排在還沒到的那一段後面。
    *
-   * **偏離 dsh，理由 1（基座表達不出來）**：dsh 在生成器的 `finally` 裡 abort，消費者的 `return()` 直接打到那顆生成器。這裡中間隔著
+   * **為什麼不在生成器的 `finally` 裡 abort（理由 1，基座表達不出來）**：消費者的 `return()` 沒有直接打到那顆生成器。這裡中間隔著
    * `@langchain/core` 1.2.9 的 `IterableReadableStream`（`dist/utils/stream.js:38-43`、`:86-96`）：它的 `pull` 會先去要下一段，
    * `return()` 經 `reader.cancel()` 走到 `generator.return()`，排在那次 `next()` 後面——下一段到之前，我們生成器的 `finally` 跑不到。
    * 所以 abort 改掛在 `stream()` 交出去的那顆物件上。實測（假端點握住第二段不放）：沒有這一層時，Node 22.19 的 `break` 2 ms 回來、

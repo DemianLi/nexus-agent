@@ -2,10 +2,10 @@
  * 行程層的致命例外處理：未處理的 rejection 與未捕捉的例外，先印一行帶標籤的診斷，再有界收尾，最後以 1 結束
  * （[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）。
  *
- * **逐條照 dsh 的 `installFailLoud`**（`packages/boot/app-boot/src/index.ts:792-933`，SHA `1517a4db`）：
+ * **`installFailLoud` 的行為**：
  *
  * - 同時接 `unhandledRejection` 與 `uncaughtException`，標籤分別是 `fatal load failure` 與
- *   `fatal uncaught exception`。**標籤不翻中文**：那是給 grep 與監管程式認的記號，dsh 的 e2e 也靠它比對。
+ *   `fatal uncaught exception`。**標籤不翻中文**：那是給 grep 與監管程式認的記號。
  * - 診斷一行：`<前綴>: <標籤>: ` 加上 `util.inspect(err, { depth: 4, maxArrayLength: 50 })`，寫到 stderr。
  *   用 `inspect` 不用 `err.stack`：`code`／`syscall`／`path`／`cause` 是可列舉屬性，堆疊那行不帶。
  *   裝了 handler 之後 Node 自己什麼都不印，這一行是唯一的紀錄。
@@ -17,8 +17,7 @@
  * - latch：第一顆失敗是被回報的那顆；`release` 期間 handler 保持安裝，之後來的（含 `release` 自己的）一律吞掉，
  *   不讓 Node 在收尾中途殺掉行程。
  *
- * **dsh 的 Loader 衍生 rejection 去重沒有抄**（`index.ts:811-836`，為了 Loader rc.5 在 fiber 失敗後衍生又丟掉的
- * 那顆 promise）。#1501 驗收 5 量過：vendor rc.11 底下，試組掉一列沒有衍生的未處理 rejection，
+ * **Loader 衍生 rejection 去重沒有做**：#1501 驗收 5 量過，vendor rc.11 底下，試組掉一列沒有衍生的未處理 rejection，
  * 結果見該 PR。
  *
  * @module

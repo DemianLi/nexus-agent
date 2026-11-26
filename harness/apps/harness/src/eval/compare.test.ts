@@ -135,7 +135,7 @@ describe('runTier：失敗的分類', () => {
   });
 
   it('配額耗盡的 429 仍然是 rejected —— 它跟限流共用狀態碼，但重試無效', async () => {
-    // dsh 把 RATE_LIMIT 與 QUOTA 分成兩個碼，只有前者在預設可重試集裡。
+    // RATE_LIMIT 與 QUOTA 是兩個碼，只有前者在預設可重試集裡。
     // 這一條擋的是「看到 429 就一律當限流」——那會讓一個要人去處理的帳務問題，
     // 被讀成「跑慢一點就好」。
     const error = Object.assign(new Error('429 insufficient quota'), {

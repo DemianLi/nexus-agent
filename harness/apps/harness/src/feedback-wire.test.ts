@@ -277,7 +277,7 @@ describe('評一則回覆', () => {
     const version = first.result.value.version;
 
     refuse = true;
-    // 先 append、再確認（同 dsh）：被拒的那一顆留在記憶體的日誌裡，所以先收回（拿現行 version），再從「沒評過」評一次。
+    // 先 append、再確認：被拒的那一顆留在記憶體的日誌裡，所以先收回（拿現行 version），再從「沒評過」評一次。
     for (const outcome of [
       await wired.client.feedbackDelete('t', { messageId, ifVersion: version }),
       await wired.client.feedbackPut('t', { messageId, rating: 'negative', ifVersion: null }),
@@ -326,7 +326,7 @@ describe('評一則回覆', () => {
     // 停在核准點不是收尾。
     expect(paused?.turnTail).toBeUndefined();
 
-    // 停在核准點時照樣評得到（#267 的 Q10）：線上指得到任何一則回覆，同 dsh。
+    // 停在核准點時照樣評得到（#267 的 Q10）：線上指得到任何一則回覆。
     const early = await wired.client.feedbackPut('t', {
       messageId: messageIdOf(paused),
       rating: 'negative',
@@ -519,7 +519,7 @@ describe('查不到的目標', () => {
         result: { ok: false, error: { code: 'target-not-found', messageId } },
       });
     }
-    // 收回不存在的照 dsh 是成功、不記；沒開過的 thread 講 target-not-found。
+    // 收回不存在的是成功、不記；沒開過的 thread 講 target-not-found。
     expect(
       await wired.client.feedbackDelete('never-opened', { messageId: 'x', ifVersion: 'x' }),
     ).toEqual({

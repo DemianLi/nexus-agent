@@ -4,8 +4,6 @@
  *
  * ## 為什麼是一支讀檔的腳本
  *
- * dsh 的 `session-stats` 只算次數與耗時（`packages/session/session-stats/src/projection.ts:31`，
- * SHA `c291e79`），**不算錯誤、不算重複**；它的執行期只有 `repeat-tool-reminder` 提醒、不停。
  * 地圖 #263 開圖時拍板：超出標準的評估只做在產品路徑外。所以這裡不是投影、不是 middleware，
  * 是一個讀本機 jsonl 的純函式加一支印報表的進入點。這個檔沒有副作用，進入點只接線——
  * 同 `cli-args.ts` 的理由：帶 top-level `await main()` 的檔 import 不得。
@@ -104,7 +102,7 @@ import type {
   SessionEvent,
   SubagentLink,
 } from '@nexus/core';
-// 讀的事件種類（`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
+// 讀的事件種類（`feedback/*`）由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 // `todo/write` 不在這裡：它的事件擴充住在 core 的 `session-log.ts`（#1463 Q2 (a)）。
 import type {} from '@nexus/plugin-feedback';
 import { bodyFirstLine, parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
@@ -115,7 +113,7 @@ import {
   type SessionHeaderMetadataView,
 } from '../session-header-metadata.js';
 
-/** 沒帶碼的錯誤結果落在這一格。dsh 只替帶碼的錯誤填 `error`，一般拋錯與核准被拒都在這裡。 */
+/** 沒帶碼的錯誤結果落在這一格：一般拋錯與核准被拒都在這裡。 */
 export const UNCODED_ERROR = '無碼';
 
 /** 工具事件從這一版開始記。見 `session-store.ts` 的版本 5。`draft` 也讀。 */

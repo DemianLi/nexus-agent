@@ -3,7 +3,7 @@
  * 這兩條是刻意的行為，各一格釘住。
  *
  * - header 在讀目錄與讀檔之間不見了：跳過那一份，不讓整次掃描失敗（同 `list`）。單檔佈局挑定的世代檔在讀本文之前不見了也一樣。
- * - 讀日誌本文的當下有人在寫：照穩定快照讀，第二次還在變就截到讀前的大小（dsh `readStableSnapshot`）。
+ * - 讀日誌本文的當下有人在寫：照穩定快照讀，第二次還在變就截到讀前的大小。
  *
  * 真的磁碟上造不出「剛好在那一下」，所以照 `jsonl-session-store-header-replace.test.ts` 的做法 mock `node:fs/promises`，
  * 在 `readFile` 之前、`stat` 與 `readFile` 上放注入點。

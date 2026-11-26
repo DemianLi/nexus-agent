@@ -1,19 +1,15 @@
 /**
  * 讀一個宣告過的交付檔的**位元組窗口**（[#544](https://github.com/DemianLi/nexus-agent/issues/544) 的 B）。
- * 照 dsh `workspace-files` 的 `readBytes`（`packages/api/workspace-files/src/index.ts`，`ddefc45`）。
  *
  * ## 為什麼要有這一條
  *
- * 文字預覽按行切頁，一頁超過 `maxBytes` 是拒絕，不是截斷（dsh 的理由逐字：「a silently cut page
- * reads as the whole page」）。所以一個**單行本身就超過 `maxBytes`** 的檔，按行怎麼切都是 `too-large`。
+ * 文字預覽按行切頁，一頁超過 `maxBytes` 是拒絕，不是截斷：靜靜切短的一頁會被當成整頁。所以一個**單行本身就超過 `maxBytes`** 的檔，按行怎麼切都是 `too-large`。
  *
- * #544 的原案是讓文字頁在那時候回切短的一段、標明還有下文。那是偏離 dsh 的拒絕，而拒絕我們表達
- * 得出來，不符合偏離的條件。demian 2026-09-23 拍板走另一條：**照 dsh 開它本來就有的位元組窗口**。
- * 頁的拒絕一個字都不動；讀不動的那種檔，呼叫端改用窗口一段一段讀。**dsh 的 UI 沒有拿窗口當文字
- * 預覽的退路**（它的 `readBytes` 只在 office 預覽裡當一個位元組的授權探針用），所以「拿它來做什麼」
+ * #544 的原案是讓文字頁在那時候回切短的一段、標明還有下文。demian 2026-09-23 拍板走另一條：**開位元組窗口**。
+ * 頁的拒絕一個字都不動；讀不動的那種檔，呼叫端改用窗口一段一段讀。「拿窗口來做什麼」
  * 是我們 web 的 UI 決定，不在這條路由的射程裡。
  *
- * ## 跟 dsh 一樣的地方
+ * ## 窗口的規則
  *
  * - **不解碼、不擋二進位**：原始位元組，沒有 NUL 檢查，也沒有 UTF-8 檢查。
  * - **窗口的上限是拒絕**：`length` 超過 `maxBytes` 回 `too-large`，不給到上限為止。
@@ -41,11 +37,11 @@ export interface DeliverableWindow {
 }
 
 /**
- * 驗窗口參數，**在找檔之前**，照 dsh 的順序（`readBytes` 先 `resolveWindow` 再 `locateFile`）：
+ * 驗窗口參數，**在找檔之前**：
  * 一個參數本身就不合格的請求，不該先讓它知道那個座標上有沒有檔。
  *
- * 先驗 `offset + length` 是安全整數（`bad-request`），再驗 `length` 有沒有超過上限（`too-large`），
- * 順序同 dsh。`length` 為 0 也是 `bad-request`（dsh 的 `integerAtLeast(length, 1)`）。
+ * 先驗 `offset + length` 是安全整數（`bad-request`），再驗 `length` 有沒有超過上限（`too-large`）。
+ * `length` 為 0 也是 `bad-request`。
  *
  * @param offset - 窗口從第幾個位元組起，呼叫端已經驗過是非負安全整數。
  * @param length - 窗口最多幾個位元組，同上。
