@@ -42,7 +42,7 @@
  * 並把頁的範圍與同一個 fd 的 stat 版本回報給 `@nexus/core`（#2030）；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
  * 不看副檔名（見 `binary-read.ts`）。**開頭的 BOM 保留**：
  * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在。行尾 `\r` 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
+ * N0335），只在 `read_file` 裡。
  *
  * 另一個會改檔案的方法是 **`uploadFiles`**——`BackendProtocolV2` 上的，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
@@ -62,10 +62,10 @@
  * （檢查與 syscall 之間祖先 symlink 被抽換）被接受——核心級的隔離是 shell sandbox 的事
  * （`feat/sandbox-plugin`）。
  *
- * **TOCTOU 窗口要說明白。** 檢查的 canonical 目標與實際寫入用的路徑不是同一個身分。
- * 只有 `delete`／`uploadFiles` 走基座：`super.delete()`／`super.uploadFiles()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
- * 傳一個 realpath 進去只會被當成虛擬路徑接到 `cwd` 底下。所以這裡回傳的是「canonical 之後
- * 再表達回去的虛擬路徑」——祖先的 symlink 已經被解掉，但基座那一次 lexical resolve 仍在
+ * **TOCTOU 窗口要說明白。** 檢查的 canonical 目標與實際寫入用的路徑不是同一個身分：`checkedPath` 回傳的是「canonical 之後
+ * 再表達回去的虛擬路徑」，祖先的 symlink 已經被解掉，但 `write`／`edit` 的 `resolveVirtual`，與 `delete`／`uploadFiles`
+ * 交給基座的 `super.delete()`／`super.uploadFiles()`，都會再 `resolvePath()` 一次；傳一個 realpath 進去
+ * 只會被當成虛擬路徑接到 `cwd` 底下，所以回傳的只能是虛擬路徑。那一次 lexical resolve 仍在
  * 我們的檢查之後發生。
  */
 
@@ -1257,8 +1257,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * ## 正規式，不是字面字串（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）
    *
-   * 基座與 #1532 起 rg 時都帶 `-F`（字面字串）：`foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。所以改成
-   * 正規式（`--regexp=`，rg 的語法）。不合法的正規式 rg 回 `regex parse error`，
+   * pattern 是正規式（`--regexp=`，rg 的語法）：字面比對（`-F`）下 `foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。
+   * 不合法的正規式 rg 回 `regex parse error`，
    * 歸類成 `SEARCH_INVALID_PATTERN`（`ripgrep-runner.ts` 的 `classifyExit`）。檔案篩選（`glob`）先驗過：空字串、`!` 開頭、大括號外的
    * 逗號清單回 `SEARCH_INVALID_PATTERN`（{@link invalidGrepGlob}）。每行文字的截斷在 `search-overflow.ts`，
    * 跟筆數上限同一對包裝，上限來自 `grepMaxLineBytes`。
@@ -1320,11 +1320,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     if (prepared.kind === 'failed') return prepared.failure;
     const outcome = await runRipgrep({
       executable: prepared.executable,
-      // pattern 與 glob 走
-      // `--flag=value` 形式、起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。pattern 是
+      // pattern 與 glob 走 `--flag=value` 形式、起點放在 `--` 後面、帶 `./` 前綴（理由見 `existingSearchArgs`），
+      // 模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。pattern 是
       // **正規式**（#1605，沒有 `-F`）。
-      // 起點多個，都有 `./` 前綴
-      // （理由見 `existingSearchArgs`）。
+      // 起點可以有多個（見 {@link grepPaths}）；
+      // 空的 pattern 與不合格的 glob 在上面先擋掉。
       argv: [
         '--json',
         ...(glob !== undefined && glob !== null ? [`--glob=${glob}`] : []),
