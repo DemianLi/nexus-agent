@@ -89,7 +89,6 @@ describe('MCP 工具在 agent 迴圈裡', () => {
   });
 
   // #1074：MCP 回 `isError` 時，agent 看到的跟其他失敗的工具一樣——`status: 'error'`、文字帶 `Error: ` 前綴。
-  // 照 dsh：MCP 的 `isError` 在 dsh 是拋錯（`packages/mcp/mcp-client/src/tools.ts:296-297`），由註冊表渲染成帶前綴的結果。
   // Chat Completions 的轉換器只送 `content`，`status` 到不了模型，所以前綴要在文字裡。
   it('MCP 回 isError：agent 看到 status: error，文字帶 Error: 前綴，原因逐字', async () => {
     const model = new ScriptedChatModel({

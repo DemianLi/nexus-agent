@@ -313,9 +313,9 @@ describe('每步平行工具呼叫上限（#711）', { timeout: 30_000 }, () => 
 
 /**
  * 基座絆索：LangGraph 的 `maxConcurrency: 1` 跑完第一顆就收掉那一步（`pregel/runner.js` 的
- * `_executeTasksWithRetry` 迴圈條件，見 `settings/agent-loop.ts` 檔頭「跟 dsh 不同」第 0 條）。
+ * `_executeTasksWithRetry` 迴圈條件，見 `settings/agent-loop.ts` 檔頭第 0 條）。
  *
- * **這條釘的是今天的缺陷。** 它紅了就是上游修好了：把 schema 的下限放回 dsh 的 1、補回「寫 1 全串行」那條測試、
+ * **這條釘的是今天的缺陷。** 它紅了就是上游修好了：把 schema 的下限放回 1、補回「寫 1 全串行」那條測試、
  * 拿掉檔頭的偏離登記。
  */
 describe('基座絆索：maxConcurrency 1', () => {

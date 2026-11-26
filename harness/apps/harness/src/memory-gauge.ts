@@ -11,21 +11,17 @@
  *    v2 的檔案不在（沒有 memory controller）再試 v1。systemd 底下的裸機行程在 `/system.slice/…`，docker 預設的私有 cgroupns
  *    看到的路徑是 `/`，兩者都讀對；寫死掛載根的話，前者會誤報「沒有 cgroup」，v1 主機則會讀到整台機器的量卻說「沒設上限」。
  *    `max`（v2）或一個大到不合理的數字（v1）是「沒設上限」，與讀不到分開講；沒設上限時若 `process.constrainedMemory()`
- *    （libuv 讀的，dsh 的註解說它也反映上層 cgroup）報了一個比主機記憶體小的限制，另外寫出「行程受限」——上限可能設在這個
+ *    （libuv 讀的）報了一個比主機記憶體小的限制，另外寫出「行程受限」——上限可能設在這個
  *    cgroup 的祖先身上。macOS 上它回 0，不當成限制，也不印 0。
  * 3. **主機**：Linux 的 `/proc/meminfo` 的 `MemAvailable`（核心估的「不必換出就能給新程式用的量」）；沒有 `/proc/meminfo`
  *    才退到 `os.freemem()`，行尾標出是哪一種與為什麼退——macOS 的 `os.freemem()` 不含可回收的快取，會比實際少，兩種數字不能直接比。
  *
- * ## 偏離 dsh：產品需求超出 dsh
+ * ## 偏離登記：產品需求
  *
- * dsh（`687f282e`）**沒有執行期的記憶體監看**：它的記憶體只在 CI 量（`scripts/run-memory-pressure-bench.ts`，
- * 無 swap 的 cgroup 模擬 4／8 GB 機器，`docs/defensive-patterns/general.zh.md:184`）。
  * 這支量具是 serve 跑在多人共用的內網主機上、需要知道「自己多大」和「主機還剩多少」才有的需求，登記為理由 2。
- * 它刻意只做 dsh 沒做的那一半——**看**；看了之後做什麼（第 0 級警告、第 3 級下架插件）等量測的數字出來由 demian 決定。
+ * 它刻意只做**看**；看了之後做什麼（第 0 級警告、第 3 級下架插件）等量測的數字出來由 demian 決定。
  *
- * 讀 cgroup 的方法**不在**這條偏離裡，照 dsh `run-memory-pressure-bench.ts:63-66`：先解 `/proc/self/cgroup` 的 `0::` 行，
- * `join('/sys/fs/cgroup', 路徑, 檔名)`，並用 `process.constrainedMemory()`。多出來的只有 v1／hybrid 的讀法——dsh 的 bench 只認 v2，
- * 我們的部署目標主機不保證是 v2，所以補上，同樣登記為理由 2。
+ * 讀 cgroup 的 v1／hybrid 是 v2 之外多補的：我們的部署目標主機不保證是 v2，同樣登記為理由 2。
  *
  * @module
  */

@@ -1,5 +1,5 @@
 /**
- * **MCP 連不上照 dsh 照樣起來**（[#751](https://github.com/DemianLi/nexus-agent/issues/751) 卡上第 7 項），走產品路徑：清單上
+ * **MCP 連不上照樣起來**（[#751](https://github.com/DemianLi/nexus-agent/issues/751) 卡上第 7 項），走產品路徑：清單上
  * `insert` 一列 `@nexus/plugin-mcp`，CLI 與 serve 各起一次。
  *
  * 「連得上／連不上」用一支包裝腳本切：旗標檔不在就立刻結束（握不成手），在就啟動真的假伺服器
@@ -149,7 +149,7 @@ describe('MCP 連不上、沒寫 failOnStartupError', () => {
 
   /**
    * 卡上的驗收：serve 起得來、啟動時那段警告指名它；**伺服器恢復、背景重試連上之後開的下一條對話連得上**。serve 的連線在池裡
-   * （[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：第一次就連不上的那一份照 dsh 在背景退避重試，不再是下一條
+   * （[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：第一次就連不上的那一份在背景退避重試，不再是下一條
    * 對話組裝時重連。還沒連上時組的對話在伺服器日誌記一行，連上了之後組的不記——那一行就是這條對話有沒有那台工具的判準（沒有
    * 警告＝工具註冊好了，CLI 那條量過工具清單）。退避調小，恢復之後不必等出廠的 500 ms 起跳。
    */

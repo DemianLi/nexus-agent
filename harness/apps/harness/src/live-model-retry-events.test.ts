@@ -275,7 +275,7 @@ describe('重試寫進日誌', () => {
     expect(log.events).toHaveLength(0);
   });
 
-  /** #1427：`retryableCodes` 真的是閘門——分類出來的碼不在清單裡就不重打，原錯誤往外拋（dsh 的 `retryableCodes`）。 */
+  /** #1427：`retryableCodes` 真的是閘門——分類出來的碼不在清單裡就不重打，原錯誤往外拋。 */
   it('retryableCodes 是閘門：碼不在清單裡的失敗只打一次，在清單裡的照常重打', async () => {
     cell = 'http429';
     const limited = new SessionLog('r');

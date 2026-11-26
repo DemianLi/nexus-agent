@@ -2,9 +2,7 @@
  * 子代理拿得到 MCP 的三支資源工具與 server 指引嗎——[#430](https://github.com/DemianLi/nexus-agent/issues/430)、
  * [#431](https://github.com/DemianLi/nexus-agent/issues/431) 的驗收，走產品路徑（`createNexusAgent`，出貨清單加一列 mcp）。
  *
- * **dsh 給**：MCP 的提示詞段落與工具都是掛在**全域**的，全域的 layer 併進每個 agent 的組裝，子代理也在其中
- * （`packages/core/system-prompt/README.md:96,110`、`packages/mcp/mcp-resources/README.md:34,57`、
- * `packages/core/scope/README.md:12`：子 scope 繼承祖先的貢獻）。nexus 的 mcp 列都是全域的，所以子代理照樣有。
+ * **子代理照樣有**：nexus 的 mcp 列都是全域的。
  *
  * 判準都看**子代理自己那幾輪**的證據：它的 prompt 裡 system 訊息帶指引，它叫 `list_mcp_resources` 得到資源清單
  * （工具不在它的工具集裡的話，叫它得到的是「不是有效工具」的錯誤文字，不會有資源 URI）。
