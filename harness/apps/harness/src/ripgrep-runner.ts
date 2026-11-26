@@ -4,7 +4,7 @@
  * 基座 `FilesystemBackend.grep` 起 `rg` 的做法（`deepagents@1.13.1`，`dist/src-C9o7b5C6.js:935-984`）有四個洞：沒有
  * `--no-config`，所以管理者 shell 裡的 `~/.ripgreprc` 或專案 `.env` 帶進來的 `RIPGREP_CONFIG_PATH` 能悄悄濾掉結果、
  * 甚至用 `--pre` 讓 rg 對每個命中的檔執行任意程式；stdout 不設上限（`output += data`）；沒有取消，使用者按停止 rg
- * 照跑；結束碼不是 0／1、逾時、spawn 失敗一律回 `null`，接著改走結果不同的 `literalSearch`。
+ * 照跑；結束碼不是 0／1、逾時、spawn 失敗一律回 `null`，接著改走結果不同的 `literalSearch`。這裡的做法：
  *
  * - argv 開頭是 `--no-config`。宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`，`danger-full-access` 下也沒有 Landlock 擋著。
  * - stdout 累計位元組，超過 {@link RAW_OUTPUT_MAX_BYTES} 就收掉 rg，回 `SEARCH_RAW_OUTPUT_OVERFLOW`，**不解析半份輸出**。

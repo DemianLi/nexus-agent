@@ -704,7 +704,7 @@ function frontAuth(browser: BrowserAuth, embed: EmbedSessionCookies | undefined)
  * `/livez`、`/readyz`、`/metrics` 給探針與指標（先過信任圍欄，見 `ops-endpoints.ts`）——**排在 `/threads` 的判斷之前**；
  * `/threads` 與它底下的路徑給 wire——圍欄、會話 cookie、JSON 閘門都在那裡；其他給網頁的靜態服務。
  * 換 token 的 `GET /?token=` 因此碰不到 wire 的 JSON 閘門（瀏覽器導覽不帶 `content-type`）：
- * index 走 `frontend-static` 的 `authorizeIndex`，API 走 `requestRejection`。
+ * index 走 `web-static.ts` 的 `authorizeIndex`，API 走 wire 的 JSON 閘門。
  */
 function routeBySurface(
   wire: WireHandler,
@@ -1258,7 +1258,7 @@ async function startServer(
     warn(line);
   }
   // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。
-  // 重載是每條 thread 重讀清單（#1405）：那一列的設定一改，
+  // 每條 thread 重讀清單（#1405）：那一列的設定一改，
   // 下一條 thread 重新試它；沒改就照樣標成 `disabled: true`，跟讀清單那一次設定驗不過的列同一個做法。
   const trialDropped = new Set(trial.dropped.map(({ entry }) => entry));
   // **每條 thread 組裝時重讀清單**（#1405）：同一個函式、同一組參數，新 thread 看得到 home 層改過的列與組裝期設定。

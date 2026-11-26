@@ -97,7 +97,7 @@ describe('模型知不知道自己在哪一格', () => {
 
   it('句子教的位址，backend 真的收：`/` 開頭落在可寫根，主機路徑落成巢狀', async () => {
     // **把提示句綁在 backend 的位址空間上**。哪天圍堵不再走 `virtualMode`、改收主機路徑，
-    // 這一條會紅，提醒提示句也要跟著換回主機路徑。
+    // 這一條會紅，提醒提示句也要跟著換成主機路徑。
     const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
 
     expect((await backend.write('/src/taught.ts', '一')).error).toBeUndefined();
@@ -111,7 +111,7 @@ describe('模型知不知道自己在哪一格', () => {
     const prompt = await promptOf({ workspace: root, sandbox: 'read-only' }, root);
 
     expect(prompt).toContain('目前的檔案政策：read-only');
-    // 少了它，模型會把政策當成「這件事做不到」而連試都不試——
+    // 少了下面這一句，模型會把政策當成「這件事做不到」而連試都不試——
     // 那是把一道圍堵變成一個能力謊報。
     expect(prompt).toContain('不要只因這個政策就拒絕必要的修改');
     expect(prompt).not.toContain('workspace-write');
@@ -119,7 +119,7 @@ describe('模型知不知道自己在哪一格', () => {
 
   it('沒有 --workspace 照樣講那一句政策，但不宣稱有誰在擋，也不長出 /sandbox', async () => {
     // #669：以前這裡是「一個字都不講」——沒有圍堵就什麼都不貢獻。
-    // 所以改成：句子在，但句子裡沒有「改不動」「直接放行」這類把 fence 當前提的話。
+    // 現在改成：句子在，但句子裡沒有「改不動」「直接放行」這類把 fence 當前提的話。
     const prompt = await promptOf({}, root);
 
     expect(prompt).toContain(sandboxPolicySentence('workspace-write', { contained: false }));

@@ -2,7 +2,7 @@
  * **root-only 的工具在真的組裝裡擋不擋得住 subagent** ——
  * [#134](https://github.com/DemianLi/nexus-agent/issues/134)。
  *
- * **我們的派發點是 LangGraph 的
+ * **執行期問不出「誰在叫」：我們的派發點是 LangGraph 的
  * ToolNode，插不進去**（見 [`tool-session-log.test.ts`](./tool-session-log.test.ts)）。
  *
  * 判別放在**組裝期**：fold 給每個 subagent 的是一份自己的工具陣列，所以 root-only
