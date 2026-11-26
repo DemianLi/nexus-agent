@@ -353,7 +353,6 @@
 
 - 停在**提問**時按停止：`harness/apps/harness/src/turn-cancel.test.ts` 只測了停在核准；模型看到「before dispatch」後會不會重問同一組，要實跑（[#376](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
 - `cn` 套件（`web/package.json` 的 `"cn"`）與 clsx＋tailwind-merge 是否完全等價：只驗過 `button`（240 組，差異 0），其他基礎元件沒有比對（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
-- 自建 markdown＋shiki＋katex 的 bundle 大小：`web/` 沒有量大小的檢查（沒有 `size-limit`、`chunkSizeWarningLimit` 這類設定），沒量過。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
 - Artifact 沙盒裡的字型載入沒驗（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
 
