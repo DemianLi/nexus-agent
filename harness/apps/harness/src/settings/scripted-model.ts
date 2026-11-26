@@ -16,8 +16,7 @@
  * 腳本是資料：`content`、可選的 `toolCalls`（`name`／`args`／`id`）、`usage`、`error`、`tokenDelayMs`，欄位照 `ScriptedChatModel`。
  * 沒有用到 `shared` 這種非資料的選項，要用的測試留在手搭的組裝上。
  *
- * 形狀照 dsh 的 `cli-mock-llm`（`packages/test-support/loader-smoke/tests/fixtures/cli-mock-llm.ts:19`）：一顆
- * in-process 的假提供者，不是 HTTP 假端點。載體的偏離（起動期讀、不在 `apply` 裡註冊）見 `model-provider.ts`。
+ * 形狀是一顆 in-process 的假提供者，不是 HTTP 假端點。它在起動期讀、不在 `apply` 裡註冊，理由見 `model-provider.ts`。
  *
  * @module
  */

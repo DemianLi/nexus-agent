@@ -5,44 +5,38 @@
  * `../server-log.ts` 的 `mountServerLog`，它把 exporter 掛在 Cordis 根的 logger 上。**改了要重啟 serve**（分類 `startup-read`，
  * `plugin-row-classes.ts`）。只有 `serve` 載這一列（`cordis.serve.yml`）；CLI 的輸出走 `Printer`，不歸它管。
  *
- * ## 對 dsh 的做法
+ * ## 設定格與輸出
  *
- * 等級在 Cordis 的 logger 層，輸出由一顆 `logger-console` exporter 決定，設定格照 dsh
- * （`harness/vendor/logger-console/src/shared.ts` 的 `ConsoleExporter.Config`）：`levels`（以 logger 名為鍵、`default` 是預設）、`showTime`、
- * `colors`、`maxLength`。文字格式也照 dsh 的 `render`：`yyyy-MM-dd hh:mm:ss [W] serve 訊息`。
+ * 等級在 Cordis 的 logger 層，輸出由一顆 `logger-console` exporter 決定，設定格是 `levels`（以 logger 名為鍵、`default` 是預設）、`showTime`、
+ * `colors`、`maxLength`。文字格式是 `yyyy-MM-dd hh:mm:ss [W] serve 訊息`。
  *
  * ### 偏離一：`levels` 收等級**名稱**，不收數字（理由 1：基座表達不出來）
  *
- * dsh 的 Cordis 是自己的 fork，等級順序是 `ERROR 0、INFO 1、WARN 2、DEBUG 3`；nexus vendor 的是上游 rc.11，順序是
- * `ERROR 0、WARN 1、INFO 2、DEBUG 3`（`harness/vendor/cordis/src/logger.ts`）。同一個數字在兩邊意思不同，所以設定寫名稱，
+ * nexus vendor 的 Cordis 是上游 rc.11，等級順序是
+ * `ERROR 0、WARN 1、INFO 2、DEBUG 3`（`harness/vendor/cordis/src/logger.ts`）。數字是 vendor 內部的順序，所以設定寫名稱，
  * 換算在 `../server-log.ts` 的 `LOG_LEVEL_NUMBERS`（一張表、測試對著 vendor 實際行為釘住）。
  *
  * ### 偏離二：多一格 `format: 'json'`（理由 2：產品需求超出 dsh）
  *
- * dsh 的 exporter 只會輸出人讀的文字（`git grep -i json 1517a4db -- vendor/logger-console/src` → 0 筆）。nexus 要把 serve 的 stdout 經 journald
+ * nexus 要把 serve 的 stdout 經 journald
  * 交給內網的日誌平台，所以多一個一行一個 JSON 物件的格式，判準取 JSON Lines；欄位名取 OTel Logs 資料模型的慣用語意，**不引入 OTel SDK、不送出去**。
  * 欄位表見 `docs/operations.md`「伺服器日誌的等級與格式」。
  *
  * 一輪對話失敗的那一行（#1536）另外帶 `thread_id`、`run_id`、`session_id`（背景子代理才有）、`seq`、`code`、`status`、`provider_request_id` 幾個鍵，文字格式的行不看它們；
- * 其他行沒有這幾個鍵。這幾個鍵是同一個偏離的一部分：dsh 沒有 JSON，也就沒有結構化欄位。
+ * 其他行沒有這幾個鍵。這幾個鍵是同一個偏離的一部分。
  *
- * ### 偏離三：設定住在 `#settings/` 的設定列，不是 Cordis 樹上的一列（理由 2：產品需求超出 dsh；**偏離 #1534 卡面**，PM 於 #1752 裁決）
+ * ### 偏離三：設定住在 `#settings/` 的設定列，不是 Cordis 樹上的一列（**偏離 #1534 卡面**，PM 於 #1752 裁決）
  *
- * 卡面寫「這一列掛在 Cordis 樹上」，照 dsh：`logger-console` 是樹上一個 plugin，建構時 `ctx.logger.exporter(this)`。
  * **基座做得到樹上那一種**（PM 的探針 C／F／G 都抓到過），所以這不是「基座表達不出來」。
  *
  * 症狀是真的：`ctx.logger.exporter()` 是一個 `ctx.effect`，登記跟著那一列的 fiber 走；根卸載時所有 disposer 並行收，exporter 常常先被收掉，
  * Cordis 在 `_unload` 裡把 disposer 拋的錯記成 `ctx.logger.error` 時它已經不在，錯誤只進緩衝（實測：exporter 掛在根上時
- * `server-log.test.ts` 的「樹上的錯誤印得出來」是紅的，突變 M7）。dsh 樹上的 logger-console 同樣會丟——dsh 不出貨 console exporter，
- * 它自己要留住卸載錯誤的收集器就**放在樹外**：`app-boot/src/index.ts:1207-1212`，另建一個 `diagnostics = new Context()`、
- * `diagnostics.logger = ctx.logger`，再走公開的 `diagnostics.logger.exporter(...)`，註解寫著 "The collector must outlive root disposal to retain asynchronous cleanup errors."。
+ * `server-log.test.ts` 的「樹上的錯誤印得出來」是紅的，突變 M7）。
  *
- * nexus 要在**出貨產品**裡把根卸載時的錯誤印到 console，這是 dsh 沒有的需求，所以是理由 2。退到的做法照 dsh app-boot：exporter 掛在樹外、活過根卸載的 keeper Context 上
+ * nexus 要在**出貨產品**裡把根卸載時的錯誤印到 console。做法是 exporter 掛在樹外、活過根卸載的 keeper Context 上
  * （`../server-log.ts` 的 `mountServerLog`，只走公開 API，不碰 logger 服務的私有欄位），設定由 `startupSetting` 在清單讀完後解出（同 `thread-capacity`）。
- * 撤除條件：dsh 出貨一顆能活過根卸載的 console exporter 的那一天，改回樹上的一列。
  *
- * 次要的事：serve 在讀清單之前就要記話（代理、home 鎖、變更紀錄那幾行），exporter 要讀完清單才有設定——這一點靠回放緩衝解決
- * （照 dsh，`apps/cli/tests/profiles/web/tests/web-failure-matrix.expected.e2e.ts:52-53`：`ctx.logger.buffer.forEach` 之後才 `ctx.logger.exporter`），
+ * 次要的事：serve 在讀清單之前就要記話（代理、home 鎖、變更紀錄那幾行），exporter 要讀完清單才有設定——這一點靠回放緩衝解決，
  * 不是非設定列不可的理由。
  *
  * ## 這一列關不掉
@@ -66,12 +60,12 @@ export const LOG_LEVEL_NAMES = ['error', 'warn', 'info', 'debug'] as const;
 /** 一個等級名稱。 */
 export type LogLevelName = (typeof LOG_LEVEL_NAMES)[number];
 
-/** 出廠的時間前綴樣板，照 dsh 的 `ConsoleExporter.getDefaults()`；空字串＝不印時間（journald 底下不會重複）。 */
+/** 出廠的時間前綴樣板；空字串＝不印時間（journald 底下不會重複）。 */
 export const DEFAULT_SHOW_TIME = 'yyyy-MM-dd hh:mm:ss ';
 
 /** `strictObject`：多寫一個欄位是打錯字，同其他幾列。 */
 export const loggerConsoleConfigSchema = z.strictObject({
-  /** `text`：人讀的一行（照 dsh 的 `render`）；`json`：一行一個 JSON 物件，訊息裡的換行留在字串裡。 */
+  /** `text`：人讀的一行；`json`：一行一個 JSON 物件，訊息裡的換行留在字串裡。 */
   format: z.enum(['text', 'json']).default('text'),
   /**
    * 門檻，以 logger 名為鍵、值是**等級名稱**；`default` 是沒有單獨寫的 logger 的門檻。一則訊息的等級比門檻**更囉嗦**就不印。

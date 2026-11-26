@@ -5,22 +5,9 @@
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-title`／`tool-text` 那幾列。
  * 消費者是 `live-model.ts` 的 `createLiveModel`，只在 `--live` 時才建。
  *
- * ## 與 dsh 的關係：連線值是 dsh 的設定欄位，型錄照 `llm-pi-ai`
- *
- * dsh 的 adapter `@deepseek-ai/dsh-llm-deepseek` 的 `Config`（`packages/llm/llm-deepseek/src/config.ts`，
- * `ddefc45`）有 `baseURL`（`:83`）、`maxTokens`（`:86`）、`streamIdleTimeoutMs`（`:89`）、
- * `retryPolicy`（`:100`，形狀在 `packages/llm/llm/src/retry-policy.ts:100`），模型則從設定與型錄選。
- * 所以**可設定本身沒有偏離，寫死才是**——跟 `tool-text` 那一列同一句話。
- *
- * 「調它會壞」的顧慮（`live-model.ts` 各常數的檔頭記著那些數字是怎麼量出來的），dsh 的答法
- * 不是不給旋鈕，是**給有邊界的旋鈕、量出來的值當 schema 預設**。這裡照做：測量留在原檔頭，
- * 常數改叫 `DEFAULT_LIVE_*`，讀的人一眼看得出它只是預設值。
- *
  * ## 偏離一：逐次請求解析，退到起動期解一次
  *
- * dsh 那一列的註解是「No key or endpoint is inlined: both resolve per request」
- * （`packages/bundle/base/cordis.patch.yml:507-510`）。**`@langchain/openai` 1.5.10 的 `ChatOpenAI`
- * 表達不出來**：client 懶建一次就快取在實例上（`dist/chat_models/base.cjs:309-319`），端點與逾時
+ * **`@langchain/openai` 1.5.10 的 `ChatOpenAI` 做不到逐次請求解析**：client 懶建一次就快取在實例上（`dist/chat_models/base.cjs:309-319`），端點與逾時
  * 凍在那顆 client 裡；模型 id 寫死 `model: this.model`（`dist/chat_models/completions.cjs:29`），
  * 不看 per-call options。逐次換只能每次重建實例。
  *
@@ -33,16 +20,16 @@
  *
  * ## 偏離二：重試只有一層，`mode: 'always'` 拒收（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)）
  *
- * **形狀與驗證逐條照 dsh**（`packages/llm/llm/src/retry-policy.ts` 的 `resolveRetryPolicy`／`resolveBackoff`）：
+ * **形狀**：
  * `retryPolicy: { mode, maxRetries, retryableCodes, backoff: { initialDelayMs, maxDelayMs, jitterRatio } }`。整個不寫就是
- * normal 的預設值，寫了就必填 `mode`；`maxRetries` 是非負安全整數、**不設上限**（同 dsh：安全靠單次等待有界）；
+ * normal 的預設值，寫了就必填 `mode`；`maxRetries` 是非負安全整數、**不設上限**（安全靠單次等待有界）；
  * `initialDelayMs` 大於 0、不超過 `MAX_TIMER_DELAY_MS`、不大於 `maxDelayMs`；`jitterRatio` 在 0 到 1；`retryableCodes` 不能
  * 是空陣列、不能有空字串、不能重複；未知欄位拒收。
  *
- * **解出來的政策是凍結的**（[#1603](https://github.com/DemianLi/nexus-agent/issues/1603)，照 dsh `retry-policy.ts:149-195` 的
- * `resolveRetryPolicy`：每條回傳路徑都 `Object.freeze`，沒有偏離）：這一份在起動期解一次、全行程的對話共用（`startupSetting`），
+ * **解出來的政策是凍結的**（[#1603](https://github.com/DemianLi/nexus-agent/issues/1603)，
+ * 每條回傳路徑都 `Object.freeze`）：這一份在起動期解一次、全行程的對話共用（`startupSetting`），
  * 誰在執行期對它 `push` 一個碼或改一個數字，所有對話的重試都會跟著變、而且不報錯；凍結之後那一處當場拋 `TypeError`。
- * `readonly` 只在編譯期有效，這一層是執行期的。使用者寫進設定的陣列是複製後才凍結（同 dsh `:182`），不會被凍到。
+ * `readonly` 只在編譯期有效，這一層是執行期的。使用者寫進設定的陣列是複製後才凍結，不會被凍到。
  *
  * **重試只有 `@nexus/core` 的 `retryModelCall` 這一層**：SDK 的 `AsyncCaller` `maxRetries` 恆為 0（`live-model.ts`
  * 的 `onFailedAttempt` 只做分類與回報）。以前兩層各算各的（SDK 6 次＋串流中段 2 次），同一個情境最壞 (1+6)×(1+2) 次請求、
@@ -51,7 +38,7 @@
  * （`retryModelCall` 直接呼叫，沒有日誌就不寫 `llm/retry`）。
  *
  * **出廠值**（demian 2026-10-14 拍板，不是偏離）：`maxRetries` 6、`initialDelayMs` 500、`maxDelayMs` 10000、
- * `jitterRatio` 0.1、`retryableCodes` 是 dsh 的預設五個碼。dsh 的預設是 5 次；6 次不計抖動的累計等待約 25.5 秒（0.5＋1＋2＋4＋8＋10），
+ * `jitterRatio` 0.1、`retryableCodes` 是預設五個碼。6 次不計抖動的累計等待約 25.5 秒（0.5＋1＋2＋4＋8＋10），
  * 蓋得過 2026-08-28 量到的 16 秒限流窗口。**那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**，所以這個數字是
  * 「蓋過已知窗口」不是「量過這顆」。代價：串流中段失敗最壞重付 6 次整個回覆。
  *
@@ -63,34 +50,32 @@
  * `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…）、解不開的回應與程式錯誤 `UNKNOWN`。
  * 所以 `retryableCodes` 就是「哪幾種分類結果值得再打」，把 `HTTP_422` 加進去就會重打 422，不用改程式。
  *
- * **與 dsh 行為對齊的幾條**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到
+ * **退避的幾條規則**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到
  * `maxDelayMs`；**沒帶 header 的 429 照樣重試**（基座的預設 handler 會把它當容量不足放棄）。
  *
- * **#1427 登記的三處暫時差異已在 #1437 撤除**：失敗分類不再沿用「除了明確無望的以外都重打」的舊判準，狀態碼、斷線、空回覆
- * 都與 dsh 的 `providerError`／`mapStopReason` 同形（408／410／422／425 等「依 dsh」不重打，不是量到的救回率；量測見 #1437 卡上）。
+ * **#1427 登記的三處暫時分類已在 #1437 撤除**：失敗分類不再沿用「除了明確無望的以外都重打」的舊判準，狀態碼、斷線、空回覆
+ * 都有各自的分類碼（408／410／422／425 等不重打；這是判準，不是量到的救回率；量測見 #1437 卡上）。
  *
- * **偏離：`mode` 只收 `normal`，`always` 拒收。** dsh 的 `always` 對每一次失敗無限重試。我們是企業內部聊天機器人，一輪沒有
- * 盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。理由類別是**產品需求超出 dsh**。**撤除條件**：demian 提出需要無限
+ * **偏離：`mode` 只收 `normal`，`always` 拒收。** 我們是企業內部聊天機器人，一輪沒有
+ * 盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。**撤除條件**：demian 提出需要無限
  * 重試的情境。也登記在 `docs/plugin-contract.md` 的偏離表。
  *
  * **舊欄位（頂層 `maxRetries`、`streamRetry`）大聲失敗**，不自動轉換：兩個舊數字沒有無損的合併方式（見
  * `legacyRetryKeysMessage`）。`--live` 起不來並指名這一列；寫入口 `plugin config set live-model` 整份替換可以改，
  * 但**寫在 `--patch` 檔裡的舊值寫入口蓋不掉**，使用者要自己改那個檔。
  *
- * ## 偏離三：逾時拆兩格，第一格語意與 dsh 不同所以欄位名不照抄
+ * ## 偏離三：逾時拆兩格
  *
- * dsh 的 `llm-pi-ai` 有兩格：`timeoutMs`（SDK 請求逾時）與 `streamIdleTimeoutMs`（串流閒置，預設 300 秒；
- * `llm-pi-ai/src/config.ts:160-166`、`:342-343`、`:47`，`5badb15`）。我們原本只有一個 `timeoutMs` 同一個值管
+ * 我們原本只有一個 `timeoutMs` 同一個值管
  * 兩段（[#521](https://github.com/DemianLi/nexus-agent/issues/521)），[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)
- * 拆回兩格，欄位名與 dsh 一致：
+ * 拆成 `timeoutMs`（SDK 請求逾時）與 `streamIdleTimeoutMs`（串流閒置）兩格：
  *
  * - **`timeoutMs`（預設 180 秒）= 連線到第一則事件**：`ChatOpenAI` 的 `timeout`，交給 openai SDK 的
  *   `setTimeout(abort, ms)`（`openai@7.5.0` 的 `client.js`，`fetchWithTimeout`）。計時器在 fetch 回來時清掉，
  *   而 #516 那層在 fetch 裡讀完第一則事件才回。這一段在重試射程內。視覺模型要先吃圖才吐第一則事件
  *   （`meta/llama-3.2-90b-vision-instruct` 實測 133 秒），所以比閒置那格寬。
  * - **`streamIdleTimeoutMs`（預設 90 秒）= 第一則事件之後，段與段之間**：`live-model.ts` 的
- *   `withStreamIdleTimeout`，每一段重新計時，時間到整次重打（偏離五）。值是 demian 拍板的 90 秒，比 dsh 的
- *   300 秒緊，理由在 `DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS`。
+ *   `withStreamIdleTimeout`，每一段重新計時，時間到整次重打（偏離五）。值是 demian 拍板的 90 秒，理由在 `DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS`。
  *
  * **舊設定怎麼辦**：`timeoutMs` 這個名字保留，語意縮成只管第一段。兩格各有預設，沒有「只設一格另一格跟著走」的
  * 隱含連動（連動會讓「只想放寬首事件」的人順便放寬了閒置，反之亦然）。出廠的 `cordis.yml` 沒寫 `timeoutMs`
@@ -99,15 +84,13 @@
  * `streamIdleTimeoutMs`。
  *
  * 非串流（CLI 的 `invoke`）那條，SDK 讀整份 body 時計時器還在，所以 `timeoutMs` 是整個請求的逾時。
- * `timeoutMs` 的名字雖然與 dsh 同名，語意仍不同：它從請求開始算到第一則事件，中間收到位元組（例如標頭）也不重新
- * 計時。兩格的上限照 dsh 的 `MAX_TIMER_DELAY_MS`（`packages/util/timeout/src/index.ts:25`），理由相同：超過
+ * `timeoutMs` 從請求開始算到第一則事件，中間收到位元組（例如標頭）也不重新
+ * 計時。兩格的上限是 `MAX_TIMER_DELAY_MS`：超過
  * 2 147 483 647 的延遲 Node 會當成 1 毫秒，「調得很寬」會變成「立刻逾時」。
  *
  * ## 型錄：輸出上限、窗口、收不收圖、怎麼關推理都跟著模型走（#729）
  *
- * dsh 由型錄裡「模型自己的上限」蓋過設定值（`packages/llm/llm-deepseek/src/config.ts:36` 的註解：「a model's own
- * cap and explicit request values win」）；`llm-pi-ai` 則把型錄寫成設定：每條路由帶 `models` 清單，**整份取代**那條
- * 路由的型錄，不逐筆合併（`packages/llm/llm-pi-ai/README.md:99`）。我們照 `llm-pi-ai` 的形狀寫成這一列的 `models`
+ * 型錄寫成這一列的 `models`
  * 欄位，形狀與逐欄的差異在 `model-catalog.ts` 的檔頭。
  *
  * - **`modelId` 必須在 `models` 裡**，不在就是載入期失敗，訊息指名 id（那一列的名字由 `startupSetting` 加上）。
@@ -128,56 +111,44 @@
  * （`@nexus/core` 的 `assembleAgent`）**不套 profile**，所以換哪一個 id 組成都不變。
  * （以前組裝點有一道「宣告」檢查擋這件事，隨 `harness-profile.ts` 一起拿掉了。）
  *
- * ## 端點的規則照 dsh
+ * ## 端點的規則
  *
- * dsh 的 resolve 那一步擋非 HTTP(S)、帳密、query、fragment，**`http:` 明確放行**
- * （`config.ts:295-298`）。dsh 只在它的 messages 協定上做這個檢查，chat-completions 那條不驗；
- * 我們對應的是 chat-completions，但照樣套用：URL 帶帳密就是把 key 寫進設定，而 dsh 自己那一列
- * 的註解說 key 不內嵌。
+ * 端點擋非 HTTP(S)、帳密、query、fragment，**`http:` 明確放行**：
+ * URL 帶帳密就是把 key 寫進設定，而 key 不內嵌（偏離一）。
  *
  * ## 金鑰的名字在這一列（[#1604](https://github.com/DemianLi/nexus-agent/issues/1604)，沒有偏離）
  *
- * 照 dsh `packages/llm/llm-deepseek-api-key/src/config.ts:9-39`：`apiKeyEnv` 是設定欄位（`credential-ref`），預設是它自己的出廠供應商
- * 的名字（`DEEPSEEK_API_KEY`），跟端點同一份設定的兩格。這裡欄位名照抄，預設保留 `NVIDIA_API_KEY`（出廠端點是 NVIDIA），出廠行為不變；
+ * `apiKeyEnv` 是設定欄位，跟端點同一份設定的兩格，預設 `NVIDIA_API_KEY`（出廠端點是 NVIDIA），出廠行為不變；
  * 把 `baseUrl` 指到公司內部閘道時，金鑰可以叫 `GATEWAY_KEY`，不必借用 `NVIDIA_API_KEY`。
  *
  * - **名字在這一列，值不在**：值照舊每次請求前由憑證服務按名字解析（#730，受管檔 `refs:`、啟動環境、`.env`，順序見 `credentials.ts`），
  *   受管檔改了下一個請求就用新的。名字跟 `baseUrl` 一樣跟著起動期解一次的那一份走（偏離一）。
- * - **形狀**同受管檔 `refs` 的鍵與 dsh 的 `credentialRef`：環境變數形狀（`CREDENTIAL_NAME_PATTERN`），空字串、含空白、含 `=` 都拒收。
- * - dsh 的 `.role('credential-ref')` 是 schemastery 的標記，zod 沒有對應；值是名字、不是秘密，照其他欄位一樣可以出現在設定傾印裡。
- *   `.volatile()`（同一代設定熱換）不適用：這一列本來就起動期解一次。
+ * - **形狀**同受管檔 `refs` 的鍵：環境變數形狀（`CREDENTIAL_NAME_PATTERN`），空字串、含空白、含 `=` 都拒收。
  * - **舊位置（程式碼資料夾根目錄）`.env` 的搬家檢查跟著這個名字走**：`loadLiveLaunchEnv` 跑在讀設定之前，所以它不自己判斷，
  *   交出 `assertKeyLocated(name)`，由 serve／CLI 讀完這一列之後用 `apiKeyEnv` 呼叫（「設定要的那把」找不到、舊位置的檔又在，才擋）；
- *   `eval`／`spike` 不讀這一列，傳預設名字。只有一條路由，所以一列一把金鑰就是 dsh「每條路由一把」。
+ *   `eval`／`spike` 不讀這一列，傳預設名字。只有一條路由，所以一列一把金鑰。
  *
  * ## 偏離四：標題要關推理，由 `createLiveModel` 依用途帶型錄條目的寫法
  *
- * 兩半各有 dsh 出處：
+ * - **「怎麼關推理」放在型錄條目**（`off` 那一級加 `compat.chatTemplateKwargs`）：
+ *   寫法跟模型 id 一起換，所以住在同一筆。
+ * - **「標題要關推理」依用途在程式裡決定**：僅限條目宣告了 `off` 的，沒宣告的什麼都不加（見
+ *   `model-catalog.ts` 的 `off` 那一級）。標題程式只表明用途，由 `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
  *
- * - **「怎麼關推理」放在型錄條目**（`off` 那一級加 `compat.chatTemplateKwargs`）：照 `llm-pi-ai` 的形狀
- *   （`packages/llm/llm-pi-ai/src/catalog.ts:389-396`、`:600-607`）。寫法跟模型 id 一起換，所以住在同一筆。
- * - **「標題要關推理」依用途在程式裡決定**：結果等價於 dsh 標題程式選最低一級推理強度
- *   （僅限條目宣告了 `off` 的：沒宣告的 dsh 取 `efforts[0]`，nexus 紀錄和送出都不做，理由 1，見 `model-catalog.ts` 檔頭；`session-title-first-prompt-llm/src/index.ts:74-76`、`session-title-llm/src/index.ts:252-258`，1517a4db；`477b4f4` 時機制是
- *   `llm-deepseek/src/serialize.ts:146` 依 `purpose` 關思考，1517a4db 起搬到 provider 端讀 `options.reasoningEffort`，`serialize.ts:147`，#1573）。
- *   標題程式只表明用途，由 `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
- *
- * **偏離的一格**：pi-ai 在非 `off` 的等級底下會把 `thinking.enabled` 解成 `true` 一併送出，我們的主請求不送
- * `chat_template_kwargs`（今天的送法）。沒有量過兩者等價——這台機器沒有 key，量不了——所以保留今天的送法，見
+ * **今天的送法**：非 `off` 的等級，主請求不送 `chat_template_kwargs`（不送 `thinking.enabled: true`）。沒有量過送與不送是否等價——這台機器沒有 key，量不了——所以保留今天的送法，見
  * `model-catalog.ts` 檔頭。量測與寫法在 `live-model.ts` 的 `DEFAULT_LIVE_MODEL_ENTRY`。
  *
  * ## 偏離五：串流中段的失敗整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）
  *
- * dsh 的 `TIMEOUT`、`TRANSPORT`、`SERVER` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18-24`），中段失敗照樣整次重打，
- * 靠的是 `assistant/attempt` 這個載體宣告「那一次作廢」。我們同向：`@nexus/core` 的 `stream-retry.ts` 整次重打、日誌多一顆
+ * 中段失敗整次重打，靠的是 `assistant/attempt` 這個載體宣告「那一次作廢」：`@nexus/core` 的 `stream-retry.ts` 整次重打、日誌多一顆
  * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**政策與首事件之前共用**（偏離二，#1427）：同一份次數、
  * 同一套退避，沒有第二層。
  *
- * ## 偏離六：全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)，理由 2：產品需求超出 dsh）
+ * ## 偏離六：全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）
  *
  * `maxConcurrentRequests` 是「整台 serve 同時最多幾個模型請求在跑」，名額滿了排隊（FIFO、聽中止訊號），等超過 `maxWaitMs`
- * 就以本機碼 `LOCAL_CAPACITY` 失敗、不重試。**dsh 沒有任何跨 session 的模型請求並行閘**（它是一個人用自己的 key）；我們是多人共用
- * 一把 key，供應商的配額是全機共用的資源。對 dsh 決策紀錄否決過的四種形狀（全域一桶、排隊、全域准入門控、用速率代替計數）的逐條回答、
- * 語意與閘為什麼放在模型類別的呼叫方法上，見 `../request-gate.ts` 與 `../gated-chat-openai.ts` 的檔頭。
+ * 就以本機碼 `LOCAL_CAPACITY` 失敗、不重試。我們是多人共用
+ * 一把 key，供應商的配額是全機共用的資源。語意與閘為什麼放在模型類別的呼叫方法上，見 `../request-gate.ts` 與 `../gated-chat-openai.ts` 的檔頭。
  *
  * - **預設不限**（`maxConcurrentRequests` 不寫就不建閘，行為與沒有這兩格一樣；照 #1476 `maxThreads` 的先例，demian 2026-10-16 拍板）：
  *   供應商的配額因端點而異，給數字沒有依據；預設打開會讓既有部署某天突然開始排隊。
@@ -233,15 +204,14 @@ export const DEFAULT_MAX_REQUEST_WAIT_MS = 60_000;
  * 出廠的重試次數（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)，demian 2026-10-14 拍板）。
  *
  * **取 6，是為了蓋過 2026-08-28 量到的 16 秒限流窗口**：不計抖動的累計等待是 0.5＋1＋2＋4＋8＋10 秒 ≈ 25.5 秒。
- * dsh 的預設是 5 次（累計約 15.5 秒，剛好卡在窗口邊上），6 是 dsh 的 `retryPolicy` 本來就開放的設定值，不是偏離。
  * **那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過。**
  */
 export const DEFAULT_RETRY_MAX_RETRIES = 6;
-/** 出廠的退避起點（毫秒），之後每次加倍。dsh 的預設（`retry-policy.ts:15`）。 */
+/** 出廠的退避起點（毫秒），之後每次加倍。 */
 export const DEFAULT_RETRY_INITIAL_DELAY_MS = 500;
 
 /**
- * 是不是一個 HTTP(S) 的根：擋帳密、query、fragment。規則照 dsh，見檔頭「端點的規則照 dsh」。
+ * 是不是一個 HTTP(S) 的根：擋帳密、query、fragment。見檔頭「端點的規則」。
  *
  * @param value - 要驗的端點。
  * @returns 合不合格。
@@ -285,13 +255,13 @@ function legacyRetryKeysMessage(found: readonly string[]): string {
 
 const retryBackoffSchema = z
   .strictObject({
-    /** 第一次重打前等多久（毫秒），之後每次加倍。dsh：大於 0、不超過計時器上限、不大於 `maxDelayMs`。 */
+    /** 第一次重打前等多久（毫秒），之後每次加倍。大於 0、不超過計時器上限、不大於 `maxDelayMs`。 */
     initialDelayMs: z
       .number()
       .gt(0)
       .max(MAX_LIVE_TIMEOUT_MS)
       .default(DEFAULT_RETRY_INITIAL_DELAY_MS),
-    /** 單次等待的上限（毫秒），**供應商給的 `retry-after` 超過它就放棄**（dsh 的 normal 模式）。 */
+    /** 單次等待的上限（毫秒），**供應商給的 `retry-after` 超過它就放棄**。 */
     maxDelayMs: z
       .number()
       .gt(0)
@@ -323,14 +293,14 @@ function retryModeError(issue: { readonly input?: unknown }): string {
 const retryPolicyShape = z.strictObject({
   /** 只收 `normal`，寫了就必填，見 {@link retryModeError}。 */
   mode: z.literal('normal', { error: retryModeError }),
-  /** 最多重打幾次（不含第一次）。非負安全整數，沒有另外的上限，同 dsh：安全靠的是單次等待有界。 */
+  /** 最多重打幾次（不含第一次）。非負安全整數，沒有另外的上限：安全靠的是單次等待有界。 */
   maxRetries: z
     .number()
     .int()
     .min(0)
     .max(Number.MAX_SAFE_INTEGER)
     .default(DEFAULT_RETRY_MAX_RETRIES),
-  /** 哪些失敗碼才重打；不能是空陣列、不能有空字串、不能重複（dsh 同三條）。 */
+  /** 哪些失敗碼才重打；不能是空陣列、不能有空字串、不能重複。 */
   retryableCodes: z
     .array(z.string().min(1, 'retryableCodes 不能有空字串'))
     .min(1, 'retryableCodes 不能是空陣列')
@@ -355,8 +325,8 @@ type FrozenRetryPolicy = Readonly<
 >;
 
 /**
- * 把驗過的重試政策凍結，見檔頭「解出來的政策是凍結的」那一段（照 dsh、沒有偏離）。**複製再凍結**，同 dsh `retry-policy.ts:182`：使用者寫進設定的那個陣列
- * 不被凍結、也不會被這一份共用；`backoff` 是巢狀物件，要另外凍一層（dsh 由 `resolveBackoff` 凍，`:140`）。
+ * 把驗過的重試政策凍結，見檔頭「解出來的政策是凍結的」那一段。**複製再凍結**：使用者寫進設定的那個陣列
+ * 不被凍結、也不會被這一份共用；`backoff` 是巢狀物件，要另外凍一層。
  *
  * @param policy - 驗過的政策。
  * @returns 一份新的、整份凍結的政策。
@@ -375,7 +345,7 @@ function freezeRetryPolicy(policy: RetryPolicyShape): FrozenRetryPolicy {
  */
 const retryPolicySchema = retryPolicyShape.transform(freezeRetryPolicy);
 
-/** 整個不寫 `retryPolicy` 時的值：normal、出廠的四個數字、dsh 預設可重試碼；**凍結的**，見 {@link retryPolicySchema}。 */
+/** 整個不寫 `retryPolicy` 時的值：normal、出廠的四個數字、預設可重試碼；**凍結的**，見 {@link retryPolicySchema}。 */
 function defaultRetryPolicy(): FrozenRetryPolicy {
   return freezeRetryPolicy({
     mode: 'normal',
@@ -399,7 +369,7 @@ export const liveModelConfigSchema = z
         .refine(isHttpRoot, '端點要是 http: 或 https: 的網址，不能帶帳密、query 或 fragment')
         .default(DEFAULT_LIVE_BASE_URL),
       /**
-       * 金鑰的名字（#1604，照 dsh `llm-deepseek-api-key` 的 `apiKeyEnv`，見檔頭「金鑰的名字在這一列」）。**名字**在這一列，**值**不在：
+       * 金鑰的名字（#1604，見檔頭「金鑰的名字在這一列」）。**名字**在這一列，**值**不在：
        * 照舊在每次請求前由憑證服務按這個名字解析（受管檔 `refs:`、啟動環境、`.env`）。環境變數的形狀，空字串、含空白、含 `=` 都拒收。
        * 預設 `NVIDIA_API_KEY`，出廠行為不變。
        */
@@ -424,8 +394,7 @@ export const liveModelConfigSchema = z
         .max(MAX_LIVE_TIMEOUT_MS)
         .default(DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS),
       /**
-       * 模型請求失敗的重試政策（#1427），**首事件之前與之後共用這一份預算**，見檔頭「偏離二」。形狀與驗證逐條照 dsh 的
-       * `retryPolicy`（`packages/llm/llm/src/retry-policy.ts` 的 `resolveRetryPolicy`／`resolveBackoff`）。整個不寫就是
+       * 模型請求失敗的重試政策（#1427），**首事件之前與之後共用這一份預算**，見檔頭「偏離二」。整個不寫就是
        * normal 的預設值；**寫了就必填 `mode`**。`maxRetries: 0` 就是不重打，回到只打一次。
        */
       retryPolicy: retryPolicySchema.default(defaultRetryPolicy),

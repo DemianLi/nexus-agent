@@ -27,7 +27,7 @@ export const MIN_MEMORY_REPORT_INTERVAL_MS = 1000;
 
 /**
  * 計時器的最大延遲（毫秒）。超過 2³¹−1 時 Node 發 `TimeoutOverflowWarning` 並把間隔改成 1 ms——一個驗得過的設定會讓日誌每毫秒寫一行。
- * 就是 `@nexus/timeout` 的 `MAX_TIMER_DELAY_MS`（照 dsh `packages/util/timeout/src/index.ts:25`）；這個數字在 repo 裡只有那一份。
+ * 就是 `@nexus/timeout` 的 `MAX_TIMER_DELAY_MS`；這個數字在 repo 裡只有那一份。
  */
 export const MAX_MEMORY_REPORT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
 

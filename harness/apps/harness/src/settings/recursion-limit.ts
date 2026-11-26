@@ -22,33 +22,26 @@
  * 而 core 不知道組裝長什麼樣。把一個「要知道組裝才講得出來的數字」放進 core，等於讓它的預設值
  * 在 core 裡沒有任何可以校準的對象。
  *
- * ## 與 dsh 的偏離
+ * ## 登記的偏離
  *
  * 1. **擁有者是 package-internal specifier（`#settings/recursion-limit`），不是套件名。** 同
  *    {@link ./thread-title.ts | thread-title} 那一列登記過的同一條，成因也一樣：`harness/apps/harness`
  *    解不到自己（條目走 `plugin-config.ts` 的 `import(entry.name)`，`@nexus/harness` 沒有連進
  *    自己的 `node_modules`）。
- * 2. **旗標贏過這一列的那個「贏」，載體跟 dsh 不同。** dsh 沒有「旗標層」與「設定層」兩條路，
- *    只有一條——**設定值本身是一個運算式，旗標是第一個運算元**：`port: !!js ctx.webStartup.port
- *    ?? 3080`（`packages/bundle/web-app/cordis.patch.yml:136-139`，配 `inject: [webStartup]`），
- *    而 `packages/boot/cmdline/src/index.ts:11-15` 逐字寫著「**No row has launcher-level
- *    command-line status**」（`ddefc45`）。
+ * 2. **旗標贏過這一列的那個「贏」，載體是組裝點。**
  *
- *    **我們表達不出來的是兩樣東西**：條目的 `inject`（`plugin-config.ts` 的 `entrySchema` 是
+ *    **設定條目表達不出來的是兩樣東西**：條目的 `inject`（`plugin-config.ts` 的 `entrySchema` 是
  *    `strictObject`，只有 `id`／`name`／`config`／`disabled`），以及**延後解析的設定值**（我們的
  *    `config` 是 YAML 原值，沒有 `!!js` 這種在樹組好之後才求值的東西）。
  *
  *    **退到**：這一列的 `config` 持有部署預設，CLI 的 `--recursion-limit` 在**組裝點**覆蓋它
- *    （{@link ../agent-factory.ts | recursionLimitFor} 的第一態）。**觀察得到的優先序跟 dsh 一樣
- *    （旗標贏），載體不一樣**——dsh 的優先序寫在那一列自己身上，我們的寫在讀它的那個函式裡。
+ *    （{@link ../agent-factory.ts | recursionLimitFor} 的第一態）。**優先序是旗標贏**，
+ *    寫在讀它的那個函式裡。
  *    代價是：將來有第二個值也要「旗標贏」時，那個優先序同樣得在它自己的消費點各寫一次。
  *
  *    **刻意不做的**：不把 `inject` ＋ 延後解析補出來。那是設定機制本身的能力（地圖 #46），在這
  *    一刀做會把一張搬常數的卡變成一張改載入器的卡——[#457](https://github.com/DemianLi/nexus-agent/issues/457)
  *    的 triage 明著這樣要求。
- * 3. **dsh 對這個值本身沒有意見**：它不跑 LangGraph，`recursionLimit` 這個概念在 `bundle/*` 的
- *    patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列的形狀抄的是 #456 那三列，
- *    不是抄 dsh 的某一列。
  *
  * ## 這一列關不掉
  *
@@ -119,8 +112,8 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  *
  * `− 2` 是裸組裝的 `− 1` 再加基座 skills 中介層的 `SkillsMiddleware.before_agent`（裸組裝沒有這一顆，2026-10-23 對兩邊的節點清單實測）。
  * **有沒有給 `--workspace` 都一樣**：沒有工作區時組裝點照樣墊一顆 `StateBackend`，那幾顆 middleware 照建，只是 listener
- * 找不到東西就什麼都不加（`agent-instructions-on-tree.test.ts` 的 D 組兩邊都量到 31）。dsh 的 pre-step 是一個事件依序跑完，
- * 不會每位 listener 吃一格；這一格是 LangGraph 基座的代價，併成一顆節點的討論在 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)。
+ * 找不到東西就什麼都不加（`agent-instructions-on-tree.test.ts` 的 D 組兩邊都量到 31）。每位 listener 吃一格，
+ * 這是 LangGraph 基座的代價，併成一顆節點的討論在 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)。
  *
  * **serve 每輪是四格**：它另掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
  * `@nexus/core` 的 `step-inbox.ts`），那顆 `beforeModel` 同樣每輪一個節點；另一半掛在 `afterAgent`，一次執行只走一次，
