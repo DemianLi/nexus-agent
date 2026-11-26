@@ -2,7 +2,7 @@
  * **計劃模式現在開著還是關著，即時看得到，重新整理之後也一樣**——[#895](https://github.com/DemianLi/nexus-agent/issues/895)
  * 的 harness 那一半。
  *
- * 規則照 dsh 的 `plan` 投影，少了 `pending`（理由見 `@nexus/wire` 的 `plan-mode.ts`）：
+ * 規則（`pending` 不在內，理由見 `@nexus/wire` 的 `plan-mode.ts`）：
  *
  * 1. root 日誌每記一顆 `plan/mode` 就送一顆，開關都送。
  * 2. 歷史只在最新一頁送一顆目前的值；計劃模式跨頁，較舊的頁不帶，免得把新的蓋回舊的。
