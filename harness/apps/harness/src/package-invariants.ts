@@ -1,31 +1,18 @@
 /**
  * 配套入口的**結構規則**：誰該有、長什麼樣、接線接完了沒有。
  *
- * 這裡一條產品規則都沒有——它不看檢查寫得對不對，只看**機械判得出來**的東西。這一點是抄
- * dsh 的，而且是它明說的自我約束：門禁不從方法名或 helper 呼叫推斷語意品質
- * （`docs/subsystems/invariants.md:59`）。
+ * 這裡一條產品規則都沒有——它不看檢查寫得對不對，只看**機械判得出來**的東西。
  *
  * **它守的是「發布了配套入口的 package，長得對不對」，不再守「每個 package 都要有」。**
  * 原本的規則是後者（加第十個 package 的人會被擋下來），所以二十個 package 各有一個配套入口，
  * 其中十二個是空 installer；#974 把這條規則翻了面：沒有可檢的關係就**不要發布**配套入口，
- * 空 installer 本身是違規。理由是 dsh 在 `2026-08-28-omit-unneeded-invariant-companions`
- * 就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量移除
- * （`docs/adr/0002-invariant-companions-first-cut.md`）。**剩下的八個是暫時保留、觀察中**。
+ * 空 installer 本身是違規。**剩下的八個是暫時保留、觀察中**。
  * 代價是新增 package 的人不再被這裡擋下來——那條目的消失了，是接受的。
  *
- * 對讀日期 2026-08-30，dsh `cd5ef8148158c3a752a658978873241fdf8e2bbc`
- * （`harness/scripts/package-invariants.ts` 與 `harness/scripts/verify-package-invariants.ts`）。
- * 與 dsh 逐條的異同見 [#108](https://github.com/DemianLi/nexus-agent/issues/108)。
- *
- * **有一條規則現在是反過來的，那是登記過的偏離**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 第一刀）：dsh 的規則是「**不得** default export」，我們是「**必須** default export 一顆
- * 具名常數」。理由是前提不同，不是口味——dsh 的配套入口把 `name` / `inject` / `apply` 散在
- * 頂層（`packages/core/session/src/invariant.ts:18`），**模組的 namespace 自己就是那顆
- * plugin**，而 loader 的 `unwrapExports` 是 `exports.default ?? exports`
- * （`harness/vendor/loader/src/index.ts:189`），所以在那邊一個 default export 會把真的 plugin 遮掉。
- * 我們的配套入口匯出的是一顆巢狀的 `NexusPlugin` 常數，namespace 不是 plugin，遮不掉任何
- * 東西；而 `cordis.yml` 的 `name` 要靠 default export 才指得到它。舊規則的理由（「specifier
- * 要留得住具名匯出」）沒有被丟掉，它變成「default export 必須是**本檔具名 export 的常數**」
+ * **規則是「**必須** default export 一顆具名常數」**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 第一刀）。配套入口匯出的是一顆巢狀的 `NexusPlugin` 常數，namespace 不是 plugin，default export 遮不掉任何
+ * 東西；而 `cordis.yml` 的 `name` 要靠 default export 才指得到它。「specifier
+ * 要留得住具名匯出」的理由，變成「default export 必須是**本檔具名 export 的常數**」
  * 那一條。
  *
  * @module
@@ -41,8 +28,7 @@ import ts from 'typescript';
  * owner 只在 `harness/packages/*` 裡找。
  *
  * `harness/apps/harness` 與 `web` 也是 workspace package，兩個都沒有 `src/invariant.ts`，
- * 照舊不會被當成 owner。**這是選的，不是 glob 字串默默決定的**：dsh 的 owner 樹在
- * `packages` 底下**再深一層**，app 本來就不在裡面；而配套入口認領的是「這個 package 擁有的跨筆關係」，
+ * 照舊不會被當成 owner。**這是選的，不是 glob 字串默默決定的**：配套入口認領的是「這個 package 擁有的跨筆關係」，
  * 組裝點與前端不擁有任何人的關係——它們是消費者。理由與另外兩個選項見 #108。
  */
 const OWNER_ROOT = 'harness/packages';
@@ -162,8 +148,8 @@ function addViolation(
 /**
  * manifest 這一側只剩一條。
  *
- * dsh 那邊 `checkManifest` 還檢 `files` 要發布 `lib/invariant.js`、註冊表要同時是
- * `workspace:^` 的 peer 與 dev 相依，`checkBuild` 再檢 bundle entry 與 project references。
+ * 這裡不檢 `files` 要發布 `lib/invariant.js`、註冊表要同時是
+ * `workspace:^` 的 peer 與 dev 相依，也不檢 bundle entry 與 project references。
  * **那些規則檢的產物當時在我們這裡不存在**：沒有 `lib/`、沒有 `files`、不發布，`build` 就是
  * `tsc --noEmit`。整組退到「不檢」，偏離標註見 #108 與該張動工的 PR 內文。#1502 之後有了 `lib/` 與 `files`，
  * 但 `files` 與 bundle entry 的檢查仍不在這一條：要補是另一張卡。
@@ -295,7 +281,7 @@ function checkSource(
 /**
  * installer 本身的兩條。
  *
- * **dsh 要求那個常數叫 `install`，我們不要求。** `@nexus/core` 的叫 `sessionInvariant`，
+ * **不要求那個常數叫 `install`。** `@nexus/core` 的叫 `sessionInvariant`，
  * 而為了滿足 gate 去改產品程式碼的名字是本末倒置——#108 的拍板選了「規則照我們的約定」。
  * 這裡改成用 register 實際傳進去的那個識別字去找宣告，效果一樣：檢的還是那個真的被註冊的
  * 函式，不是碰巧同名的另一個。

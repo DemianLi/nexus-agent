@@ -1,18 +1,17 @@
 /**
  * **代理模組以外，沒人自己碰 undici、也沒人替請求指定 `dispatcher`**
- * （[#746](https://github.com/DemianLi/nexus-agent/issues/746)，照 dsh 的 `scripts/verify-no-bare-dispatcher.ts`，`477b4f4`）。
+ * （[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
  *
  * Node 內建的 `fetch` 走 undici 的全域派送器，而代理就是裝在那個位置上。請求上另外指定的 `dispatcher`
  * 會蓋掉全域那一個，於是這個呼叫點不管使用者設了什麼代理都直連；自己 `new Agent(...)` 也一樣。
- * dsh 的網頁抓取工具曾經就是這樣繞過了所有代理。
  *
- * ## 與 dsh 的差異
+ * ## 實作的選擇
  *
- * - dsh 比的是 `Agent`／`ProxyAgent`／`EnvHttpProxyAgent` 這幾個類別的建構。這裡**比匯入**：代理模組以外
+ * - **比匯入**：代理模組以外
  *   任何 `undici` 的匯入（靜態、動態、`require` 三種寫法）都算。理由是我們的樹上到處是 `createCliAgent` 這類名字，
  *   而不匯入 undici 就建不出它的 agent，所以匯入是更早、更不會被改名繞過的那一道。
- * - 另外照 dsh 擋 `dispatcher` 這個屬性（物件字面值的一般寫法與簡寫）。
- * - 逃生口同 dsh：緊貼在上一行或同一行的註解帶 `proxy-exempt:` 並寫明理由。今天沒有任何使用者。
+ * - 另外擋 `dispatcher` 這個屬性（物件字面值的一般寫法與簡寫）。
+ * - 逃生口：緊貼在上一行或同一行的註解帶 `proxy-exempt:` 並寫明理由。今天沒有任何使用者。
  * - 用 TypeScript 的語法樹掃，不用逐行正則：簡寫 `{ dispatcher }` 與改名的匯入，正則都會漏。
  *
  * **掃測試檔**：測試自己建一個直連 agent 去打 `fetch`，量到的就不是代理了。

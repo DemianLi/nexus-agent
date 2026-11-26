@@ -410,7 +410,7 @@ describe('B／C／D：串流（首事件之前與之後）', () => {
     expect(retryRows(log).map((row) => row.code)).toEqual(['SERVER', 'SERVER']);
   }, 30_000);
 
-  // #1805：照 dsh 的 `providerError`（`transport.ts:22-35`）依 `error.type`、字串 `code`、訊息字樣分類；
+  // #1805：依 `error.type`、字串 `code`、訊息字樣分類；
   // 這幾列**都不帶數字碼**，訊息也特意避開額度／超窗字樣，所以「拿掉讀 `type`」的突變會讓 AUTH／RATE_LIMIT／INVALID_REQUEST 三列紅。
   // `retryRows` 是監看（`createInbandWatcher`）回報的碼，`classifyTurnFailure(error)` 是 `turn/failed` 那一格，兩格要同碼；
   // 不重打的碼（`hits` 為 1）則是監看與分類器同樣認出它不在可重試集裡才成立。
@@ -713,7 +713,7 @@ describe('E：不是供應商的錯，與被層層包住的供應商錯', () => 
   });
 });
 
-// #1557（N0478）：額度與超窗的供應商措辭。dsh 的 adapter 兩條路都用措辭認（`llm-deepseek/src/transport.ts:26-32`），
+// #1557（N0478）：額度與超窗的供應商措辭。
 // 這裡走真的 `createLiveModel`＋`retryModelCall`＋loopback 假端點，把「只認碼」時代記成 `RATE_LIMIT`／`INVALID_REQUEST` 的說法收進來。
 describe('N0478：供應商用措辭說額度用完或超出上下文（#1557）', () => {
   const quotaSentence =

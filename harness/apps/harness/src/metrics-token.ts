@@ -7,10 +7,6 @@
  * **內容是裸的 token 加一個換行，不是 JSON。** 檔案要原樣交給監控那一側：Prometheus 的 `authorization.credentials_file` 讀整個檔案（去掉前後空白）
  * 當 bearer，包一層 `{ "version": 1, … }` 它就沒法用了。token 是 32 位元組亂數的 base64url（43 字元）。
  *
- * ## 偏離 dsh：產品需求超出 dsh
- *
- * dsh 沒有指標出口，也就沒有這個檔（背景見 #1535「dsh 的做法」）；落盤與權限的規矩借 dsh `credentials-local` 的 `assertOwnerOnly`（已抽成 `owner-only.ts`）。
- *
  * @module
  */
 

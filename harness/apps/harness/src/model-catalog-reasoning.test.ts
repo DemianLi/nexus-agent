@@ -1,7 +1,7 @@
 /**
  * **型錄的推理強度宣告驗證**——[#1561](https://github.com/DemianLi/nexus-agent/issues/1561)（N0448）。
  *
- * 照 dsh `resolveModelReasoning` 的前三條（`packages/llm/llm-pi-ai/src/catalog.ts:741-756`，`687f282e`）：空 dict、`off` 以外的等級沒有線上的寫法、
+ * 空 dict、`off` 以外的等級沒有線上的寫法、
  * 值是空字串，三種都在載入時拒收，訊息指名是哪一顆模型的哪一級。以前這三種都靜靜收下：`{}` 讓 `selectableEfforts` 回空清單，選單上不出現強度，
  * 也看不出是設定寫錯。
  *

@@ -5,13 +5,12 @@
  * 那一列的連線值。想在產品組裝上跑一條自訂的工具回合只能自己起一台 OpenAI 相容的假端點，或手抄一份組裝根——
  * 而手抄的組裝跟產品組裝之間沒有任何東西保證同形。
  *
- * 現在的形狀照 dsh：模型的選擇是一列（`agent-default-model`，dsh `packages/bundle/base/cordis.patch.yml:82-86`），
- * 提供者各是一列；測試用 patch `insert` 一列腳本提供者、把選擇列指過去，同 dsh
- * `apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts:36-42`。
+ * 現在的形狀：模型的選擇是一列（`agent-default-model`），
+ * 提供者各是一列；測試用 patch `insert` 一列腳本提供者、把選擇列指過去。
  *
  * ## 偏離登記：提供者不在 `apply` 裡註冊進服務，退到起動期讀
  *
- * dsh 的提供者在 `apply` 裡註冊進 `ctx.llm`，選擇在之後解析。我們的組裝點在 `loadPlugins` **之前**就要有
+ * 我們的組裝點在 `loadPlugins` **之前**就要有
  * 模型：`createNexusAgent` 一開頭用它比對 harness profile、算系統提示詞裡的型號標籤。這是我們自己的載入順序，
  * 不是 deepagents 的限制——可以搬，但那是另一張卡的範圍；這張退到最接近的載體：**提供者是只講設定的列**
  * （同 `live-model`，#529 登記的起動期讀），多一格 {@link ModelProviderPlugin.createModel}，由選擇列指到它時

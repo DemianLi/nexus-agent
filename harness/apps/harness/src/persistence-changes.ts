@@ -1,27 +1,25 @@
 /**
  * 持久化型別變更的確認紀錄與驗證器（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-2）。
  *
- * 照 dsh `scripts/persistence-changes.ts`（`687f282e`）搬過來，檢查與分類不改：從原始碼抽出的型別圖
+ * 從原始碼抽出的型別圖
  * （{@link ./persistence-schema.ts}）跟 `docs/persistence-changes/` 的紀錄歷史末端比，對不上又沒有紀錄就拋
  * `unacknowledged persistence type changes`。每一筆紀錄是 `YYYY-MM-DD-slug.md`（機器聲明＋相容性與驗證的說明）加
  * `YYYY-MM-DD-slug.schema.json`（變更後的型別圖）。規則與檔案職責見 `docs/persistence-changes/README.md`。
  * CI 由 `persistence-changes.test.ts` 跑 {@link verifyPersistenceChanges}；命令列是
  * `pnpm --filter @nexus/harness run persistence-changes --check|--baseline ID|--record ID|--update ID`。
  *
- * 跟 dsh 不同的地方：
+ * 這裡的取捨：
  *
- * - **紀錄只寫中文一份**（偏離 dsh，理由 2：本 repo 的文件只有中文）。dsh 一筆是英文 `.md`、中文 `.zh.md`、
- *   `i18n.yaml` 與 `schema.json`，並驗兩份的機器聲明逐字相同（dsh `:658-664`、`renderPersistencePair`）；這裡一筆是
+ * - **紀錄只寫中文一份**（本 repo 的文件只有中文）。一筆是
  *   一份中文 `.md` 加 `schema.json`，說明輸入（`--prose`）也只有一種語言。
- * - **訊息來源的相容政策不搬**（過渡，登記在 `persistence-schema.ts` 檔頭，撤除條件
- *   [#1883](https://github.com/DemianLi/nexus-agent/issues/1883)）：清單只有 `formatVersion` 1，所以 dsh
- *   `parseSchema` 的 compatibility 欄位（`:219-228`、`:255-262`）、比對時的來源分組（`:455-476`）與 `formatVersion` 2
- *   （`:288`）在這裡是走不到的分支，跟著拿掉；`source-policy-changed`、`attribution-kind-added` 兩種分類也就沒有。
- * - 不在這張卡的範圍、所以沒有的：定稿檢查點 `finalized/vN.json`（dsh `verifyFinalization`）、歷史格式的快照解析
+ * - **沒有訊息來源的相容政策**（過渡，登記在 `persistence-schema.ts` 檔頭，撤除條件
+ *   [#1883](https://github.com/DemianLi/nexus-agent/issues/1883)）：清單只有 `formatVersion` 1，所以
+ *   compatibility 欄位、比對時的來源分組與 `formatVersion` 2 都沒有；`source-policy-changed`、`attribution-kind-added` 兩種分類也就沒有。
+ * - 不在這張卡的範圍、所以沒有的：定稿檢查點 `finalized/vN.json`、歷史格式的快照解析
  *   （`parseHistoricalPersistenceSnapshot`，只給 `persistence-review`／`persistence-formats` 用）、人讀的目錄文件
  *   `persistence-catalog.md`（[#1886](https://github.com/DemianLi/nexus-agent/issues/1886)）。
  * - 基線必備的根不含 `JsonlHeaderLine`：這個根在 #1594 ③（格式 52）才加進來，紀錄歷史的基線比它早。
- * - 生成物缺漏或過期時，訊息指向 `gen-persistence-schema`，不寫 dsh 的「regenerate the persistence catalog」：
+ * - 生成物缺漏或過期時，訊息指向 `gen-persistence-schema`：
  *   這裡沒有 catalog（同上，#1886）。
  *
  * @module
@@ -990,7 +988,7 @@ function machineBlock(change: PersistenceChangeRecord): string {
   ].join('\n');
 }
 
-/** 紀錄的三段說明標題（dsh 中文版的「概述／兼容性／验证」改成本 repo 的用詞）。 */
+/** 紀錄的三段說明標題。 */
 const PROSE_HEADINGS = ['摘要', '相容性', '驗證'] as const;
 
 function scaffold(change: PersistenceChangeRecord, prose?: PersistenceChangeProse): string {
@@ -1257,7 +1255,7 @@ function executeCommand(
   };
 }
 
-/** 預設的生成物：只有 `docs/persistence-schema.json`（dsh 另有 `persistence-catalog.md`，見檔頭）。 */
+/** 預設的生成物：只有 `docs/persistence-schema.json`。 */
 function persistenceSchemaArtifacts(
   _root: string,
   current: PersistenceSchemaInventory,

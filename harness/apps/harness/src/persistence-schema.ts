@@ -2,7 +2,7 @@
  * 用 TypeScript 型別檢查器，從原始碼抽出會話日誌落盤的完整型別圖
  * （[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1）。
  *
- * 照 dsh `scripts/persistence-schema.ts`（`687f282e`）：合成一個只有型別別名的根檔（header、`keyof SessionEventMap`、
+ * 合成一個只有型別別名的根檔（header、`keyof SessionEventMap`、
  * 每一種 `SessionEvent<"名字">`），跟產品原始碼一起建一個 program，再把每個根的型別轉成 JSON 型別圖
  * （`persistence-schema-model.ts`），算出標準指紋。生成物是 `docs/persistence-schema.json`
  * （`gen-persistence-schema.ts`）。偵測不比 git diff：加一個選填欄位、把必填改選填、改 header，指紋都會變。
@@ -17,29 +17,26 @@
  * - `event:<名字>`：每一種事件，名字來自 `known-event-types-catalog.ts` 的掃描，再跟編譯器看到的
  *   `keyof SessionEventMap` 對一次，兩邊不一致就拋。
  *
- * 每個事件根照 dsh 帶 `surface` 欄位（不進指紋；dsh 的驗證器 `persistence-changes.ts:299` 拒收沒有這一格的事件根，
- * `:388`、`:397`、`:424` 用它判斷能不能同版新增）。nexus 沒有 surface 那一軸（`session-log.ts` 講事件替換的
+ * 每個事件根帶 `surface` 欄位（不進指紋）。nexus 沒有 surface 那一軸（`session-log.ts` 講事件替換的
  * 那段：沒有 `surfaceOp`），所以每一種都照實寫 `false`。
  *
- * 合成的根檔放在 `scripts/`（同 dsh），不在追蹤範圍裡：它的型別別名不能變成型別名與宣告位置，否則
+ * 合成的根檔放在 `scripts/`，不在追蹤範圍裡：它的型別別名不能變成型別名與宣告位置，否則
  * `__persistence_schema_roots__.ts#EventRootN` 會進基線，而且每加一種排序靠前的事件就整批重編號。
  *
  * ## program 怎麼組
  *
- * dsh 讀 `tsconfig.host.json`，檔案是 host 那一側所有套件的原始碼。nexus 沒有根 `tsconfig.json`，對應的是
- * `tsconfig.base.json`（它的 `paths` 把 `@nexus/core` 對到原始碼，各套件 `declare module '@nexus/core'` 的事件擴充才合得進去），
+ * 設定檔用 `tsconfig.base.json`（它的 `paths` 把 `@nexus/core` 對到原始碼，各套件 `declare module '@nexus/core'` 的事件擴充才合得進去），
  * 檔案是 `harness/packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（跟事件目錄同一套判斷）。`web/src` 不進 program：
- * 它不宣告事件，`tsconfig.base.json` 也沒有 DOM 與 JSX 的設定。編譯選項照 dsh 覆寫成 `strict`、
+ * 它不宣告事件，`tsconfig.base.json` 也沒有 DOM 與 JSX 的設定。編譯選項覆寫成 `strict`、
  * `exactOptionalPropertyTypes`、`skipLibCheck: false`；診斷只收選項、語法、根檔，以及從根可達的宣告範圍內的語意錯誤。
  *
  * ## 過渡：訊息上的來源不進型別圖
  *
- * **`@persistenceSource`／`@persistenceAttribution` 這一刀不搬，登記為過渡（不掛偏離理由）。** dsh 用這兩個標記把訊息來源
- * （`packages/llm/llm/src/message.ts:145` 的 `MessageBase.source`）綁進型別圖，讓「新增一種來源」走寬鬆的相容政策。
+ * **`@persistenceSource`／`@persistenceAttribution` 這一刀不搬，登記為過渡（不掛偏離理由）。**
  * nexus 訊息上的來源 `MessageSource`（`harness/packages/nexus-core/src/message-source.ts`）落盤在 `additional_kwargs.nexus_source`，
  * 今天的 `LoggedMessage` 照 LangChain 把 `additional_kwargs` 宣告成 `Record<string, any>`，所以圖裡是 `any`。**表達得出來**：
  * 跟 `role`、`name`、`tool_call_id` 一樣在 `LoggedMessage` 改寫型別就行；這一刀不收窄，是因為 `MessageSource` 本身是開放記錄
- * （`kind: string` 加索引簽名），接進來也看不出變更，dsh 的綁定還要求同一個物件上有 `role` 字面量。收窄屬
+ * （`kind: string` 加索引簽名），接進來也看不出變更。收窄屬
  * [#1883](https://github.com/DemianLi/nexus-agent/issues/1883)。兩個標記都不搬，清單的 `formatVersion` 固定 1。
  * **後果：訊息的 `additional_kwargs`、`response_metadata` 裡的東西這套檢查看不到，改了不會紅。** `user/message` 的
  * `data.source`（`session-log.ts` 的 `UserMessageSource`，封閉聯集）不受影響，已經在圖裡。
@@ -79,7 +76,7 @@ export const PERSISTENCE_SCHEMA_REGENERATE =
   'pnpm --filter @nexus/harness run gen-persistence-schema';
 
 /**
- * 生成物的全文：精簡清單照 dsh `gen-persistence-catalog.ts` 的寫法（兩格縮排、結尾換行）。
+ * 生成物的全文：精簡清單兩格縮排、結尾換行。
  *
  * @param inventory - {@link extractPersistenceSchema} 的結果。
  */
@@ -91,7 +88,7 @@ export function renderPersistenceSchema(inventory: PersistenceSchemaInventory): 
 const CONFIG_PATH = 'tsconfig.base.json';
 
 /**
- * 合成的根檔：只存在於 compiler host 裡，不落盤。放在 {@link TRACKED_PREFIXES} 之外（同 dsh 的 `scripts/`），
+ * 合成的根檔：只存在於 compiler host 裡，不落盤。放在 {@link TRACKED_PREFIXES} 之外，
  * 它的別名才不會被記成型別名與宣告位置。
  */
 export const ROOTS_FILE = 'harness/scripts/__persistence_schema_roots__.ts';
@@ -285,7 +282,7 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
   return extraction.inventory(roots);
 }
 
-/** program 的檔案：`harness/packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼（對應 dsh 的 `hostSourceFiles`）。 */
+/** program 的檔案：`harness/packages/<套件>/src` 與 `harness/apps/harness/src` 的產品原始碼。 */
 function programSourceFiles(root: string): string[] {
   return [
     ...productFilesUnder(root, 'harness/packages').filter((file) =>

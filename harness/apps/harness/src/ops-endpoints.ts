@@ -14,9 +14,9 @@
  * 探針免登入、本文只有狀態字（同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽）；指標透露別人的活動，要 `Authorization: Bearer <token>`
  * （`tokenMatches` 比），缺或錯一律 401、不說是哪一種。**會話 cookie 換不到指標，反過來也一樣**：兩件事分開，避免把瀏覽器的 cookie 交給監控系統。
  *
- * ## 偏離 dsh：產品需求超出 dsh（理由 2）
+ * ## 端點的判準
  *
- * dsh `687f282e` 沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例：探針語意取
+ * 判準取公開的慣例：探針語意取
  * Kubernetes 的 `livez`／`readyz` 分法；格式取 Prometheus 文字格式（`# HELP`／`# TYPE`，counter 名以 `_total` 結尾）。**不新增任何出境路徑**。
  *
  * @module

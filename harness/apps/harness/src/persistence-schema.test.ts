@@ -1,9 +1,9 @@
 /**
  * 從原始碼抽持久化型別圖（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-1）。
  *
- * 照 dsh `scripts/persistence-schema.spec.ts`（`687f282e`）：在暫存目錄搭一棵照 nexus 佈局的小 repo
+ * 在暫存目錄搭一棵照 nexus 佈局的小 repo
  * （`tsconfig.base.json`、`harness/packages/nexus-core/src` 的 `SessionEventMap` 與 `StoredSessionHeader`、一個放酬載的套件），
- * 改原始碼、重抽、比指紋。沒搬的：surface 與 `JsonlHeaderLine` 那一格（nexus 沒有 surface 那一軸，事件根一律
+ * 改原始碼、重抽、比指紋。沒有的：surface 與 `JsonlHeaderLine` 那一格（nexus 沒有 surface 那一軸，事件根一律
  * `surface: false`；也沒有 `JsonlHeaderLine` 這個根）、訊息來源政策那一組（過渡，見 `persistence-schema.ts` 檔頭）、用 `classifyPersistenceChange`／`parsePersistenceSnapshot` 斷言的地方
  * （驗證器，⓪b-2；這裡改成比指紋）。
  *

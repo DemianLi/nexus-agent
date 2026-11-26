@@ -124,7 +124,7 @@ describe('`/permission` 是切換的唯一入口', () => {
       expect(switched?.kind).toBe('success');
       expect(switched?.text).toContain('從 workspace-write 換成 danger-full-access');
       expect(switched?.text).not.toContain('沒有完整記進');
-      // 順序：先記意圖，再動旋鈕（dsh `apply`）。
+      // 順序：先記意圖，再動旋鈕。
       expect(built.sessionLog.events.slice(before).map((event) => event.type)).toEqual([
         'permission/preset',
         'sandbox/mode',
