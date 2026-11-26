@@ -2,7 +2,7 @@
  * **模型工具寫得進哪一份會話日誌** —— [#134](https://github.com/DemianLi/nexus-agent/issues/134)
  * 開的頭，[#137](https://github.com/DemianLi/nexus-agent/issues/137) 收的尾。
  *
- * 我們的工具是 LangGraph 的 ToolNode 在跑，派發點插不進去，所以答案分兩半，而兩半現在都有了：
+ * 我們的工具是 LangGraph 的 ToolNode 在跑，沒有派發點可以把呼叫者身分塞進去，所以答案分兩半：
  *
  * 1. **「哪一份日誌」** —— 一次組裝一張會話註冊表（`SessionRegistry`），由
  *    `attachSession` 綁上來。第一條測試驗它。
@@ -142,14 +142,8 @@ describe('模型工具與會話日誌', () => {
   });
 
   /**
-   * **這一條是翻過面的絆索。**
-   *
-   * 它以前釘的是現況：root 與 subagent 寫進**同一份**日誌，而那跟單一所有者規則
-   * 相反（subagent 與其他 agent 各自維護自己的列表）。當時
-   * 缺的不只是判斷依據，還缺**第二份日誌可以寫**——認得出來與有地方去是兩件事。
-   *
-   * 兩件都補上了，所以它反過來寫。**留著這條而不是刪掉**：哪天有人把身分那一層拆掉，
-   * 兩筆會重新落回同一份，而紅的就是這裡。
+   * root 與 subagent 各寫各的一份（單一所有者；subagent 與其他 agent 各自維護自己的列表）。
+   * 哪天有人把身分那一層拆掉，兩筆會重新落回同一份，而紅的就是這裡。
    */
   it('root 與 subagent 各寫各的一份——單一所有者', async () => {
     const model = new ScriptedChatModel({

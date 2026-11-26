@@ -172,7 +172,7 @@ describe('有一輪在跑', () => {
       expect(run.model.prompts).toHaveLength(1);
       await until(() => run.frames.some(isStoppedFrame));
 
-      // 下一句照常，而模型看到的是原字串。
+      // 下一句照常。
       await run.pump.submit({ kind: 'message', text: '還在嗎' });
       const tools = (run.model.prompts.at(-1) ?? []).filter(
         (message) => message.getType() === 'tool',
@@ -254,7 +254,6 @@ describe('有一輪在跑', () => {
           .root()
           .filter((event) => event.type === 'turn/end')
           .map((event) => event.data);
-      // 保留但停住。
       expect(ends()).toEqual([ABORTED_END]);
       expect(run.pump.running).toBe(false);
       expect(run.pump.inbox.map((item) => item.text)).toEqual(['第二句']);
@@ -321,7 +320,7 @@ describe('沒有一輪在跑', () => {
       );
       await until(() => run.frames.some(isStoppedFrame));
 
-      // 下一句：模型看到的是我們寫的原字串，不是基座補的「another message came in」。
+      // 下一句：模型看到的是`TOOL_ABORTED_BEFORE_DISPATCH_TEXT`，不是基座補的「another message came in」。
       await run.pump.submit({ kind: 'message', text: '算了' });
       const tools = (run.model.prompts.at(-1) ?? []).filter(
         (message) => message.getType() === 'tool',

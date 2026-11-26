@@ -166,8 +166,6 @@ describe('過大的工具結果搬走之後還取得回來', () => {
   });
 
   it('暫存不再落在使用者的工作區裡 —— 它是 harness 的暫存，不是模型在做的事', async () => {
-    // 這是這張卡刻意改掉的行為：修之前 workspace-write 會在使用者的專案目錄下留一個
-    // 永遠沒人清的 large_tool_results/。
     const { root, backend } = await containedRoot('workspace-write');
     await fetchThenRead(OVERSIZED, backend);
     expect(await readdir(root)).not.toContain('large_tool_results');
@@ -729,7 +727,7 @@ describe('啟動時清掉超過保留期的暫存', () => {
     expect(await readdir(dir)).toEqual([]);
   });
 
-  /** 別人改得動的會話目錄不進去，而且講一聲。以前只驗根，這種目錄照清。 */
+  /** 別人改得動的會話目錄不進去，而且講一聲。 */
   it('群組可寫的會話目錄：裡面的過期檔不碰，講一聲', async () => {
     const dir = await root();
     const shared = await session(dir, OLD, 60);

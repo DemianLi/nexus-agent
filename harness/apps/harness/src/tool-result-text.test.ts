@@ -150,8 +150,7 @@ describe('上限', () => {
   });
 
   /**
-   * **抽字不截**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）：這條原本釘的是「抽字時就套上限」，
-   * 外溢層落地後翻面——上限在模型面，日誌裡那則原樣上線。`capToolText` 只剩壓縮摘要在用（#896）。
+   * **抽字不截**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）：上限在模型面，日誌裡那則原樣上線。`capToolText` 只剩壓縮摘要在用（#896）。
    */
   it('抽字不套上限：比 `tool-text` 預設上限長的文字照樣一字不差', () => {
     const long = `${HALF}藍鯨${HALF}`;

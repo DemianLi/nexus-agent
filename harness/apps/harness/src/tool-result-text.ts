@@ -150,7 +150,7 @@ function isReadMeta(meta: unknown): boolean {
  * - **搜尋與 diff 的上限就是 `tool-text` 那一列的 `maxBytes`**
  *   （[#617](https://github.com/DemianLi/nexus-agent/issues/617) 決定 2；那時它也是工具文字的上限，#736 之後文字不再截）。
  * - **讀檔是 {@link READ_META_MAX_BYTES_FACTOR} 倍**（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）：
- *   #602 把一頁放大到 2000 行之後，每行 `{"number":N,"text":"…"}` 的外殼約 25 位元組，短行的大檔
+ *   一頁 2000 行時，每行 `{"number":N,"text":"…"}` 的外殼約 25 位元組，短行的大檔
  *   文字沒被截、meta 卻超過一倍的上限。兩倍裝得下一整頁 2000 行短行。
  * - **搜尋從尾巴整組砍**，
  *   標 `truncated`，`total` 不動，至少留一項——一項自己就超過的也留著，不讓一張空卡蓋掉真的結果。
