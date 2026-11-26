@@ -85,7 +85,7 @@ describe('parseCredentialsDocument', () => {
     expect(parseCredentialsDocument(file, 'version: 1\nrefs:\n').refs.size).toBe(0);
   });
 
-  /** 同 dsh：整份只有註解（`toJS()` 是 `null`）與空 mapping 都是空的倉庫，不要求 `version`（#1507）。 */
+  /** 整份只有註解（`toJS()` 是 `null`）與空 mapping 都是空的倉庫，不要求 `version`（#1507）。 */
   it.each([
     ['只有註解', '# 只有註解\n'],
     ['註解加空白行', '# 把唯一一把 key 註解掉了\n# NVIDIA_API_KEY: x\n\n   \n'],
@@ -118,7 +118,7 @@ describe('parseCredentialsDocument', () => {
     });
   });
 
-  /** `records` 是 dsh 的鍵、我們沒有這種憑證：放過它，使用者會以為存進去的東西有作用（偏離 dsh 的既有登記）。 */
+  /** nexus 沒有 `records` 這種憑證：放過它，使用者會以為存進去的東西有作用。 */
   it('records 仍然拒絕，訊息講明 nexus 沒有這種憑證，不說成「不認得的頂層鍵」', () => {
     const text = `version: 1\nrecords:\n  a/b:\n    type: api-key\n    key: ${SECRET}\nrefs:\n  ${KEY}: ${SECRET}\n`;
     let message = '';

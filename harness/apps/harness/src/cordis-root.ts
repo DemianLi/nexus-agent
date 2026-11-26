@@ -1,54 +1,48 @@
 /**
  * serve 與 CLI 的 Cordis 根（[#1401](https://github.com/DemianLi/nexus-agent/issues/1401)，決議 §3-1 第 5 條的第一步）。
  *
- * ## 照 dsh 的 `boot()`
+ * ## 啟動順序
  *
- * dsh `packages/boot/app-boot/src/index.ts:975-1010`：`new Context()`、根上 provide 宿主的值（dsh 的 `dshHomePath`，
- * launcher 的 `cmdlineArgs`／`appExit`）、`await ctx.plugin(Loader)`、掛列、`loader.await()`、`auditStartupEntries`。
- * 這裡同一個順序。宿主的值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有這幾列：
+ * 順序：`new Context()`、根上 provide 宿主的值、`await ctx.plugin(Loader)`、掛列、`loader.await()`、`auditStartupEntries`。
+ * 宿主的值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有這幾列：
  *
- * | 列 id | 是什麼 | dsh 對應 |
- * |---|---|---|
- * | `nexus-compat` | 相容層：`assembly-root.ts` 的整個組裝流程包成一顆插件，提供服務 {@link ASSEMBLY_SERVICE}「組一個 agent」 | `agent-loop`（提供 `agents`） |
- * | `cli`／`serve` | 入口那一列，`inject: [ASSEMBLY_SERVICE]` | `headless-runner`／`webserver` |
- * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`，契約服務；#1416 PR 2） | `tools` 服務的提供者 |
- * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，契約服務；#1421），只收定義、不推動 | `sessionProjections` 服務的提供者 |
- * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，契約服務；#1446），只收路徑、不掃描 | `skills` 服務的提供者 |
- * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，契約服務；#1456），只收定義、不執行 | `commands` 服務的提供者 |
- * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，契約服務；#1458），**值由入口在建樹時給** | （無對應，偏離登記在 `@nexus/approval-channel`） |
- * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，契約服務；#1463），**挑法由宿主給**：行程裡每一條活著的 thread 綁上的註冊表（`thread-sessions.ts`） | （無對應，偏離登記在 `@nexus/session`） |
- * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，契約服務；#1466），**挑法由宿主給**：同一張登記表、同一支 `pickBoundForCall`，一筆登記同時帶這條 thread 的 fs 把手（就是那次組裝 host-services 裡的 `fs` 服務） | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
- * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，契約服務；#1474），**插件登記 listener、宿主建 middleware**（`pre-step-middleware.ts`） | `agent/pre-step` 事件（偏離登記在 `@nexus/agent-loop`；列 id 刻意不叫 `agent-loop`，那個名字對到相容層） |
- * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
- * | `include:<id>` | Include 底下的函式插件，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準，不在這裡列名單） | 各插件 |
+ * | 列 id | 是什麼 |
+ * |---|---|
+ * | `nexus-compat` | 相容層：`assembly-root.ts` 的整個組裝流程包成一顆插件，提供服務 {@link ASSEMBLY_SERVICE}「組一個 agent」 |
+ * | `cli`／`serve` | 入口那一列，`inject: [ASSEMBLY_SERVICE]` |
+ * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`，契約服務；#1416 PR 2） |
+ * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，契約服務；#1421），只收定義、不推動 |
+ * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，契約服務；#1446），只收路徑、不掃描 |
+ * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，契約服務；#1456），只收定義、不執行 |
+ * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，契約服務；#1458），**值由入口在建樹時給** |
+ * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，契約服務；#1463），**挑法由宿主給**：行程裡每一條活著的 thread 綁上的註冊表（`thread-sessions.ts`） |
+ * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，契約服務；#1466），**挑法由宿主給**：同一張登記表、同一支 `pickBoundForCall`，一筆登記同時帶這條 thread 的 fs 把手（就是那次組裝 host-services 裡的 `fs` 服務） |
+ * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，契約服務；#1474），**插件登記 listener、宿主建 middleware**（`pre-step-middleware.ts`） |
+ * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） |
+ * | `include:<id>` | Include 底下的函式插件，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準，不在這裡列名單） |
  *
  * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs`、`pre-step`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
  * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools`、
  * `projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs`、`pre-step` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
  *
  * **收尾**：相容層組出來的每一個 agent 都用 `ctx.effect` 登記收尾，登記完才交出去；agent 的 `dispose` 就是那筆 effect 的
- * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。這是 dsh
- * `agent-loop` 把 agent 綁在 `ownerCtx.effect` 上的同一招（`packages/core/agent-loop/src/index.ts:603-622`）。根由入口持有，
- * 照 dsh launcher 的 `app.current?.fiber.dispose()`（`apps/cli/src/profile-boot.ts:256-263`）：起不來與關掉時都卸載它。
+ * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。根由入口持有：起不來與關掉時都卸載它。
  *
  * ## 偏離登記
  *
- * - **清單由變更紀錄導出（#1412），清單上只有函式插件的列在 Loader 的樹上（#1416 PR 2）**：dsh 的整棵樹本來就由一份 patch
- *   清單導出（`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以
- *   「Cordis 不管插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch
+ * - **清單由變更紀錄導出（#1412），清單上只有函式插件的列在 Loader 的樹上（#1416 PR 2）**：我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch
  *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘的列不上樹的理由是插件
  *   還在相容層**：上樹跟著「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader
  *   對每列 `config` 跑 `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。**函式插件（模組有 `manifest` 匯出的才上樹；
  *   遷出了哪幾顆見 `docs/plugin-contract.md` 的「接進清單」與 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED`）**經 `plugin-tree.ts` 的 Include 上樹：patch 原樣推給 Include，相容層那一側仍然疊一份、驗一份、當清單的權威，兩邊疊出來
  *   對不上那一列就算掉了。
  * - **Include 的寫回全關（#1416 PR 2，`harness/vendor/README.md` 第 7 條）**：上游 Include 會把樹側的變更寫回 `cordis.yml`，那是
- *   第二個寫入口，會繞過變更紀錄。vendor 時關掉三條寫回路徑，寫入口只有變更紀錄一個。這是對 dsh 做法的偏離，理由是我們的
+ *   第二個寫入口，會繞過變更紀錄。vendor 時關掉三條寫回路徑，寫入口只有變更紀錄一個，理由是我們的
  *   出貨檔是 repo 裡的檔、使用者的改動要留稽核軌跡。
  * - **橋接列（過渡）**：函式插件在相容層清單上有一個外殼（同 id、同位置），因為清單上其餘的列還是 `NexusPlugin`，要排在同
  *   一份清單、同一個順序裡。卡上寫「拿掉」，這是對字面的偏離；最後一顆搬出相容層時橋接連同相容層一起拿掉
  *   （`docs/plugin-contract.md` 的「接進清單」）。
- * - **入口的工作不在入口那一列裡**：dsh 的 `headless-runner` 在 `apply` 裡 `void run(...)`，跑在那一列的 fiber 底下。
- *   我們的入口那一列只把服務交回 `runCli`／`runServe`，對話迴圈與 HTTP 伺服器照舊跑在呼叫端的流程裡，理由是驗收 C：
+ * - **入口的工作不在入口那一列裡**：入口那一列只把服務交回 `runCli`／`runServe`，對話迴圈與 HTTP 伺服器照舊跑在呼叫端的流程裡，理由是驗收 C：
  *   入口一路以來的錯誤（`StartupError`、旗標矛盾、續接失敗）要在同一個時刻、以同一個類別與同一句話拋給呼叫端。搬進
  *   `run` 的話，錯誤得改經 `appExit` 那一類通道出去，每一條的形狀都要重新對一遍，那是「每個 thread 重讀清單」之後的卡。
  *
@@ -221,7 +215,7 @@ export interface CordisRootOptions {
   readonly contained?: boolean;
 }
 
-/** 一個還沒建的根。入口先拿到它，失敗與關掉的收尾才有東西可收，照 dsh launcher 的 `app.current`。 */
+/** 一個還沒建的根。入口先拿到它，失敗與關掉的收尾才有東西可收。 */
 export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
   const tree = new PluginTree({
     ...(options.channel !== undefined && { channel: options.channel }),
@@ -237,7 +231,7 @@ export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
       if (booted) throw new Error('Cordis 根已經建過了');
       booted = true;
       let assembly: NexusAssembly | undefined;
-      // 兩段失敗標籤：`create` 之前是宿主準備，不是插件樹（對應 dsh `boot` 在 `mountRootInclude` 之前才換標籤）。
+      // 兩段失敗標籤：`create` 之前是宿主準備，不是插件樹。
       let stage = '根準備失敗';
       try {
         const root: Context = await tree.context();
@@ -259,7 +253,7 @@ export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
         await auditTreeEntries(root.loader);
       } catch (error) {
         await dispose().catch(() => {});
-        // 稽核交出的 `StartupError` 已經指名哪一列、帶 cause 全文，原樣拋；其餘標上階段並接最深一顆的堆疊（dsh `boot` 的 catch）。
+        // 稽核交出的 `StartupError` 已經指名哪一列、帶 cause 全文，原樣拋；其餘標上階段並接最深一顆的堆疊。
         if (error instanceof StartupError) throw error;
         throw bootFailure(stage, error);
       }

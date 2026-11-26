@@ -6,8 +6,7 @@
  *
  * `@nexus/core` 的 `replayConversation` 推的是**模型看得到的**：壓縮過就是摘要加之後的、沒配到結果的呼叫補一則
  * 合成的錯誤、格式 9 以前的日誌整串推不出來。畫面要的是**發生過什麼**——壓縮前那一段照樣在、合成的那則不是真的
- * 結果、舊日誌照樣有人打的字與工具卡。所以兩側共用的是**哪一種事件代表什麼**，不是同一個函式；照 dsh：模型那側是
- * `Session.deriveMessages()`，畫面那側是 client 的 `ConversationNodeAssembler` 逐顆認日誌事件，兩者本來就分開。
+ * 結果、舊日誌照樣有人打的字與工具卡。所以兩側共用的是**哪一種事件代表什麼**，不是同一個函式。
  *
  * | 日誌事件 | 畫面 |
  * | --- | --- |
@@ -45,8 +44,7 @@
  * {@link historyPage}。
  *
  * 其餘的（外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、目標、回饋）即時的畫面也不畫，這裡也不畫。
- * **壓縮畫成一格標記，不取代被蓋掉的列**（#896）：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段
- * 換成摘要；我們沒有 surface 那一軸，標記以外即時的畫面從來沒換過，歷史跟著即時。
+ * **壓縮畫成一格標記，不取代被蓋掉的列**（#896）：標記以外即時的畫面從來沒換過，歷史跟著即時。
  *
  * ## 目標排的輪次不畫那一串字
  *
@@ -229,7 +227,7 @@ function reasoningOf(message: LoggedMessage | undefined): string {
 }
 
 /**
- * 畫面上算一則的：人打的字（一輪開頭的、輪中插的）、模型的回覆。分頁以它計數，同 dsh 以 `user/message`／`assistant/message` 計。
+ * 畫面上算一則的：人打的字（一輪開頭的、輪中插的）、模型的回覆。分頁以它計數。
  */
 function isMessage(event: SessionEvent): boolean {
   return (
@@ -683,7 +681,7 @@ function planModeOf(events: readonly SessionEvent[]): boolean | undefined {
 }
 
 /**
- * 這一顆會不會把待辦清單清成 `null`：開新的一輪，也就是不是 `resume` 的 `turn/start`（照 dsh 的 `todos` 投影）。
+ * 這一顆會不會把待辦清單清成 `null`：開新的一輪，也就是不是 `resume` 的 `turn/start`。
  * 「一輪開始」為什麼不含 `resume` 見 `@nexus/wire` 的 `todos.ts`。即時（pump）與這裡共用這一條。
  *
  * @param event - root 日誌的一顆事件。
@@ -814,7 +812,7 @@ function latestPressureEvents(events: readonly SessionEvent[]): PressureEvent[] 
     at -= 1
   ) {
     const event = events[at]!;
-    // 沒有正常回來的呼叫（#1022）也是一筆樣本（dsh 的 `contextPressure` 連 `assistant/attempt` 的用量也取樣），
+    // 沒有正常回來的呼叫（#1022）也是一筆樣本，
     // 與即時那一側（thread-pump 的 `model/usage` 分支）同一條。
     if (event.type === 'model/usage') usage ??= event;
     else if (event.type === 'context/measure') measure ??= event;
@@ -907,7 +905,7 @@ export interface AwaitingInput {
  * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
  *
  * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。前景子代理的核准
- * 冒到人面前（#328 第 1 項）時 `task` 也停在這裡，同樣維持「執行中」。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
+ * 冒到人面前（#328 第 1 項）時 `task` 也停在這裡，同樣維持「執行中」。停在核准上的那顆一直是「執行中」：它的工具卡沒有
  * 「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。核准有兩種來處，即時那條都不改卡：停在核准閘門上的
  * 那顆本體沒被呼叫到，卡從日誌 `tool/call` 開；`request_sandbox_escalation` 在本體裡問人
  * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），基座發的那顆帶核准中斷的 `tool-error` 由 pump 丟掉
@@ -924,9 +922,7 @@ export interface AwaitingInput {
  *   在下行接上時補送（`ThreadPump.subscribe`，[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。行程重開過的話
  *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
  * @param inherited - 分叉繼承來的前綴有幾顆（`inheritedEventCount`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），
- *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉 frame，同 dsh 的
- *   `subagentCatalog` 投影（`packages/subagent/subagent/src/catalog.ts:124-126`，`687f282e`）——這顆 frame 就是拿來取代
- *   那個投影的（`@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
+ *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉 frame（這顆 frame 的定義在 `@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
  */
 export function historyFrames(
   events: readonly SessionEvent[],
@@ -1100,7 +1096,7 @@ export function historyFrames(
               reasoning,
               undefined,
               undefined,
-              // 開始＝這一次模型呼叫開始（dsh 的 `stepStartTime`），不是落盤；不會晚於落盤，防時鐘倒退。
+              // 開始＝這一次模型呼叫開始，不是落盤；不會晚於落盤，防時鐘倒退。
               Math.min(event.time, modelStartedAt.get(event.data.modelCall ?? -1) ?? event.time),
             ),
           );
@@ -1218,7 +1214,7 @@ export function historyFrames(
         });
         break;
       case 'session/end-seed':
-        // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收。
         // 新檔由續接補寫的 `turn/end {interrupted}` 收，走不到這裡。
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         break;
@@ -1428,9 +1424,7 @@ export function historyPage(
     if (counted < maxMessages) continue;
     cut = at;
     // 退到那一輪的開頭，一輪不拆兩頁。
-    // **偏離 dsh（理由 1，#1555 N1372）：不收 `maxMessages: 500` 的硬上限。** dsh 的 `paginate` 湊到 `minTurns: 2` 且 ≥ 50 則才算夠，
-    // 在那之前只要先數滿 500 則就切在 groupStart——所以一輪超過 500 則、或最後兩輪合計超過 500 則，都會在輪中間硬切
-    // （`session.ts:54` 的 `HISTORY_PAGE_OPTIONS`，`history.ts:392-427` 的 `paginate`，`687f282e`）。
+    // **不收 `maxMessages: 500` 的硬上限（#1555 N1372）**：一輪超過 500 則時，硬上限會把那一輪切在中間。
     // 我們的較早頁是「自己從空的折、再接在前面」（`use-conversation.ts` 的 `prependEntries`），這是已登記偏離「歷史送線上 `Event`、不送
     // 日誌事件」的後果（`@nexus/wire` `protocol.ts` 的「偏離：送的是線上的 `Event`」段）：從半輪開始的頁折不出來，所以頁不能切在一輪中間。
     // 退到位元組上限 {@link HISTORY_PAGE_MAX_BYTES}（軟的，`fitBytes`，單獨一輪超標時 `onOversize` 叫一次）。
