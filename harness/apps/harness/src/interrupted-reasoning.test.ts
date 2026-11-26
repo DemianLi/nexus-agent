@@ -1,8 +1,7 @@
 /**
  * **按了停止的那則，重新整理之後推理還在**——[#561](https://github.com/DemianLi/nexus-agent/issues/561)。
  *
- * 照 dsh：中止時把已送出的正文與推理一起收成那則 `assistant/message {interrupted: true}`，逐塊判、只有空白
- * 的那塊不留（`packages/llm/llm/src/assembler.ts:169`，`ddefc45`）。推理占串流的大半（#527 量過），所以
+ * 中止時把已送出的正文與推理一起收成那則 `assistant/message {interrupted: true}`。推理占串流的大半（#527 量過），所以
  * **停在推理階段**才是常見的那一種，而那時正文一個字都還沒有。
  *
  * 真的 `ChatOpenAI` 對著本機的假端點，端點照 vLLM 系的拼法在 `delta` 送 `reasoning_content`，每 40ms 一顆，
@@ -11,7 +10,7 @@
  * **下一輪一定要送得出去**：只有推理的那則送回模型時是 `content: []`（`ChatOpenAI` 丟推理區塊）。這裡驗
  * 的是我們送得出去、假端點記到的正是那個形狀；真端點收不收是 #561 另外量的（NVIDIA 閘道收，#592 另量
  * gpt-oss-20b 也收）。這裡用的是裸的 `ChatOpenAI`，記到的是 LangChain 自己送的形狀；產品路徑的
- * `createLiveModel` 會在送出前照 dsh 把這則整則拿掉（`live-model.ts` 的 `withEmptyAssistantContent`）。
+ * `createLiveModel` 會在送出前把這則整則拿掉（`live-model.ts` 的 `withEmptyAssistantContent`）。
  */
 
 import { createServer } from 'node:http';
@@ -344,8 +343,8 @@ describe('按了停止的那則，推理在重新整理之後還在（#561）', 
       expect(run.upstream.sent[0]).toBeLessThan(22);
 
       expect(run.interrupted).toEqual([]);
-      // 已知差異：即時那則在按下停止的當下已經畫出來了（只有空白），重新整理之後就沒有了。照 dsh 的
-      // trim 做，代價就是這一則；它什麼都看不到，差的只是一個空泡泡。
+      // 已知差異：即時那則在按下停止的當下已經畫出來了（只有空白），重新整理之後就沒有了。按 `reasoning.trim()` 判，
+      // 代價就是這一則；它什麼都看不到，差的只是一個空泡泡。
       expect(aiView(run.frames)).toHaveLength(1);
       expect(aiView(run.history())).toEqual([]);
       const state = await run.agent.getState({
