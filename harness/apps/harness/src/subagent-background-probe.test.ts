@@ -817,7 +817,7 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
  * 兩種拉起法，差在**背景那一輪的非同步環境是誰的**：
  * - `inherit`：在工具本體裡排 `setTimeout` 再 `graph.invoke`。AsyncLocalStorage 帶著工具呼叫當下的環境走，
  *   LangGraph／LangChain 的 config 也是靠它隱式繼承的——這是「工具本體裡 `void graph.invoke()`」最自然的寫法。
- * - `loop`：由一個在任何圖的環境**之外**建好的長壽迴圈取件、執行，dsh 收件匣模型的形狀。
+ * - `loop`：由一個在任何圖的環境**之外**建好的長壽迴圈取件、執行。
  */
 type LaunchMode = 'inherit' | 'loop';
 

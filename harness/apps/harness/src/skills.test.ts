@@ -173,8 +173,7 @@ describe('skills 進到 system prompt', () => {
  *
  * **基座的空結果不算**：載入結果為空時 `loadedSkills.length > 0` 是 false，於是每一次
  * `beforeAgent` 都重掃整個來源。**這條絆索翻面了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
- * 原本斷言「沒 skill」是兩次掃描，現在是一次——照 dsh，掃描結果連空的也進快取
- * （`packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
+ * 原本斷言「沒 skill」是兩次掃描，現在是一次：掃描結果連空的也進快取。改的是組裝點包的那一層，不是基座。
  */
 describe('skills 的快取邊界', () => {
   it('載到 skill 就凍住，載到空的也凍住', async () => {
@@ -305,7 +304,7 @@ describe('subagent 的 skills 邊界', () => {
  * 不過都只是 `console.warn(...)`，**metadata 照樣被收進清單**。這跟 `@nexus/core` 那側
  * 「路徑格式在註冊期就擋」的做法是相反的哲學。
  *
- * 調用策略的兩個旗標已經照 dsh fail-closed（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)，
+ * 調用策略的兩個旗標已經 fail-closed（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)，
  * 見下面〈只給人叫的技能不列給模型〉）：nexus 自己解析、用 backend 視圖讓基座看不到。名字這一條沒有跟著擋，
  * 不在 #1574 的範圍，這裡照舊只釘住事實。
  */
@@ -443,7 +442,7 @@ describe('沒有 skill 就一個字都不加', () => {
  * root 與 general-purpose 子代理兩條路都量。
  *
  * 基座不讀 `disable-model-invocation`／`user-invocable`，今天掃到的全部印進 prompt；組裝點交給基座的 backend 換成
- * `skill-catalog.ts` 的視圖，照 dsh 讓模型那一側看不到只給人叫的、旗標不合規的（fail-closed）。`skill.list` 那一半在刀 3。
+ * `skill-catalog.ts` 的視圖，讓模型那一側看不到只給人叫的、旗標不合規的（fail-closed）。`skill.list` 那一半在刀 3。
  */
 describe('只給人叫的技能不列給模型', () => {
   /** `{ '<名字>': '<frontmatter 多出來的幾行>' }`，放在 `skills/<名字>/SKILL.md`。 */

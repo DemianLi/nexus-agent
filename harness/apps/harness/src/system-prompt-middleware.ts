@@ -8,13 +8,13 @@
  *
  * ## 渲染：逐字照今天的 `applyParts`（golden C）
  *
- * 位元組敏感的細節都保留，**不改用 dsh 的 `renderPrompt`**：
+ * 位元組敏感的細節都保留：
  *
  * - 前段只在有內容時加；`systemMessage` 的內容是字串就 `` `${head}\n\n${原文}` ``，是區塊陣列就在最前面加一塊 `` `${head}\n\n` ``；
  * - 後段用 `SystemMessage.concat` 接 `` `\n\n${tail}` ``；
  * - 沒有 `systemMessage` 時走 `systemPrompt` 這個字串欄位：`[head, body, tail]` 濾掉空的再以 `\n\n` 接，而且**不同時改兩個欄位**；
  * - `new SystemMessage({ content })` 會丟掉原訊息的其他欄位，這個行為照舊；
- * - 插值與錯誤訊息沿用 `interpolateStrict`（中文），不用 dsh 的 `interpolate`。
+ * - 插值與錯誤訊息沿用 `interpolateStrict`（中文）。
  *
  * ## 什麼時候不掛
  *

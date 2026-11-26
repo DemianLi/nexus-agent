@@ -67,10 +67,7 @@ export function sseResponse<T>(
       // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
       // header 壓著等第一顆 body byte——實測 Vite dev server 的 proxy 正是如此：
       // 直連拿得到 `200 text/event-stream`，經過它就一個位元組都不來，而瀏覽器那端
-      // 看起來就是永遠「連線中」。**這一行今天的依據就是那次實測**——dsh 當初的
-      // `sseResponse()` 也這樣做（「Send an SSE comment line on open so
-      // clients/proxies see a live channel」），但那個套件在 HEAD `0a53fb55` 已經
-      // 不在了，見 `wire-handler.ts` 檔頭。註解不是封包，解碼端本來就會跳過它。
+      // 看起來就是永遠「連線中」。註解不是封包，解碼端本來就會跳過它。
       controller.enqueue(encoder.encode(': connected\n\n'));
     },
     async pull(controller) {

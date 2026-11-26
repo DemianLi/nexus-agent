@@ -7,10 +7,8 @@
  * 就沒有檢查、沒有參與者、也不進遙測，而**三件事都是靜默的**。這一檔就是那三個靜默失敗
  * 的絆索。
  *
- * **它們不是三個政策決定。** dsh 那側沒有「要不要接」這個問題：消費者訂的是 session
- * 註冊表，不是一份 session（`packages/core/session/src/invariant.ts:218-220` 的
- * `for (const session of ctx.sessions.list())` 加 `ctx.on('session/created', …)`；遙測的
- * coordinator 檔頭寫的是 “subscribes to the session firehose”）。我們把那個結構補起來，
+ * **它們不是三個政策決定。** 沒有「要不要接」這個問題：消費者訂的是 session
+ * 註冊表，不是一份 session。我們把那個結構補起來，
  * 三題就一起消失了。
  *
  * **零憑證、零外部連線**：後端是測試自己的假貨，模型是 `ScriptedChatModel`。
@@ -284,8 +282,7 @@ describe('輪的擁有者是進入點，不是工具', () => {
  * 只收 root 日誌，那行 `if` 與「接了不只一份」的判斷一起拿掉了；剩下要釘的是結果——委派過之後 `/goal` 照樣答得出來，而
  * subagent 那一份日誌上沒有服務（`existingFor` 不建，所以這一問不會把它弄出來）。
  *
- * 而「只管 root」不是為了繞過那件事：**它就是 dsh 對 goal 的政策**（`tool-goal` 的
- * `hasDirectHumanInput` 第一道是 `ctx.agents.roots().includes(execution.agent)`）。目標是
+ * 而「只管 root」不是為了繞過那件事：**它就是 goal 的政策**：目標是
  * 人交代的，subagent 沒有人可以交代。
  */
 describe('goal 的參與者只掛在 root 上', () => {

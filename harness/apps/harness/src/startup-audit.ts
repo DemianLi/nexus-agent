@@ -1,14 +1,13 @@
 /**
  * 啟動時哪幾列掉了要整個起不來：**必掛名單**與那一段警告（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
  *
- * ## 照 dsh：載入器不管嚴不嚴，嚴格的語意由用它的那一方持有
+ * ## 載入器不管嚴不嚴，嚴格的語意由用它的那一方持有
  *
- * dsh 的載入器一列起不來、其他列照樣起來；app-boot 在全部結算之後套一份**寫死在程式裡**的必掛名單：
+ * 載入器一列起不來、其他列照樣起來；在全部結算之後套一份**寫死在程式裡**的必掛名單：
  * 名單上的條目掛了就一定要起來，起不來就釋放資源、以 `StartupError` 拒絕，訊息連可少掛的失敗一起列；
- * 只有可少掛的沒起來時印一段警告、繼續（dsh `packages/boot/app-boot/src/index.ts:739-754`、`:925-938`，
- * `README.zh.md:137`，`477b4f4`）。**比對用條目的 id**（`:931-932`），名單不分入口；沒掛或被關掉的不影響啟動。
+ * 只有可少掛的沒起來時印一段警告、繼續。**比對用條目的 id**，名單不分入口；沒掛或被關掉的不影響啟動。
  *
- * 這個模組是那一步的產品路徑版。掉了哪幾列分兩次知道，照卡上第 4 項：
+ * 掉了哪幾列分兩次知道：
  *
  * 1. **讀完清單、還沒建任何東西**（{@link auditStartupEntries}）：`loadPluginConfig` 交出模組載不進來與設定驗不過的列，
  *    必掛的掉了就在這裡起不來——早於建模型、讀或建瀏覽器會話密鑰、綁 port。
@@ -21,27 +20,26 @@
  * ## Cordis 樹上的列（#1401）
  *
  * serve 與 CLI 以 Cordis 為根之後（`cordis-root.ts`），樹上另有相容層與入口那兩列。{@link auditTreeEntries} 在
- * `loader.await()` 之後結算它們，照 dsh `auditStartupEntries` 的 `inactiveEntries`：不是 ACTIVE 的一律列出，FAILED 等一次
+ * `loader.await()` 之後結算它們：不是 ACTIVE 的一律列出，FAILED 等一次
  * `fiber.await()` 拿回原始錯誤，PENDING 列出缺哪些服務；必掛的沒起來就拋同一種 {@link StartupError}。兩張名單分開
  * （{@link REQUIRED_TREE_ENTRY_IDS}）：清單的列 id 由使用者的 patch 決定，`insert` 一列 id 叫 `serve` 的不該因此變成必掛。
  *
  * ## 名單是 `browser-session`、`system-prompt`、`background-subagents`、`permission-presets`、`goal-round-cap`、`turn-timeout` 與 `session-reference`
  *
- * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
+ * 下面三類裡只有最後一類是清單上的一列：
  *
- * | dsh 那一類 | dsh 的條目 | 我們對應的是 | 是清單上的一列嗎 |
- * |---|---|---|---|
- * | 共用的 agent 執行 | `agent-loop` | 組裝本身（`createNexusAgent`、折疊、deepagents） | 不是 |
- * | 應用的對外端點 | `webserver`、`headless-runner`、`acp`、`sdk-jsonrpc-server` | serve 的 HTTP 伺服器、CLI 的對話迴圈 | 不是 |
- * | web 的啟動與傳輸 | `modules`、`connection` | `connection` 的 cookie 有效期在我們是 `browser-session` 這一列 | **是** |
+ * | 類別 | 我們對應的是 | 是清單上的一列嗎 |
+ * |---|---|---|
+ * | 共用的 agent 執行 | 組裝本身（`createNexusAgent`、折疊、deepagents） | 不是 |
+ * | 應用的對外端點 | serve 的 HTTP 伺服器、CLI 的對話迴圈 | 不是 |
+ * | web 的啟動與傳輸 | `browser-session`（瀏覽器會話 cookie 的有效期） | **是** |
  *
  * 不是清單上的列的那幾樣（組裝本身、入口自己的程式碼、組裝點自己加的外掛），失敗照舊一律起不來，不經過這裡。
  *
- * **`system-prompt` 是我們多的一個**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)，偏離登記）：dsh 的名單沒有它，
- * 因為 dsh 的嚴格插值在渲染時拋——每一輪都紅，壞掉的設定不可能被忽略。我們的載入器把 `apply` 拋的錯變成「那一列掉了」，
+ * **`system-prompt` 也在名單上**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)，偏離登記）：我們的載入器把 `apply` 拋的錯變成「那一列掉了」，
  * 不列進名單的話，前綴寫了個打錯字的 `{{modle}}` 只換來一行警告，模型靜靜少了身分與 persona 照樣跑——比大聲失敗更糟。
- * 表達不出來的是「壞了就每輪都紅」。#1477 之後的理由改寫成：**我們在掛載當下驗語法與名字，不是渲染時才拋**（這一列自己登記
- * `model`、`cwd` 兩個變數名，`apply` 裡走一遍前後綴，寫壞的設定當場拋；值每次模型呼叫才取）。退到最接近的：讓這一列掉了就整個起不來。
+ * #1477 之後的理由是：**我們在掛載當下驗語法與名字，不是渲染時才拋**（這一列自己登記
+ * `model`、`cwd` 兩個變數名，`apply` 裡走一遍前後綴，寫壞的設定當場拋；值每次模型呼叫才取）。所以讓這一列掉了就整個起不來。
  *
  * **已知缺口（#1477 Q3，這張不修）**：樹上自我停用（#1424，verdict `off`）的必掛列不進 `dropped`，這份名單接不住它。`off` 只會來自插件
  * 自己呼叫自我停用，`system-prompt` 沒有這種呼叫；必掛列自我停用的語意（行程內停著還是起不來）是 #1424 的延伸題，不夾在遷移卡裡定。
@@ -49,8 +47,7 @@
  *
  * **`background-subagents` 是第三個**（[#707](https://github.com/DemianLi/nexus-agent/issues/707)，偏離登記），理由與 `system-prompt` 同型但方向相反：
  * 它帶著子代理的 `toolFilter`，那是一道**限制**。這一列設定驗不過就掉，掉了的後果是「沒有過濾」——部署方寫了 `deny: [write_file]`、
- * 寫錯一個字，換來一行警告和一個什麼都能寫的子代理，是 fail-open。dsh 那側同一格寫壞時整顆委派工具跟著掉（`apply` 拋），
- * 不會留下一個沒被限制的委派路徑；我們的前景 `task` 是基座的，不跟這一列一起掉，表達不出「一起掉」，退到最接近的：讓這一列掉了就整個起不來。
+ * 寫錯一個字，換來一行警告和一個什麼都能寫的子代理，是 fail-open。我們的前景 `task` 是基座的，不跟這一列一起掉，所以讓這一列掉了就整個起不來。
  * 代價是 `maxActiveSubagents` 寫壞也起不來（以前是警告加預設值）。
  *
  * **`goal-round-cap` 同一型**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，沿用 #707 那筆登記）：它是目標續行的操作者上限，
@@ -61,23 +58,22 @@
  * 掉了一輪就沒有時鐘，是 fail-open。同樣關得掉：`disabled: true` 是部署方明講不限。
  *
  * **`session-reference` 也同一型，方向是「寫壞靜靜變回不合需求的預設」**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
- * 沿用 #707 那筆登記，偏離理由 2）：dsh 的 `SessionReferenceResolver` 在建構子裡越界就拋 `SESSION_REFERENCE_INVALID_CONFIG`
- * （`packages/context/session-reference/src/index.ts:100-128`），我們的載入器把它變成「那一列掉了」，掉了之後 `startupSetting` 回 schema 的預設
- * （`referenceContextFraction` 0.2，dsh 的英文換算）。出廠把比例調低到 0.1 是因為中文三條 0.2 的來源逼近摘要門檻
+ * 沿用 #707 那筆登記，偏離理由 2）：四個上限寫壞時 schema 驗不過，
+ * 那一列就掉了，掉了之後 `startupSetting` 回 schema 的預設
+ * （`referenceContextFraction` 0.2）。出廠把比例調低到 0.1 是因為中文三條 0.2 的來源逼近摘要門檻
  * （`cordis.yml` 那一列），打錯一個字就靜靜回到 0.2。這一列**同時關不掉**（`PROTECTED_ENTRY_NAMES`）：兩道一起，寫壞與關掉都不會讓出廠的比例消失。
  *
  * **它跟「關不掉」的名單（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）是兩回事**：那一份只管能不能寫
- * `disabled: true`，以 `name` 為鍵；這一份管掉了要不要整個起不來，以 id 為鍵，照 dsh。以 id 為鍵繞不過去：patch
+ * `disabled: true`，以 `name` 為鍵；這一份管掉了要不要整個起不來，以 id 為鍵。以 id 為鍵繞不過去：patch
  * 改不動既有列的 id（`applyEntryPatches` 的解構），出貨那一列也關不掉；`insert` 一列同 `name`、換個 id 的，
  * 設定寫壞只是那一列掉，出貨那一列照樣在、照樣被 `startupSetting` 讀到。
  *
- * **兩個入口共用一份清單，所以 `browser-session` 寫壞連 CLI 也起不來**（偏離登記）：dsh 的終端機那側根本不掛
- * `connection`；我們照「用條目 id 比、名單不分入口」推下來，方向是起不來，不是放行。
+ * **兩個入口共用一份清單，所以 `browser-session` 寫壞連 CLI 也起不來**（偏離登記）：名單用條目 id 比、不分入口，方向是起不來，不是放行。
  *
  * ## 帶 `--live` 時 `live-model` 也要在
  *
- * 不是名單的一員，是 dsh 的連鎖：`agent-loop` 硬要 `llm`（dsh `packages/core/agent-loop/src/index.ts:331`），
- * 可少掛的提供方掉了會讓必掛的使用方起不來（`README.zh.md:109`）。我們的使用方是帶 `--live` 的那次組裝。
+ * 不是名單的一員，是連鎖：可少掛的提供方掉了會讓必掛的使用方起不來。
+ * 使用方是帶 `--live` 的那次組裝。
  * **不退回設定格式的預設值**：那份預設的網址是對外的公開端點，會連同金鑰一起送出去。沒帶 `--live` 時那份值沒人用，
  * 印警告就好。
  *
@@ -112,7 +108,7 @@ const LIVE_MODEL_ENTRY_ID = 'live-model';
 /** 組裝點自己加的外掛不是清單上的列，警告裡模組那一格寫這個。 */
 const ASSEMBLY_POINT = '組裝點';
 
-/** 有必掛的列掉了：整個起不來。訊息連可少掛的一起列，照 dsh 的 `StartupError`。 */
+/** 有必掛的列掉了：整個起不來。訊息連可少掛的一起列。 */
 export class StartupError extends PluginConfigError {
   /** 這一次掉了的全部，必掛與可少掛都在。 */
   readonly dropped: readonly StartupDrop[];
@@ -198,8 +194,7 @@ export function startupErrorFrom(
 }
 
 /**
- * Cordis 樹上必須起來的列（#1401）：相容層與入口那一列，對到 dsh 名單上的 `agent-loop` 與 `headless-runner`／`webserver`
- * （dsh `packages/boot/app-boot/src/index.ts:741-757`）。字面值同 `cordis-root.ts` 的列 id。
+ * Cordis 樹上必須起來的列（#1401）：相容層與入口那一列。字面值同 `cordis-root.ts` 的列 id。
  */
 export const REQUIRED_TREE_ENTRY_IDS: ReadonlySet<string> = new Set([
   'nexus-compat',
@@ -224,7 +219,7 @@ const FIBER_ACTIVE = FIBER_STATE.ACTIVE;
 const FIBER_FAILED = FIBER_STATE.FAILED;
 
 /**
- * 結算 Cordis 樹上的列，照 dsh 的 `auditStartupEntries`：在 `loader.await()` 之後呼叫，不是 ACTIVE 的列一律列出；
+ * 結算 Cordis 樹上的列：在 `loader.await()` 之後呼叫，不是 ACTIVE 的列一律列出；
  * 有必掛的就拋。只有可少掛的沒起來時交回它們，由呼叫端決定怎麼講（今天樹上沒有可少掛的列）。
  *
  * @param loader - 已結算的那顆 Loader。
@@ -255,7 +250,6 @@ export async function auditTreeEntries(loader: Loader): Promise<readonly Startup
     }
     if (fiber.state === FIBER_ACTIVE) continue;
     if (fiber.state === FIBER_FAILED) {
-      // 照 dsh：等一次拿回記下的原始錯誤。
       const error = await fiber.await().then(
         () => new Error('狀態是 FAILED，卻沒有記下錯誤'),
         (reason: unknown) => reason,
@@ -292,7 +286,7 @@ function messageOf(error: unknown): string {
 
 /**
  * 一個被拋出的值連同 `cause` 鏈與 `AggregateError` 的成員，每個 `Error` 一份堆疊，同一顆只出現一次（`seen` 防循環）。
- * 照 dsh 的 `formatActivationError`（`packages/boot/app-boot/src/index.ts:963-979`，`687f282e`）。**插件在 `apply` 裡常把錯誤包一層
+ * **插件在 `apply` 裡常把錯誤包一層
  * 再丟**（`new Error('外層', { cause })`），只取 `message` 的話真正的原因就丟了。
  *
  * @param error - catch 到的值。
@@ -317,8 +311,7 @@ export function formatActivationError(error: unknown): string {
 }
 
 /**
- * 根沒建起來時要拋的那句：`${階段}：${原因}`，原因後面接最深那一顆 `cause` 的堆疊。照 dsh `boot` 的 catch
- * （`packages/boot/app-boot/src/index.ts:1252-1263`）。`StartupError` 不經這裡，原樣拋。
+ * 根沒建起來時要拋的那句：`${階段}：${原因}`，原因後面接最深那一顆 `cause` 的堆疊。`StartupError` 不經這裡，原樣拋。
  *
  * @param stage - 失敗在哪一段（根準備、插件樹）。
  * @param cause - 原本拋的值。
@@ -342,7 +335,7 @@ export function bootFailure(stage: string, cause: unknown): Error {
 }
 
 /**
- * 兩次合起來要印的那一段（可能是空的），照 dsh 的 `activationDiagnostic`。**呼叫端只印一次**：CLI 印到標準錯誤，
+ * 兩次合起來要印的那一段（可能是空的）。**呼叫端只印一次**：CLI 印到標準錯誤，
  * serve 印到伺服器日誌、在綁 port 之前。外掛在 `apply` 裡交出的警告（`registry.logger`）也印在同一段（卡上第 7 項）。
  *
  * @param loaded - `loadDefaultPlugins` 的結果。
@@ -399,7 +392,7 @@ export function requiredIds(options: StartupAuditOptions): ReadonlySet<string> {
   return options.live ? new Set([...REQUIRED_ENTRY_IDS, LIVE_MODEL_ENTRY_ID]) : REQUIRED_ENTRY_IDS;
 }
 
-/** 起不來那一則，照 dsh 的 `startupDiagnostic`：必掛的標出來，可少掛的一起列。 */
+/** 起不來那一則：必掛的標出來，可少掛的一起列。 */
 function startupDiagnostic(
   dropped: readonly StartupDrop[],
   required: ReadonlySet<string>,
@@ -408,8 +401,8 @@ function startupDiagnostic(
   const lines = [`起不來：${String(requiredCount)} 列必掛的沒有掛上。這一次掉了的全部：`];
   for (const drop of dropped) {
     lines.push(dropLine(drop, required.has(drop.id)));
-    // 帶堆疊與 cause 鏈的全文縮排接在底下（dsh `startupDiagnostic` 同）；只給管理者看的這一則用，
-    // 回到網頁的路徑（`describeDrop`、失敗列的 `message`）仍是一行，照 dsh 的 `reloadDiagnostic`。
+    // 帶堆疊與 cause 鏈的全文縮排接在底下；只給管理者看的這一則用，
+    // 回到網頁的路徑（`describeDrop`、失敗列的 `message`）仍是一行。
     if (drop.detail !== undefined) {
       lines.push(...drop.detail.split('\n').map((line) => `    ${line}`));
     }
@@ -417,7 +410,7 @@ function startupDiagnostic(
   return lines.join('\n');
 }
 
-/** 可少掛的沒起來、或寫了沒作用的 `config` 時那一段，照 dsh 的 `activationDiagnostic`。 */
+/** 可少掛的沒起來、或寫了沒作用的 `config` 時那一段。 */
 function activationWarning(
   dropped: readonly StartupDrop[],
   ignored: readonly IgnoredConfig[],

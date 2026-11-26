@@ -1,6 +1,6 @@
 /**
  * 第三方元件清單（`harness/scripts/gen-third-party-notices.ts`，[#1545](https://github.com/DemianLi/nexus-agent/issues/1545)）的
- * 新鮮度與規則紅燈。照 dsh（687f282e）`scripts/gen-third-party-notices.spec.ts`：新鮮度放在測試裡，不另開 job。
+ * 新鮮度與規則紅燈：新鮮度放在測試裡，不另開 job。
  *
  * 新鮮度那格真的跑一次網頁的 vite build（`write: false`）。
  */
