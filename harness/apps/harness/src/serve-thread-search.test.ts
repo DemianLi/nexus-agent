@@ -4,8 +4,7 @@
  * 搜得對不對在 [`thread-search.test.ts`](./thread-search.test.ts)；這一檔問的是只有產品路徑上量得到的：
  *
  * 1. **出廠的清單不開**：有東西可搜時回失敗，沒有時回空；patch 一列打開之後，serve 寫下的日誌搜得到。
- * 2. **出廠的清單一次都不載入 `node:sqlite`**：Node 22 載入它會在 stderr 印一行實驗功能的警告，dsh 用測試釘同一件事
- *    （`apps/cli/tests/lazy-search-startup.compat.spec.ts:103-123`，`477b4f4`）。**判準是模組有沒有載入，不是 stderr
+ * 2. **出廠的清單一次都不載入 `node:sqlite`**：Node 22 載入它會在 stderr 印一行實驗功能的警告。**判準是模組有沒有載入，不是 stderr
  *    有沒有那一行**：Node 24 以後不印，本機跑的是哪一版就量不到那一行。所以另起一個行程，退出時自己講載入過沒有。
  * 3. 線上的閘門：`content-type`、方法、body。
  * 4. **活的 thread 讀記憶體**（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）：落盤窗口拉長，批次窗口裡的那一句搜得到；新建、
@@ -112,7 +111,7 @@ describe('出廠的清單', () => {
       code: 'not_supported',
       message: THREAD_SEARCH_DISABLED_MESSAGE,
     });
-    // 不合法的查詢講的是查詢，不是沒開：同 dsh 先正規化。
+    // 不合法的查詢講的是查詢，不是沒開：先正規化。
     expect(await client.searchThreads('   ')).toEqual({
       kind: 'rejected',
       code: 'invalid_argument',

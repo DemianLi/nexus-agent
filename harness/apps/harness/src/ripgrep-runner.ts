@@ -6,32 +6,22 @@
  * 甚至用 `--pre` 讓 rg 對每個命中的檔執行任意程式；stdout 不設上限（`output += data`）；沒有取消，使用者按停止 rg
  * 照跑；結束碼不是 0／1、逾時、spawn 失敗一律回 `null`，接著改走結果不同的 `literalSearch`。
  *
- * 這裡照 dsh `packages/fs/tool-fs-search/src/search-core.ts:222-287` 的 `runRipgrep`（`687f282e`）：
- *
- * - argv 開頭是 `--no-config`（`:240`）。宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`，`danger-full-access` 下也沒有 Landlock 擋著。
+ * - argv 開頭是 `--no-config`。宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`，`danger-full-access` 下也沒有 Landlock 擋著。
  * - stdout 累計位元組，超過 {@link RAW_OUTPUT_MAX_BYTES} 就收掉 rg，回 `SEARCH_RAW_OUTPUT_OVERFLOW`，**不解析半份輸出**。
  *   stderr 只留最後 {@link STDERR_MAX_BYTES}，當診斷用。
  * - 取消：呼叫端的 signal 與 {@link SEARCH_TIMEOUT_MS} 的逾時合成一個，觸發時先 `SIGTERM`，{@link KILL_GRACE_MS} 後還在就
- *   `SIGKILL`（`:53`），回 `SEARCH_ABORTED`。
- * - 結束碼：0 有結果、1 零結果，其餘依 stderr 分 `SEARCH_INVALID_PATTERN`（regex／glob 解析錯誤）與 `SEARCH_FAILED`
- *   （`:124-130`）；被訊號殺也是 `SEARCH_FAILED`。**沒有退路**：這一層不改走別的搜尋法。
+ *   `SIGKILL`，回 `SEARCH_ABORTED`。
+ * - 結束碼：0 有結果、1 零結果，其餘依 stderr 分 `SEARCH_INVALID_PATTERN`（regex／glob 解析錯誤）與 `SEARCH_FAILED`；被訊號殺也是 `SEARCH_FAILED`。**沒有退路**：這一層不改走別的搜尋法。
  *   **唯一的例外是偏離 1（#1704）**：呼叫端給了 `tolerateUnreadable`、結束碼 2、而 stderr 每一行都是「起點底下讀不到」時，
  *   照樣交出 stdout。
- * - 子行程環境是 `scrubbedParentEnv()`（`search-core.ts:8`、`subprocess-local/src/spawn.ts:45`）：名字像憑證的與
+ * - 子行程環境是 `scrubbedParentEnv()`：名字像憑證的與
  *   harness 自己的變數不交給 rg。
  *
- * ## 偏離 dsh（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)，理由 2：多人共用主機）
+ * ## 偏離（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)，理由 2：多人共用主機）
  *
- * 1. **有些路徑讀不到不讓整次搜尋失敗。** dsh `runRipgrep` 把 0、1 以外的結束碼一律拋成 `SEARCH_FAILED`
- *    （`search-core.ts:282-284`）。dsh 的測試裡結束碼 2 只有：regex 解析錯誤（`tests/tools.spec.ts:568`）、glob 解析錯誤（`:576`）、
- *    路徑不存在的 `IO error`（`:583`）、被截尾的 stderr（`:597-605`）與 `'boom'`（`:1108`）；空 stderr 那條是結束碼 3（`:591`）。
- *    **沒有「部分路徑讀不到」的情境**——它是單人的 Host，工作區都是自己的檔。
+ * 1. **有些路徑讀不到不讓整次搜尋失敗。**
  *    多人共用一台主機時，工作區裡只要有一個 0600、屬於別人的檔，或一個 0700 的目錄，rg 就回 2，stdout 其實已經有
  *    其餘檔的命中，整次 grep 失敗等於把已找到的一起丟掉。
- *
- *    **最接近的 dsh 前例是 `packages/context/file-reference-local/src/search.ts`**（`687f282e`）：走訪時「根不是子樹」——
- *    讀不到的子樹只少掉它自己的候選、其他分支照用（`:297-302`），但讀不到的**根**表示這趟走訪什麼都沒學到，失敗而不是回空
- *    （`:211-217`；測試 `tests/search.spec.ts:197`、`:254-269`）。這裡照同一條線：
  *
  *    - **搜尋起點本身讀不到 → 照舊判錯。**stderr 裡讀不到的路徑等於 {@link TolerateUnreadable.searchRoots} 的任何一個
  *      （`.`、`./<起點>`；rg 的 stderr 原樣印出我們給的引數），就不放行：整個工作區都沒搜到，不能當成「沒有命中」。
@@ -54,11 +44,6 @@
  *
  *    退到的做法：照樣交出 stdout，並在結果上帶 {@link RipgrepOutcome.unreadable}，由呼叫端告訴模型「結果只涵蓋讀得到的」。
  *
- * ## 與 dsh 的差異（不是偏離，是載體）
- *
- * dsh 經 `ctx.subprocess` 服務起子行程，終止升級由那個服務做；nexus 沒有這個服務（`child-env.ts` 檔頭同一個登記），
- * 所以升級（`SIGTERM` → `SIGKILL`）、逾時與輸出計數都在這個檔案裡自己做。規則照抄，載體退成一個函式。
- *
  * ## 執行檔
  *
  * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。產物裡的 rg 不見了就是
@@ -80,18 +65,18 @@ import { ripgrepReadRoots } from './ripgrep-sandbox.js';
 import { productToolLauncher } from './tool-launcher.js';
 import type { ToolLaunchFailure, ToolLauncher, ToolProcess } from './tool-process.js';
 
-/** 完整 stdout 的上限（位元組）。dsh `RAW_OUTPUT_MAX_BYTES`（`search-core.ts:36`），同 Claude Code 的 ripgrep 緩衝。 */
+/** 完整 stdout 的上限（位元組），同 Claude Code 的 ripgrep 緩衝。 */
 export const RAW_OUTPUT_MAX_BYTES = 20_000_000;
 
-/** 一次搜尋的逾時預算（毫秒）。dsh `SEARCH_TIMEOUT_MS`（`:43`）。 */
+/** 一次搜尋的逾時預算（毫秒）。 */
 export const SEARCH_TIMEOUT_MS = 30_000;
 
-/** 保留的 stderr 尾巴（位元組），診斷用。dsh `SEARCH_STDERR_MAX_BYTES`（`:50`）。 */
+/** 保留的 stderr 尾巴（位元組），診斷用。 */
 export const STDERR_MAX_BYTES = 64 * 1024;
 
 /**
  * 起不來的錯誤訊息是**固定字串**：它會原樣變成工具結果交給模型，而 Node 的 spawn 錯誤訊息與內附 rg 的位置都帶主機的絕對路徑
- * （`spawn /opt/…/rg ENOENT`）。照 dsh `packages/fs/tool-fs-search/src/search-core.ts:260`：訊息固定、原始錯誤不接在後面。
+ * （`spawn /opt/…/rg ENOENT`）。訊息固定、原始錯誤不接在後面。
  * 要查是哪個路徑，看 serve 啟動日誌那一行「搜尋（grep）：內附 ripgrep …」（給管理者的，`rg-path.ts`）。
  */
 const FAILURE_REASONS: Record<ToolLaunchFailure, string> = {
@@ -105,7 +90,7 @@ const FAILURE_REASONS: Record<ToolLaunchFailure, string> = {
 const launchFailure = (tool: RipgrepTool, reason: ToolLaunchFailure): string =>
   `${tool} could not start its search command (${FAILURE_REASONS[reason]})`;
 
-/** 收掉 rg 時 `SIGTERM` 之後等多久升級到 `SIGKILL`（毫秒）。dsh `SEARCH_GRACE_MS`（`:53`）。 */
+/** 收掉 rg 時 `SIGTERM` 之後等多久升級到 `SIGKILL`（毫秒）。 */
 export const KILL_GRACE_MS = 3_000;
 
 /** 錯誤訊息裡說的是哪一顆工具：`grep` 與 `glob` 共用同一支 runner（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）。 */
@@ -139,7 +124,7 @@ export interface RipgrepRunOptions {
   /** 這一次的沙箱模式；預設 `read-only`。rg 不寫檔，`workspace-write` 也照 `read-only` 起。 */
   readonly mode?: SandboxMode | undefined;
   /**
-   * 結束碼 2、stderr 全是「讀不到」（而且讀不到的不是搜尋起點）時照樣交出 stdout（偏離 1，#1704）。**不給就是 dsh 的做法**：
+   * 結束碼 2、stderr 全是「讀不到」（而且讀不到的不是搜尋起點）時照樣交出 stdout（偏離 1，#1704）。
    * 只有呼叫端確定「子樹讀不到不是秘密、少搜幾個檔可以接受」才給（工作區的 `grep`／`glob`）；附件路由不給
    * （#1822：同一個目錄裡沒引用的別名檔屬於別的 thread，連「有幾個」都不交給模型）。
    */
@@ -232,7 +217,7 @@ function unreadableCount(
   return lines.length;
 }
 
-/** 非 0／1 結束的 rg 歸類，照 dsh `classifyRunFailure`（`:124-130`）。 */
+/** 非 0／1 結束的 rg 歸類。 */
 function classifyExit(
   tool: RipgrepTool,
   exitCode: number,
@@ -418,7 +403,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
       let unreadable = 0;
       if (exitCode !== 0 && exitCode !== 1) {
         const stderrText = stderrTail.toString('utf8');
-        // 偏離 1（#1704）：只有結束碼 2、而 stderr 全是「讀不到」才放行；其餘的非 0／1 照 dsh 判錯。
+        // 偏離 1（#1704）：只有結束碼 2、而 stderr 全是「讀不到」才放行；其餘的非 0／1 判錯。
         const skipped =
           exitCode === 2 && options.tolerateUnreadable !== undefined
             ? unreadableCount(stderrText, stderrTruncated, options.tolerateUnreadable.searchRoots)

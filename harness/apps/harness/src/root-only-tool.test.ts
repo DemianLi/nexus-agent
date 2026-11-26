@@ -2,18 +2,10 @@
  * **root-only 的工具在真的組裝裡擋不擋得住 subagent** ——
  * [#134](https://github.com/DemianLi/nexus-agent/issues/134)。
  *
- * dsh 的 `tool-goal` 對 subagent 的態度是**直接拒絕**：`hasDirectHumanInput` 的第一道
- * 就是 `ctx.agents.roots().includes(execution.agent)`，工具描述自己寫著 “Execution
- * rejects non-human and subagent authority.”（`references/deepseek-harness/packages/goal/
- * tool-goal/src/authority.ts`、`src/index.ts:48`，SHA
- * `0a53fb55bea101816fa226bb964ae2bed71c343b`）。**所以「拒絕」不是我們的偏離，它就是
- * dsh 對這一類工具的政策**——dsh 只有 `tool-todo` 那一類才給 subagent 各自一份。
- *
- * dsh 靠 `exec.agent` 在執行期問出「誰在叫」，那個欄位是它自己的 agent loop 派發時塞的
- * （`packages/core/agent-loop/src/tool-calls.ts:78`），而**我們的派發點是 LangGraph 的
+ * **我們的派發點是 LangGraph 的
  * ToolNode，插不進去**（見 [`tool-session-log.test.ts`](./tool-session-log.test.ts)）。
  *
- * 我們換的地方是**組裝期**：fold 給每個 subagent 的是一份自己的工具陣列，所以 root-only
+ * 判別放在**組裝期**：fold 給每個 subagent 的是一份自己的工具陣列，所以 root-only
  * 的那顆在那份裡被換成同名的拒絕樁。**整條路上一次都沒有讀 `configurable`**——不看
  * `thread_id`、不看 `ls_agent_type`（那是 LangSmith tracing 的元資料）、也不看
  * `checkpoint_ns`（格式沒有承諾）。判別發生在組裝期，升版動不到它。

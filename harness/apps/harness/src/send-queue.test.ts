@@ -1,7 +1,7 @@
 /**
  * **送出佇列放在 server 上**——[#637](https://github.com/DemianLi/nexus-agent/issues/637) 的驗收。
  *
- * 照 dsh 的收件匣（`packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：人送出的話一律先進佇列，每一次變動在日誌上
+ * 人送出的話一律先進佇列，每一次變動在日誌上
  * 落一顆 `inbox/spliced`，一輪開始時領一件。按停止之後排著的停住，下一次送出才喚醒；重啟之後從日誌折回來、停住。
  *
  * 三層：
@@ -546,7 +546,7 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
   });
 
   /**
-   * 照 dsh：刪掉續行預約只把「取消了」記下來，**暫停在 pump 閒下來時才做**（`goal-round-driver/src/index.ts:258-283`）。
+   * 刪掉續行預約只把「取消了」記下來，**暫停在 pump 閒下來時才做**。
    * 刪的當下還有別的輪在跑（折回來的預約排在人的件後面）就要等它們全跑完，那幾輪期間目標仍是 active。
    */
   it('刪掉續行預約：還有別的輪在跑就等它們收尾、閒下來才暫停目標', async () => {
@@ -1028,7 +1028,7 @@ describe('wire', () => {
     hold.open();
     await until(() => log().some((event) => event.type === 'turn/end'));
 
-    // 停在核准點時送出：照 dsh 收下、排著（#637 的 Q4）。
+    // 停在核准點時送出：收下、排著（#637 的 Q4）。
     const second = await client.runStart(thread, '第二句');
     expect(second.type).toBe('success');
     const secondId = (second as { result: { run_id: string } }).result.run_id;

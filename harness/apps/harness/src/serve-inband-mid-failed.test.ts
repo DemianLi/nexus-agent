@@ -117,7 +117,7 @@ describe('串流中段的 in-band 錯誤（#1763）', () => {
     expect(error).toMatchObject({ code: last.code, status: last.status });
   }, 60000);
 
-  // #1805：只有 `type`、沒有數字碼、訊息也不含額度／超窗字樣的信封，照 dsh 的 `providerError` 記 `AUTH`（不是 `SERVER`）。
+  // #1805：只有 `type`、沒有數字碼、訊息也不含額度／超窗字樣的信封，記 `AUTH`（不是 `SERVER`）。
   // 突變：拿掉 `classifyInbandError` 讀 `type` 的那一階，這條就紅（`SERVER`、被重打 3 次）。
   it('只有 type: authentication_error 的信封 → turn/failed 是 AUTH，不重打（#1805）', async () => {
     envelope = { message: '金鑰不對', type: 'authentication_error' };

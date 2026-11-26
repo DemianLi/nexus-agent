@@ -146,7 +146,7 @@ describe('組裝起來之後', () => {
           .filter((event) => event.type === 'sandbox/mode')
           .map((event) => event.data),
       ).toEqual([{ mode: 'read-only' }]);
-      // 新會話把起始組合釘進日誌（dsh `pinInitialPermission`）：`--sandbox read-only` 配核准 `ask` 就是 `read-only` 那一組。
+      // 新會話把起始組合釘進日誌：`--sandbox read-only` 配核准 `ask` 就是 `read-only` 那一組。
       expect(
         sessionLog.events
           .filter((event) => event.type === 'permission/preset')

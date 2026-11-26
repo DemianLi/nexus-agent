@@ -2,7 +2,7 @@
  * 子代理的會話閘，第二次核對（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544) 驗收 3）。
  *
  * 第一道（冷讀 header、在續接之前）擋住絕大多數；它和續接之間還有一道窄縫——檔案在冷讀之後、拿到寫租約之前被換掉。
- * 對應 dsh 續接之後的核對（`session-controller/src/agent.ts:231-234`）。這一檔用一個假的存放處重現那道縫：
+ * 這一檔用一個假的存放處重現那道縫：
  * `open(…, 'read')` 回「沒有 `parentSession`」，`resume` 回「有」。斷言：丟 `SubagentSessionError`（線上是
  * `thread_is_subagent`），**而且續接拿到的寫把手被關掉了**（租約放了，不然下一次請求撞上自己留下的租約）。
  * 拿掉第二次核對就紅：請求會往下組裝、回成功（header 帶了 `cwd`，所以不會先被 `assertSameCwd` 擋成別的錯）。

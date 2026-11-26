@@ -2,8 +2,7 @@
  * **會話的檔名與讀 header 只有一份定義**（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857) 驗收 A，#1594 拆刀 ①）。
  *
  * 一份會話是 `<base>.header.json`＋`<base>.jsonl`＋`<base>.lock`。檔名只在 `@nexus/core` 的 `session-filename.ts`
- * 定義，讀一份會話只走 `jsonl-session-store.ts` 的 `readSessionEntry`（照 dsh `packages/session/session-format/src/filename.ts`
- * 的「檔名只有一份定義」）。#1594 ② 換佈局時只動這兩處；別處自己拼檔名、自己解 header，換佈局那天就會靜靜讀錯。
+ * 定義，讀一份會話只走 `jsonl-session-store.ts` 的 `readSessionEntry`。#1594 ② 換佈局時只動這兩處；別處自己拼檔名、自己解 header，換佈局那天就會靜靜讀錯。
  *
  * 擋三種寫法（非測試程式；測試的遷移是 ①b）：
  *
@@ -13,7 +12,7 @@
  *   上一條只看直接的匯入來源，看不到。具名轉出上一條已經擋了；不做跨檔解析。`export * as ns` 不算裸的：
  *   拿的人得寫 `ns.parseHeader`，屬性存取那條擋得到。
  *
- * 不是會話的 `.jsonl`（變更紀錄、結果檔……）照 dsh `scripts/verify-no-bare-dispatcher.ts` 的 `proxy-exempt:` 做法：
+ * 不是會話的 `.jsonl`（變更紀錄、結果檔……）：
  * 同一行或上一行的註解寫 `session-file-exempt: <理由>`。**理由空白也紅**：新加的 `.jsonl` 一定要說它為什麼不是會話檔。
  * 不列白名單檔：列了檔，那個檔之後新增的會話檔名就沒人看。
  *
@@ -151,7 +150,7 @@ const SOURCE_ROOTS = ['harness/apps/harness/src', 'harness/packages', 'harness/s
 
 /**
  * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。
- * `.fixture.ts`、`.smoke.ts` 是非測試，要掃。`.js` 照 dsh 的「每個原始碼檔」（#1873）。
+ * `.fixture.ts`、`.smoke.ts` 是非測試，要掃。`.js` 也算（#1873）。
  */
 export const isSource = (name: string): boolean =>
   /\.(tsx?|mts|cts|[cm]?js)$/u.test(name) &&

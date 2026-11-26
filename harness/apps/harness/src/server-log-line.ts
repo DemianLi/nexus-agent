@@ -6,8 +6,8 @@
  */
 
 /**
- * serve 的伺服器日誌每一行是 `[yyyy-MM-dd hh:mm:ss ][E|W|I|D] 名字 訊息本文`（#1534，照 dsh 的 `render`）。
- * 測試比的是**訊息本文**，這裡把前綴剝掉。多行訊息的續行縮排是「時間＋`[X]`＋空格」那麼長（`render` 的 `indent`，**不含名字**），一併剝掉。
+ * serve 的伺服器日誌每一行是 `[yyyy-MM-dd hh:mm:ss ][E|W|I|D] 名字 訊息本文`（#1534）。
+ * 測試比的是**訊息本文**，這裡把前綴剝掉。多行訊息的續行縮排是「時間＋`[X]`＋空格」那麼長（**不含名字**），一併剝掉。
  * 不是這個形狀的行原樣回傳。
  */
 export function serverLogBody(line: string): string {
