@@ -2,8 +2,6 @@
  * 引用別的會話的準備那一半（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：把人在句子裡 `@` 的會話，
  * 凍成一則附在那句話後面的 user-role 快照。候選那一半在 `session-reference-candidates.ts`。
  *
- * 分六步：
- *
  * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 `maxReferences` 條不同的會話（預設 3，
  *    `session-reference` 那一列，#1573）、不能引用自己。
  * 2. **精確讀**（{@link SessionReferenceReader}）：冷讀的整份日誌壞了就拋，不撿回。
@@ -21,22 +19,18 @@
  *    寫進日誌的時候就要已經是換過的 `@標題`，而那時迴圈還沒開始，所以解析與驗證（自己、太多條、網址壞）提前到 `run.start`／
  *    `queue.update` 收下的那一刻，回 `invalid_argument`，那句話不進佇列、什麼都不丟。**讀被引用的會話仍在迴圈裡**（領走之後、叫模型之前），
  *    失敗讓這一輪失敗。
- * 2. （已撤：截斷的全文存進接收那條 thread 的工具結果暫存並回位址，#1553 N0948；沒有暫存時回 `storage-not-configured`。
- *    編號保留，別處引用的「偏離 3、4」不跟著動。）
- * 3. （已撤：模型容量。以前寫「我們的模型解不出 `maxInputTokens`，所以固定 64 KiB」，前提今天不成立：型錄每一筆必填 `contextWindow`，
- *    組裝端有 `limitsOf`，#1573 N0862 起預算跟著模型窗口走，見偏離 5、6。編號保留，別處引用的「偏離 3、4」不跟著動。）
  * 4. **投影靠 `replayConversation`**：「現在看得到的」就是把日誌推回模型歷史
  *    （壓縮會換掉舊的），同 `thread-search.ts` 的做法。**推不出來就拋**（`SESSION_REFERENCE_READ_FAILED`），不像搜尋那樣退回「整份都算」
  *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。投影時在副本後面接上補結（{@link closedForProjection}）：活會話還沒回覆也投影得出人打的字。
  *    `capturedThroughSeq` 取傳入 `events` 的最後一顆：活的是記憶體最後一顆，冷讀的是補結那一顆。
- * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（理由 1，基座表達不出來；#1573 N0862）：
+ * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（#1573 N0862）：
  *    我們領走發生在 step-inbox 的 `beforeModel`，它在 middleware 順序裡是**第一顆**（`harness/packages/nexus-core/src/fold.ts:671` 的註解），而這一步的路由由後面的
- *    重複提醒／換模型通知那顆 `beforeModel` 的 `assembleStep()` 才定，所以領走的當下**這一步的路由還沒定**。表達不出來的是「領走晚於
- *    定路由」。退到最接近的：領走時問選擇控制器的 `next()`（使用者最後選的 → 最近一次請求走的 → 部署預設，純讀日誌），整批共用
+ *    重複提醒／換模型通知那顆 `beforeModel` 的 `assembleStep()` 才定，所以領走的當下**這一步的路由還沒定**。
+ *    領走時問選擇控制器的 `next()`（使用者最後選的 → 最近一次請求走的 → 部署預設，純讀日誌），整批共用
  *    一次。**不叫 `assembleStep()`／`takeStepRoute()`**：前者會寫快照，`beforeModel` 被跳過的下一步會吃到舊路由。差別只在「領走之後、
  *    這一步請求之前」又有 `model/selection` 落進日誌的那個窗口：預算用的是舊那顆的窗口，請求走的是新那顆，不補。這個窗口在同一批領走裡不存在：開場那句與插話都從 `#deliverSteps`（`thread-pump.ts`）一處進來、
  *    一次領走，共用同一個預算。
- * 6. **出廠的 `referenceContextFraction` 是 0.1，不是 0.2**（理由 2，產品需求；demian 2026-10-17 拍板 Q4 (b)）：
+ * 6. **出廠的 `referenceContextFraction` 是 0.1，不是 0.2**（demian 2026-10-17 拍板 Q4 (b)）：
  *    「每 token 4 位元組」是照英文調的，本產品以中文為主，nexus 自己的估算器量中文約 0.31 token／位元組，0.2 時三條來源占摘要門檻的
  *    94%–95%，乘上實測的真實÷o200k 1.10 就超過。量法、數字與突變見 `cordis.yml` 的 `session-reference` 那一列與 `session-reference-budget.test.ts`；
  *    schema 的預設仍是 0.2（`settings/session-reference.ts`）。
@@ -429,7 +423,6 @@ export function renderReferencePrompt(data: readonly ReferencedSessionData[]): s
   return `${PROMPT_PREFIX}${stringifyTagSafeJson(data)}${PROMPT_SUFFIX}`;
 }
 
-/** 全文存下來了沒有。 */
 type FullSnapshot =
   | ({ readonly status: 'saved' } & SpillRef)
   | {
@@ -452,7 +445,6 @@ interface OmissionSource {
 }
 
 /**
- * 預覽少了字的那一條，存全文並回一則說明。沒有截斷就是 `undefined`。
  * 沒有存檔服務回 `storage-not-configured`；存檔拋錯回 `save-failed`——存不下不能把殘缺的預覽說成有全文，也不讓這一輪失敗。
  * 取消不在這裡吞：外層 {@link settleWithCancellation} 照樣拋 `CANCELLED`。
  *
@@ -500,10 +492,6 @@ function omission(source: OmissionSource, fullSnapshot: FullSnapshot): OmissionN
   };
 }
 
-/**
- * 截斷的那一條的完整逐字稿：警告、擷取的中繼資料，每則訊息切成最多 64 個
- * code point 一段的 JSON 字串、一段一行（沒有換行的長訊息也讀得了，逐段 `JSON.parse` 串起來就是原文）。
- */
 function renderTranscript(data: ReferencedSessionData, capturedFormatVersion: number): string {
   const { conversation, ...capture } = data;
   return [
@@ -566,7 +554,6 @@ function cancelled(signal: AbortSignal): SessionReferenceError {
   );
 }
 
-/** 等 `work`，但取消時不等它。 */
 function settleWithCancellation<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return work;
   if (signal.aborted) {
@@ -646,7 +633,6 @@ export async function prepareSessionReferences(
     return { ...retained, capturedFormatVersion: storedFormatVersion };
   });
 
-  // 逐條存，存的時候也等得到取消。
   const omissions = await settleWithCancellation(
     Promise.all(
       rendered.map((source, index) => prepareReferenceOmission(options.spillStore, source, index)),

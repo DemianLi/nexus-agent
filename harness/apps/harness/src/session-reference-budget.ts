@@ -1,13 +1,6 @@
 /**
  * 引用別的會話時，每條來源最多留幾個位元組（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862）。
  *
- * 預算怎麼算：
- *
- * 1. 設了 `maxReferenceBytes` 就用它，**原樣蓋過**自動預算。
- * 2. 否則 `max(65536, floor(contextWindow × 4 × referenceContextFraction))`。窗口以 token 計，「每 token 4 位元組」是估算的大小，
- *    不是換算。
- * 3. 取不到窗口，用 64 KiB。
- *
  * 這是純函式：**窗口由呼叫端取**（`wire-handler.ts` 組在 `new ThreadPump` 那一處，問這條 thread 的選擇控制器下一步走哪一顆，
  * 再查型錄），這裡不碰日誌、不碰型錄。
  *
@@ -15,14 +8,12 @@
  *
  * - **沒有選擇控制器**（腳本模型、沒帶 `--live`）：沒有型錄可查，用 64 KiB。
  * - **路由的模型不在型錄裡**：走不到。控制器的下一步路由跳過型錄沒有的模型，退回部署預設，窗口是部署預設那顆的。
- * - 型錄是同步的純查表（`findModelEntry`），沒有錯誤路徑；取消走 `prepareSessionReferences` 的 `signal`。
  *
  * @module
  */
 
 import { DEFAULT_MAX_REFERENCE_BYTES } from './session-reference.js';
 
-/** 「每 token 約幾個位元組」（`contextWindow * 4 * fraction` 的那個 4）。 */
 export const REFERENCE_BYTES_PER_TOKEN = 4;
 
 /**

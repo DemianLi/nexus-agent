@@ -50,7 +50,7 @@
  *
  * ## 標題
  *
- * {@link threadTitleOf}：最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)，latest-wins）；一顆都沒有才照規則推。規則與偏離見 `session-title.ts`。
+ * {@link threadTitleOf}：最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)，latest-wins）；一顆都沒有才照規則推。規則見 `session-title.ts`。
  *
  * @module
  */
@@ -93,7 +93,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 判準與偏離寫在那裡（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
  * **列表（{@link isListedThread}）和 serve 的續接閘（`serve-run.ts` 的 `createAgent`）共用這一支**，判準只有一份。
- * web 這條路只認 `origin`，分叉是一條可以驅動的主對話。
  */
 export { isSubagentSessionHeader };
 

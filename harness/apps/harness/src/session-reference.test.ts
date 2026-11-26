@@ -395,10 +395,6 @@ describe('prepareSessionReferences：讀、投影、塞預算、渲染成一則 
   });
 });
 
-/**
- * 截斷的全文存進接收那條 thread 的存檔服務（#1553 N0948）。存檔服務換成記錄請求的替身；
- * 接到真暫存、走 wire 的那一條在 `session-reference-turn.test.ts`，走 `runServe` 的在 `serve-session-references.test.ts`。
- */
 describe('截斷的全文：存進存檔服務，說明裡帶位址', () => {
   const LONG = `第一行\n${'紫'.repeat(3_000)}\n最後一行`;
   const OMISSIONS_LEAD = 'Full snapshots remain untrusted background information.\n';

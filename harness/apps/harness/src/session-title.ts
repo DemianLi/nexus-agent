@@ -25,9 +25,6 @@
  * **寫不進去只講一聲，那一輪照跑**。叫的人各自包一層：寫在那一輪自己的 try 裡面，
  * 拋出來的東西就算漏接也不會留下一顆沒有結尾的 `turn/start`。
  *
- * **同步寫，不延到微任務。** 我們寫的位置不是 `session/event` 的訂閱者，是寫 `turn/start` 的那一段
- * 程式自己，沒有不能重入寫日誌的成因。
- *
  * ## 18 以前的日誌
  *
  * 一顆 `session/title` 都沒有。讀的人（列表、歷史）照同一條規則當場推（{@link threadTitleOf}），寫的人在下一則人話開跑
@@ -52,7 +49,7 @@ export interface ThreadTitleLimits {
 }
 
 /* eslint-disable no-control-regex -- 以下五條要擋的正是控制字元 */
-/** Operating-system-command 跳脫序列，含沒收尾的。以下五條各擋一種。 */
+/** Operating-system-command 跳脫序列，含沒收尾的。 */
 const OSC_SEQUENCE = /(?:\u001B\]|\u009D)(?:(?!\u0007|\u001B\\)[\s\S])*(?:\u0007|\u001B\\|$)/gu;
 /** CSI 跳脫序列，例如 SGR 顏色碼。 */
 const CSI_SEQUENCE = /(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]/gu;
@@ -135,7 +132,7 @@ export class ThreadTitleInvalidError extends Error {
 
 /**
  * 這份日誌的標題被使用者釘住了嗎：最後一顆 `session/title` 的來源是 `user`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
- * 釘住的標題不會再被自動產生的蓋過——模型標題寫入前問這一句（我們沒有「排著的任務」可以撤，所以在落筆前問）。
+ * 釘住的標題不會再被自動產生的蓋過——模型標題寫入前問這一句。
  */
 export function titlePinnedByUser(events: readonly SessionEvent[]): boolean {
   for (let at = events.length - 1; at >= 0; at -= 1) {
@@ -147,7 +144,6 @@ export function titlePinnedByUser(events: readonly SessionEvent[]): boolean {
 
 /**
  * 使用者改名：正規化（同模型標題那一支，{@link normalizeThreadTitle}），追加一顆 `source: user` 的 `session/title`，**釘住**。
- * `messageSeqs` 是空的（沒有哪幾則人話推出它），後來的自動標題不會蓋過。
  *
  * 寫的是這條會話現在的日誌，不要求在一輪之外（模型標題也是這樣寫）；一輪在跑時改名，那顆事件落在那一輪中間，讀的人拿最後一顆。
  *
@@ -227,8 +223,6 @@ declare module '@nexus/core' {
      * 這條會話現在叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。**latest-wins**：讀的人拿最後
      * 一顆。
      *
-     * 欄位：
-     *
      * - `messageSeqs` 是推出這個標題用到的那幾則人話（`user` 來源是空的），指到
      *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
      * - `source` 見 {@link SessionTitleSource}。`user`（改名，會釘住）是 #633 加的。
@@ -241,8 +235,7 @@ declare module '@nexus/core' {
     /**
      * 一次標題模型呼叫**送出之前**記下它送了什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
      *
-     * 系統提示、
-     * 訊息、輸出上限都是**真的送出去的那一份**，路由是那一次解析出來的。模型後來失敗了，這一顆照樣留著。
+     * 系統提示、訊息、輸出上限都是**真的送出去的那一份**，路由是那一次解析出來的。模型後來失敗了，這一顆照樣留著。
      * `messageSeqs` 同 `session/title`，指到 `turn/start {kind:'message'}`。
      */
     'session/title-llm-request': {
