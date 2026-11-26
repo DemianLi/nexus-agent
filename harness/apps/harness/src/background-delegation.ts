@@ -1,0 +1,650 @@
+/**
+ * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)，地圖
+ * [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 5 張）。`createNexusAgent({ backgroundSubagents })`
+ * 不給就完全沒有這顆 middleware；出貨的 serve 設定給了（`cordis.yml` 的 `background-subagents`，`continuable`）。
+ *
+ * ## 模型看到的是 `subagent`，執行的前景仍是基座的 `task`
+ *
+ * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（core 的 `ToolAdmission` 與 `ToolAddition`），
+ * `wrapToolCall`（最外層）承接它：判斷與背景派出是 core 型別的 `ToolCallStep`。langchain 在 `wrapModelCall` 裡對工具清單
+ * 有兩條規則：已註冊的工具換成同名的另一個實例一律拒絕；新加的工具要有 middleware 帶 `wrapToolCall` 才放行
+ * （`langchain@1.5.10` `dist/agents/nodes/AgentNode.js:246-257`；native loop 照同一套，`native-loop/model-node.ts`）。
+ * 拿掉工具、換成不是 `Runnable` 的定義都不在檢查內（探針見 #831）。
+ *
+ * 基座 `task` 的 schema 只有 `description`／`subagent_type`，執行時 zod 剝掉其餘欄位，所以模型直接送 `task` 帶的
+ * `run_in_background` 不會生效、照前景跑。背景與否、模型選擇只在 `subagent` 的 schema 上，前景改派只交那兩格。
+ *
+ * - **`run_in_background: false`**：把呼叫改派給基座的 `task`（`toolCall.name` 換成 `task`、`request.tool` 換成
+ *   工具清單那一步順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`。
+ *   回給模型的結果名字改回 `subagent`。
+ * - **`true`（預設）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
+ *   當場回編號。
+ * - **模型直接送 `task`**（藏起來的那顆）：**不攔**，基座照樣跑，等同 `run_in_background: false`。它沒被宣告過，
+ *   只有壞掉的模型才會送；行為與前景一致，所以不值得為它多一條錯誤路徑（探針實測，#831）。
+ *
+ * **這顆在疊上的位置（量到的）**：`nexusToolFailureContainment` ＞ `nexusTurnCancel`（外層守衛）＞ **這顆** ＞
+ * `nexusApprovalGate` ＞ … ＞ `nexusToolExecute`；輸出上限的替換與沙箱政策的快照是它的 `tools/execute` 監聽者，也在這顆裡面。所以前景改派後，
+ * 核准閘門、輸出上限、沙箱快照看到的是 `task`；**圍堵與外層的中止守衛在外面，看到的是 `subagent`**（圍堵的日誌事件名、
+ * 中止後回的「還沒動手」結果都用 `subagent`）。`thread-pump.ts` 收回時選碼用 `@nexus/wire` 的
+ * `DELEGATION_TOOL_NAMES`，`task` 與 `subagent` 都認；wire 的子代理卡以 `task` 認歸屬，前景改派後內層看到的正是 `task`。
+ *
+ * `subagent` 的描述取自當次請求裡 `task` 的描述（core 的 `task-tool-definition.ts` 逐字造的那一份；改掉跟背景矛盾的兩句，見
+ * {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
+ * （plugin middleware 也射進去，#327）沒有 `task`，`wrapModelCall` 在那裡不加 `subagent`；`wrapToolCall` 按呼叫者身分只接手
+ * root 的，子代理幻覺出來的 `subagent` 呼叫原樣交下去、落到 `UNKNOWN_TOOL`（[#1045](https://github.com/DemianLi/nexus-agent/issues/1045)：
+ * 不按身分判的話，子代理那一層也會接手：前景用 root 那份 `task` 派出巢狀孫代理、背景把孫代理掛到 root 的 host 上）。
+ *
+ * ## 沙箱快照
+ *
+ * 接受那一刻用控制器的 `delegate` 包住 {@link BackgroundSubagentHost.start}：日誌在包裡開，參與者把
+ * `sandbox/mode {source:'delegation'}` 寫進去；之後每一輪由 host 的 `enter` 用 `delegateFromLog` 讀回（#827）。
+ * **沒有控制器**（沒掛沙箱 plugin 的組裝）時兩頭都原樣跑——`delegateFromLog` 在日誌上找不到那一顆會拋。
+ *
+ * @module
+ */
+
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { ToolMessage } from '@langchain/core/messages';
+import { tool } from '@langchain/core/tools';
+import { Command } from '@langchain/langgraph';
+import type { StructuredToolInterface } from '@langchain/core/tools';
+import {
+  addedTools,
+  admittedTools,
+  INVALID_ARGS,
+  originalToolOf,
+  putToolResultMeta,
+  toolCallSessionAddress,
+  toolDescriptionOf,
+  toolNameOf,
+  toolRefusal,
+  withToolCallStep,
+  withToolListStep,
+  wrapModelCallWith,
+  wrapToolCallWith,
+} from '@nexus/core';
+import type {
+  PluginEntry,
+  SessionLog,
+  SessionRegistry,
+  ToolAdmission,
+  ToolCallStep,
+  ToolErrorInfo,
+} from '@nexus/core';
+import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection, ToolListStep } from '@nexus/core';
+import { createMiddleware } from 'langchain';
+import type { BackgroundSubagentMeta } from '@nexus/wire';
+import { z } from 'zod';
+
+import { isBackgroundAddress } from './background-run-id.js';
+import {
+  BackgroundSubagentError,
+  BackgroundSubagentHost,
+  backgroundRefusalInfo,
+  withReturnGuidance,
+} from './background-subagents.js';
+import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
+import type { ColdChildStore } from './background-cold.js';
+import {
+  baselineChoice,
+  describeSubagentModels,
+  resolveModelSelection,
+} from './subagent-model-selection.js';
+import type { DelegationBaseline, ModelSelectionConfig } from './subagent-model-selection.js';
+import type { BackgroundAgent, BackgroundSubagentControl } from './background-subagents.js';
+
+/** 模型看到的工具名。 */
+export const SUBAGENT_TOOL_NAME = 'subagent';
+/** 列出自己派出的背景子代理。 */
+export const LIST_AGENTS_TOOL_NAME = 'list_agents';
+/** 列出授權清單裡的模型（#877）。 */
+export const LIST_SUBAGENT_MODELS_TOOL_NAME = 'list_subagent_models';
+/** 只停一個背景子代理當下那一輪。 */
+export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
+/** 對背景子代理追加指示。 */
+export const SEND_MESSAGE_TOOL_NAME = 'send_message';
+/** 被換掉的基座委派工具。 */
+const BASE_DELEGATION_TOOL_NAME = 'task';
+/** 模型那一側拿掉 `task`。 */
+const WITHOUT_TASK: ToolAdmission = { admits: (name) => name !== BASE_DELEGATION_TOOL_NAME };
+/** `subagent` 參數不合 schema 時的碼，同圍堵認出 schema 不合時給的那一組。 */
+const SUBAGENT_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
+
+/** 這個 middleware 的名字。 */
+export const BACKGROUND_DELEGATION_MIDDLEWARE_NAME = 'nexusBackgroundDelegation';
+
+/** 選項：只有沙箱那一頭，其餘都從組裝推。 */
+export interface BackgroundSubagentsOptions {
+  /** 沙箱控制器（cli／serve 建的那一個）。沒有就不做快照與讀回。 */
+  readonly sandbox?: Pick<SandboxModeController, 'delegate' | 'delegateFromLog'>;
+  /** 每個主對話同時存活的背景子代理上限，預設 8（#836），見 `BackgroundSubagentHostOptions.maxActive`。 */
+  readonly maxActive?: number;
+  /**
+   * 依選擇建一顆模型實例（[#876](https://github.com/DemianLi/nexus-agent/issues/876)、
+   * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：背景子代理被指定了模型（與推理等級）時，組裝點用它建出那一張圖
+   * 要用的模型。**每個 `(子代理, 模型, 推理等級)` 只被叫一次**（host 快取編好的圖），實例不共用。
+   * 省略＝這份組裝建不出別的模型（沒連真實供應商的組裝），指定模型的圖當場編不出來。
+   */
+  readonly modelFor?: (choice: ModelChoice) => BaseChatModel;
+  /**
+   * 這個會話允許模型逐次替子代理挑模型（#877）：**給了，`subagent` 才多 `model`／`reasoning_effort` 兩格並註冊
+   * `list_subagent_models`；省略，這兩樣都不存在、帶了這兩格的呼叫會被拒絕**。授權清單是日誌上記著的政策（#875），
+   * 由 serve 在 `createAgent` 時取樣／讀回後傳進來；工具面在整個會話內不變。
+   */
+  readonly modelSelection?: ModelSelectionConfig;
+  /**
+   * 這一次委派的基線（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：定義釘的模型與強度、父代理**此刻**的選擇、部署預設。
+   * 組裝點從會話的控制器與 registry 的定義導出；省略（沒連真實供應商，沒有每會話選擇）＝沿用預設實例。背景子代理在**委派那一刻**
+   * 取這一次、之後固定。
+   */
+  readonly delegationBaseline?: (subagent: string) => DelegationBaseline | undefined;
+  /**
+   * 重啟之前派出的背景子代理怎麼冷復活（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）。省略＝這份組裝沒有落盤，
+   * 重啟之前的子代理不認得（cli 的 REPL、`--no-session-log` 的 server）。
+   */
+  readonly cold?: ColdChildStore;
+}
+
+const subagentSchema = z.object({
+  description: z.string().describe('交給子代理的任務，寫清楚它需要的背景與期待的產出。'),
+  subagent_type: z.string().describe('要用哪一種子代理（見上面的清單）。'),
+  run_in_background: z
+    .boolean()
+    .optional()
+    .describe('預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。'),
+});
+
+/** 開了選模型的 `subagent`：多兩個選填欄位（#877）。 */
+const selectingSubagentSchema = subagentSchema.extend({
+  model: z
+    .string()
+    .optional()
+    .describe(
+      '子代理用哪一顆模型（型錄 id）。省略＝沿用你現在用的這顆。先用 list_subagent_models 看可選的。',
+    ),
+  reasoning_effort: z
+    .string()
+    .optional()
+    .describe(
+      '子代理在這顆模型上的推理等級。省略＝這顆模型的預設；換了模型卻沒給，也用新模型的預設。',
+    ),
+});
+
+/** 接在描述後面、講怎麼選模型的那一段（#877）。 */
+const SELECTION_DESCRIPTION =
+  '\n\n選模型是選填的：省略 `model` 與 `reasoning_effort` 就沿用你現在的模型。要指定時，先用 `list_subagent_models` ' +
+  '看可選的模型與它的推理等級；換了模型卻沒給推理等級，就用新模型的預設。選模型只在背景委派（`run_in_background` 為 true）時可用。';
+
+/**
+ * 基座 `task` 描述裡跟「背景」矛盾的兩句：一次性的生命週期（`ephemeral`）與「每次都是全新的、只回一份最終報告」。
+ * 逐字錨點，**換的是基座 1.13.1 的原文**；原文變了這裡的比對會落空，`background-delegation.test.ts` 的上游絆索會紅，
+ * 那時要重讀新的描述再決定怎麼改。
+ */
+export const TASK_DESCRIPTION_REWRITES: readonly (readonly [from: string, to: string])[] = [
+  ['Launch an ephemeral subagent', 'Launch a subagent'],
+  [
+    'Each invocation is stateless: the agent sees only the prompt you give it and returns a single final report.',
+    'Each new delegation starts fresh: the agent sees only the prompt you give it, and reports its final result when it finishes.',
+  ],
+];
+
+/** 接在 `task` 描述後面的那一段。 */
+const BACKGROUND_DESCRIPTION =
+  '\n\n`run_in_background` 預設 true：子代理在背景跑，這次呼叫當場回它的編號，你可以接著做別的事。' +
+  '要等它的結果才能往下時傳 `false`，這次呼叫會等它跑完並回結果。';
+
+/** 接在系統提示詞後面的那一句。 */
+const PARALLEL_SENTENCE =
+  '要派幾個互不相依的子代理時，在同一則訊息裡一起呼叫 `subagent`，派出去後繼續做有用的事，不要乾等。';
+
+/**
+ * 那一句的段（#2414）：這一格看得到 `subagent` 才接。`subagent` 是上面那顆 middleware 換掉 `task` 換上的，fold 把段接在它內側，
+ * 所以子代理（沒有 `task`）不接。
+ */
+const PARALLEL_SECTION: MiddleSection = {
+  name: 'background-delegation:parallel',
+  order: MIDDLE_SECTION_ORDERS.BACKGROUND_DELEGATION,
+  separator: '\n',
+  text: (context) => (context.tools.includes(SUBAGENT_TOOL_NAME) ? PARALLEL_SENTENCE : ''),
+};
+
+/**
+ * 背景派出的接線點：一份組裝一個。`createNexusAgent` 建它，`attachSession` 時 {@link BackgroundDelegation.attach}
+ * 建 host（**在任何圖的環境之外**，見 `background-subagents.ts` 檔頭）。
+ */
+export class BackgroundDelegation {
+  readonly #options: BackgroundSubagentsOptions;
+  #host: BackgroundSubagentHost | undefined;
+  /** 當次請求裡那一份 `task` 頂替的基座實例。前景改派要用它。 */
+  #baseTask: StructuredToolInterface | undefined;
+  /** 描述沒變就重用同一個工具實例。 */
+  #tool: { readonly description: string; readonly instance: StructuredToolInterface } | undefined;
+
+  constructor(options: BackgroundSubagentsOptions = {}) {
+    this.#options = options;
+  }
+
+  /**
+   * 會話接上來時建 host。
+   *
+   * @param sessions - 這次組裝綁的會話註冊表。
+   * @param compile - 按名字編帶存檔點的圖（`AgentHandle.compileSubagent` 包好存檔點）。
+   * @param port - 背景子代理往主對話這個方向的出口：結算通知（#840）與子代理寫來的話（#849）。**沒給就沒有人被通知、
+   *   子代理也寄不出去**：cli 的 REPL 一行一輪，沒有可以叫醒的一輪。
+   * @returns 收掉的函式（等進行中的輪收完），上面掛著 `control`：wire 對單一背景子代理傳話、單獨停的控制面（#865）。
+   */
+  attach(
+    sessions: SessionRegistry,
+    compile: (subagent: string, choice?: ModelChoice) => BackgroundAgent,
+    port: BackgroundParentPort = {},
+  ): (() => Promise<void>) & { readonly control: BackgroundSubagentControl } {
+    // 一份組裝一個會話（serve 一條 thread 一份組裝）：第二次接上會把第一個 host 的位置蓋掉，
+    // 那個 host 的子代理就從工具的視線裡消失，所以直接拒絕，不靜靜蓋掉。
+    if (this.#host !== undefined) throw new Error('背景子代理已經接上一個會話，一份組裝只接一個');
+    const sandbox = this.#options.sandbox;
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile,
+      ...(port.onSettled !== undefined && { onSettled: port.onSettled }),
+      ...(port.onMessage !== undefined && { onMessage: port.onMessage }),
+      ...(port.onStatus !== undefined && { onStatus: port.onStatus }),
+      ...(port.isArchived !== undefined && { isArchived: port.isArchived }),
+      ...(port.onTurnFailed !== undefined && { onTurnFailed: port.onTurnFailed }),
+      ...(port.warn !== undefined && { warn: port.warn }),
+      ...(port.turnClock !== undefined && { turnClock: port.turnClock }),
+      ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
+      ...(this.#options.cold !== undefined && { cold: this.#options.cold }),
+      ...(sandbox !== undefined && {
+        enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),
+      }),
+    });
+    this.#host = host;
+    const close = async (): Promise<void> => {
+      if (this.#host === host) this.#host = undefined;
+      await host.close();
+    };
+    return Object.assign(close, { control: host.control });
+  }
+
+  /** 組裝用的條目：一顆最外層的 middleware，加上平行句那一段。 */
+  entry(): PluginEntry {
+    return {
+      plugin: {
+        name: 'background-delegation',
+        apply: (registry) => {
+          registry.middleware.use(this.#middleware(), { prepend: true });
+          registry.prompt.section(PARALLEL_SECTION);
+          // 只在 root：子代理不派子代理，也不該去列別人派的。
+          registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
+          registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
+          // 只有這個會話有授權清單才註冊（#877）。
+          if (this.#options.modelSelection !== undefined) {
+            registry.tools.register(this.#listSubagentModelsTool(), { rootOnly: true });
+          }
+          // `send_message` 不是 rootOnly：背景子代理要能往上傳訊（#849）。誰能傳給誰由工具本體按呼叫者身分判。
+          registry.tools.register(this.#sendMessageTool());
+        },
+      },
+    };
+  }
+
+  #subagentTool(baseDescription: string): StructuredToolInterface {
+    const description =
+      TASK_DESCRIPTION_REWRITES.reduce(
+        (text, [from, to]) => text.replace(from, to),
+        baseDescription,
+      ) + BACKGROUND_DESCRIPTION;
+    if (this.#tool?.description === description) return this.#tool.instance;
+    const selecting = this.#options.modelSelection !== undefined;
+    const instance = tool(async () => '', {
+      name: SUBAGENT_TOOL_NAME,
+      description: selecting ? description + SELECTION_DESCRIPTION : description,
+      schema: selecting ? selectingSubagentSchema : subagentSchema,
+    }) as unknown as StructuredToolInterface;
+    this.#tool = { description, instance };
+    return instance;
+  }
+
+  /**
+   * `list_agents`：薄薄一層，讀 host 的目錄，不自己另存一份。
+   *
+   * 描述裡「做完會通知」「用 send_message 接著談」兩句對應的機制是 #840、#839。
+   */
+  #listAgentsTool() {
+    return tool(
+      () => {
+        const host = this.#host;
+        if (host === undefined) throw new Error('背景子代理還沒接上會話，列不出來');
+        const entries = host.list();
+        return entries.length === 0
+          ? '(no subagents)'
+          : entries
+              .map(
+                (entry) =>
+                  `${entry.runId} [${entry.status}] — ${entry.label}` +
+                  (entry.note === undefined ? '' : ` (${entry.note})`),
+              )
+              .join('\n');
+      },
+      {
+        name: LIST_AGENTS_TOOL_NAME,
+        description:
+          'List subagents you started, with their ids, labels, and status. ' +
+          'running means it is working; inactive means it is not currently working. ' +
+          'You will be notified when a subagent finishes; there is no need to keep checking its status. ' +
+          'Use send_message to continue the conversation.',
+        schema: z.object({}),
+      },
+    );
+  }
+
+  /**
+   * `list_subagent_models`（#877）：授權清單裡有哪些模型、某一顆有哪些推理等級。**schema 固定、不列舉模型**。授權在前，不在清單裡的 id 一律拒絕，見 `describeSubagentModels`。
+   */
+  #listSubagentModelsTool() {
+    const selection = this.#options.modelSelection!;
+    // 標「主對話目前用的」要讀此刻的選擇（#328）：會話換了模型，政策查的也是那顆。傳空名字＝沒有哪個定義釘東西，基線只剩父代理。
+    return tool(
+      ({ model }: { model?: string }) =>
+        describeSubagentModels(
+          selection,
+          { model },
+          this.#options.delegationBaseline?.('')?.parent.model,
+        ),
+      {
+        name: LIST_SUBAGENT_MODELS_TOOL_NAME,
+        description:
+          'List the models a subagent may use, without changing your own. Call with no arguments to list the authorized ' +
+          'models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the ' +
+          '`model` and `reasoning_effort` fields of the subagent tool.',
+        schema: z.object({
+          model: z
+            .string()
+            .optional()
+            .describe('Exact model id to inspect. Omit to list the authorized models.'),
+        }),
+      },
+    );
+  }
+
+  /**
+   * `interrupt_agent`：只停該背景子代理當下那一輪，**不等它停穩就回**。
+   *
+   * 不存在的、沒在跑的、別人（別的主對話）的編號都是被接受的 no-op，照樣回同一句（也讓模型
+   * 不能藉由回應試探編號）。host 是這個主對話的，別人的編號在這裡本來就不存在。
+   * 描述裡「用 send_message 接著談」對應的機制是 #839。
+   */
+  #interruptAgentTool() {
+    return tool(
+      ({ agent_id }: { agent_id: string }) => {
+        const host = this.#host;
+        if (host === undefined) throw new Error('背景子代理還沒接上會話，停不了');
+        host.interrupt(agent_id);
+        return `interrupt requested for agent ${agent_id}`;
+      },
+      {
+        name: INTERRUPT_AGENT_TOOL_NAME,
+        description:
+          'Ask a subagent to stop its current work. This call returns without waiting for it to stop. ' +
+          "You can continue a direct child's conversation later with send_message. " +
+          'Subagents it started will keep running.',
+        schema: z.object({
+          agent_id: z
+            .string()
+            .describe(
+              'The id of an agent created under you: your direct child or a deeper descendant.',
+            ),
+        }),
+      },
+    );
+  }
+
+  /**
+   * `send_message`：回的是**送達回條，不是對方的回答**。兩個方向，由**呼叫者的身分**決定（`toolCallSessionAddress`）：
+   *
+   * - root → 自己派出去的背景子代理（#839）：`host.send`。
+   * - 背景子代理 → 它的直接 parent（#849）：`host.sendToParent`，收件人必須是 root 的會話 id。
+   * - 其他（前景一次性子代理、認不出身分）：拒絕。
+   *
+   * 描述：跑著的子代理在下一步領走（`BackgroundSubagentHost.send` 插進它當下那一輪），閒著的開新的一輪。
+   * 傳給 parent 那一向，主對話有 `next-step`，忙著就插進去。
+   */
+  #sendMessageTool() {
+    return tool(
+      async (
+        { agent_id, message }: { agent_id: string; message: string },
+        config?: unknown,
+      ): Promise<string> => {
+        const host = this.#host;
+        if (host === undefined) throw new Error('背景子代理還沒接上會話，傳不了');
+        const address = toolCallSessionAddress(config);
+        if (address?.kind === 'root') {
+          // 重啟之前派出的冷子代理，先接回來再投遞（#1271）；已常駐的立刻過。
+          await host.resume(agent_id);
+          void host.send({ runId: agent_id, message });
+        } else if (address !== undefined && isBackgroundAddress(address)) {
+          host.sendToParent({
+            runId: (address as { runId: string }).runId,
+            targetId: agent_id,
+            message,
+          });
+        } else {
+          throw new Error(
+            '只有主對話與可繼續的背景子代理能用 send_message；你是一次性子代理，做完把結果當最後一則回覆交回去就好',
+          );
+        }
+        return `message delivered to agent ${agent_id}`;
+      },
+      {
+        name: SEND_MESSAGE_TOOL_NAME,
+        description:
+          'Send a message to an agent. A working agent receives it at its next step; an idle agent starts a new turn with it. ' +
+          "Returns delivery confirmation, not the agent's answer.",
+        schema: z.object({
+          agent_id: z
+            .string()
+            .describe(
+              'The id of one of your background subagents (from subagent or list_agents), or your direct parent when you are a resident continuable child.',
+            ),
+          message: z.string().describe('The message to deliver to the agent.'),
+        }),
+      },
+    );
+  }
+
+  #middleware() {
+    const step = this.#toolStep();
+    const listStep: ToolListStep = (request) => {
+      const base = request.tools.find((each) => toolNameOf(each) === BASE_DELEGATION_TOOL_NAME);
+      // 子代理的疊沒有 `task`：什麼都不做。
+      if (base === undefined) return undefined;
+      this.#baseTask = originalToolOf(base) as StructuredToolInterface;
+      const subagent = this.#subagentTool(toolDescriptionOf(base) ?? '');
+      return addedTools(admittedTools(request.tools, WITHOUT_TASK), {
+        additions: () => [subagent],
+      });
+    };
+    return withToolListStep(
+      withToolCallStep(
+        createMiddleware({
+          name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
+          wrapModelCall: wrapModelCallWith(listStep) as never,
+          wrapToolCall: wrapToolCallWith(step),
+        }),
+        step,
+      ),
+      listStep,
+    );
+  }
+
+  /**
+   * 這顆的工具那一半：只接 root 叫的 `subagent`。前景改派給基座的 `task`（內層認 `task`），回來的結果名字改回 `subagent`；
+   * 背景在這裡交給 host、當場回編號；其餘原樣往內交。
+   *
+   * @returns 這一步。
+   */
+  #toolStep(): ToolCallStep {
+    return async (call, next) => {
+      if (call.name !== SUBAGENT_TOOL_NAME) return next();
+      // 只接手 root 的呼叫（#1045）：`subagent` 只在 root 那一層的模型視野裡（上面看到 `task` 才加），子代理的模型看不到它，
+      // 叫了就原樣交下去，落到基座的「沒有這顆工具」、由最內層標 `UNKNOWN_TOOL`（#1024）。這一份實例掛在每一層（#327），哪一層要從這次呼叫的身分查（`registry.ts` 的 `use`）；
+      // 認不出身分的也不接手。前提：root 那一層有 `task`（`toolFilter` 只套在子代理上）。
+      const caller = toolCallSessionAddress({ configurable: call.configurable } as never);
+      if (caller?.kind !== 'root') return next();
+      const callId = call.callId ?? '';
+      const selection = this.#options.modelSelection;
+      // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。
+      if (selection === undefined) {
+        const raw = call.args as Record<string, unknown> | undefined;
+        if (raw !== undefined && ('model' in raw || 'reasoning_effort' in raw)) {
+          return toolRefusal('這個會話沒有開子代理選模型，不能指定 model 或 reasoning_effort', {
+            callId,
+            name: SUBAGENT_TOOL_NAME,
+          });
+        }
+      }
+      const parsed = (selection === undefined ? subagentSchema : selectingSubagentSchema).safeParse(
+        call.args,
+      );
+      // 參數不合 schema 帶 `INVALID_ARGS`。host 拒絕 `start`（名額滿、已關）帶碼（#1046，見下面的 `catch`）；其餘拒絕
+      // 不帶碼（#1024）。
+      if (!parsed.success) {
+        return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
+          callId,
+          name: SUBAGENT_TOOL_NAME,
+          error: SUBAGENT_ARGS_ERROR,
+        });
+      }
+      const {
+        description,
+        subagent_type: subagentType,
+        run_in_background: background,
+      } = parsed.data;
+      const requested = parsed.data as { model?: string; reasoning_effort?: string };
+      const asksForModel =
+        requested.model !== undefined || requested.reasoning_effort !== undefined;
+
+      // 前景走基座的 `task`，它的圖與模型在組裝期寫死，帶不進去（#877 的偏離登記）：拒絕，不靜靜用 root 的。
+      if (background === false && asksForModel) {
+        return toolRefusal(
+          '只有背景委派能指定 model 或 reasoning_effort；前景（run_in_background 為 false）用你現在的模型',
+          { callId, name: SUBAGENT_TOOL_NAME },
+        );
+      }
+      let choice: ModelChoice | undefined;
+      const baseline = this.#options.delegationBaseline?.(subagentType);
+      if (selection !== undefined) {
+        const resolved = resolveModelSelection(selection, requested, baseline);
+        if (!resolved.ok) {
+          return toolRefusal(resolved.error, { callId, name: SUBAGENT_TOOL_NAME });
+        }
+        choice = resolved.choice;
+      } else if (baseline !== undefined) {
+        // 沒開模型自己挑：走基線，定義釘的 ?? 父代理此刻的（#328）。
+        choice = baselineChoice(baseline);
+      }
+
+      if (background === false) {
+        if (this.#baseTask === undefined) {
+          return toolRefusal('沒有可用的 task 工具，前景委派做不了', {
+            callId,
+            name: SUBAGENT_TOOL_NAME,
+          });
+        }
+        return renameResult(
+          await next({
+            name: BASE_DELEGATION_TOOL_NAME,
+            tool: this.#baseTask,
+            args: { description, subagent_type: subagentType },
+          }),
+          callId,
+        );
+      }
+
+      const host = this.#host;
+      if (host === undefined) {
+        return toolRefusal('背景子代理還沒接上會話，派不出去', {
+          callId,
+          name: SUBAGENT_TOOL_NAME,
+        });
+      }
+      try {
+        // **接受那一刻**：同步（沒有 await），包在沙箱的 delegate 裡。
+        const sandbox = this.#options.sandbox;
+        // 回報指引只接在背景派出去的（#849）：前景的 `task` 是一次性的，寄不出話，也不該被告知要寄。
+        const start = () =>
+          host.start({
+            subagent: subagentType,
+            text: withReturnGuidance(description, host.rootSessionId),
+            ...(choice !== undefined && { choice }),
+            // root 那一份記子代理目錄，指回這一顆呼叫（#1023）。
+            ...(callId !== '' && { callId }),
+          });
+        const started = sandbox === undefined ? start() : sandbox.delegate(start);
+        // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的
+        // （#832）。寫在這次呼叫自己的槽裡，圍堵收尾時帶進 `tool/result`，即時與重播是同一份。
+        const key: BackgroundSubagentMeta = {
+          kind: 'background-subagent',
+          runId: started.runId,
+          subagentType,
+          // 被指定的模型與推理等級（#889）：畫面據它說這個子代理跑哪一顆；沒指定就不放，跟著主對話。
+          ...(choice !== undefined && {
+            model: choice.model,
+            ...(choice.effort !== undefined && { reasoningEffort: choice.effort }),
+          }),
+        };
+        putToolResultMeta(SUBAGENT_TOOL_NAME, key);
+        // 第一輪的下場不在這次呼叫裡等：失敗已記在它自己的日誌（`outcome` 永遠不 reject）。
+        return new ToolMessage({
+          content: `子代理已在背景啟動，編號：${started.runId}（${subagentType}）。`,
+          tool_call_id: callId,
+          name: SUBAGENT_TOOL_NAME,
+        });
+      } catch (error) {
+        // host 拒絕（名額滿、已關）帶碼（#1046），見 `backgroundRefusalInfo`；其餘（編不出圖等）不帶。
+        const info =
+          error instanceof BackgroundSubagentError ? backgroundRefusalInfo(error) : undefined;
+        return toolRefusal(error instanceof Error ? error.message : String(error), {
+          callId,
+          name: SUBAGENT_TOOL_NAME,
+          ...(info !== undefined && { error: info }),
+        });
+      }
+    };
+  }
+}
+
+/**
+ * 一則工具結果改名成 `subagent`：模型叫的是 `subagent`，回給它的結果也用這個名字。ToolMessage 直接換；`task` 收尾回的是
+ * `Command`（帶狀態更新），換它 `update.messages` 裡屬於這次呼叫的那一則，其餘原樣留著。
+ */
+function renameResult<T>(result: T, callId: string): T {
+  const rename = (message: ToolMessage): ToolMessage =>
+    new ToolMessage({
+      content: message.content,
+      tool_call_id: message.tool_call_id,
+      name: SUBAGENT_TOOL_NAME,
+      status: message.status,
+      ...(message.artifact !== undefined && { artifact: message.artifact }),
+      ...(message.additional_kwargs !== undefined && {
+        additional_kwargs: message.additional_kwargs,
+      }),
+    });
+  if (ToolMessage.isInstance(result)) return rename(result) as T;
+  if (!(result instanceof Command)) return result;
+  const update = result.update;
+  if (typeof update !== 'object' || update === null || !('messages' in update)) return result;
+  const messages = (update as { messages: unknown }).messages;
+  if (!Array.isArray(messages)) return result;
+  const next = messages.map((message: unknown) =>
+    ToolMessage.isInstance(message) && message.tool_call_id === callId ? rename(message) : message,
+  );
+  return new Command({
+    update: { ...(update as Record<string, unknown>), messages: next },
+    ...(result.goto !== undefined && { goto: result.goto }),
+    ...(result.graph !== undefined && { graph: result.graph }),
+    ...(result.resume !== undefined && { resume: result.resume }),
+  }) as T;
+}

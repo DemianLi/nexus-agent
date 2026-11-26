@@ -1,0 +1,177 @@
+/**
+ * **一顆核准中斷一個面板**：這一顆的那批工具呼叫，一個決定。
+ *
+ * 問答中斷有它自己的面板（`question-panel.tsx`）。**兩個元件不是一個元件內部分支**——
+ * 送出的形狀完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而 dsh 那邊也是兩個 slot。
+ *
+ * 界線在中斷上，不在輪次上（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+ * 同一輪的其他中斷各有各的面板、先來先處理、各答各的——`interrupt_id` 是那道界線，伺服器據它逐
+ * task 派送。
+ *
+ * **一張卡裡一批一個決定今天是「還沒做」，不是「不能做」。** 原本寫在這裡的理由是基座
+ * 的批次語義（一筆被拒、被核准的那幾筆靜靜地不執行還從 `tool_calls` 裡被抹掉），那個
+ * 理由在 [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不成立了：閘門
+ * 改成逐次呼叫各自判，一個被拒不再抹掉其他筆。
+ *
+ * **那句 `actions.length > 1` 的 rendered 警告刪掉了**（#232 第 5 項）。它講的是基座
+ * 的批次抹除，而那件事 #112 之後不存在；至於它想提醒的「同一批還有別的工具」，現在
+ * 畫面上就看得見——每一顆中斷自己一個面板、名稱帶「（1／2）」，不需要一句話代勞。`actionRequests` 經我們的
+ * fold 恆長度 1，所以那條分支本來也到不了。
+ *
+ * **現在是換手層裡的面板**（#408，規格 §4.3）：外框、名稱、邊框光與焦點歸 `pending-swap.tsx`，這裡只畫要執行的內容與
+ * 按鈕。只有允許／不允許，沒有 ❌、沒有停止、不可收起、Esc 不做事（§8）——停在核准點想結束就按不允許，讓模型
+ * 接著回話（#376 第 10、11 條：#265 Q7「停在核准點按停止收回」因此在畫面上沒有入口，demian 知情後選的）。
+ *
+ * 按鈕只有 `pending.allowedDecisions` 裡的那些，而那份清單是**逐筆交集**（見
+ * `@nexus/wire` 的 `intersectDecisions`）：基座對不在某一筆清單裡的決定是當場拋，
+ * 一顆多出來的按鈕按下去是整場 run 死。
+ *
+ * **沙箱升級**（`request_sandbox_escalation`，#1292）畫 harness 送的那句描述（模式、理由、只蓋這一次），不畫工具名與參數 JSON。
+ * 沒有描述就照一般的畫（`features/tool/sandbox-escalation.ts`）。
+ *
+ * **工具名只在多個操作時進卡裡**（#3035 結論 D、#3039 第 1 項）：名稱列已經講「等待核准 `工具名`」，單一操作的卡裡不重複；
+ * 多個操作時每段參數上方放那一個的工具名 `code` 標籤，不加前綴字，參數才對得上是哪一個。
+ *
+ * **子代理在做的事**（#3039 第 2 項）：名稱列已經有「・子代理名」，卡裡只在內文最上面放委派卡的 `description`，淡色、不加前綴；
+ * 沒有 `description` 就不畫這一行。
+ *
+ * **其他工具畫閘門給的理由**（#1628）：參數上面一行，例如 MCP 閘門寫明哪台 server、哪支工具（名字被補了指紋時人看不出來）。
+ * core 沒有理由時填的預設字不畫，那句跟名稱列的工具名重複（`features/approval/reason.ts`）。是一般的文字，報讀照樣唸得到，不靠 tooltip。
+ */
+
+import type { PendingApproval } from '@nexus/wire';
+
+import { Chevron } from '@/shared/blocks/chevron';
+import { Surface } from '@/shared/blocks/surface';
+import type { PendingAsker } from '@/features/approval/asker';
+import { Button } from '@/components/ui/button';
+import { RowTrigger } from '@/shared/blocks/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
+import { approvalReasonOf } from '@/features/approval/reason';
+import { escalationReason } from '@/features/tool';
+
+/** 封閉詞彙的中文字面。認不得的原樣顯示——寧可露出來，不要吞掉。 */
+const LABELS: Record<string, string> = { approve: '全部核准', reject: '全部拒絕' };
+
+/** 交集為空時的原因。 */
+export const NO_DECISION_REASON =
+  '這顆中斷沒有共同可用的決定：送出不在清單上的決定會讓這一輪整個失敗，所以這裡不放允許與不允許。';
+
+function Actions({ pending, asker }: { pending: PendingApproval; asker?: PendingAsker }) {
+  return (
+    // 可捲動，所以要能用鍵盤捲：進 Tab 順序並給名稱（§8）。
+    <Surface
+      tone="stage"
+      role="group"
+      tabIndex={0}
+      aria-label="要執行的內容"
+      className="flex max-h-[40svh] flex-col gap-3 overflow-auto p-3"
+    >
+      {/* 前景子代理要核准（#328）時它在做的事（委派卡的 `description`）；root 自己問的、或沒有 `description` 的，沒有這一行。 */}
+      {asker?.description !== undefined && (
+        <p className="text-muted-foreground text-tip" data-testid="approval-asker">
+          {asker.description}
+        </p>
+      )}
+      {pending.actions.map((action, index) => {
+        const escalation = escalationReason(action);
+        if (escalation !== undefined) {
+          return (
+            // 描述裡有檔案路徑：長路徑沒有空格，不斷行會撐破窄螢幕。
+            <p
+              key={`${action.name}-${index}`}
+              className="text-body wrap-anywhere"
+              data-testid="approval-escalation"
+            >
+              {escalation}
+            </p>
+          );
+        }
+        const reason = approvalReasonOf(action);
+        return (
+          <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
+            {pending.actions.length > 1 && (
+              <code className="w-fit font-mono font-medium text-tip" data-testid="approval-tool">
+                {action.name}
+              </code>
+            )}
+            {reason !== undefined && (
+              // 理由裡有 server 給的工具名：長名字沒有空格，不斷行會撐破窄螢幕。
+              <p className="text-body wrap-anywhere" data-testid="approval-reason">
+                {reason}
+              </p>
+            )}
+            <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
+              {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
+              {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
+            </pre>
+          </div>
+        );
+      })}
+    </Surface>
+  );
+}
+
+export function ApprovalCard({
+  pending,
+  busy,
+  onDecide,
+  onStop,
+  asker,
+}: {
+  pending: PendingApproval;
+  /** 前景子代理在問時給（`pendingAsker`）；沒給就是 root 自己問的。 */
+  asker?: PendingAsker;
+  busy: boolean;
+  onDecide: (decision: string) => void;
+  /** 停止這一輪：**只在**交集為空時出現（#376 第 12 條），那時這是唯一的出口。 */
+  onStop: () => void;
+}) {
+  if (pending.allowedDecisions.length === 0) {
+    return (
+      <div className="flex flex-col gap-2" data-testid="approval-card">
+        <p className="text-destructive px-3 text-body">{NO_DECISION_REASON}</p>
+        <Collapsible>
+          <RowTrigger className="text-muted-foreground gap-2 text-ui lg:min-h-9">
+            <Chevron />
+            原始中斷內容
+          </RowTrigger>
+          <CollapsibleContent className="overflow-hidden">
+            <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
+          </CollapsibleContent>
+        </Collapsible>
+        <div className="flex justify-end p-2">
+          <Button
+            type="button"
+            variant="destructive"
+            className="h-11 px-5 lg:h-9"
+            disabled={busy}
+            onClick={onStop}
+          >
+            停止這一輪
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col" data-testid="approval-card">
+      <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
+      <div className="flex justify-end gap-2 p-2">
+        {/* 不允許在左、允許在右。 */}
+        {[...pending.allowedDecisions].reverse().map((decision) => (
+          <Button
+            key={decision}
+            type="button"
+            variant={decision === 'approve' ? 'default' : 'outline'}
+            className="h-11 px-5 lg:h-9"
+            disabled={busy}
+            onClick={() => onDecide(decision)}
+          >
+            {LABELS[decision] ?? decision}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}

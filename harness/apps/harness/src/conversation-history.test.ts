@@ -1,0 +1,1354 @@
+/**
+ * 日誌 → 畫面的那張表（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀），逐條一格。
+ *
+ * **判準是折出來的畫面**，不是 frame 的形狀：frame 由 `@nexus/wire` 的 `reduceConversation` 折，那才是 web 畫出來
+ * 的東西，而同一個畫面可以由不同的 frame 折出來。對著真的 server 重開一次的在 `serve-history.test.ts`。
+ */
+
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
+import type { GoalId, SessionEvent } from '@nexus/core';
+import {
+  SessionLog,
+  TOOL_ABORTED,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  toLoggedMessage,
+} from '@nexus/core';
+import type { ConversationEntry, ConversationState, ThreadHistoryQuery } from '@nexus/wire';
+import {
+  HISTORY_PAGE_MAX_BYTES,
+  SUBAGENT_CATALOG,
+  UNFINISHED_TOOL_TEXT,
+  emptyConversation,
+  prependEntries,
+  reduceAll,
+  AUTH_FAILURE_MESSAGE,
+} from '@nexus/wire';
+import { describe, expect, it } from 'vitest';
+
+import type { AwaitingInput } from './conversation-history.js';
+import {
+  HistoryQueryError,
+  historyFrames,
+  historyPage,
+  isTodosReset,
+} from './conversation-history.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { READ_META_MAX_BYTES_FACTOR } from './tool-result-text.js';
+
+type Draft = Pick<SessionEvent, 'type' | 'data'>;
+
+/** 排好 `seq` 與 `time`。 */
+function log(...drafts: Draft[]): SessionEvent[] {
+  return drafts.map((draft, seq) => ({ ...draft, seq, time: 1000 + seq }) as SessionEvent);
+}
+
+const human = (text: string): Draft => ({ type: 'turn/start', data: { kind: 'message', text } });
+const resume: Draft = { type: 'turn/start', data: { kind: 'resume' } };
+const turnEnd: Draft = { type: 'turn/end', data: {} };
+
+function reply(text: string, callIds: readonly string[] = [], interrupted?: true): Draft {
+  return {
+    type: 'assistant/message',
+    data: {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: text,
+          tool_calls: callIds.map((id) => ({ id, name: 'echo', args: { message: id } })),
+        }),
+      ),
+      ...(interrupted === undefined ? {} : { interrupted }),
+    },
+  };
+}
+
+const call = (callId: string, name = 'echo'): Draft => ({
+  type: 'tool/call',
+  data: { callId, name, arguments: `{"message":"${callId}"}` },
+});
+
+function result(callId: string, text: string, isError = false): Draft {
+  return {
+    type: 'tool/result',
+    data: {
+      callId,
+      isError,
+      message: toLoggedMessage(
+        new ToolMessage({
+          content: text,
+          tool_call_id: callId,
+          ...(isError && { status: 'error' }),
+        }),
+      ),
+    },
+  };
+}
+
+/** 一則條目攤成一行，好比對。 */
+function line(entry: ConversationEntry): string {
+  switch (entry.kind) {
+    case 'human':
+      return `human:${entry.text}`;
+    case 'ai':
+      return `ai:${entry.text}${entry.stopped === true ? '（已停止）' : ''}`;
+    case 'tool':
+      return `tool:${entry.name}:${entry.status}${entry.error === undefined ? '' : `:${entry.error}`}`;
+    default:
+      return entry.kind;
+  }
+}
+
+function screen(events: readonly SessionEvent[], awaitingInput?: AwaitingInput): ConversationState {
+  return reduceAll(
+    emptyConversation(),
+    historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES, awaitingInput),
+  );
+}
+
+/** 掛著中斷，停在閘門上的是這幾個名字。 */
+const gated = (...names: string[]): AwaitingInput => ({ gatedTools: new Set(names) });
+
+const TWO_TURNS = log(
+  human('記住暗號是藍鯨'),
+  { type: 'model/start', data: {} },
+  reply('先回聲一次。', ['c1']),
+  { type: 'model/end', data: {} },
+  call('c1'),
+  result('c1', '回聲：c1'),
+  reply('記住了。'),
+  turnEnd,
+  human('暗號是什麼'),
+  reply('藍鯨。'),
+  turnEnd,
+);
+
+describe('日誌 → 畫面', () => {
+  it('人打的字、回覆、工具卡依序畫出來，最後停在就緒', () => {
+    const state = screen(TWO_TURNS);
+
+    expect(state.entries.map(line)).toEqual([
+      'human:記住暗號是藍鯨',
+      'ai:先回聲一次。',
+      'tool:echo:done',
+      'ai:記住了。',
+      'human:暗號是什麼',
+      'ai:藍鯨。',
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /** 見 `@nexus/wire` 的 `historyPath`：帶了耐久 seq，之後的即時 frame 全被當成重複丟掉。 */
+  it('一顆 frame 都不帶 seq', () => {
+    const frames = historyPage(TWO_TURNS).events;
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.filter((frame) => frame.seq !== undefined)).toEqual([]);
+  });
+
+  /**
+   * **成功那一側也帶結果文字**（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+   * 重新整理之後提問卡要靠它逐題配答案——少了這一格，答案只有作答的那個分頁記得。
+   * 「即時與重播是同一串」那一條在 `tool-card-from-log.test.ts`。
+   */
+  it('工具成功：卡是完成，結果文字帶上、紅字不給', () => {
+    const state = screen(
+      log(human('跑'), reply('', ['c1']), call('c1'), result('c1', '回聲：c1'), turnEnd),
+    );
+    const tool = state.entries.find((entry) => entry.kind === 'tool');
+
+    expect(tool?.kind === 'tool' ? tool.text : undefined).toBe('回聲：c1');
+    expect(tool?.kind === 'tool' ? tool.error : '有紅字').toBeUndefined();
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:done']);
+  });
+
+  it('工具失敗：卡是失敗，紅字是模型收到的那則', () => {
+    const state = screen(
+      log(human('跑'), reply('', ['c1']), call('c1'), result('c1', '找不到那個檔', true), turnEnd),
+    );
+
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:找不到那個檔']);
+  });
+
+  /**
+   * **多塊文字的失敗訊息：抽字規則跟成功時同一條**（`toolResultText`）。內容混了非文字就抽不出字，
+   * 紅字才退回錯誤碼，再退是「未指名的錯誤」。
+   */
+  it('失敗訊息是多塊文字：接起來當紅字，碼另外有自己那一格', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        reply('', ['c1']),
+        call('c1'),
+        {
+          type: 'tool/result',
+          data: {
+            callId: 'c1',
+            isError: true,
+            error: { name: 'FsError', code: 'FS_SANDBOX_DENIED' },
+            message: toLoggedMessage(
+              new ToolMessage({
+                content: [
+                  { type: 'text', text: '第一塊' },
+                  { type: 'text', text: '第二塊' },
+                ],
+                tool_call_id: 'c1',
+                status: 'error',
+              }),
+            ),
+          },
+        },
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:第一塊\n\n第二塊']);
+    // 碼另外有自己那一格（#667），跟紅字的退路無關。
+    expect(state.entries.find((entry) => entry.kind === 'tool')).toMatchObject({
+      errorCode: 'FS_SANDBOX_DENIED',
+    });
+  });
+
+  it('舊格式的失敗結果沒有內容：紅字是錯誤碼', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        call('c1'),
+        {
+          type: 'tool/result',
+          data: { callId: 'c1', isError: true, error: { name: 'x', code: TOOL_ABORTED } },
+        },
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual(['human:跑', `tool:echo:failed:${TOOL_ABORTED}`]);
+  });
+
+  /**
+   * **碼有自己那一格**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：格式 7、8 的收回結果只有碼、
+   * 沒有 `message`。紅字的退路照舊是碼（上面兩條），判斷改讀 `tool-finished` 上的 `code`——同一個值，web 比它
+   * 判「停在提問時被停止」，不比紅字的結尾。
+   */
+  it('舊格式只有碼的收回結果：`tool-finished` 帶碼，紅字仍是碼', () => {
+    const events = log(
+      human('跑'),
+      call('c1'),
+      {
+        type: 'tool/result',
+        data: {
+          callId: 'c1',
+          isError: true,
+          error: { name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH },
+        },
+      },
+      turnEnd,
+    );
+    const finished = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES).find(
+      (frame) =>
+        frame.method === 'tools' &&
+        (frame.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(finished?.params.data).toMatchObject({
+      failed: true,
+      message: 'ABORTED_BEFORE_DISPATCH',
+      code: 'ABORTED_BEFORE_DISPATCH',
+    });
+    const tool = screen(events).entries.find((entry) => entry.kind === 'tool');
+    expect(tool).toMatchObject({ errorCode: 'ABORTED_BEFORE_DISPATCH' });
+  });
+
+  it('成功的結果不帶碼；失敗而日誌沒寫碼的也不帶', () => {
+    const frames = historyFrames(
+      log(
+        human('跑'),
+        reply('', ['c1', 'c2']),
+        call('c1'),
+        result('c1', '好了'),
+        call('c2'),
+        result('c2', '壞了', true),
+        turnEnd,
+      ),
+      DEFAULT_TOOL_TEXT_MAX_BYTES,
+    );
+    const finished = frames
+      .filter(
+        (frame) =>
+          frame.method === 'tools' &&
+          (frame.params.data as { event?: unknown }).event === 'tool-finished',
+      )
+      .map((frame) => frame.params.data as Record<string, unknown>);
+    expect(finished).toHaveLength(2);
+    expect(finished.map((data) => 'code' in data)).toEqual([false, false]);
+  });
+
+  it('講到一半被停止：那則標成已停止，沒結果的卡收成失敗', () => {
+    const state = screen(
+      log(human('跑'), reply('寫到一半', [], true), call('c1'), {
+        type: 'turn/end',
+        data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
+      }),
+    );
+
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      'ai:寫到一半（已停止）',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
+    expect(state.status).toBe('stopped');
+  });
+
+  /** 同即時那條（#1624）：收尾 frame 在 `aborted` 旁邊帶原因，人按停止與時鐘到點分得出來。 */
+  it.each([[{ kind: 'user' }], [{ kind: 'hook', reason: 'turn-timeout' }]] as const)(
+    '被中止的那一輪：收尾 frame 帶日誌上的原因 %o',
+    (cause) => {
+      const frames = historyFrames(
+        log(human('跑'), reply('寫到一半', [], true), {
+          type: 'turn/end',
+          data: { reason: { kind: 'aborted', cause } },
+        }),
+        DEFAULT_TOOL_TEXT_MAX_BYTES,
+      );
+      const closing = frames.filter((frame) => frame.method === 'lifecycle').at(-1);
+      expect(closing?.params.data).toMatchObject({ event: 'failed', aborted: true, cause });
+    },
+  );
+
+  /** 同即時那條（#433）：pump 在收尾 frame 上補 `maxTokens`，重播照日誌的 `turn/end` 補同一格。 */
+  it('撞到輸出上限：那一輪最後一則回覆標上，狀態是就緒', () => {
+    const state = screen(
+      log(human('寫'), reply('寫到'), {
+        type: 'turn/end',
+        data: { reason: { kind: 'max-tokens' } },
+      }),
+    );
+    expect(state.status).toBe('idle');
+    const replies = state.entries.filter((entry) => entry.kind === 'ai');
+    expect(replies.map((entry) => entry.kind === 'ai' && entry.maxTokens)).toEqual([true]);
+  });
+
+  /** 封存的會話（#633）：一個請求都沒發。話還在畫面上（`turn/start` 帶文字），也不是失敗，收尾 frame 補 `blocked`。 */
+  it('被準入閘門擋下（封存）：話留著、狀態是就緒、不是失敗；收尾 frame 帶 blocked', () => {
+    const events = log(human('封存之後的話'), {
+      type: 'turn/end',
+      data: { reason: { kind: 'blocked' } },
+    });
+    const state = screen(events);
+    expect(state.status).toBe('idle');
+    expect(state.error).toBeUndefined();
+    expect(state.entries.map(line)).toEqual(['human:封存之後的話']);
+    // 冷載入一樣標得出來：折疊器把被擋的人話標上 blocked，畫面據此講「沒有送給模型」。
+    expect(state.entries[0]).toMatchObject({ kind: 'human', blocked: true });
+    const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const closing = frames
+      .filter((frame) => frame.method === 'lifecycle')
+      .map((frame) => frame.params.data);
+    expect(closing.at(-1)).toMatchObject({ event: 'completed', blocked: true });
+  });
+
+  it('一輪失敗：狀態是失敗，下一輪跑完就回到就緒', () => {
+    const failed = log(human('跑'), { type: 'turn/failed', data: { message: '供應商掛了' } });
+    expect(screen(failed).status).toBe('failed');
+    expect(screen(failed).error).toBe('供應商掛了');
+
+    const recovered = screen(log(...failed, human('再來'), reply('好了。'), turnEnd));
+    expect(recovered.status).toBe('idle');
+  });
+
+  it('失敗的碼跟著歷史走；舊日誌沒有碼就沒有這一格', () => {
+    const coded = log(human('跑'), {
+      type: 'turn/failed',
+      data: { message: '額度用完', error: { message: '額度用完', code: 'QUOTA' } },
+    });
+    expect(screen(coded)).toMatchObject({ error: '額度用完', errorCode: 'QUOTA' });
+    const old = log(human('跑'), { type: 'turn/failed', data: { message: '供應商掛了' } });
+    expect(screen(old).error).toBe('供應商掛了');
+    expect(screen(old).errorCode).toBeUndefined();
+  });
+
+  it('舊日誌的 AUTH 存著供應商原話：讀的時候換成固定句', () => {
+    const state = screen(
+      log(human('跑'), {
+        type: 'turn/failed',
+        data: { message: '401 sk-FAKE', error: { message: '401 sk-FAKE', code: 'AUTH' } },
+      }),
+    );
+    expect(state).toMatchObject({ error: AUTH_FAILURE_MESSAGE, errorCode: 'AUTH' });
+    expect(JSON.stringify(state)).not.toContain('sk-FAKE');
+  });
+
+  /**
+   * 停在核准點的那一輪收掉時卡先收成失敗；人答了之後 `resume` 那一輪以同一個 `callId` 再記一次 `tool/call`，
+   * 同一張卡翻回執行中、再照結果收——**一張卡，不是兩張**。
+   */
+  it('核准之後接著跑：同一顆呼叫只有一張卡，終態照結果', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        reply('', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        resume,
+        call('c1', 'write_file'),
+        result('c1', '寫好了'),
+        reply('寫好了。'),
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:done', 'ai:寫好了。']);
+  });
+
+  /**
+   * 兩種等法照即時分開畫（#317）：停在閘門上的是「執行中」，本體拋了中斷的是「等你回答」。
+   *
+   * **第一條原本釘的是「停在閘門上也是等你回答」**（#310），換機制時翻面寫；少了混著掛的那一條，把每張卡都畫成
+   * 執行中的實作也會綠。
+   */
+  describe('最後一輪停下來等人', () => {
+    const interrupt = (interruptId: string): Draft => ({
+      type: 'interrupt/raised',
+      data: { interruptId },
+    });
+    const pending = log(
+      human('寫檔'),
+      reply('', ['c1']),
+      call('c1', 'write_file'),
+      interrupt('i1'),
+      turnEnd,
+    );
+
+    it('停在核准閘門上、這條 thread 還掛著那顆中斷：卡跟即時一樣是「執行中」，畫面停在忙著', () => {
+      const state = screen(pending, gated('write_file'));
+
+      expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:running']);
+      expect(state.status).toBe('running');
+    });
+
+    it('本體拋了中斷的（問答）：卡是「等你回答」', () => {
+      const state = screen(
+        log(
+          human('問'),
+          reply('', ['c1']),
+          call('c1', 'ask_user_question'),
+          interrupt('i1'),
+          turnEnd,
+        ),
+        gated(),
+      );
+
+      expect(state.entries.map(line)).toEqual(['human:問', 'tool:ask_user_question:suspended']);
+      expect(state.status).toBe('running');
+    });
+
+    it('同一輪一題問答、一顆核准：問答是「等你回答」，核准是「執行中」', () => {
+      const state = screen(
+        log(
+          human('兩個都動'),
+          reply('', ['c1', 'c2']),
+          call('c1', 'ask_user_question'),
+          call('c2', 'write_file'),
+          interrupt('i1'),
+          interrupt('i2'),
+          turnEnd,
+        ),
+        gated('write_file'),
+      );
+
+      expect(state.entries.map(line)).toEqual([
+        'human:兩個都動',
+        'tool:ask_user_question:suspended',
+        'tool:write_file:running',
+      ]);
+    });
+
+    it('行程重開過、中斷已經不在了：卡照即時那條規則收成失敗', () => {
+      const state = screen(pending);
+
+      expect(state.entries.map(line)).toEqual([
+        'human:寫檔',
+        `tool:write_file:failed:${UNFINISHED_TOOL_TEXT}`,
+      ]);
+      expect(state.status).toBe('idle');
+    });
+
+    it('掛著的判斷只作用在最後一頁', () => {
+      const page = historyPage(
+        log(...pending, human('之後'), reply('好。'), turnEnd),
+        {},
+        gated('write_file'),
+      );
+
+      expect(reduceAll(emptyConversation(), page.events).entries.map(line)).toContain(
+        `tool:write_file:failed:${UNFINISHED_TOOL_TEXT}`,
+      );
+    });
+  });
+
+  it('上一個行程死在一輪中間：那一輪在 end-seed 收掉', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        call('c1'),
+        { type: 'session/end-seed', data: {} },
+        human('還在嗎'),
+        reply('在。'),
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+      'human:還在嗎',
+      'ai:在。',
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /**
+   * **切回去之後的第一眼就是這個樣子**：上一個行程死在一輪中間，這個行程還沒說過話，日誌停在 end-seed。上一條
+   * 後面還接了一輪，而 `turn/start` 本來就會收掉還開著的那一輪——少了 end-seed 那一步它照樣綠。
+   */
+  it('日誌停在 end-seed：那一輪收掉，畫面不停在執行中', () => {
+    const state = screen(log(human('跑'), call('c1'), { type: 'session/end-seed', data: {} }));
+
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /**
+   * 續接補寫的收尾（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：補的 `tool/result` 帶那句「結果不明」、
+   * `turn/end {interrupted}` 把那一輪收成完成——畫面與舊檔在 end-seed 收掉的那一條一致，不停在執行中。
+   */
+  it('補寫的收尾：工具卡仍是「沒有結果」那一句、那一輪收掉，畫面不停在執行中', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        call('c1'),
+        {
+          ...result('c1', 'The tool call was interrupted ... outcome is unknown.', true),
+          data: {
+            ...result('c1', 'x', true).data,
+            error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+          },
+        } as Draft,
+        { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+        { type: 'session/end-seed', data: {} },
+      ),
+    );
+
+    // 畫面講的還是補寫之前的那一句（web 拿它比對「被停止」），不是補結的英文。
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /**
+   * 補的「還沒開始」（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：回覆要了、沒記到 `tool/call` 的呼叫，
+   * 補的 `tool/result` 前面沒有 `tool-started`，也就沒有卡。畫面不為它多畫一張、也不丟一顆對不到卡的 `tool-finished`；
+   * 另一個記過 `tool/call` 的照舊收成「沒有結果」。
+   */
+  it('補寫的「還沒開始」：不畫卡、不丟孤兒 tool-finished；結果不明的那張照舊', () => {
+    const notStarted = {
+      ...result('c2', 'x', true),
+      data: {
+        ...result('c2', 'x', true).data,
+        error: { name: 'ToolNotStartedError', code: 'TOOL_NOT_STARTED' },
+      },
+    } as Draft;
+    const unknown = {
+      ...result('c1', 'x', true),
+      data: {
+        ...result('c1', 'x', true).data,
+        error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+      },
+    } as Draft;
+    const events = log(
+      human('跑'),
+      reply('我來', ['c1', 'c2']),
+      call('c1'),
+      unknown,
+      notStarted,
+      { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+      { type: 'session/end-seed', data: {} },
+    );
+
+    const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const finished = frames.filter(
+      (frame) =>
+        frame.method === 'tools' &&
+        (frame.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(
+      finished.map((frame) => (frame.params.data as { tool_call_id?: unknown }).tool_call_id),
+    ).toEqual(['c1']);
+    const state = screen(events);
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      'ai:我來',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /** 舊檔形狀「開著的輪＋end-seed」補結接在 end-seed 後面：end-seed 先把那一輪收掉，補的 `turn/end` 不能再收第二次。 */
+  it('舊檔形狀（end-seed 先收、補結在後）：收一次，不多出第二個收尾 frame', () => {
+    const events = log(
+      human('跑'),
+      call('c1'),
+      { type: 'session/end-seed', data: {} },
+      {
+        ...result('c1', 'x', true),
+        data: {
+          ...result('c1', 'x', true).data,
+          error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+        },
+      } as Draft,
+      { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+    );
+    const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const completed = frames.filter(
+      (frame) =>
+        frame.method === 'lifecycle' &&
+        (frame.params.data as { event?: unknown }).event === 'completed',
+    );
+    expect(completed).toHaveLength(1);
+    expect(screen(events).status).toBe('idle');
+  });
+
+  /** 死前記過 `interrupt/raised` 也一樣：那一輪死了，不是停在核准點等人（否則畫面會掛一張等人回覆的卡）。 */
+  it('補寫的收尾：死前記過 interrupt/raised 也收成完成，不畫成等人回覆', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        call('c1'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+      ),
+      // 這條 thread 此刻掛著中斷時，被當成「停在核准點」的輪會畫成忙著等人；補寫的收尾不該。
+      gated('echo'),
+    );
+
+    expect(state.status).toBe('idle');
+  });
+
+  it('目標排的輪次不畫那一串指示，同即時', () => {
+    const state = screen(
+      log(
+        {
+          type: 'turn/start',
+          data: { kind: 'goal', text: '繼續做', goalId: 'g1' as GoalId, revision: 1, round: 1 },
+        },
+        reply('做完了。'),
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual(['ai:做完了。']);
+  });
+
+  it('外掛注入的訊息不畫；壓縮畫成一格標記，位置在回覆之後（#896）', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        reply('好。'),
+        {
+          type: 'user/message',
+          data: {
+            message: toLoggedMessage(new AIMessage('提醒')),
+            source: { kind: 'plugin', plugin: 'repeat-reminder' },
+          },
+        },
+        {
+          type: 'compaction/summary',
+          data: {
+            cutoffIndex: 1,
+            messagesBefore: 2,
+            filePath: null,
+            summary: toLoggedMessage(new AIMessage('摘要')),
+          },
+        },
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual(['human:跑', 'ai:好。', 'compaction']);
+  });
+});
+
+describe('評分要的兩格（#382）', () => {
+  /** 一則有 id 的回覆。 */
+  function replyWithId(text: string, id: string, callIds: readonly string[] = []): Draft {
+    return {
+      type: 'assistant/message',
+      data: {
+        message: toLoggedMessage(
+          new AIMessage({
+            content: text,
+            id,
+            tool_calls: callIds.map((callId) => ({ id: callId, name: 'echo', args: {} })),
+          }),
+        ),
+      },
+    };
+  }
+
+  it('回覆帶日誌記的訊息 id；key 照舊是 history-<seq>；沒記 id 的就沒有', () => {
+    const state = screen(
+      log(human('跑'), replyWithId('有 id。', 'm-1'), reply('沒 id。'), turnEnd),
+    );
+    expect(
+      state.entries.flatMap((entry) => (entry.kind === 'ai' ? [[entry.id, entry.messageId]] : [])),
+    ).toEqual([
+      ['history-1', 'm-1'],
+      ['history-2', undefined],
+    ]);
+    // 人那一則沒有訊息 id：它不是評分的目標。時刻是那一筆 `turn/start` 的 `time`（#1030）。
+    expect(state.entries[0]).toEqual({
+      kind: 'human',
+      id: 'history-0',
+      text: '跑',
+      startedAt: 1000,
+    });
+  });
+
+  it('停在核准點又續接的一輪不在中間收掉：收尾只有續接後那則，同即時', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        replyWithId('要動手了。', 'm-1', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        resume,
+        call('c1', 'write_file'),
+        result('c1', '寫好了'),
+        replyWithId('寫好了。', 'm-2'),
+        turnEnd,
+      ),
+    );
+    expect(
+      state.entries.flatMap((entry) =>
+        entry.kind === 'ai' ? [[entry.text, entry.turnTail === true]] : [],
+      ),
+    ).toEqual([
+      ['要動手了。', false],
+      ['寫好了。', true],
+    ]);
+    expect(state.entries.map(line)).toContain('tool:write_file:done');
+  });
+
+  it('停在中斷上、之後另起一輪（沒有續接）：那一輪在下一輪開頭收掉，卡照即時收成失敗', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        replyWithId('要動手了。', 'm-1', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        human('算了'),
+        replyWithId('好。', 'm-2'),
+        turnEnd,
+      ),
+    );
+    expect(state.entries.map(line)).toEqual([
+      'human:寫檔',
+      'ai:要動手了。',
+      `tool:write_file:failed:${UNFINISHED_TOOL_TEXT}`,
+      'human:算了',
+      'ai:好。',
+    ]);
+    expect(
+      state.entries.flatMap((entry) => (entry.kind === 'ai' && entry.turnTail ? [entry.text] : [])),
+    ).toEqual(['要動手了。', '好。']);
+  });
+
+  it('停在中斷上、之後只有別的事件（例如人送了回饋）而現在還掛著：照舊停在等人', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        replyWithId('', 'm-1', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        { type: 'feedback/record', data: { text: '慢' } },
+      ),
+      gated('write_file'),
+    );
+    expect(state.status).toBe('running');
+    expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:running']);
+  });
+});
+
+describe('分頁', () => {
+  /** 五輪，每輪一句人話一則回覆。 */
+  const FIVE = log(
+    ...[1, 2, 3, 4, 5].flatMap((n): Draft[] => [human(`第 ${n} 句`), reply(`第 ${n} 則`), turnEnd]),
+  );
+
+  it('省略參數：整份放得下就是一頁，前面沒有更多', () => {
+    const page = historyPage(FIVE);
+
+    expect(page).toMatchObject({ firstSeq: 0, throughSeq: FIVE.length - 1, hasMore: false });
+  });
+
+  it('以則數切，切在一輪的開頭；往前翻接得起來，接完就是整份', () => {
+    const last = historyPage(FIVE, { maxMessages: 3 });
+    // 最後 3 則是「第 4 則」「第 5 句」「第 5 則」，退到第 4 輪的開頭：一輪不拆兩頁。
+    expect(last.firstSeq).toBe(9);
+    expect(last.hasMore).toBe(true);
+
+    let state = reduceAll(emptyConversation(), last.events);
+    let cursor = last;
+    while (cursor.hasMore) {
+      const earlier = historyPage(FIVE, {
+        maxMessages: 3,
+        beforeSeq: cursor.firstSeq,
+        throughSeq: last.throughSeq,
+      });
+      state = prependEntries(state, reduceAll(emptyConversation(), earlier.events));
+      cursor = earlier;
+    }
+
+    expect(state.entries.map(line)).toEqual(screen(FIVE).entries.map(line));
+  });
+
+  it('throughSeq 定住上界：之後寫進來的不會出現在往前翻的頁裡', () => {
+    const first = historyPage(FIVE, { maxMessages: 2 });
+    const grown = log(...FIVE, human('後來的'), reply('後來的回覆'), turnEnd);
+
+    const earlier = historyPage(grown, {
+      maxMessages: 100,
+      beforeSeq: first.firstSeq,
+      throughSeq: first.throughSeq,
+    });
+
+    expect(reduceAll(emptyConversation(), earlier.events).entries.map(line)).not.toContain(
+      'human:後來的',
+    );
+  });
+
+  it('不從 resume 那一輪切：同一顆呼叫的卡不會分在兩頁', () => {
+    const events = log(
+      human('寫檔'),
+      reply('', ['c1']),
+      call('c1', 'write_file'),
+      { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+      turnEnd,
+      resume,
+      call('c1', 'write_file'),
+      result('c1', '寫好了'),
+      reply('寫好了。'),
+      turnEnd,
+    );
+
+    const page = historyPage(events, { maxMessages: 1 });
+
+    expect(page.firstSeq).toBe(0);
+  });
+
+  it('前面只有看不見的事件：沒有更多', () => {
+    const events = log(
+      { type: 'sandbox/mode', data: { mode: 'workspace-write' } },
+      human('第一句'),
+    );
+
+    expect(historyPage(events, { maxMessages: 1 })).toMatchObject({ firstSeq: 1, hasMore: false });
+  });
+
+  it('空的日誌：一顆 frame 都沒有', () => {
+    expect(historyPage([])).toEqual({
+      events: [],
+      firstSeq: 0,
+      throughSeq: -1,
+      hasMore: false,
+      legacy: false,
+    });
+  });
+
+  it.each([
+    ['maxMessages 是 0', { maxMessages: 0 }],
+    ['beforeSeq 是負的', { beforeSeq: -1 }],
+    ['beforeSeq 不是整數', { beforeSeq: 1.5 }],
+    ['beforeSeq 在 throughSeq 之後', { beforeSeq: 5, throughSeq: 2 }],
+  ])('參數不對：拋 HistoryQueryError（%s）', (_label, query) => {
+    expect(() => historyPage(FIVE, query)).toThrow(HistoryQueryError);
+  });
+});
+
+describe('舊格式', () => {
+  /** 格式 8 的一輪：叫過模型、沒記下回覆，工具結果不帶內容。 */
+  const V8 = log(
+    human('跑一下'),
+    { type: 'model/start', data: {} },
+    { type: 'model/end', data: {} },
+    call('c1'),
+    { type: 'tool/result', data: { callId: 'c1', isError: false } },
+    { type: 'model/start', data: {} },
+    { type: 'model/end', data: {} },
+    turnEnd,
+  );
+
+  it('標成舊格式；人打的字與工具卡照樣畫得出來', () => {
+    const page = historyPage(V8);
+
+    expect(page.legacy).toBe(true);
+    expect(reduceAll(emptyConversation(), page.events).entries.map(line)).toEqual([
+      'human:跑一下',
+      'tool:echo:done',
+    ]);
+  });
+
+  it('對照：格式 9 的不是舊格式', () => {
+    expect(historyPage(TWO_TURNS).legacy).toBe(false);
+  });
+
+  /**
+   * `messagesCompactable`（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）出現以前寫的 `context/measure` 沒有這一格：
+   * 重放出來的 `measure` 不出這個 key，web 照沒有它的算法畫，不當成 `false`。對照：有就原樣帶上線。
+   */
+  it('context/measure 沒有 messagesCompactable 時，線上的 measure 也沒有這個 key', () => {
+    const measured = (extra: object) =>
+      reduceAll(
+        emptyConversation(),
+        historyPage(
+          log(
+            human('嗨'),
+            { type: 'model/start', data: {} },
+            reply('嗨。'),
+            { type: 'model/end', data: {} },
+            {
+              type: 'context/measure',
+              data: {
+                approxTokens: 33_000,
+                messageCount: 70,
+                thresholds: [
+                  { type: 'tokens', value: 100_000 },
+                  { type: 'messages', value: 60 },
+                ],
+                ...extra,
+              },
+            },
+            turnEnd,
+          ),
+        ).events,
+      ).contextPressure?.measure;
+
+    const old = measured({});
+    expect(old).toMatchObject({ approxTokens: 33_000, messageCount: 70 });
+    expect(old !== undefined && 'messagesCompactable' in old).toBe(false);
+    expect(measured({ messagesCompactable: false })?.messagesCompactable).toBe(false);
+  });
+
+  /**
+   * `breakdown`（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）同理：有就三格原樣上線，沒有的舊日誌重放出來就沒有這個 key。
+   */
+  it('context/measure 的 breakdown：有就三格原樣帶上線，沒有就沒有這個 key', () => {
+    const measured = (extra: object) =>
+      reduceAll(
+        emptyConversation(),
+        historyPage(
+          log(
+            human('嗨'),
+            { type: 'model/start', data: {} },
+            reply('嗨。'),
+            { type: 'model/end', data: {} },
+            {
+              type: 'context/measure',
+              data: {
+                approxTokens: 33_000,
+                messageCount: 70,
+                thresholds: [{ type: 'tokens', value: 100_000 }],
+                ...extra,
+              },
+            },
+            turnEnd,
+          ),
+        ).events,
+      ).contextPressure?.measure;
+
+    const old = measured({});
+    expect(old !== undefined && 'breakdown' in old).toBe(false);
+    const breakdown = { systemTokens: 1200, toolsTokens: 0, messageTokens: 31_800 };
+    expect(measured({ breakdown })?.breakdown).toEqual(breakdown);
+    // `messageParts`（#2774）同理：有就四格原樣上線，沒有就沒有這個 key。
+    expect('messageParts' in measured({ breakdown })!.breakdown!).toBe(false);
+    const messageParts = {
+      summaryTokens: 800,
+      injectedTokens: 1_000,
+      toolResultTokens: 20_000,
+      conversationTokens: 10_000,
+    };
+    expect(measured({ breakdown: { ...breakdown, messageParts } })?.breakdown).toEqual({
+      ...breakdown,
+      messageParts,
+    });
+    // `summaryIndexTokens`（#2776）同理：有就原樣上線，沒有就沒有這個 key（上面那一條的 `toEqual`）。
+    const indexed = { ...messageParts, summaryIndexTokens: 300 };
+    expect(measured({ breakdown: { ...breakdown, messageParts: indexed } })?.breakdown).toEqual({
+      ...breakdown,
+      messageParts: indexed,
+    });
+  });
+});
+
+/**
+ * 還在跑的那一輪不是舊格式（[#953](https://github.com/DemianLi/nexus-agent/issues/953)）：模型呼叫已經開始、回覆要等它結束才落盤，
+ * 整份日誌看起來就是「叫過模型、沒有回覆」。這一組每一格都有對照——只認「尾巴是開著的輪」而不管前面，真的舊格式也會被吞掉。
+ */
+describe('還在跑的那一輪', () => {
+  const modelStart: Draft = { type: 'model/start', data: {} };
+
+  it('新會話第一句的回覆還沒落盤：不是舊格式，畫面是執行中、人話在', () => {
+    const events = log(human('跑一下'), modelStart);
+    expect(historyPage(events).legacy).toBe(false);
+    const state = screen(events);
+    expect(state.status).toBe('running');
+    expect(state.entries.map(line)).toEqual(['human:跑一下']);
+  });
+
+  it('對照：同一份日誌收了尾、仍沒有回覆，就是舊格式', () => {
+    const events = log(human('跑一下'), modelStart, { type: 'model/end', data: {} }, turnEnd);
+    expect(historyPage(events).legacy).toBe(true);
+  });
+
+  it('工具跑到一半（回覆已落盤、結果還沒到）：不是舊格式，畫面是執行中', () => {
+    const events = log(human('跑一下'), modelStart, reply('先回聲。', ['c1']), call('c1'));
+    expect(historyPage(events).legacy).toBe(false);
+    expect(screen(events).status).toBe('running');
+  });
+
+  it('前面有格式 8 的輪：開著的那一輪不蓋掉它，照舊報舊格式', () => {
+    const events = log(
+      human('舊的一輪'),
+      modelStart,
+      { type: 'model/end', data: {} },
+      turnEnd,
+      human('新的一輪'),
+      modelStart,
+    );
+    expect(historyPage(events).legacy).toBe(true);
+  });
+});
+
+/**
+ * **一頁的位元組上限**（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
+ *
+ * 則數上限綁不住位元組量——一則底下可以掛任意多張工具卡。這一組釘的是那個上限與**輪邊界**的關係：
+ * 輪邊界贏，所以上限是軟的。
+ */
+describe('一頁的位元組上限', () => {
+  /** 一輪：人一句、模型叫 n 次工具、n 顆結果、收尾。`bytes` 是每顆結果的大小。 */
+  function turn(index: number, reads: number, bytes: number, replyText = '讀了。'): Draft[] {
+    const ids = Array.from({ length: reads }, (_, i) => `c${index}-${i}`);
+    const body = 'x'.repeat(bytes);
+    return [
+      human(`第 ${index} 輪。`),
+      reply(replyText, ids),
+      ...ids.flatMap((id) => [call(id), result(id, body)]),
+      turnEnd,
+    ];
+  }
+
+  const build = (turns: number, reads: number, bytes: number, replyText?: string): SessionEvent[] =>
+    log(...Array.from({ length: turns }, (_, i) => turn(i, reads, bytes, replyText)).flat());
+
+  const wire = (page: ReturnType<typeof historyPage>): number =>
+    Buffer.byteLength(JSON.stringify(page.events), 'utf8');
+
+  /** 這一頁的第一顆必須是一輪的開頭（而且不是 `resume`）——從輪中間切會送出孤兒工具卡。 */
+  function expectPageStart(events: readonly SessionEvent[], at: number): void {
+    const first = events[at];
+    expect(first?.type, `firstSeq=${at}`).toBe('turn/start');
+    expect((first?.data as { kind?: string } | undefined)?.kind).not.toBe('resume');
+  }
+
+  it('超標的窗口切成多頁，每一頁都從輪邊界開始、而且落在上限內', () => {
+    // 25 輪 × 每輪 10 次滿版讀 ≈ 12 MiB，遠超過上限。
+    const events = build(25, 10, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const page = historyPage(events);
+
+    expect(page.firstSeq).toBeGreaterThan(0);
+    expect(page.hasMore).toBe(true);
+    expect(wire(page)).toBeLessThanOrEqual(HISTORY_PAGE_MAX_BYTES);
+    expectPageStart(events, page.firstSeq);
+
+    // 往前翻也一樣：每一頁都從輪邊界開始，而且 `firstSeq` 嚴格遞減（不會原地打轉）。
+    let before = page.firstSeq;
+    for (let hop = 0; hop < 3 && before > 0; hop += 1) {
+      const older = historyPage(events, { beforeSeq: before, throughSeq: page.throughSeq });
+      expect(older.firstSeq, `第 ${hop} 跳`).toBeLessThan(before);
+      expect(wire(older)).toBeLessThanOrEqual(HISTORY_PAGE_MAX_BYTES);
+      expectPageStart(events, older.firstSeq);
+      before = older.firstSeq;
+    }
+  });
+
+  it('單獨一輪就超標時，那一頁照樣回得出來——輪邊界比上限強', () => {
+    // 一輪 200 次滿版讀 ≈ 9.6 MiB，一輪就爆。
+    const events = build(1, 200, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const page = historyPage(events);
+
+    expect(page.firstSeq).toBe(0);
+    expect(page.events.length).toBeGreaterThan(0);
+    expect(page.hasMore).toBe(false);
+    // **超標是刻意的**：不從輪中間切，所以這一頁就是比上限大。
+    expect(wire(page)).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
+    expectPageStart(events, page.firstSeq);
+  });
+
+  it('典型的一頁不受影響：25 輪 × 每輪 3 次小讀整頁都在', () => {
+    const events = build(25, 3, 2_000);
+    const page = historyPage(events);
+
+    expect(page.firstSeq).toBe(0);
+    expect(page.hasMore).toBe(false);
+    // 離上限還有一個量級以上的餘裕——正常瀏覽不該被切碎。
+    expect(wire(page) * 10).toBeLessThan(HISTORY_PAGE_MAX_BYTES);
+  });
+
+  it('判準是序列化後的長度，不是各段內容相加：零工具的一頁照樣切得動', () => {
+    // **這一條釘的是「量什麼」**：底下一顆工具卡都沒有，所以「把工具結果長度相加」會量到 0、永遠不切。
+    const events = build(30, 0, 0, 'y'.repeat(300_000));
+    const page = historyPage(events, { maxMessages: 1_000 });
+
+    expect(page.firstSeq).toBeGreaterThan(0);
+    expect(page.hasMore).toBe(true);
+    expect(wire(page)).toBeLessThanOrEqual(HISTORY_PAGE_MAX_BYTES);
+    expectPageStart(events, page.firstSeq);
+  });
+
+  it('上限不是查詢參數：呼叫端調不高', () => {
+    const events = build(25, 10, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const capped = historyPage(events);
+    // 塞一個不存在的參數進去（協定上沒有這一格），頁的大小一個位元組都不會變。
+    const attempted = historyPage(events, {
+      maxBytes: HISTORY_PAGE_MAX_BYTES * 100,
+    } as ThreadHistoryQuery);
+
+    expect(attempted.firstSeq).toBe(capped.firstSeq);
+    expect(wire(attempted)).toBe(wire(capped));
+  });
+
+  it('撐破上限時叫一次 onOversize，帶秤到的位元組；沒撐破就不叫', () => {
+    const oversized: number[] = [];
+    const single = build(1, 200, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    historyPage(single, {}, undefined, (bytes) => void oversized.push(bytes));
+    expect(oversized).toHaveLength(1);
+    expect(oversized[0]).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
+    // 秤到的跟真的送出去的要對得上（累加值是高估，所以只會大一點點）。
+    const actual = wire(historyPage(single));
+    expect(oversized[0]).toBeGreaterThanOrEqual(actual);
+    expect(oversized[0]! - actual).toBeLessThan(1_000);
+
+    const quiet: number[] = [];
+    historyPage(build(25, 3, 2_000), {}, undefined, (bytes) => void quiet.push(bytes));
+    expect(quiet).toEqual([]);
+  });
+
+  /**
+   * **秤最後一段時要帶真的那一份 `awaitingInput`**。
+   *
+   * 停在核准點的那一輪會多出 `tool-suspended` 那幾顆 frame（每顆未收的呼叫一顆）。秤重時不帶它，
+   * 秤到的就比真的送出去的小——而**低估的方向正好是「真的超出上限而判準以為沒有」**。這一條是那道
+   * 防線自己的量測：`fitBytes` 裡那個參數被拿掉的話，這裡會紅。
+   */
+  it('最後一輪停在核准點時，秤到的不小於真的送出去的', () => {
+    // 170 則各 50000 位元組的文字 ≈ 8.5 MB，撐得破一頁（文字自 #736 起原樣上線）。
+    const settled = Array.from({ length: 170 }, (_, i) => `s${i}`);
+    const pending = Array.from({ length: 60 }, (_, i) => `p${i}`);
+    const body = 'x'.repeat(DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const events = log(
+      human('讀一堆檔，然後要寫。'),
+      reply('讀了，接著寫。', [...settled, ...pending]),
+      ...settled.flatMap((id) => [call(id), result(id, body)]),
+      ...pending.map((id) => call(id, 'write_file')),
+      { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+      turnEnd,
+    );
+    // 一顆都不閘：60 顆全都會多出 `tool-suspended`。
+    const waiting = gated();
+
+    const measured: number[] = [];
+    const page = historyPage(events, {}, waiting, (bytes) => void measured.push(bytes));
+
+    expect(page.firstSeq).toBe(0);
+    expect(measured).toHaveLength(1);
+    expect(measured[0]).toBeGreaterThanOrEqual(wire(page));
+  });
+
+  /**
+   * **幾個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、`meta` 的上限與讀檔 meta 的倍數
+   * 住在這個 app，wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方把三個值
+   * 一起釘死——任何一個動了，這裡會紅，逼人回頭重讀 `protocol.ts` 那段推算。同一個做法見 `@nexus/wire`
+   * 的 `conversation.ts:927`。
+   *
+   * ## 一張卡是文字加 meta，文字的上限在生產者（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）
+   *
+   * 文字不截在 `tool-text` 那一格（#736），由生產者自己的上限決定：讀檔不外溢，一頁選到的行（含換行）累計 50 KiB 就停、最多
+   * 2000 行，每行再加 7 位元組的行號（`@nexus/core` 的 `read-continuation.ts`，那兩個數沒匯出，這裡寫字面值）。
+   * 所以一張讀檔卡最壞約 165,200（文字 65,200 加 meta 100,000），一頁約裝 48 張。外溢層管的其他工具換成位元組
+   * 沒有固定的數（估算 token，量到的數寫在 `protocol.ts`），不在這條裡。8 MB 沒跟著改（demian 2026-09-25 拍板）：
+   * 這個上限本來就是軟的，切點只落在輪邊界上。
+   *
+   * ## 它只保證到 schema 的預設值為止（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）
+   *
+   * meta 的上限是一列條目的 `config`，**部署在 patch 裡改掉它，這些比例就不再成立，而且沒有
+   * 任何東西會紅**——配對的另一半是協定常數，在 #457 的射程外，而且 wire 結構上 import 不到 harness。
+   *
+   * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的。另外兩條分別要把協定常數
+   * 變成設定、或讓 wire 反過來收 harness 注入的值，兩條都在動協定層的形狀。
+   *
+   * 所以這一條比的是 `DEFAULT_TOOL_TEXT_MAX_BYTES`，**名字本身就是射程宣告**：它釘的是出廠那一份。
+   */
+  it('頁上限裝得下約 48 張最壞的讀檔卡——在 schema 的預設上限底下', () => {
+    expect({
+      page: HISTORY_PAGE_MAX_BYTES,
+      meta: DEFAULT_TOOL_TEXT_MAX_BYTES,
+      readMetaFactor: READ_META_MAX_BYTES_FACTOR,
+    }).toEqual({ page: 8_000_000, meta: 50_000, readMetaFactor: 2 });
+    const readText = 50 * 1024 + 2_000 * 7;
+    const readCard = readText + DEFAULT_TOOL_TEXT_MAX_BYTES * READ_META_MAX_BYTES_FACTOR;
+    expect(readCard).toBe(165_200);
+    expect(Math.floor(HISTORY_PAGE_MAX_BYTES / readCard)).toBe(48);
+  });
+});
+
+describe('isTodosReset（#682：與頁起點共用「不是 resume 的 turn/start」）', () => {
+  it('message 的 turn/start 清待辦；resume 不清；別種事件不清', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '嗨' });
+    log.append('turn/start', { kind: 'resume' });
+    log.append('turn/end', {});
+    expect(log.events.map(isTodosReset)).toEqual([true, false, false]);
+  });
+});
+
+describe('模型回覆的開始時刻（#1048）', () => {
+  /** 排好 `seq`，時刻按給的表（沒給的用 `1000 + seq`）。 */
+  function timed(
+    drafts: readonly Draft[],
+    times: Readonly<Record<number, number>>,
+  ): SessionEvent[] {
+    return drafts.map(
+      (draft, seq) => ({ ...draft, seq, time: times[seq] ?? 1000 + seq }) as SessionEvent,
+    );
+  }
+  const modelStart: Draft = { type: 'model/start', data: {} };
+  const modelEnd: Draft = { type: 'model/end', data: { outcome: 'ok' } } as Draft;
+  const replyOf = (text: string, modelCall?: number, callIds: readonly string[] = []): Draft => {
+    const draft = reply(text, callIds);
+    return modelCall === undefined
+      ? draft
+      : ({ ...draft, data: { ...draft.data, modelCall } } as Draft);
+  };
+  const aiEntries = (events: readonly SessionEvent[]) =>
+    screen(events).entries.filter((entry) => entry.kind === 'ai');
+
+  it('一輪兩次呼叫：每則回覆的 startedAt 是它自己那次的 model/start，settledAt 是落盤', () => {
+    // seq: 0 輪首 · 1 model/start(A) · 2 回覆 A(落盤 1500) · 3 model/end · 4 call · 5 result ·
+    //      6 model/start(B, 3000) · 7 回覆 B(落盤 3400) · 8 model/end
+    const events = timed(
+      [
+        human('查一下'),
+        modelStart,
+        replyOf('先查。', 1, ['c1']),
+        modelEnd,
+        call('c1'),
+        result('c1', '好'),
+        modelStart,
+        replyOf('查好了。', 6),
+        modelEnd,
+        turnEnd,
+      ],
+      { 1: 1100, 2: 1500, 4: 1600, 5: 2900, 6: 3000, 7: 3400 },
+    );
+    const [first, second] = aiEntries(events);
+    expect([first?.startedAt, first?.settledAt]).toEqual([1100, 1500]);
+    // 不是整輪第一顆 model/start（1100），也不是 B 落盤（3400）。
+    expect([second?.startedAt, second?.settledAt]).toEqual([3000, 3400]);
+  });
+
+  it('日誌沒有 modelCall（#1021 之前）或找不到那顆 model/start：退回落盤的時刻，兩格相等', () => {
+    const old = timed([human('嗨'), modelStart, replyOf('你好。'), modelEnd, turnEnd], {
+      1: 1100,
+      2: 1500,
+    });
+    const orphan = timed([human('嗨'), modelStart, replyOf('你好。', 99), modelEnd, turnEnd], {
+      1: 1100,
+      2: 1500,
+    });
+    for (const events of [old, orphan]) {
+      const [entry] = aiEntries(events);
+      expect([entry?.startedAt, entry?.settledAt]).toEqual([1500, 1500]);
+    }
+  });
+
+  it('model/start 的時刻晚於落盤（時鐘倒退）：不晚於落盤', () => {
+    const events = timed([human('嗨'), modelStart, replyOf('你好。', 1), modelEnd, turnEnd], {
+      1: 1700,
+      2: 1500,
+    });
+    const [entry] = aiEntries(events);
+    expect([entry?.startedAt, entry?.settledAt]).toEqual([1500, 1500]);
+  });
+
+  it('講到一半被停止的那則（interrupted）：startedAt 同樣取呼叫開始，settledAt 取收尾', () => {
+    const events = timed(
+      [
+        human('嗨'),
+        modelStart,
+        {
+          ...replyOf('講到一', 1),
+          data: { ...replyOf('講到一', 1).data, interrupted: true },
+        } as Draft,
+        {
+          type: 'turn/end',
+          data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
+        } as Draft,
+      ],
+      { 1: 1100, 2: 1500, 3: 1600 },
+    );
+    const [entry] = aiEntries(events);
+    expect(entry?.startedAt).toBe(1100);
+    expect(entry?.settledAt).toBe(1600);
+  });
+});
+
+describe('分叉繼承來的子代理目錄（#1579）', () => {
+  const catalog = (childId: string, callId: string): Draft => ({
+    type: 'subagent/catalog',
+    data: { childId, callId, mode: 'one-shot' },
+  });
+  /** 前綴是來源 thread `T` 的一輪（派了 `T/x`），切點之後是自己的一輪（派了 `F/y`）。 */
+  const FORKED = log(
+    human('一'),
+    call('c1', 'task'),
+    catalog('T/x', 'c1'),
+    turnEnd,
+    { type: 'session/end-seed', data: { inherited: true } },
+    human('二'),
+    call('c2', 'task'),
+    catalog('F/y', 'c2'),
+    turnEnd,
+  );
+  const childIds = (events: readonly SessionEvent[], query?: ThreadHistoryQuery): string[] =>
+    historyPage(events, query)
+      .events.map((frame) => (frame.params as { data?: { name?: string; payload?: unknown } }).data)
+      .filter((data) => data?.name === SUBAGENT_CATALOG)
+      .map((data) => (data!.payload as { childId: string }).childId);
+
+  it('前綴裡的不轉 frame（`F/x` 開不到），自己派的照轉', () => {
+    expect(childIds(FORKED)).toEqual(['F/y']);
+  });
+
+  it('切點由整份日誌算：只拿前綴那一頁（不含標記）也不轉', () => {
+    // `throughSeq` 停在前綴裡：這一頁不含標記，但切點從整份日誌來。
+    expect(childIds(FORKED, { beforeSeq: 4 })).toEqual([]);
+  });
+});

@@ -1,0 +1,107 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+/* shadcn 的 custom variant、工具類與 keyframes（SG `src/index.css:3` 載入的那一份，#1523）：照 SG 的順序排在 solid-glass.css 前面。 */
+@import './vendor/solid-glass/shadcn/tailwind.css';
+
+/* 字型全部打包進本地（完全內網）：介面 Geist、等寬 Geist Mono（只打包 latin，`styles/fonts.css`），中文都退 Noto Sans TC（#1468 Q6）。 */
+@import './styles/fonts.css';
+@import '@fontsource-variable/noto-sans-tc';
+
+/* 外觀是 solid-glass（#1468、#1512）：vendor 原檔 → 產生器解過門檻的顏色 → 本地修改（機制類，layer 外）→ nexus 獨有的非顏色 token。 */
+@import './vendor/solid-glass/solid-glass.css';
+@import './styles/tokens.generated.css';
+@import './styles/solid-glass.overrides.css';
+@import './styles/theme.css';
+@import './styles/motion.css';
+@import './styles/markdown.css';
+@import './styles/shiki.css';
+@import './styles/preview.css';
+
+/* 建置工具的註解會寫到 class 名（例如 `.animate-spin`），不讓 Tailwind 把它們當成要產出的 utility。 */
+@source not '../scripts';
+@source not '../tokengen';
+/* 測試裡的範例字串與說明文件提到的類別名也不要編成規則（裸的 `.container`、`.shadow` 會套到不相干的元素；`scripts/check-built-css.mjs` 量產物確認）。 */
+@source not './**/*.test.{ts,tsx}';
+@source not '../*.md';
+/* 只給測試用的量具：`css-cascade.ts`（#1498）處理 `@container` 的字樣會被當成裸的 `.container`，`color-math.ts`（#1512）的 `blur` 會變成 `.blur`。 */
+@source not './styles/css-cascade.ts';
+@source not './styles/color-math.ts';
+/* vendor 的上游 CSS、授權與說明、同步腳本、清單：要的是 import 進來的規則，不是把裡面的字掃成 utility。`.tsx` 不排除（#1497 第 ③ 步起要掃）。 */
+@source not './vendor/**/*.{css,md,mjs,json}';
+@source not './vendor/**/LICENSE';
+/* 瀏覽器護欄的測試頁（#1512）量的是出貨的 CSS，不能讓它自己的字樣反過來改到出貨的 CSS；它也不准寫 class（`src/guard-page.test.ts`）。 */
+@source not '../guard';
+
+/*
+ * 現行規則見 `docs/web-ui.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
+ *
+ * 動效：基礎元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS（沒裝時一筆都不產出、也不報錯）。
+ * 時長與曲線照 SG 的機制（#1687）：讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。
+ * **不用 inline**：inline 會讓 utility 直接展開數值、不再讀 `var(--animate-in)`，reduced-motion 在執行期換掉的變數就沒人讀，
+ * 無聲失效（`check-built-css` 量產物）。可是非 inline 的值宣告在 `:root`，裡面的 `var(--tw-duration)` 會在 `:root` 先解掉，
+ * 所以真正生效的值逐元素寫在 `styles/motion.css` 的「進出場」那段；這裡留同一份值，只為了讓 Tailwind 產出 `var(--animate-in)`。
+ */
+@theme {
+  --animate-in: enter var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
+    var(--tw-animation-delay, 0s) 1 normal backwards;
+  --animate-out: exit var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
+    var(--tw-animation-delay, 0s) 1 normal both;
+}
+
+@theme inline {
+  /*
+   * 圓角階梯照 SG（#1468 Q8，#1512）：`--radius-sm`…`--radius-4xl` 都是 `solid-glass.css` 的 `calc(var(--radius) * n)`，這裡不重綁。
+   * 嵌在卡片（`rounded-3xl p-1`）裡的列：SG 的 3xl 減內距 4，同心。給 `RowTrigger` 與排隊清單的列用，不要寫 `rounded-[…]`。
+   * 照抄 SG 3xl 的算式（`design-system.test.ts` 比對兩者），SG 改了倍數這裡要跟著改。
+   */
+  --radius-row: calc(var(--radius) * 2.2 - 4px);
+
+  /* 字重只用 400／500，semibold 以上一律落在 500 */
+  --font-weight-semibold: 500;
+  --font-weight-bold: 500;
+
+  /* 字級：UI 13、內文 14/23、tooltip 12、微標籤 11 */
+  --text-ui: 13px;
+  --text-ui--line-height: 18px;
+  --text-body: 14px;
+  --text-body--line-height: 23px;
+  --text-tip: 12px;
+  --text-tip--line-height: 16px;
+  --text-micro: 11px;
+  --text-micro--line-height: 14px;
+
+  --color-brand: var(--brand);
+  --color-success: var(--success);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+}

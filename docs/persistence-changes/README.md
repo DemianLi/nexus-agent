@@ -8,7 +8,7 @@ description: "審查與維護會話持久化型別變更的確認紀錄、對應
 
 這裡放已確認的會話持久化型別變更，以及每一筆的前驅。每筆紀錄把一個相容性決定綁在確切的生成型別圖上。檢查只用目前 checkout 裡的檔案，把目前的原始碼跟紀錄歷史比。
 
-照 dsh `docs/persistence-changes/README.zh.md`（`687f282e`）寫成；跟 dsh 不同的地方列在 [`persistence-changes.ts`](../../apps/harness/src/persistence-changes.ts) 檔頭。
+照 dsh `docs/persistence-changes/README.zh.md`（`687f282e`）寫成；跟 dsh 不同的地方列在 [`persistence-changes.ts`](../../harness/apps/harness/src/persistence-changes.ts) 檔頭。
 
 ## 目錄
 
@@ -22,7 +22,7 @@ description: "審查與維護會話持久化型別變更的確認紀錄、對應
 <a id="files-and-ownership"></a>
 ## 檔案與職責
 
-[型別圖](../persistence-schema.json)是正規化後的型別，由 [`persistence-schema.ts`](../../apps/harness/src/persistence-schema.ts) 從原始碼抽出。根涵蓋邏輯會話 header（`SessionHeader`）、事件封裝（`SessionEventEnvelope`）與 repo 裡宣告的每一種事件。被引用的型別一變，每個受影響的根的摘要都跟著變。
+[型別圖](../persistence-schema.json)是正規化後的型別，由 [`persistence-schema.ts`](../../harness/apps/harness/src/persistence-schema.ts) 從原始碼抽出。根涵蓋邏輯會話 header（`SessionHeader`）、事件封裝（`SessionEventEnvelope`）與 repo 裡宣告的每一種事件。被引用的型別一變，每個受影響的根的摘要都跟著變。
 
 每一筆帶日期的紀錄是同目錄的兩個檔：
 
@@ -61,7 +61,7 @@ pnpm --filter @nexus/harness run persistence-changes --record 2026-10-23-slug --
 
 一般事件可以加一個帶必填、非負整數 `data.version` 的酬載分支：新版本要比所有既有的酬載版本高，所有既有分支照上面明確允許的同版規則保持可讀。選填屬性的新增與必填改選填可以跟新版本一起引入；每個保留的分支各自比較。其他酬載變更要相容性審查。舊讀方可能拒收新的酬載版本。
 
-每一則同版說明都要講舊紀錄怎麼保持可讀、舊讀方怎麼處理新紀錄，包括不必明確給 `--decision` 的允許情形。日誌沒用到某個功能時要保留舊行為；可捨棄的功能要能安全略過；必要的功能要有有效的拒絕訊號。拒絕不支援的功能不能變成損壞恢復或尾端截斷。必填改選填時，說明讀方怎麼處理缺值。審查的人判斷行為與證據；檢查器驗聲明與型別分類。升版的紀錄同時照 [`session-store.ts`](../../packages/nexus-core/src/session-store.ts) 檔頭的升版紀錄走。
+每一則同版說明都要講舊紀錄怎麼保持可讀、舊讀方怎麼處理新紀錄，包括不必明確給 `--decision` 的允許情形。日誌沒用到某個功能時要保留舊行為；可捨棄的功能要能安全略過；必要的功能要有有效的拒絕訊號。拒絕不支援的功能不能變成損壞恢復或尾端截斷。必填改選填時，說明讀方怎麼處理缺值。審查的人判斷行為與證據；檢查器驗聲明與型別分類。升版的紀錄同時照 [`session-store.ts`](../../harness/packages/nexus-core/src/session-store.ts) 檔頭的升版紀錄走。
 
 讀方按屬性名拒收某個 JSON 欄位時，把那個屬性宣告成選填的 `never`，加上不帶參數的 `@persistenceReserved` 標記。抽取器會保留這個禁止的欄位，所以之後允許 JSON 值就算改既有欄位的型別。必填屬性或允許 JSON 值的屬性不能帶這個標記。沒標記的選填 `never` 與 `undefined` 屬性照舊省略。
 
@@ -72,7 +72,7 @@ pnpm --filter @nexus/harness run persistence-changes --record 2026-10-23-slug --
 
 已接受的紀錄描述歷史上的轉換；加後繼時要保留它的機器聲明與型別圖快照。還沒有後繼的末端紀錄可以明確刷新（`--update`）；命令在產生檔案之前就拒絕基線與已有後繼的紀錄。基線不依賴 Git 參照、遠端服務或已發行版本的 checkout。
 
-摘要描述宣告的持久化型別，不描述執行期的驗證或行為。一般註解、原始碼位置、別名與不改語意的宣告重排都不影響摘要。物件欄位、聯集分支、交集運算元與索引簽名，在解析出的型別不變時可以重排；tuple 位置與數字列舉值照樣影響摘要。原始碼位置還是可能變，所以生成物過期就重新生成，摘要沒變就不必加確認紀錄。`unknown` 這類不透明型別沒有可比較的內部結構。純行為變更與藏在不透明值裡的結構不在這套機制的範圍內。
+摘要描述宣告的持久化型別，不描述執行期的驗證或行為。一般註解、原始碼位置、別名與不改語意的宣告重排都不影響摘要。物件欄位、聯集分支、交集運算元與索引簽名，在解析出的型別不變時可以重排；tuple 位置與數字列舉值照樣影響摘要。生成物的 `sources` 只記檔、不記行號：增刪註解、在同檔內搬動或重排宣告造成的行號位移，不會讓它過期。其他內容變了（例如指紋、型別名、宣告所在的檔或同檔的宣告個數）照樣過期；過期就重新生成，摘要沒變就不必加確認紀錄。`unknown` 這類不透明型別沒有可比較的內部結構。純行為變更與藏在不透明值裡的結構不在這套機制的範圍內。
 
 <a id="dev-note"></a>
 ## 開發備註

@@ -2,7 +2,7 @@
 
     node_compat.py smoke    逐檔跑 node-compat-files.txt 列的測試，核對每一檔都真的跑了
 
-清單、為什麼是這幾檔，見 node-compat-files.txt 檔頭。照 dsh `scripts/run-gates.ts:444-460`：逐檔、串行。
+清單、為什麼是這幾檔，見 node-compat-files.txt 檔頭。
 
 **不能交給 vitest 自己判斷「有沒有跑到」**：vitest 的位置參數是子字串過濾，不是路徑。清單裡寫錯一個檔名，
 其他檔照跑、以 0 結束，job 是綠的。所以這裡先核對每一檔都存在，跑完再讀 JSON 報告，核對「實際跑了的檔」
@@ -33,13 +33,17 @@ def read_list(path: Path = LIST) -> list[str]:
 
 
 def group_by_app(files: list[str]) -> dict[str, list[str]]:
-    """依 `apps/<名稱>/` 分組，各組在自己的目錄下跑 vitest（各 app 有自己的 vitest 設定）。"""
+    """依 workspace 專案的根（`web`、`harness/apps/<名稱>`）分組，各組在自己的目錄下跑 vitest（各專案有自己的 vitest 設定）。"""
     groups: dict[str, list[str]] = {}
     for f in files:
         parts = f.split('/')
-        if len(parts) < 3 or parts[0] != 'apps':
-            raise ValueError(f'清單只收 apps/<名稱>/ 底下的測試：{f}')
-        groups.setdefault('/'.join(parts[:2]), []).append(f)
+        if len(parts) >= 3 and parts[0] == 'web':
+            root = 'web'
+        elif len(parts) >= 5 and parts[:2] == ['harness', 'apps']:
+            root = '/'.join(parts[:3])
+        else:
+            raise ValueError(f'清單只收 web/ 或 harness/apps/<名稱>/ 底下的測試：{f}')
+        groups.setdefault(root, []).append(f)
     return groups
 
 

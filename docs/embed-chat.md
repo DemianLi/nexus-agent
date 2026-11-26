@@ -218,12 +218,31 @@ window.addEventListener('keydown', (event) => {
 - 計劃模式、目標、待辦、送出佇列；
 - 分叉、側欄與歷史清單；
 - 花費；
-- 附件上傳（空白畫面也不提「把檔案拖進來」）；
+- 附件上傳；
 - 改動卡（差異檢視）。
 
 輸入框送出的一律當成一句話，`/` 開頭也不會當成命令。一輪還在跑時不收下一句，要先按停止。
 
 打開元件時會接上一次的對話（記在瀏覽器的 `nexus.embed.threads.current`，跟獨立頁面分開）；按「新對話」開一條新的。獨立頁面開的對話在元件裡打不開，元件會說明並請使用者按「新對話」。
+
+## 本機模擬模式
+
+沒有 serve 時，宿主頁的前端照樣可以開發宿主頁工具的串接（[#3175](https://github.com/DemianLi/nexus-agent/issues/3175)）：`web` 跑 `pnpm run build:mock`，產物在 `web/dist-mock/`，宿主頁把 `embed.js` 換成那裡的 `embed-mock.js`（連同 `assets/` 放在同一個目錄）。元件照樣畫，但不打任何網路請求，照 `globalThis.nexusChatMock` 的劇本回話與叫宿主頁工具：
+
+```ts
+globalThis.nexusChatMock = {
+  // 第 n 句話用第 n 輪；也可以改給 reply，每一句話自己決定。
+  turns: [[{ say: '先轉過去。' }, { tool: 'focus_device', args: { id: 'B-07' } }, { say: '好了。' }]],
+  reply: ({ text, context, hostTools }) => [{ say: `收到：${text}` }],
+};
+```
+
+- 每一步是 `{ say }` 或 `{ tool, args, approval }`。叫工具預設先出核准卡（同 serve 出廠），`approval: false` 直接發 `nexus-host-tool`；`respond` 的結果、`fail` 的原因畫在工具卡上，再接下一步。
+- 劇本每送出一句話讀一次，中途改了下一句生效。型別是 `nexus-chat.d.ts` 的 `NexusChatMock`。
+- `web/embed-demo` 的測試頁網址加 `?embed=/embed-mock.js` 就是模擬模式，範例劇本在它的 `main.ts`：句子裡的設備編號轉過去，說到「標」再高亮。
+- 驗得到的是宿主頁這一側的接線：宣告、事件、`respond`／`fail`、核准卡、`context`。**驗不到模型會不會在對的時機叫對的工具**：劇本不理解句子，要接真的 serve 才知道。
+- 宿主頁 30 秒內沒交回，工具卡標失敗（「宿主頁沒在期限內交回」），劇本照跑下一步，同 serve 出廠的期限；核准卡沒有期限，等人按。
+- 不模擬：斜線命令（清單是空的）、換票登入（`signIn` 一律 reject `sign_in_failed`）、上傳、子代理、對話清單（這幾個回「模擬模式不支援」）。`embed-mock.js` 只給本機開發，serve 不供應它。
 
 ## 開發時接上另一台主機的 serve
 

@@ -9,7 +9,7 @@ description: 會話日誌的格式升到 55，請求快照改寫在模型呼叫�
 
 新版的會話日誌是格式 55（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)），在
 [54](../session-log-format-54/guide.md) 之上再改下面幾樣。每一版改了什麼，紀錄在
-[`packages/nexus-core/src/session-store.ts`](../../../../packages/nexus-core/src/session-store.ts) 裡 `SESSION_LOG_FORMAT_VERSION` 的說明。
+[`packages/nexus-core/src/session-store.ts`](../../../../harness/packages/nexus-core/src/session-store.ts) 裡 `SESSION_LOG_FORMAT_VERSION` 的說明。
 
 - **請求快照換位置、不帶 `modelCall`**：`request/system` 與 `request/header` 記在它所屬那次 `model/start` **之前**，不再帶
   `modelCall`；順序是快照、`model/start`，兩顆一起落盤之後才送出請求（耐久檢查點被關掉時不等落盤）。54 以前的快照記在 `model/start` 之後、帶 `modelCall`。

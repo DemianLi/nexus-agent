@@ -10,7 +10,7 @@ description: 會話日誌的格式升到 54，換票登入開的嵌入版對話�
 新版的會話日誌是格式 54（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)），在
 [53](../session-log-format-53/guide.md) 之上再多一樣：用換票登入的身分（嵌入 cookie）開的嵌入版對話，header 記著開它的人
 （`owner` 與 `embedOrigin`）。每一版改了什麼，紀錄在
-[`packages/nexus-core/src/session-store.ts`](../../../../packages/nexus-core/src/session-store.ts) 裡 `SESSION_LOG_FORMAT_VERSION` 的說明。
+[`packages/nexus-core/src/session-store.ts`](../../../../harness/packages/nexus-core/src/session-store.ts) 裡 `SESSION_LOG_FORMAT_VERSION` 的說明。
 
 - **換票登入的身分只打得開自己開的對話**：使用者代號與嵌入方都要對上。沒記開它的人的嵌入版對話（54 以前開的、主機擁有者從
   嵌入路由開的），換票登入的身分打不開，主機擁有者照樣打得開。v0.6.0 沒有換票登入，所以升級前的對話沒有人因此打不開。

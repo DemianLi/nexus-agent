@@ -1,0 +1,183 @@
+/**
+ * 兩條進入點寫進同一種日誌——**這是 [#89](https://github.com/DemianLi/nexus-agent/issues/89)
+ * 選 (B) 而不是 (A) 的全部價值所在**。
+ *
+ * (A) 是接 `thread-pump.ts` 那個為瀏覽器排序去重而生的 `seq`，而 CLI 那條路
+ * （`cli.ts` 直接 `agent.stream()`）根本不經過 pump —— 接了等於遙測只看得到瀏覽器
+ * 來的 run。所以這一檔要證的不是「日誌會動」，是**兩條路各自都真的在寫**、
+ * 而且寫出來的號在自己的 session 內連續。
+ *
+ * 訊息內容不在這一版的日誌裡，理由見 `@nexus/core` 的 `session-log.ts` 檔頭：
+ * 兩條路拿得到的顆粒度不一樣（分片 vs 完整訊息），硬記會變成合成資料。
+ */
+
+import { tool } from '@langchain/core/tools';
+import { MemorySaver } from '@langchain/langgraph';
+import { SessionLog } from '@nexus/core';
+import { createDeepAgent, StateBackend } from 'deepagents';
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
+import { ScriptedChatModel } from './scripted-model.js';
+import type { ScriptedTurn } from './scripted-model.js';
+import type { PumpAgent } from './thread-pump.js';
+import { ThreadPump } from './thread-pump.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
+
+function noteTool() {
+  return tool(({ text }: { text: string }) => `已記下：${text}`, {
+    name: 'take_note',
+    description: '把一段文字記下來。',
+    schema: z.object({ text: z.string().describe('要記下的內容') }),
+  });
+}
+
+function buildPumpAgent(turns: readonly ScriptedTurn[], gated = false): PumpAgent {
+  return createDeepAgent({
+    model: new ScriptedChatModel({ turns }),
+    tools: [noteTool()],
+    backend: new StateBackend(),
+    ...(gated
+      ? {
+          checkpointer: new MemorySaver(),
+          interruptOn: { take_note: { allowedDecisions: ['approve', 'reject'] as const } },
+        }
+      : {}),
+  }) as unknown as PumpAgent;
+}
+
+const PLAIN_TURNS: readonly ScriptedTurn[] = [{ content: '好的。' }];
+
+const GATED_TURNS: readonly ScriptedTurn[] = [
+  { content: '', toolCalls: [{ name: 'take_note', args: { text: '一筆' } }] },
+  { content: '記完了。' },
+];
+
+/** `seq` 必須是 0,1,2,… ——這是耐久序號唯一的硬要求。 */
+function seqsOf(log: SessionLog): number[] {
+  return log.events.map((event) => event.seq);
+}
+
+// 人送出的話一律先進送出佇列（#637）：一輪前面一顆送進來、`turn/start` 之後一顆領走。這一檔每條都是第一句，所以領走之後
+// 還有一顆退回標題（#647）。
+const QUEUED_TURN = ['inbox/spliced', 'turn/start', 'inbox/spliced', 'session/title'] as const;
+
+describe('會話事件日誌：web 那條路', () => {
+  it('一輪跑完寫下 turn/start 與 turn/end，seq 連續', async () => {
+    const pump = new ThreadPump(buildPumpAgent(PLAIN_TURNS), 'web-1');
+
+    await pump.submit({ kind: 'message', text: '嗨' });
+
+    expect(pump.sessionLog.events.map((event) => event.type)).toEqual([...QUEUED_TURN, 'turn/end']);
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4]);
+    expect(pump.sessionLog.events[1]?.data).toEqual({ kind: 'message', text: '嗨' });
+    expect(pump.sessionLog.sessionId).toBe('web-1');
+  });
+
+  it('停在核准點會記下 interrupt/raised，而且那一輪照樣有 turn/end', async () => {
+    const pump = new ThreadPump(buildPumpAgent(GATED_TURNS, true), 'web-2');
+
+    await pump.submit({ kind: 'message', text: '記一筆' });
+
+    const types = pump.sessionLog.events.map((event) => event.type);
+    expect(types).toEqual([...QUEUED_TURN, 'interrupt/raised', 'turn/end']);
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4, 5]);
+    const raised = pump.sessionLog.events[4]?.data as { interruptId: string };
+    expect(raised.interruptId).toBe(pump.pendings[0]?.interruptId ?? '(沒有掛著的中斷)');
+  });
+
+  it('核准之後那一輪記成 resume，號接在前一輪後面', async () => {
+    const pump = new ThreadPump(buildPumpAgent(GATED_TURNS, true), 'web-3');
+
+    await pump.submit({ kind: 'message', text: '記一筆' });
+    await pump.submit({
+      kind: 'resume',
+      interruptId: pump.pendings[0]?.interruptId ?? '',
+      response: { decisions: [{ type: 'approve' }] },
+    });
+
+    // resume 不走佇列：它答的是掛著的中斷，不是一句新的話。
+    expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
+      ...QUEUED_TURN,
+      'interrupt/raised',
+      'turn/end',
+      'turn/start',
+      'turn/end',
+    ]);
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(pump.sessionLog.events[6]?.data).toEqual({ kind: 'resume' });
+  });
+
+  it('跑壞了記 turn/failed，而且錯誤照樣往外拋', async () => {
+    const failing: PumpAgent = {
+      streamEvents: () => Promise.reject(new Error('模型不見了')),
+      // 中止這一輪（#276）才會讀寫 checkpoint，這條測試走不到。
+      getState: () => Promise.reject(new Error('這條測試用不到 checkpoint')),
+      updateState: () => Promise.reject(new Error('這條測試用不到 checkpoint')),
+    };
+    const pump = new ThreadPump(failing, 'web-4');
+
+    await expect(pump.submit({ kind: 'message', text: '嗨' })).rejects.toThrow('模型不見了');
+
+    expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
+      ...QUEUED_TURN,
+      'turn/failed',
+    ]);
+    expect(pump.sessionLog.events[4]?.data).toEqual({
+      message: '模型不見了',
+      // 不是供應商的錯：`UNKNOWN`（#434）。
+      error: { message: '模型不見了', code: 'UNKNOWN' },
+    });
+  });
+});
+
+describe('會話事件日誌：CLI 那條路', () => {
+  const silent = { log: () => undefined, error: () => undefined };
+
+  it('CLI 也在寫，而且 seq 跨輪連續——同一份日誌活得比一輪久', async () => {
+    // 只量日誌上的事件序列：`log` 下一定要接日誌，而接上會寫一顆 approval/policy，所以明給 `state`。
+    const { agent, dispose, sessionLog } = await createCliAgent(
+      { live: false, historySource: 'state' },
+      shipped,
+    );
+
+    try {
+      await runTurn(agent, '第一句', silent, sessionLog);
+      await runTurn(agent, '第二句', silent, sessionLog);
+    } finally {
+      await dispose();
+    }
+
+    // 退回標題只在第一句寫一次（#647）。
+    expect(sessionLog.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/end',
+      'turn/start',
+      'turn/end',
+    ]);
+    expect(seqsOf(sessionLog)).toEqual([0, 1, 2, 3, 4]);
+    expect(sessionLog.events[3]?.data).toEqual({ kind: 'message', text: '第二句' });
+    expect(sessionLog.sessionId).toBe('cli');
+  });
+
+  it('一輪拋錯時記 turn/failed，錯誤照樣往外拋', async () => {
+    const exploding = {
+      stream: () => Promise.reject(new Error('串流開不起來')),
+    } as unknown as Parameters<typeof runTurn>[0];
+    const log = new SessionLog('cli');
+
+    await expect(runTurn(exploding, '嗨', silent, log)).rejects.toThrow('串流開不起來');
+
+    // 標題寫在 try 裡面、串流之前，所以它先落；串流的失敗照樣收成 `turn/failed`（#647）。
+    expect(log.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/failed',
+    ]);
+  });
+});

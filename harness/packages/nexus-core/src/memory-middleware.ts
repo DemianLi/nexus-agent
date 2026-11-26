@@ -1,0 +1,136 @@
+/**
+ * 記憶那一段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：讀到的內容記在宿主這一側的 {@link MemoryContents}，
+ * 每條 thread 一份；文字由這裡渲染（`base-prompt-text.ts`），自己一塊，是系統提示的最後一塊：讀檔那半在 tail，渲染那半排在 `historyFromLog` 前面。
+ *
+ * 讀檔仍委派基座的 `createMemoryMiddleware` 的 `beforeAgent`：同一條 thread 第一次 invoke 讀一次，結果寫進 state 的
+ * `memoryContents`，之後 state 裡有就不再讀（中途改檔，這條 thread 看不到）。這裡跟著記下那一次的結果或 state 裡已有的那一份，
+ * 渲染只讀 {@link MemoryContents}，不讀模型請求上的 state。
+ *
+ * @module
+ */
+
+import type { AnyBackendProtocol } from 'deepagents';
+import { createMemoryMiddleware as createBaseMemoryMiddleware } from 'deepagents';
+import { createHookStepMiddleware } from './hook-step.js';
+import type { AgentMiddleware } from 'langchain';
+
+import { renderMemorySectionWithin } from './base-prompt-text.js';
+import { injectionLimitFor } from './injection-budget.js';
+import type { ContextWindowOf } from './skills-middleware.js';
+import { createSystemPromptStepMiddleware } from './system-prompt-step.js';
+import type { SystemPromptCell } from './system-prompt-step.js';
+
+/** 一條 thread 讀到的記憶：來源路徑 → 內容。 */
+type Contents = Readonly<Record<string, string>>;
+
+/** 記憶的內容，每條 thread 一份。沒帶 `thread_id` 的呼叫共用一格。 */
+export interface MemoryContents {
+  /**
+   * 記下這條 thread 讀到的。
+   *
+   * @param thread - `configurable.thread_id`。
+   * @param contents - 讀到的。
+   */
+  record(thread: string | undefined, contents: Contents): void;
+  /**
+   * 這條 thread 讀到的。
+   *
+   * @param thread - `configurable.thread_id`。
+   * @returns 還沒讀過是 `undefined`。
+   */
+  of(thread: string | undefined): Contents | undefined;
+}
+
+/** 建一份空的 {@link MemoryContents}。 */
+export function createMemoryContents(): MemoryContents {
+  const byThread = new Map<string | undefined, Contents>();
+  return {
+    record: (thread, contents) => {
+      byThread.set(thread, contents);
+    },
+    of: (thread) => byThread.get(thread),
+  };
+}
+
+/** 呼叫帶的 `configurable.thread_id`。 */
+function threadOf(runtime: unknown): string | undefined {
+  const thread = (runtime as { readonly configurable?: { readonly thread_id?: unknown } } | null)
+    ?.configurable?.thread_id;
+  return typeof thread === 'string' ? thread : undefined;
+}
+
+/** 基座 middleware 上我們要轉呼叫的鉤子。 */
+interface BaseHooks {
+  readonly name: string;
+  readonly stateSchema?: unknown;
+  readonly beforeAgent: (
+    state: unknown,
+    runtime: unknown,
+  ) => Promise<{ memoryContents?: Contents } | undefined>;
+}
+
+/** 渲染記憶段那顆 middleware 的名字。不撞基座與 fold 的任何一顆。 */
+export const MEMORY_PROMPT_MIDDLEWARE_NAME = 'nexusMemoryPrompt';
+
+/** 記憶的兩半：讀檔的 hook，與渲染那一段的系統提示 cell。 */
+export interface MemoryMiddlewareParts {
+  /** 讀檔那半：名字與 state 形狀同基座（`MemoryMiddleware`、`memoryContents`），只有 `beforeAgent`，不改系統提示。 */
+  readonly hook: AgentMiddleware;
+  /** 渲染那半：只改系統提示（`block`），不讀檔。 */
+  readonly prompt: AgentMiddleware;
+}
+
+/**
+ * 建記憶 middleware 的兩半（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)）。
+ *
+ * 兩半分開，渲染那半才能排在 `historyFromLog` 前面：請求快照在推導之前寫，那一刻系統提示要已經完整，而記憶是系統提示的最後一塊。
+ * 讀檔那半留在洋蔥最內層（tail），`beforeAgent` 的順序由它決定。兩半共用同一份 {@link MemoryContents}：
+ * `beforeAgent` 在第一次模型呼叫之前就填好，所以渲染排在哪裡都讀得到同一份。
+ *
+ * @param options - 後端與來源路徑。
+ * @param options.backend - 讀記憶檔的後端。
+ * @param options.sources - 來源路徑，照登記的先後。
+ * @param contents - 讀到的內容記在這裡；省略就自己建一份。
+ * @param contextWindowOf - 這次請求走的模型的窗口；不給就只看絕對上限。整段超過預算表 `memory` 那一列的上限時，放不下的那一份
+ *   整份不放、留一行指標（{@link renderMemorySectionWithin}，[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
+ * @returns 兩半。
+ */
+export function createMemoryMiddleware(
+  options: { readonly backend: AnyBackendProtocol; readonly sources: readonly string[] },
+  contents: MemoryContents = createMemoryContents(),
+  contextWindowOf?: ContextWindowOf,
+): MemoryMiddlewareParts {
+  const base = createBaseMemoryMiddleware({
+    backend: options.backend,
+    sources: [...options.sources],
+    addCacheControl: false,
+  }) as unknown as BaseHooks;
+  // 用 `block` 不用 `append`：記憶自己一塊，位元組同基座。
+  const cell: SystemPromptCell = {
+    step: (request) => {
+      const { text, deferredBytes } = renderMemorySectionWithin(
+        contents.of(threadOf(request.runtime)) ?? {},
+        options.sources,
+        injectionLimitFor('memory', contextWindowOf?.(request.model)),
+      );
+      return [{ block: text, source: 'memory', ...(deferredBytes > 0 && { deferredBytes }) }];
+    },
+  };
+  const hook = createHookStepMiddleware({
+    name: base.name,
+    ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
+    async beforeAgent(state: unknown, runtime: unknown) {
+      const result = await base.beforeAgent(state, runtime);
+      const loaded =
+        result?.memoryContents ??
+        (state as { readonly memoryContents?: Contents } | null)?.memoryContents ??
+        {};
+      contents.record(threadOf(runtime), loaded);
+      return result as never;
+    },
+  } as never) as unknown as AgentMiddleware;
+  return {
+    hook,
+    prompt: createSystemPromptStepMiddleware(MEMORY_PROMPT_MIDDLEWARE_NAME, cell),
+  };
+}

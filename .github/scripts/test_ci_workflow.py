@@ -1,4 +1,4 @@
-"""CI 形狀測試（#1546）：釘住 ci.yml 裡改錯了也不會紅的那幾處。照 dsh `scripts/ci-workflow.spec.ts:16-42`。
+"""CI 形狀測試（#1546）：釘住 ci.yml 裡改錯了也不會紅的那幾處。
 
 在 static 與輕的模式的 plan 裡跑（`python3 -m unittest discover -s .github/scripts`）。需要 PyYAML。
 
@@ -7,7 +7,7 @@
 - gate 的 needs 列了每一個 job，判斷段也讀了每一個 job 的結果——只列 needs 不判斷，skipped 會被當成通過；
 - 兩處釘在下限的 Node（packed-install、node-compat 的 22.19）對得上 `engines`；
 - 同時活躍的 job 峰值在上限之內（ci.yml 檔頭的算式）；
-- 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
+- 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate，例外是 develop → main 與清外部對照的 PR（#2090、#3125）；
 - test-harness 與 native agent loop 各自的四片讀同一份耗時（兩者分開存）、合併後那一輪各片存回自己那一份（#2093、#2498）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
 - web 的真瀏覽器 e2e 只在合併後完整一輪跑，是自己 build 的獨立 job，不在 static 裡（#1602、#2517）；
@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
 
+import check_rust_paths
+from project_paths import actual
 import plan_ci
 from node_compat import read_list
 
@@ -33,12 +36,16 @@ CI = ROOT / '.github' / 'workflows' / 'ci.yml'
 SETUP = ROOT / '.github' / 'actions' / 'setup' / 'action.yml'
 PLAN_CHECKS = ROOT / '.github' / 'actions' / 'plan-checks' / 'action.yml'
 SPAWNER_ACTION = ROOT / '.github' / 'actions' / 'sandbox-spawner' / 'action.yml'
+MUSL_INSTALL = ROOT / '.github' / 'scripts' / 'install-musl-debs.sh'
+WARM_MUSL = ROOT / '.github' / 'workflows' / 'warm-musl-debs.yml'
 
 # ci.yml 檔頭：免費額度同時 20 個 job。合併後的一輪加上兩張功能 PR 的輕 gate 同時跑，要在這之內。
 JOB_LIMIT = 20
 LIGHT_IF = "steps.plan.outputs.mode == 'light'"
 TYPECHECK_CACHE = 'node_modules/.cache/nexus-typecheck'
 COMPAT_NODES = {'22.19', '26'}
+SPAWNER_CRATE = str(check_rust_paths.check_action(ROOT)[0])
+SPAWNER_RELEASE = '${{ github.workspace }}/' + SPAWNER_CRATE + '/target/${{ env.SPAWNER_TARGET }}/release/'
 
 
 def load(path: Path) -> dict:
@@ -73,6 +80,48 @@ def loop_pairs(branch: str, verdict: str) -> set[str]:
             return set(re.findall(r'"([\w-]+)=\$\w+"', match.group(1)))
     raise AssertionError(f'找不到要求 {verdict} 的迴圈')
 
+INTERNAL_FLAG = '--expose-' + 'internals'
+INTERNAL_ADDON = 'node-addon-require-builtin'
+INTERNAL_LOADER_SRC = 'harness/vendor/loader/src/'
+THIS_FILE = Path(__file__).resolve().relative_to(ROOT).as_posix()
+
+
+def tracked_files(root: Path = ROOT) -> list[str]:
+    out = subprocess.run(['git', 'ls-files', '-z'], cwd=root, check=True, capture_output=True).stdout
+    return [f for f in out.decode('utf-8').split('\0') if f]
+
+
+def internal_loader_trigger(root: Path, files: list[str]) -> str | None:
+    lock = root / 'pnpm-lock.yaml'
+    if lock.is_file() and INTERNAL_ADDON in lock.read_text(encoding='utf-8'):
+        return f'pnpm-lock.yaml 裡有 {INTERNAL_ADDON}'
+    for f in files:
+        if f.startswith(INTERNAL_LOADER_SRC) or f == THIS_FILE or f.lower().endswith(('.md', '.mdx')):
+            continue
+        path = root / f
+        if path.is_file() and INTERNAL_FLAG.encode() in path.read_bytes():
+            return f'{f} 帶 {INTERNAL_FLAG}'
+    return None
+
+
+def covers_pre_v2_loader(matrix: list[str]) -> bool:
+    """24.12.0 起 Node 內部 loader 是 v2。setup-node 拿到只寫主版本的 `24` 會跑最新的 24，不算。"""
+    for node in matrix:
+        match = re.fullmatch(r'24\.(\d+)(?:\.\d+)?', str(node))
+        if match and int(match.group(1)) < 12:
+            return True
+    return False
+
+
+def internal_loader_gap(root: Path, files: list[str], matrix: list[str]) -> str | None:
+    trigger = internal_loader_trigger(root, files)
+    if trigger is None or covers_pre_v2_loader(matrix):
+        return None
+    return (
+        f'{trigger}，vendor loader 會碰 Node 內部 loader，但 node-compat 的矩陣 {list(matrix)} 沒有落在 >=24.0 <24.12 的格'
+        '（24.0–24.11.1 是 v1，24.12.0 起是 v2）。在 .github/workflows/ci.yml 的 node-compat 矩陣補一格，例如 \'24.11\'。'
+    )
+
 
 class NodeCompatShape(unittest.TestCase):
     def setUp(self) -> None:
@@ -106,7 +155,58 @@ class NodeCompatShape(unittest.TestCase):
         files = read_list()
         self.assertTrue(files)
         for f in files:
-            self.assertTrue((ROOT / f).is_file(), f)
+            self.assertTrue((ROOT / actual(f, lambda c: (ROOT / c).exists())).is_file(), f)
+
+    def test_matrix_covers_pre_v2_loader_when_internals_are_reachable(self) -> None:
+        gap = internal_loader_gap(ROOT, tracked_files(), self.job['strategy']['matrix']['node'])
+        self.assertIsNone(gap, gap)
+
+
+class InternalLoaderRule(unittest.TestCase):
+    TODAY = ['22.19', '26']
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def write(self, name: str, text: str) -> None:
+        (self.root / name).write_text(text, encoding='utf-8')
+
+    def test_neither_condition_passes(self) -> None:
+        self.write('pnpm-lock.yaml', 'lockfileVersion: 9\n')
+        self.write('a.ts', 'export {}\n')
+        self.assertIsNone(internal_loader_gap(self.root, ['a.ts'], self.TODAY))
+
+    def test_lockfile_addon_without_pre_v2_cell_fails(self) -> None:
+        self.write('pnpm-lock.yaml', f'  {INTERNAL_ADDON}@1.0.0:\n')
+        gap = internal_loader_gap(self.root, [], self.TODAY)
+        self.assertIsNotNone(gap)
+        self.assertIn(INTERNAL_ADDON, gap)
+        self.assertIn('pnpm-lock.yaml', gap)
+        self.assertIn('>=24.0 <24.12', gap)
+
+    def test_flag_in_file_with_pre_v2_cell_passes(self) -> None:
+        self.write('run.sh', f'node {INTERNAL_FLAG} x.js\n')
+        self.assertIsNone(internal_loader_gap(self.root, ['run.sh'], [*self.TODAY, '24.11']))
+
+    def test_flag_in_file_without_pre_v2_cell_names_the_file(self) -> None:
+        self.write('run.sh', f'node {INTERNAL_FLAG} x.js\n')
+        gap = internal_loader_gap(self.root, ['run.sh'], self.TODAY)
+        self.assertIsNotNone(gap)
+        self.assertIn('run.sh', gap)
+
+    def test_loader_source_and_markdown_do_not_count(self) -> None:
+        (self.root / 'harness/vendor/loader/src').mkdir(parents=True)
+        self.write('harness/vendor/loader/src/internal.ts', INTERNAL_FLAG)
+        self.write('README.md', INTERNAL_FLAG)
+        files = ['harness/vendor/loader/src/internal.ts', 'README.md']
+        self.assertIsNone(internal_loader_gap(self.root, files, self.TODAY))
+
+    def test_major_only_24_does_not_cover(self) -> None:
+        self.assertFalse(covers_pre_v2_loader(['24', '26']))
+        self.assertFalse(covers_pre_v2_loader(['24.12']))
+        self.assertTrue(covers_pre_v2_loader(['24.0']))
 
 
 class LowerBound(unittest.TestCase):
@@ -235,6 +335,47 @@ class Budget(unittest.TestCase):
         self.assertLessEqual(full_peak(jobs) + len(native) + 2 * light_peak, JOB_LIMIT)
 
 
+class HostMcpConformance(unittest.TestCase):
+    """宿主的 MCP 符合性測試（#2570）全標 `#[ignore]`：沒帶 `--ignored` 時 cargo 也綠、一支都沒跑，所以那一步要帶 `--ignored`
+    並核對實際跑到的數目不是 0；對手是 node 起的 server，所以要排在 setup 之後。"""
+
+    def test_runs_ignored_tests_and_checks_the_count(self) -> None:
+        for name in ('sandbox-spawner', 'sandbox-spawner-arm64'):
+            with self.subTest(job=name):
+                steps = load(CI)['jobs'][name]['steps']
+                names = [s.get('name') for s in steps]
+                step = steps[names.index('宿主的 MCP 符合性測試')]
+                self.assertEqual(step['shell'], 'bash')
+                self.assertEqual(step['working-directory'], SPAWNER_CRATE)
+                self.assertIn('--test mcp_conformance -- --ignored --nocapture', step['run'])
+                self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
+                uses = [s.get('uses') for s in steps]
+                self.assertLess(uses.index('./.github/actions/setup'), names.index('宿主的 MCP 符合性測試'))
+                self.assertLess(uses.index('./.github/actions/sandbox-spawner'), names.index('宿主的 MCP 符合性測試'))
+
+
+class PairLeafInterop(unittest.TestCase):
+    """橋對 TS 葉子的對接測試（#2583）全標 `#[ignore]`：沒帶 `--ignored` 時 cargo 也綠、一支都沒跑，所以那一步要帶 `--ignored`
+    並核對實際跑到的數目不是 0（`grep` 讀的要是這一步 `tee` 寫的那個檔，所以整段 `run` 逐行釘）；葉子是 node 起的，所以要排在 setup 之後。"""
+
+    def test_runs_ignored_tests_and_checks_the_count(self) -> None:
+        for name in ('sandbox-spawner', 'sandbox-spawner-arm64'):
+            with self.subTest(job=name):
+                steps = load(CI)['jobs'][name]['steps']
+                names = [s.get('name') for s in steps]
+                step = steps[names.index('橋對 TS 葉子的對接測試')]
+                self.assertEqual(step['shell'], 'bash')
+                self.assertEqual(step['working-directory'], SPAWNER_CRATE)
+                self.assertEqual(step['run'].splitlines(), [
+                    'cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET"'
+                    ' --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"',
+                    "grep -Eq 'test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/pair-leaf.txt\"",
+                ])
+                uses = [s.get('uses') for s in steps]
+                self.assertLess(uses.index('./.github/actions/setup'), names.index('橋對 TS 葉子的對接測試'))
+                self.assertLess(uses.index('./.github/actions/sandbox-spawner'), names.index('橋對 TS 葉子的對接測試'))
+
+
 class E2ePerThread(unittest.TestCase):
     """真瀏覽器 e2e 用 per-thread 再跑一輪（#2341）：`NEXUS_E2E_PROCESS_MODEL` 沒設時 e2e 照 single 跑、照樣綠，所以 env 要釘。"""
 
@@ -245,11 +386,11 @@ class E2ePerThread(unittest.TestCase):
 
     def test_runs_e2e_against_the_built_supervisor(self) -> None:
         step = self.steps['真瀏覽器 e2e（per-thread）']
-        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
         self.assertEqual(
             step['env']['NEXUS_SUPERVISOR_BIN'],
-            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+            SPAWNER_RELEASE + 'nexus-supervisor',
         )
         uses = [s.get('uses') for s in self.job['steps']]
         self.assertLess(uses.index('./.github/actions/sandbox-spawner'), list(self.steps).index('真瀏覽器 e2e（per-thread）'))
@@ -281,7 +422,7 @@ class E2eNative(unittest.TestCase):
 
     def test_runs_e2e_on_the_native_loop(self) -> None:
         step = self.steps[self.STEP]
-        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         self.assertEqual(step['env']['NEXUS_E2E_AGENT_LOOP'], 'native')
         # 不跟 per-thread 交叉：帶了它，single 下的 native 就沒人測。
         self.assertNotIn('NEXUS_E2E_PROCESS_MODEL', step['env'])
@@ -324,11 +465,17 @@ class UpgradeGuideGate(unittest.TestCase):
         self.jobs = load(CI)['jobs']
 
     def test_runs_without_condition(self) -> None:
-        for script in ('check_upgrade_guides.py', 'check_md_links.py'):
+        for script in ('check_upgrade_guides.py', 'check_md_links.py', 'check_adrs.py', 'check_boundary.py'):
             with self.subTest(script=script):
                 steps = [s for s in self.steps if s.get('run') == f'python3 .github/scripts/{script}']
                 self.assertEqual(len(steps), 1)
                 self.assertNotIn('if', steps[0])
+
+    def test_ratchets_run_without_condition_and_compare_base_on_prs(self) -> None:
+        steps = [s for s in self.steps if 'check_ratchets.py' in str(s.get('run', ''))]
+        self.assertEqual(len(steps), 1)
+        self.assertNotIn('if', steps[0])
+        self.assertIn('check_ratchets.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"', steps[0]['run'])
 
     def test_plan_runs_it_after_full_checkout(self) -> None:
         steps = self.jobs['plan']['steps']
@@ -467,6 +614,35 @@ class PostMerge(unittest.TestCase):
             with self.subTest(scope=scope):
                 self.assertEqual(self.wf['permissions'].get(scope), level)
 
+    def test_visual_diff_only_reports(self) -> None:
+        """視覺差異（#2766）只報告：自己紅了不讓這一輪紅、`report` 不看它；排在 full 後面，不多佔一個同時跑的 job；拿得到上一個 commit。"""
+        job = self.wf['jobs']['visual-diff']
+        self.assertIs(job['continue-on-error'], True)
+        self.assertEqual(job['needs'], 'full')
+        self.assertEqual(job['if'], '${{ !cancelled() }}')
+        self.assertNotIn('visual-diff', self.wf['jobs']['report']['needs'])
+        self.assertEqual(job['steps'][0]['with']['fetch-depth'], 2)
+        runs = '\n'.join(step.get('run', '') for step in job['steps'])
+        self.assertIn('git worktree add --detach "$RUNNER_TEMP/prev" HEAD^', runs)
+        self.assertIn('web/visual/compare.ts', runs)
+
+    def test_visual_diff_comments_on_the_pr(self) -> None:
+        """有差時在對應的 PR 留言請作者確認：寫 PR 的權限只給這一個 job，commit 訊息經環境變數傳，沒有留言檔或沒有 PR 號就不留。"""
+        job = self.wf['jobs']['visual-diff']
+        self.assertEqual(job['permissions'], {'contents': 'read', 'pull-requests': 'write'})
+        self.assertEqual(self.wf['permissions'].get('pull-requests'), 'read')
+        for name, other in self.wf['jobs'].items():
+            if name != 'visual-diff':
+                with self.subTest(job=name):
+                    self.assertNotIn('permissions', other)
+        step = next(step for step in job['steps'] if step.get('name') == '有差時在 PR 留言')
+        self.assertEqual(step['env']['MESSAGE'], '${{ github.event.head_commit.message }}')
+        self.assertNotIn('${{', step['run'])
+        self.assertIn('[ -f "$comment" ] || exit 0', step['run'])
+        self.assertIn('gh pr comment "$pr"', step['run'])
+        names = [step.get('name') for step in job['steps']]
+        self.assertLess(names.index('比對'), names.index('有差時在 PR 留言'))
+
     def test_report_turns_red_with_the_run(self) -> None:
         report = self.wf['jobs']['report']
         self.assertEqual(report['needs'], ['full', 'native-loop'])
@@ -524,8 +700,8 @@ class SandboxSpawner(unittest.TestCase):
         return plan_ci.plan(changed, event, base, force_full=full)['rust']
 
     def test_builds_only_when_the_spawner_or_ci_changes(self) -> None:
-        self.assertEqual(self.rust(['native/sandbox-spawner/src/main.rs']), 'true')
-        self.assertEqual(self.rust(['native/sandbox-spawner/Cargo.lock']), 'true')
+        self.assertEqual(self.rust([f'{SPAWNER_CRATE}/src/main.rs']), 'true')
+        self.assertEqual(self.rust([f'{SPAWNER_CRATE}/Cargo.lock']), 'true')
         self.assertEqual(self.rust(['.github/workflows/ci.yml']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
         self.assertEqual(self.rust(['apps/harness/src/sandbox-protocol.ts']), 'true')
@@ -541,13 +717,48 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['packages/nexus-host-bridge/package.json']), 'true')
         for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
                      'supervisor-protocol', 'conversation-process', 'conversation-control', 'host-client', 'peer-socket-auth',
-                     'forwarded-principal', 'per-thread.integration.test'):
+                     'forwarded-principal', 'per-thread.integration.test', 'pair-leaf', 'pair-leaf.test', 'pair-leaf.process.test'):
             self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
         # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。
         self.assertEqual(self.rust(['apps/harness/src/serve.ts']), 'false')
         self.assertEqual(self.rust(['apps/harness/src/wire-handler.ts']), 'false')
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
+
+    def test_runs_thread_search_under_per_thread(self) -> None:
+        """內容搜尋在 per-thread 下搜之前先排空（#2689）：`NEXUS_E2E_PROCESS_MODEL` 沒設時那一檔照 single 跑、照樣綠，所以 env 要釘。"""
+        step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
+        self.assertEqual(
+            step['run'],
+            "pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'",
+        )
+        self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
+        self.assertEqual(
+            step['env']['NEXUS_SUPERVISOR_BIN'],
+            SPAWNER_RELEASE + 'nexus-supervisor',
+        )
+
+    def test_runs_fork_deletion_under_per_thread(self) -> None:
+        """刪除碰到分叉在 per-thread 下再跑一次（#2957）：env 沒設時照 single 跑、照樣綠，所以 env 要釘。"""
+        step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑刪除碰到分叉')
+        self.assertEqual(
+            step['run'],
+            'pnpm --filter @nexus/harness --fail-if-no-match exec vitest run src/serve-thread-fork-deletion src/serve-fork-stash-deleted',
+        )
+        self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
+        self.assertEqual(
+            step['env']['NEXUS_SUPERVISOR_BIN'],
+            SPAWNER_RELEASE + 'nexus-supervisor',
+        )
+
+    def test_per_thread_thread_search_filter_matches_one_test(self) -> None:
+        """`-t` 篩不到任何一支時 vitest 4 回 exit 0（全部 skipped），測試改名後這一步會靜靜變綠：名字要恰好對到一支 it。"""
+        step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
+        name = re.search(r"-t '([^']+)'", step['run']).group(1)
+        source = (ROOT / 'harness/apps/harness/src/serve-thread-search.test.ts').read_text(encoding='utf-8')
+        titles = re.findall(r"^\s*it\('([^']*)'", source, re.MULTILINE)
+        matched = [title for title in titles if name in title]
+        self.assertEqual(len(matched), 1, matched)
 
     def test_builds_whenever_packed_install_runs(self) -> None:
         """包裡的 spawner 是這個 job 編的：develop → main 的 PR 只改 TypeScript 也要編。"""
@@ -573,17 +784,47 @@ class SandboxSpawner(unittest.TestCase):
         """發版傳 cache: 'false'：快取那一步要真的看這個 input。"""
         action = load(SPAWNER_ACTION)
         self.assertEqual(action['inputs']['cache']['default'], 'true')
-        cache = next(s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache@'))
-        self.assertEqual(cache['if'], "inputs.cache == 'true'")
+        caches = [s for s in action['runs']['steps'] if '~/.cargo/registry' in str(s.get('with', {}).get('path', ''))]
+        self.assertEqual(len(caches), 2, '存得了的一份與只還原的一份')
+        for cache in caches:
+            self.assertTrue(cache['if'].startswith("inputs.cache == 'true' && "), cache['if'])
 
     def test_lints_with_the_pinned_toolchain(self) -> None:
         """fmt 與 clippy 用安裝那一步裝的元件；fmt 紅了 clippy 照樣跑，clippy 警告即錯（#2620）。"""
         self.assertIn('--component clippy --component rustfmt', self.steps['安裝釘住的 Rust']['run'])
         self.assertEqual(self.steps['格式']['run'], 'cargo fmt --all --check')
-        self.assertEqual(self.steps['clippy']['if'], '${{ !cancelled() }}')
+        self.assertEqual(self.steps['clippy']['if'], "${{ !cancelled() && inputs.test == 'true' }}")
         self.assertEqual(self.steps['clippy']['run'], 'cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings')
         names = list(self.steps)
         self.assertLess(names.index('clippy'), names.index('編譯'))
+
+    def test_only_the_e2e_per_thread_job_skips_lint_and_tests(self) -> None:
+        """e2e (per-thread) 只要 release 的監督行程（#2809）：`test` 預設 'true'，略過的是 fmt、clippy 與兩輪測試，編譯不略過、快取只還原不存；
+        只有那一個 job 帶 'false'，其餘用到 action 的 job（含發版）不帶，照舊跑測試。"""
+        action = load(SPAWNER_ACTION)
+        self.assertEqual(action['inputs']['test']['default'], 'true')
+        skipped = sorted(s['name'] for s in action['runs']['steps'] if 'name' in s and "inputs.test == 'true'" in str(s.get('if', '')))
+        self.assertEqual(skipped, sorted(['格式', 'clippy', '測試（musl）', '測試（glibc 的子行程）']))
+        self.assertNotIn('if', self.steps['編譯'])
+        caches = [s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache')]
+        self.assertEqual(
+            sorted((s['uses'], s['if']) for s in caches if 'target' in s['with']['path']),
+            [
+                ('actions/cache/restore@v6', "inputs.cache == 'true' && inputs.test != 'true'"),
+                ('actions/cache@v6', "inputs.cache == 'true' && inputs.test == 'true'"),
+            ],
+        )
+        users = {}
+        for path in (CI, ROOT / '.github' / 'workflows' / 'release.yml'):
+            for name, job in load(path)['jobs'].items():
+                for step in job.get('steps', []):
+                    if step.get('uses') == './.github/actions/sandbox-spawner':
+                        users[(path.name, name)] = step.get('with', {}).get('test', 'true')
+        self.assertEqual(
+            {key for key, value in users.items() if value != 'true'},
+            {('ci.yml', 'e2e-per-thread')},
+        )
+        self.assertEqual(users[('ci.yml', 'e2e-per-thread')], 'false')
 
     def test_bundle_keeps_the_exec_bit(self) -> None:
         """upload-artifact 不保留執行權限，所以先包成 tar。"""
@@ -624,16 +865,17 @@ class SandboxSpawner(unittest.TestCase):
 
     def test_integration_runs_against_the_built_binaries(self) -> None:
         """兩種架構都拿編好的 spawner 與監督行程跑整合測試；env 沒設時測試整支跳過，CI 照樣綠，所以 env 與清單都要釘（#2341）。"""
-        release = '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/'
+        release = SPAWNER_RELEASE
         for job in ('sandbox-spawner', 'sandbox-spawner-arm64'):
             step = next(s for s in self.ci['jobs'][job]['steps'] if s.get('name') == '真的 spawner 跑整合測試')
             for suite in ('sandbox-spawner', 'git-sandbox', 'mcp-sandbox', 'kernel-file-lock', 'per-thread'):
                 self.assertIn(f' src/{suite}.integration', step['run'], (job, suite))
             self.assertEqual(step['env']['NEXUS_SPAWNER_BIN'], release + 'nexus-sandbox-spawner', job)
             self.assertEqual(step['env']['NEXUS_SUPERVISOR_BIN'], release + 'nexus-supervisor', job)
+            self.assertEqual(step['env']['NEXUS_COMPOSITION_BIN'], release + 'nexus-composition', job)
 
     def test_light_mode_still_builds(self) -> None:
-        result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
+        result = plan_ci.plan([f'{SPAWNER_CRATE}/src/main.rs'], 'pull_request', 'develop')
         self.assertEqual((result['mode'], result['rust']), ('light', 'true'))
 
     def test_runs_on_the_plan_flag_not_the_mode(self) -> None:
@@ -665,12 +907,75 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('--target "$SPAWNER_TARGET"', self.steps['編譯']['run'])
         self.assertIn('--target "$SPAWNER_TARGET"', self.steps['測試（musl）']['run'])
         self.assertNotIn('--target', self.steps['測試（glibc 的子行程）']['run'])
-        bundle = (ROOT / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
+        bundle = (ROOT / 'harness' / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
         self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
+
+    def test_musl_gcc_is_installed_before_anything_compiles(self) -> None:
+        """宿主的 TLS 用 ring（#2570），ring 有 C 要編：musl target 的 C 編譯器指到 musl-gcc，裝在第一個 cargo 步驟之前。"""
+        install = MUSL_INSTALL.read_text(encoding='utf-8')
+        self.assertIn('install -y --no-install-recommends musl-tools', install)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', install)
+        names = list(self.steps)
+        self.assertLess(names.index('還原 musl 的 .deb 快取'), names.index('安裝 musl-gcc'))
+        self.assertLess(names.index('安裝 musl-gcc'), names.index('clippy'))
+        self.assertLess(names.index('安裝 musl-gcc'), names.index('編譯'))
+
+    def test_musl_gcc_install_survives_a_package_mirror_outage(self) -> None:
+        """套件站一時連不到不該整輪紅（#2702）：.deb 存快取、鍵含架構與 runner image 版本；命中就離線裝，裝不起來或沒命中退回 apt，三次、每次 120 秒封頂，三次都失敗才紅。"""
+        cache = self.steps['還原 musl 的 .deb 快取']
+        self.assertTrue(cache['uses'].startswith('actions/cache@'))
+        for part in ('runner.os', 'runner.arch', 'steps.image.outputs.version'):
+            self.assertIn(part, cache['with']['key'])
+        self.assertNotIn('env.ImageVersion', cache['with']['key'], 'env context 讀不到 runner 行程的環境變數')
+        image = self.steps['讀 runner image 版本']
+        self.assertIn('ImageVersion', image['run'])
+        self.assertIn('$GITHUB_OUTPUT', image['run'])
+        for step in (image, cache):
+            self.assertEqual(step['if'], "inputs.cache == 'true'", '發版傳 cache: false，.deb 快取不還原、不存')
+        install = self.steps['安裝 musl-gcc']
+        self.assertEqual(install['env']['CACHE_HIT'], '${{ steps.musl-debs.outputs.cache-hit }}')
+        self.assertEqual(install['run'], '${{ github.workspace }}/.github/scripts/install-musl-debs.sh', '裝法只有一份，預熱排程共用')
+        run = MUSL_INSTALL.read_text(encoding='utf-8')
+        self.assertIn('dpkg -i', run)
+        self.assertIn('for attempt in 1 2 3', run)
+        self.assertIn('timeout 120', run)
+        self.assertIn('Dir::Cache::archives', run)
+        self.assertIn('exit 1', run)
+        self.assertIn('rm -rf "$debs/lock" "$debs/partial"', run, 'root 留下的 lock 與 partial 讓 post 步驟存不了快取')
+        self.assertIn('chown -R', run)
+        self.assertIn('compgen -G "$debs/*.deb"', run, '沒有 .deb 就刪目錄，不存空快取')
+        self.assertLess(run.index('compgen -G'), run.index('chown -R'))
+        self.assertIn('rm -rf "$debs"', run)
+        self.assertEqual(install['env']['ALLOW_GCC_FALLBACK'], '${{ inputs.cache }}', '發版（cache: false）不准退回 gcc')
+        self.assertIn('[ "$ALLOW_GCC_FALLBACK" = "true" ] && command -v gcc', run)
+        self.assertIn('::warning::', run)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', run)
+
+    def test_warm_schedule_fills_the_same_cache_the_action_reads(self) -> None:
+        """預熱排程（#2702 方案 P）：鍵與 action 同一把、兩個架構各原生跑、共用同一支安裝 shell、不准退回 gcc，只在預設分支排程。"""
+        warm = load(WARM_MUSL)
+        triggers = warm.get('on', warm.get(True))
+        self.assertIn('schedule', triggers)
+        self.assertIn('workflow_dispatch', triggers)
+        self.assertEqual(
+            sorted(triggers['pull_request']['paths']),
+            ['.github/scripts/install-musl-debs.sh', '.github/workflows/warm-musl-debs.yml'],
+        )
+        job = warm['jobs']['warm']
+        runners = {m['arch']: m['runner'] for m in job['strategy']['matrix']['include']}
+        spawner = {'x64': self.ci['jobs']['sandbox-spawner']['runs-on'], 'arm64': self.ci['jobs']['sandbox-spawner-arm64']['runs-on']}
+        self.assertEqual(runners, spawner, '預熱跑在 CI 讀它的同一種 runner 上，鍵裡的 image 版本才對得上')
+        steps = {s.get('name'): s for s in job['steps']}
+        self.assertEqual(steps['還原 musl 的 .deb 快取']['with'], self.steps['還原 musl 的 .deb 快取']['with'], '鍵與路徑要跟 action 一致')
+        install = steps['安裝 musl-gcc']
+        self.assertEqual(install['run'], self.steps['安裝 musl-gcc']['run'])
+        self.assertEqual(install['env']['ALLOW_GCC_FALLBACK'], 'false', '預熱的工作是裝到真的 .deb，裝不到就紅')
+        self.assertEqual(install['env']['CACHE_HIT'], '${{ steps.musl-debs.outputs.cache-hit }}')
+        self.assertEqual(steps['讀 runner image 版本']['run'].strip(), self.steps['讀 runner image 版本']['run'].strip())
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
-        native = ROOT / 'native' / 'sandbox-spawner'
+        native = ROOT / 'harness' / 'native' / 'sandbox-spawner'
         root = (native / 'Cargo.toml').read_text(encoding='utf-8')
         self.assertIn('[workspace]\nmembers = ["host"]\n', root)
         deps = re.search(r'(?ms)^\[dependencies\]\n(.*?)(?:^\[|\Z)', root)
@@ -685,7 +990,7 @@ class SandboxSpawner(unittest.TestCase):
             self.assertIn(' --workspace ', self.steps[name]['run'], name)
 
     def test_toolchain_is_pinned(self) -> None:
-        toolchain = (ROOT / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')
+        toolchain = (ROOT / 'harness' / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')
         self.assertRegex(toolchain, r'(?m)^channel = "\d+\.\d+\.\d+"$')
         self.assertIn('rust-toolchain.toml', self.steps['安裝釘住的 Rust']['run'])
 
@@ -724,11 +1029,11 @@ class WebE2e(unittest.TestCase):
         self.assertEqual(self.job['if'], 'inputs.full')
         self.assertEqual(self.job['needs'], 'plan')
         e2e = self.job['steps'][self.names.index('真瀏覽器 e2e')]
-        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web --fail-if-no-match run test:e2e')
         # 這裡帶了 NEXUS_E2E_PROCESS_MODEL，兩個 job 都跑 per-thread，single 沒人測也照樣綠。
         self.assertNotIn('env', e2e)
         build = self.job['steps'][self.names.index('建置 lib 與 web')]['run'].split('\n')
-        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
+        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web --fail-if-no-match run build'))
         self.assertLess(self.names.index('建置 lib 與 web'), self.names.index('真瀏覽器 e2e'))
 
     def test_not_serialized_in_static(self) -> None:
@@ -767,25 +1072,25 @@ class TypecheckCache(unittest.TestCase):
         self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
         script = (ROOT / '.github' / 'scripts' / 'typecheck.sh').read_text(encoding='utf-8')
         self.assertIn(f'cache={TYPECHECK_CACHE}\n', script)
-        generator = (ROOT / 'scripts' / 'gen-typecheck-projects.ts').read_text(encoding='utf-8')
+        generator = (ROOT / 'harness' / 'scripts' / 'gen-typecheck-projects.ts').read_text(encoding='utf-8')
         self.assertIn(f"CACHE_DIR = '{TYPECHECK_CACHE}'", generator)
         # 整個目錄：產生的設定、out/（宣告檔與 buildinfo）、沒人引用的套件的 buildinfo，少了哪一份都要從頭查。
         self.assertEqual(
             self.save['with']['path'].split(),
-            [f'packages/*/{TYPECHECK_CACHE}', f'apps/*/{TYPECHECK_CACHE}'],
+            [f'harness/packages/*/{TYPECHECK_CACHE}', f'harness/apps/*/{TYPECHECK_CACHE}', f'web/{TYPECHECK_CACHE}'],
         )
 
     def test_full_layer_checks_every_package_from_scratch(self) -> None:
         uses = [str(s.get('uses', '')) for s in self.typecheck['steps']]
         self.assertFalse(any(u.startswith(('actions/cache/restore@', 'actions/cache@')) for u in uses))
         run = next(s['run'] for s in self.typecheck['steps'] if s.get('name') == 'Typecheck')
-        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'")
+        self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*' '--filter=./web'")
 
     def test_root_script_matches_full_layer(self) -> None:
         # 開發時的 `pnpm typecheck` 跟全跑同一支、同一組篩選：宣告檔輸出才有的錯，本機與 CI 一起紅。
         manifest = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
         self.assertEqual(
-            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'"
+            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./**/packages/*' '--filter=./**/apps/*' '--filter=./web'"
         )
 
 
@@ -838,11 +1143,11 @@ class HarnessDurations(unittest.TestCase):
         self.assertLess(names.index(self.restores[-1]['uses']), names.index('Test'))
 
     def test_sequencer_reads_the_restored_dir(self) -> None:
-        source = (ROOT / 'apps' / 'harness' / 'src' / 'test-shard-sequencer.ts').read_text(encoding='utf-8')
+        source = (ROOT / 'harness' / 'apps' / 'harness' / 'src' / 'test-shard-sequencer.ts').read_text(encoding='utf-8')
         env = re.search(r"DURATIONS_DIR_ENV = '([A-Z_]+)'", source)
         assert env is not None
         self.assertEqual(self.test['env'], {env.group(1): '${{ github.workspace }}/.harness-durations'})
-        config = (ROOT / 'apps' / 'harness' / 'vitest.config.ts').read_text(encoding='utf-8')
+        config = (ROOT / 'harness' / 'apps' / 'harness' / 'vitest.config.ts').read_text(encoding='utf-8')
         self.assertIn('sequence: { sequencer: DurationSequencer }', config)
 
     def test_only_post_merge_saves_its_own_shard(self) -> None:
@@ -902,7 +1207,7 @@ class NativeDurations(unittest.TestCase):
 
     def test_sequencer_reads_the_restored_dir(self) -> None:
         self.assertEqual(self.test['env'], {'NEXUS_TEST_DURATIONS_DIR': '${{ github.workspace }}/.native-durations'})
-        config = (ROOT / 'apps' / 'harness' / 'vitest.native.config.ts').read_text(encoding='utf-8')
+        config = (ROOT / 'harness' / 'apps' / 'harness' / 'vitest.native.config.ts').read_text(encoding='utf-8')
         self.assertIn("mergeConfig(base", config)
 
     def test_saves_its_own_shard(self) -> None:
@@ -999,13 +1304,115 @@ class LightScope(unittest.TestCase):
             snapshot,
         )
 
+    def test_web_design_guards_run_for_web_source_and_styles(self) -> None:
+        """web 的設計護欄（#2757）不是改到的檔的同名測試：動到 `apps/web/src` 的 tsx、css 或顏色 token 的產生器都要排到它們。"""
+        guards = ['apps/web/src/components/ui/local-edits.test.ts', 'apps/web/src/styles/design-system.test.ts']
+        expected = ['src/components/ui/local-edits.test.ts', 'src/styles/design-system.test.ts']
+
+        def tests(path: str) -> dict:
+            return plan_ci.light([path], self.NAMES, lambda p: p == path, guards)['tests']
+
+        for path in (
+            'apps/web/src/components/composer.tsx',
+            'apps/web/src/vendor/solid-glass/components/ui/button.tsx',
+            'apps/web/src/styles/theme.css',
+            'apps/web/src/index.css',
+            'apps/web/tokengen/generate.mjs',
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(tests(path), {'apps/web': expected})
+
+        # 測試檔、不畫畫面的 ts、web 以外的 tsx 與說明文件不排。
+        for path in (
+            'apps/web/src/components/composer.test.tsx',
+            'apps/web/src/lib/thread-title.ts',
+            'apps/web/COMPONENTS.md',
+            'apps/web/guard/main.tsx',
+            'packages/nexus-core/src/a.tsx',
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn('src/styles/design-system.test.ts', tests(path).get('apps/web', []))
+
+        # 跟同名規則排到的測試併在一起，不重複。
+        changed = ['apps/web/src/styles/design-system.test.ts', 'apps/web/src/c.tsx']
+        existing = {*changed, 'apps/web/src/c.test.tsx'}
+        self.assertEqual(
+            plan_ci.light(changed, self.NAMES, lambda p: p in existing, guards)['tests'],
+            {'apps/web': ['src/c.test.tsx', *expected]},
+        )
+
+    def test_web_structure_guards_run_for_web_ts_sources(self) -> None:
+        """web 的結構護欄（#2883）掃整個 `apps/web/src`：只改 `.ts` 也要排到，新增、搬動、刪除都算。"""
+        guards = plan_ci.WEB_STRUCTURE_GUARDS
+        expected = sorted(g[len('apps/web/') :] for g in guards)
+
+        def tests(changed: list[str], existing: set[str] | None = None) -> dict:
+            present = set(guards) if existing is None else existing
+            return plan_ci.light(changed, self.NAMES, lambda p: p in present)['tests']
+
+        for path in ('apps/web/src/features/x/foo.ts', 'apps/web/src/features/x/foo.tsx', 'apps/web/src/lib/a.ts'):
+            with self.subTest(path=path):
+                self.assertEqual(tests([path], {path, *guards}), {'apps/web': expected})
+
+        # 刪檔：檔已不在，護欄照排（刪檔也會弄壞 import）。
+        self.assertEqual(tests(['apps/web/src/features/x/gone.ts']), {'apps/web': expected})
+
+        # 只改測試檔、`.d.ts`、css、web 以外的 ts 都不因此排結構護欄。
+        for path in (
+            'apps/web/src/features/x/foo.test.ts',
+            'apps/web/src/features/x/foo.test.tsx',
+            'apps/web/src/env.d.ts',
+            'apps/web/src/styles/theme.css',
+            'apps/harness/src/a.ts',
+        ):
+            with self.subTest(path=path):
+                result = tests([path], {path, *guards}).get('apps/web', [])
+                self.assertFalse(set(expected) & set(result), result)
+
+        # 護欄檔不存在就不排。
+        self.assertEqual(tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts'}), {})
+        self.assertEqual(
+            tests(['apps/web/src/a.ts'], {'apps/web/src/a.ts', guards[0]}), {'apps/web': ['src/architecture.test.ts']}
+        )
+
+    def test_web_structure_guards_merge_with_design_guards(self) -> None:
+        design = ['apps/web/src/styles/design-system.test.ts']
+        existing = {'apps/web/src/styles/theme.css', *design, *plan_ci.WEB_STRUCTURE_GUARDS}
+        # css 只排設計護欄。
+        self.assertEqual(
+            plan_ci.light(['apps/web/src/styles/theme.css'], self.NAMES, lambda p: p in existing, design)['tests'],
+            {'apps/web': ['src/styles/design-system.test.ts']},
+        )
+        # tsx 兩組都排。
+        existing.add('apps/web/src/c.tsx')
+        tests = plan_ci.light(['apps/web/src/c.tsx'], self.NAMES, lambda p: p in existing, design)['tests']
+        self.assertEqual(
+            tests,
+            {
+                'apps/web': sorted(
+                    g[len('apps/web/') :] for g in [*design, *plan_ci.WEB_STRUCTURE_GUARDS]
+                )
+            },
+        )
+
+    def test_web_structure_guards_exist_on_disk(self) -> None:
+        for g in plan_ci.WEB_STRUCTURE_GUARDS:
+            with self.subTest(guard=g):
+                self.assertTrue((plan_ci.ROOT / actual(g, lambda c: (plan_ci.ROOT / c).exists())).is_file())
+
+    def test_web_design_guards_are_the_style_tests_on_disk(self) -> None:
+        guards = plan_ci.web_design_guards()
+        self.assertIn('apps/web/src/styles/design-system.test.ts', guards)
+        self.assertIn('apps/web/src/components/ui/local-edits.test.ts', guards)
+        self.assertTrue(all(g.startswith('apps/web/src/') and g.endswith('.test.ts') for g in guards))
+
     def test_docs_only_needs_no_install(self) -> None:
         self.assertFalse(plan_ci.needs_node(self.scope(['docs/a.md', 'AGENTS.md'])))
         self.assertTrue(plan_ci.needs_node(self.scope(['.github/workflows/ci.yml'])))
 
 
 class EditedPullRequest(unittest.TestCase):
-    """只改 PR 內文不重跑 gate、不取消正在跑的那一輪（#2090 第 7 條）。"""
+    """只改 PR 內文不重跑 gate、不取消正在跑的那一輪，例外是 develop → main 與清外部對照的 PR（#2090 第 7 條、#3125）。"""
 
     def setUp(self) -> None:
         self.ci = load(CI)
@@ -1016,7 +1423,7 @@ class EditedPullRequest(unittest.TestCase):
         self.assertNotIn('types', self.ci[True]['pull_request'])
 
     def test_edited_workflow_has_no_gate(self) -> None:
-        """只改內文時這支的 job 被跳過；叫 gate 的話，跳過的 required check 算成通過。"""
+        """這支的 job 或步驟在不用重跑時會被跳過；叫 gate 的話，跳過的 required check 算成通過。"""
         self.assertEqual(self.wf[True]['pull_request']['types'], ['edited'])
         self.assertNotIn('gate', self.wf['name'].lower())
         for job_id, job in self.wf['jobs'].items():
@@ -1025,10 +1432,44 @@ class EditedPullRequest(unittest.TestCase):
                 self.assertNotIn('gate', job.get('name', '').lower())
 
     def test_reruns_only_for_what_gate_reads(self) -> None:
+        job = self.wf['jobs']['rerun']
+        self.assertEqual(job['if'], 'github.event.changes.title || github.event.changes.base || github.event.changes.body')
         self.assertEqual(
-            self.wf['jobs']['rerun']['if'],
-            "github.event.changes.title || github.event.changes.base || (github.event.changes.body && github.base_ref == 'main')",
+            job['env']['SCOPE_FIRST'],
+            "${{ github.event.changes.body && !github.event.changes.title && !github.event.changes.base && github.base_ref != 'main' }}",
         )
+
+    def test_body_only_edit_of_a_feature_pr_reruns_only_when_in_scope(self) -> None:
+        """只改內文的功能 PR：先用 check_dsh_cleanup.py 判範圍，範圍外不重跑（#3125）。"""
+        steps = self.wf['jobs']['rerun']['steps']
+        checkout = steps[0]
+        self.assertTrue(checkout['uses'].startswith('actions/checkout@'))
+        self.assertEqual(checkout['if'], "env.SCOPE_FIRST == 'true'")
+        self.assertEqual(checkout['with']['fetch-depth'], 0)
+        scope = next(s for s in steps if s.get('id') == 'scope')
+        self.assertEqual(scope['if'], "env.SCOPE_FIRST == 'true'")
+        self.assertIn('check_dsh_cleanup.py --in-scope', scope['run'])
+        rerun = next(s for s in steps if 'rerun' in s.get('name', ''))
+        self.assertEqual(rerun['if'], "env.SCOPE_FIRST != 'true' || steps.scope.outputs.in_scope == 'true'")
+
+    def test_scope_failure_is_not_swallowed_and_output_name_matches(self) -> None:
+        steps = self.wf['jobs']['rerun']['steps']
+        scope = next(s for s in steps if s.get('id') == 'scope')
+        self.assertIn('scope=$(python3 .github/scripts/check_dsh_cleanup.py --in-scope', scope['run'])
+        self.assertIn('echo "in_scope=$scope" >> "$GITHUB_OUTPUT"', scope['run'])
+        self.assertNotIn('|| true', scope['run'])
+        self.assertTrue(scope['run'].startswith('set -euo pipefail'))
+
+    def test_gate_checks_the_cleanup_evidence_on_feature_prs(self) -> None:
+        step = next(s for s in load(PLAN_CHECKS)['runs']['steps'] if 'check_dsh_cleanup.py' in str(s.get('run', '')))
+        self.assertEqual(step['if'], "github.event_name == 'pull_request' && github.base_ref != 'main'")
+        self.assertIn('jq -r \'.body // ""\' "$RUNNER_TEMP/pr.json"', step['run'])
+        self.assertIn('check_dsh_cleanup.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"', step['run'])
+        self.assertNotIn('BODY', step.get('env', {}))
+        self.assertNotIn('|| true', step['run'])
+        self.assertIn('set -euo pipefail', step['run'])
+        names = [s.get('name') for s in load(PLAN_CHECKS)['runs']['steps']]
+        self.assertLess(names.index('檢查 PR 標題與內文'), names.index(step['name']))
 
     def test_gate_reads_title_body_and_base_from_api(self) -> None:
         """rerun 沿用觸發時的事件；從事件讀的話，改了標題重跑還是驗舊的。"""
@@ -1054,7 +1495,7 @@ class NodeModulesCache(unittest.TestCase):
         for part in ('runner.os', 'runner.arch', 'inputs.node-version', "'pnpm-lock.yaml'", "'pnpm-workspace.yaml'"):
             with self.subTest(part=part):
                 self.assertIn(part, key)
-        for manifest in ("'package.json'", "'packages/*/package.json'", "'apps/*/package.json'", "'vendor/*/package.json'"):
+        for manifest in ("'package.json'", "'harness/packages/*/package.json'", "'harness/apps/*/package.json'", "'web/package.json'", "'harness/vendor/*/package.json'"):
             with self.subTest(manifest=manifest):
                 self.assertIn(manifest, key)
 
@@ -1062,7 +1503,7 @@ class NodeModulesCache(unittest.TestCase):
         self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
         self.assertEqual(self.save['with']['key'], '${{ steps.modules.outputs.cache-primary-key }}')
         # 型別檢查的快取由 ci.yml 另外存取，混進來會讓它跟著 lockfile 的鍵走。
-        self.assertIn('!packages/*/node_modules/.cache', self.save['with']['path'].split())
+        self.assertIn('!harness/packages/*/node_modules/.cache', self.save['with']['path'].split())
 
     def test_install_runs_on_both_paths(self) -> None:
         install = next(s for s in self.steps if s.get('name') == '安裝相依套件')
@@ -1075,8 +1516,8 @@ class NodeModulesCache(unittest.TestCase):
 
     def test_vendor_declarations_follow_their_source(self) -> None:
         # 命中時不跑 prepare，宣告檔只能從快取來；鍵若不含 vendor 的 src 與 tsconfig，改了它們仍會命中舊的宣告檔。
-        self.assertIn('vendor/*/lib/types', self.restore['with']['path'].split())
-        for part in ("'vendor/*/tsconfig.json'", "'vendor/*/src/**'"):
+        self.assertIn('harness/vendor/*/lib/types', self.restore['with']['path'].split())
+        for part in ("'harness/vendor/*/tsconfig.json'", "'harness/vendor/*/src/**'"):
             with self.subTest(part=part):
                 self.assertIn(part, self.restore['with']['key'])
 

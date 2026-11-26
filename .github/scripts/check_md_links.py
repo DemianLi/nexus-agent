@@ -1,12 +1,10 @@
 """檢查 repo 自寫 Markdown 的相對連結：目標檔要存在，指向 .md 的 `#片段` 要對到那份的標題 slug 或 `<a id>`（#1537）。
 
-- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `vendor/README.md` 與
-  `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
-- 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`、`.agents`）照認；符號連結指到同一份的只掃一次。
+- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755）。vendor 只掃本地寫的兩份 README（`harness/vendor/README.md` 與
+  `web/src/vendor/solid-glass/README.md`，舊路徑 `vendor/README.md`、`apps/web/src/vendor/solid-glass/README.md`
+  並列在 `GROUPS`），其餘是原樣搬來的，不掃。
 - 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
-- 落在 repo 根目錄 `references/` 底下的目標不查（存在與錨點都不查）：那是 AGENTS.md〈技術實現標準〉要各自 clone 的唯讀參照，
-  `.gitignore` 排除、CI 上不存在。代價是指到那裡的路徑打錯了也抓不到。
 
 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job，理由同 `check_upgrade_guides.py`：純文件 PR 會跳過 `static`，
 `plan` 不裝相依，所以沒有 Markdown 解析器，逐行近似。各處往哪一邊偏：
@@ -21,6 +19,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
@@ -29,24 +28,18 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
-PATTERNS = [
-    'README.md',
-    'docs/**/*.md',
-    'packages/*.md',
-    'packages/*/*.md',
-    'packages/*/*/*.md',
-    'AGENTS.md',
-    'GLOSSARY-MAP.md',
-    '.docs/**/*.md',
-    '.github/**/*.md',
-    'apps/*/*.md',
-    'apps/*/*/*.md',
-    'vendor/README.md',
-    'apps/web/src/vendor/solid-glass/README.md',
-    '.agents/skills/**/*.md',
+GROUPS: list[tuple[str, list[str], int]] = [
+    ('README', ['README.md'], 1),
+    ('docs', ['docs/**/*.md'], 1),
+    ('packages', ['packages/*.md', 'packages/*/*.md', 'packages/*/*/*.md',
+                  'harness/packages/*.md', 'harness/packages/*/*.md', 'harness/packages/*/*/*.md'], 1),
+    ('apps', ['apps/*/*.md', 'apps/*/*/*.md', 'harness/apps/*/*.md', 'harness/apps/*/*/*.md', 'web/*.md', 'web/*/*.md'], 1),
+    ('harness-vendor', ['vendor/README.md', 'harness/vendor/README.md'], 1),
+    ('web-vendor', ['apps/web/src/vendor/solid-glass/README.md', 'web/src/vendor/solid-glass/README.md'], 1),
+    ('GLOSSARY-MAP', ['GLOSSARY-MAP.md'], 1),
+    ('.github', ['.github/**/*.md'], 1),
 ]
-# 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。
-UNCHECKED_ROOT = 'references'
+PATTERNS = [pattern for _, patterns, _ in GROUPS for pattern in patterns]
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
 # 引言符號：最多 3 格縮排、`>`、可有一格空白，可以疊好幾層。
 QUOTE = re.compile(r'^ {0,3}> ?')
@@ -57,24 +50,35 @@ LINK_DEFINITION = re.compile(r'^ {0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s+.*)?$')
 INLINE_CODE = re.compile(r'`+[^`]*`+')
 
 
+def visible_matches(root: Path, pattern: str) -> list[Path]:
+    found = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
+    literal = len(pattern.split('*', 1)[0].split('/')) - 1
+    return [
+        path for path in found
+        if path.is_file() and not any(part.startswith('.') for part in path.relative_to(root).parts[literal:])
+    ]
+
+
 def source_paths(root: Path) -> list[Path]:
-    """PATTERNS 撈到的檔，照路徑排序；萬用字元不配點開頭的段，realpath 相同的只留第一個。"""
     seen: set[str] = set()
     found: list[Path] = []
     for pattern in PATTERNS:
-        matches = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
-        # pattern 裡寫死的段照認，萬用字元配到的段才不收點開頭的。
-        literal = len(pattern.split('*', 1)[0].split('/')) - 1
-        for path in matches:
-            relative = path.relative_to(root).parts
-            if any(part.startswith('.') for part in relative[literal:]) or not path.is_file():
-                continue
+        for path in visible_matches(root, pattern):
             real = os.path.realpath(path)
             if real in seen:
                 continue
             seen.add(real)
             found.append(path)
     return sorted(found)
+
+
+def empty_groups(root: Path) -> list[str]:
+    errors = []
+    for name, patterns, floor in GROUPS:
+        count = len({os.path.realpath(path) for pattern in patterns for path in visible_matches(root, pattern)})
+        if count < floor:
+            errors.append(f'「{name}」這一組在 {root} 底下掃到 {count} 份，至少要 {floor} 份：{"、".join(patterns)}。')
+    return errors
 
 
 def github_slug(heading: str) -> str:
@@ -172,8 +176,6 @@ def link_violations(path: Path, root: Path) -> list[str]:
             continue
         raw_path = re.sub(r'[#?].*$', '', url)
         target = path if raw_path == '' else Path(os.path.normpath(path.parent / unquote(raw_path)))
-        if Path(os.path.relpath(target, root)).parts[:1] == (UNCHECKED_ROOT,):
-            continue
         if not target.exists():
             violations.append(f'第 {number} 行的連結 {url} 指到不存在的檔案')
             continue
@@ -185,9 +187,9 @@ def link_violations(path: Path, root: Path) -> list[str]:
     return violations
 
 
-def collect(root: Path) -> tuple[list[Path], int, list[str]]:
+def collect(root: Path, only: list[Path] | None = None) -> tuple[list[Path], int, list[str]]:
     """掃過的檔、相對連結的條數、違規（`相對路徑：說明`）。"""
-    files = source_paths(root)
+    files = source_paths(root) if only is None else sorted(p if p.is_absolute() else root / p for p in only)
     links = 0
     violations: list[str] = []
     for path in files:
@@ -198,12 +200,19 @@ def collect(root: Path) -> tuple[list[Path], int, list[str]]:
     return files, links, violations
 
 
-def main() -> int:
-    files, links, violations = collect(ROOT)
-    for violation in violations:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description='檢查 Markdown 相對連結。')
+    parser.add_argument('--root', type=Path, default=ROOT, help='連結的根；預設是這個項目倉庫自己')
+    parser.add_argument('--files', nargs='+', type=Path, help='只掃這些檔（相對於 --root）；不給就掃 PATTERNS，並要求每一組掃到的份數不低於 floor')
+    args = parser.parse_args(argv)
+    root = args.root.resolve()
+    errors = [] if args.files else empty_groups(root)
+    missing = [f'{f}：指定要掃的檔不存在' for f in args.files or [] if not (root / f).is_file()]
+    files, links, violations = collect(root, None if missing else args.files)
+    for violation in [*errors, *missing, *violations]:
         print(f'::error::{violation}')
-    if violations:
-        print('Markdown 有壞掉的相對連結。')
+    if errors or missing or violations:
+        print('Markdown 有壞掉的相對連結，或掃到的文件比該有的少。')
         return 1
     print(f'Markdown 相對連結通過：{len(files)} 份檔、{links} 條相對連結。')
     return 0

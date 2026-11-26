@@ -1,13 +1,13 @@
 # 工具 schema 目錄
 
-模型實際收到的每個工具的名稱、描述與參數 schema（共 25 個）。**這份檔案由程式產生，不要手改**：
+模型實際收到的每個工具的名稱、描述與參數 schema（共 27 個）。**這份檔案由程式產生，不要手改**：
 
 ```bash
 pnpm --filter @nexus/harness run gen-tool-catalog
 ```
 
-`apps/harness/src/tool-catalog.test.ts` 在 CI 裡驗它沒有過期；改了工具的名稱、描述或參數，重新產生並一起提交，
-review 時就看得到模型看到的字變了什麼。範圍與做法見 `apps/harness/src/tool-catalog.ts` 的檔頭（#442）。
+`harness/apps/harness/src/tool-catalog.test.ts` 在 CI 裡驗它沒有過期；改了工具的名稱、描述或參數，重新產生並一起提交，
+review 時就看得到模型看到的字變了什麼。範圍與做法見 `harness/apps/harness/src/tool-catalog.ts` 的檔頭（#442）。
 
 ## 基座（deepagents）
 
@@ -197,6 +197,77 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
     "glob",
     "max_count",
     "output_mode"
+  ],
+  "additionalProperties": false
+}
+```
+
+### `history_read`
+
+描述：
+
+```text
+Read back, verbatim, a stretch of this conversation that was replaced by a summary. Pass the entry number shown in the summary <index> (or a segment id from history_search). Returns a transcript page of up to 16000 characters; the last line gives the offset of the next page. Use it when you need an exact detail (a value, an error string, a file path, what a tool returned) that the summary does not give.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "entry": {
+      "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+      "type": "number"
+    },
+    "segment": {
+      "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+      "type": "number"
+    },
+    "offset": {
+      "description": "Character offset to start from. Defaults to 0.",
+      "type": "number"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+### `history_search`
+
+描述：
+
+```text
+Search the stretches of this conversation that were replaced by a summary for a literal string (case-insensitive, not a regex, not semantic). Returns each match with its entry number, a character offset and surrounding text; pass that entry and offset to history_read to read around it. Messages still in context are not searched.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Literal string to look for. Case-insensitive, not a regex."
+    },
+    "entry": {
+      "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+      "type": "number"
+    },
+    "segment": {
+      "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+      "type": "number"
+    },
+    "limit": {
+      "description": "Maximum matches to return. Defaults to 20, at most 100.",
+      "type": "number"
+    }
+  },
+  "required": [
+    "query"
   ],
   "additionalProperties": false
 }
@@ -656,7 +727,7 @@ List the models a subagent may use, without changing your own. Call with no argu
 
 ## ask-user
 
-plugin，套件 packages/nexus-plugin-ask-user
+plugin，套件 harness/packages/nexus-plugin-ask-user
 
 ### `ask_user_question`
 
@@ -734,7 +805,7 @@ plugin，套件 packages/nexus-plugin-ask-user
 
 ## echo
 
-plugin，套件 packages/nexus-plugin-echo
+plugin，套件 harness/packages/nexus-plugin-echo
 
 ### `echo`
 
@@ -765,7 +836,7 @@ plugin，套件 packages/nexus-plugin-echo
 
 ## goal
 
-plugin，套件 packages/nexus-plugin-goal
+plugin，套件 harness/packages/nexus-plugin-goal
 
 ### `create_goal`
 
@@ -875,7 +946,7 @@ Update the exact current goal revision. Call get_goal first and copy its goal_id
 
 ## plan-mode
 
-plugin，套件 packages/nexus-plugin-plan-mode
+plugin，套件 harness/packages/nexus-plugin-plan-mode
 
 ### `exit_plan_mode`
 
@@ -906,7 +977,7 @@ plugin，套件 packages/nexus-plugin-plan-mode
 
 ## present
 
-plugin，套件 packages/nexus-plugin-present
+plugin，套件 harness/packages/nexus-plugin-present
 
 ### `present`
 
@@ -954,7 +1025,7 @@ Declare existing files as final deliverables for the user. Use it when the user 
 
 ## quickjs
 
-plugin，套件 packages/nexus-plugin-quickjs
+plugin，套件 harness/packages/nexus-plugin-quickjs
 
 ### `run_javascript`
 
@@ -985,7 +1056,7 @@ plugin，套件 packages/nexus-plugin-quickjs
 
 ## submit-record
 
-plugin，套件 packages/nexus-plugin-submit-record
+plugin，套件 harness/packages/nexus-plugin-submit-record
 
 ### `submit_record`
 
@@ -1027,7 +1098,7 @@ plugin，套件 packages/nexus-plugin-submit-record
 
 ## todo
 
-plugin，套件 packages/nexus-plugin-todo
+plugin，套件 harness/packages/nexus-plugin-todo
 
 ### `todo_write`
 

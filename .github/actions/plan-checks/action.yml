@@ -1,7 +1,7 @@
 name: 異動與格式檢查
 description: >-
   算出這一輪的異動檔（寫進 changed.txt），再跑不用安裝相依的檢查：main 的 PR 來源、PR 標題與內文、升級指南、
-  Markdown 相對連結、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
+  Markdown 相對連結、ADR 格式、web 與 harness 的邊界、只降不升的計數、清外部對照 PR 的內文證據、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
 
 outputs:
   count:
@@ -48,7 +48,7 @@ runs:
         fi
         echo "PR 來源為 develop，通過。"
 
-    # 規則與可用 type 見 AGENTS.md，實作見 .github/scripts/check_pr.py。
+    # 規則與可用 type 見 docs/contributing.md，實作見 .github/scripts/check_pr.py。
     # 標題、內文、base 從 API 讀當下的值：rerun 沿用觸發時的事件，改標題後由 pr-edited.yml 重跑這一輪，事件裡的還是舊標題。
     # 標題與內文是外部輸入，只經環境變數交給腳本，不經 shell 展開。
     - name: 檢查 PR 標題與內文
@@ -70,7 +70,19 @@ runs:
         TITLE=$(jq -r .title "$RUNNER_TEMP/pr.json") BODY=$(jq -r '.body // ""' "$RUNNER_TEMP/pr.json") \
           python3 .github/scripts/check_pr.py
 
-    # 升級指南的格式（#1537，規則見 AGENTS.md「發版」）。版本目錄要對到已存在的 tag，靠 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
+    # 清外部對照的 PR（只動註解與字串內容、對照詞計數下降）要在內文附證據：改寫的每句註解、消失的段名、指向它們的地方（#3125）。
+    # 規則與範圍見 .github/scripts/check_dsh_cleanup.py；develop → main 的 PR 不看。內文從 API 讀當下的值，補完內文不推 commit 也會重判。
+    - name: 檢查清對照 PR 的內文證據
+      if: github.event_name == 'pull_request' && github.base_ref != 'main'
+      shell: bash
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        BODY=$(jq -r '.body // ""' "$RUNNER_TEMP/pr.json") \
+          python3 .github/scripts/check_dsh_cleanup.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"
+
+    # 升級指南的格式（#1537，規則見 docs/release.md〈升級指南〉）。版本目錄要對到已存在的 tag，靠 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
     - name: 檢查升級指南
       shell: bash
       run: python3 .github/scripts/check_upgrade_guides.py
@@ -79,6 +91,39 @@ runs:
     - name: 檢查 Markdown 相對連結
       shell: bash
       run: python3 .github/scripts/check_md_links.py
+
+    - name: 檢查 ADR 格式
+      shell: bash
+      run: python3 .github/scripts/check_adrs.py
+
+    - name: 檢查 pnpm 篩選帶 --fail-if-no-match
+      shell: bash
+      run: python3 .github/scripts/check_pnpm_filters.py
+
+    - name: 檢查 Rust 產物與 vitest 結果檔的路徑
+      shell: bash
+      run: python3 .github/scripts/check_rust_paths.py
+
+    - name: 檢查 web 與 harness 的邊界
+      shell: bash
+      run: python3 .github/scripts/check_boundary.py
+
+    - name: 檢查協作用的檔與舊路徑開頭的檔
+      shell: bash
+      run: python3 .github/scripts/check_legacy_paths.py
+
+    - name: 只降不升的計數
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          python3 .github/scripts/check_ratchets.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"
+        else
+          python3 .github/scripts/check_ratchets.py
+        fi
 
     - name: 攔截大檔案
       shell: bash

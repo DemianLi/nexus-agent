@@ -94,7 +94,6 @@ class LockfileAge(unittest.TestCase):
         self.assertEqual([(f.name, f.version) for f in findings], [('fresh', '1.0.1')])
 
     def test_version_union_exclude(self) -> None:
-        # dsh `pnpm-workspace.yaml:94` 的 `name@a||b` 形狀。
         fetch = CountingFetch({})
         policy = Policy(1440, frozenset({'@scope/pkg@1.0.0||1.0.0-linux-x64'}))
         checked, findings = check(BASE, lock(['old@1.0.0', "'@scope/pkg@1.0.0'", "'@scope/pkg@1.0.0-linux-x64'"]), policy, NOW, fetch)

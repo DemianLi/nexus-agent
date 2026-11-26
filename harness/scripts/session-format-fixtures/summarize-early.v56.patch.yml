@@ -1,0 +1,13 @@
+# 格式 56 的夾具（`v56`，v0.6.2 寫入器）：把摘要門檻壓到 3 則、保留量壓到 1 個 token，一輪 CLI 就在第二次呼叫之前摘要一次。
+# config 是整份替換，照 v0.6.2 出貨那一列寫，只改 trigger 的則數與保留量；`retainRatio` 與 `retainTokens` 擇一，所以換成 `retainTokens`。
+- id: summarization
+  config:
+    trigger:
+      - { type: tokens, value: 100000 }
+      - { type: messages, value: 3 }
+    retainTokens: 1
+    truncateArgs:
+      trigger: { type: messages, value: 20 }
+      keep: { type: messages, value: 20 }
+    historyPathPrefix: /conversation_history
+    compactionRetries: 1

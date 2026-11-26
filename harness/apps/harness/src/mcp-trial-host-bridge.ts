@@ -1,0 +1,34 @@
+/**
+ * per-thread 的前台與對話行程，啟動時的試組用的宿主門面（#3000、#3031）。
+ *
+ * 試組只驗設定與組裝，不需要連線。沒有這個門面時，試組走連線池、在這個行程裡自己起 MCP server（`per-thread.integration.test.ts`〈per-thread：MCP 經宿主連〉的行程樹斷言抓得到）。
+ * 對話行程的真門面在試組時還沒接上宿主，經它 `open` 會等到時限才回 `host_unavailable`；前台沒有宿主。有了這個門面，`mcp/client` 的 `open` 當場回一份空清單，列的設定照樣經 `MCP_HOST_ROW_SERVICE` 驗過；其他服務一律當宿主不在。
+ * 真正的連線在 thread 組裝時才向真的宿主 `open`。
+ *
+ * @module
+ */
+
+import { ABSENT_HOST_BRIDGE } from '@nexus/host-bridge';
+import type { HostBridge } from '@nexus/host-bridge';
+
+const EMPTY_OPEN = JSON.stringify({ tools: [], instructions: '', warning: null });
+
+/** 試組用的門面，見檔頭。 */
+export const TRIAL_HOST_BRIDGE: HostBridge = {
+  call(service, method, payload, options) {
+    if (service !== 'mcp/client' || method !== 'open') {
+      return ABSENT_HOST_BRIDGE.call(service, method, payload, options);
+    }
+    options?.onId?.(0);
+    options?.onChunk?.(EMPTY_OPEN);
+    options?.onChunk?.({ ready: { chunks: 1, bytes: Buffer.byteLength(EMPTY_OPEN, 'utf8') } });
+    // open 不收尾：掛著，直到呼叫端取消。
+    return new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => {
+        reject(new Error('試組的 open 取消了'));
+      });
+    });
+  },
+  onReady: ABSENT_HOST_BRIDGE.onReady,
+  onEvent: ABSENT_HOST_BRIDGE.onEvent,
+};

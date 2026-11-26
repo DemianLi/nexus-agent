@@ -2,14 +2,13 @@
 
     check_lockfile_age.py <base sha>
 
-**為什麼要這一步（偏離 dsh，理由 1：基座表達不出來）。** dsh 用 pnpm 11，年齡閘由 pnpm 自己在安裝時驗。nexus
-留在 pnpm 10.34.5：它的年齡檢查只在解析時發生（`NO_MATURE_MATCHING_VERSION`），`--frozen-lockfile` 不重新解析，
+**為什麼要這一步。** nexus 用 pnpm 10.34.5：它的年齡檢查只在解析時發生（`NO_MATURE_MATCHING_VERSION`），`--frozen-lockfile` 不重新解析，
 已經寫進 lockfile 的版本 CI 不會再查。有人在本機用 `--config.minimum-release-age=0` 或改舊版 pnpm 產生 lockfile，
 新版本就這樣進來了。退到：對 base 沒有、head 有的 `packages` 鍵逐一查 registry 的發布時間。
 
 規則與 pnpm 對齊：
 - 門檻與例外讀 `pnpm-workspace.yaml` 的 `minimumReleaseAge`（分鐘）與 `minimumReleaseAgeExclude`；
-- 例外只收精確版本（`name@1.2.3`，或 dsh 用的 `name@1.2.3||1.2.4`）。只寫套件名的條目等於整個套件永遠免檢，
+- 例外只收精確版本（`name@1.2.3`，或 `name@1.2.3||1.2.4`）。只寫套件名的條目等於整個套件永遠免檢，
   這裡當成設定錯誤直接紅（政策寫在 `pnpm-workspace.yaml` 的註解）。
 
 **查不到就紅（fail-closed）**：網路錯、404、packument 沒有那個版本的 `time`，一律當成不合格，訊息寫明原因。

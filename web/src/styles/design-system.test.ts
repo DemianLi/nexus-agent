@@ -1,0 +1,629 @@
+// @vitest-environment node
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, test } from 'vitest';
+
+import {
+  isVendorUpstream,
+  VENDOR_UPSTREAM_FILES,
+  vendorManifestName,
+} from '@/test/vendor-upstream';
+
+import { readCascade } from './css-cascade';
+
+/**
+ * 元件只能用系統裡的值（#1141 第 2 刀；`docs/web-ui.md` §5、§11 第 12 條）：顏色、字級、圓角各有一份階梯，
+ * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
+ * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
+ *
+ * 十七條：
+ * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
+ * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
+ * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
+ * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
+ * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-(--hover-faint)`＋`shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card`＋`rounded-3xl`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
+ * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
+ *    #1638；`data-state=open` 的寫法也照擋），就是又手寫了一顆。
+ * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-muted`＋`w-full`＋`text-left`＋`min-h-11`，就是又手寫了一列。
+ *    少了 `min-h-11` 的不算：工具結果的收合鈕（`tool/result.tsx` 的 `FoldToggle`）是一行字高的鈕，不是整列。
+ * 8. **不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
+ *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
+ *    vendor 上游原樣的 ring 由 `solid-glass.overrides.css` 統一處理（不在掃描範圍）；`ui/`（nexus 層）也照擋。
+ * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
+ * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-muted`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
+ * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
+ *     輸入框裡的是 `InputGroupTextarea`，也在 `ui/`。這條掃 JSX，不是字串字面值。
+ * 12. **時長只用 {@link DURATION_STEP} 列的 `duration-*` 級距**（#1280；#1827 D21 照 SG）：Tailwind 本身接受任意整數，這裡收窄；
+ *     不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137` 與 `animation-duration-*`。這條連 `ui/` 一起管。
+ * 13. **不用細字重**（#1307；`COMPONENTS.md`「次要靠顏色不靠字重」）：`font-thin`／`font-extralight`／`font-light` 擋下。
+ *     次要的字靠 `text-muted-foreground`，不靠把字變細——細字在中文與小字級下先糊掉。今天 0 次，是絆索。連 `ui/` 一起管。
+ * 14. **間距只用 {@link SPACING_STEP} 列的級距**（#2763；`docs/web-ui.md` §13.4）：內距、外距、間隙、定位偏移不寫 `p-[9px]`
+ *     這種任意值，也不寫級距外的數字（`p-13`）。引用 token 的算式（`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
+ *     這條**連 vendor 上游原樣的檔一起掃**：vendor 現有的任意值逐條釘在 {@link VENDOR_PINNED}，多一條、少一條都報錯。
+ * 15. **停用的透明度只有 50**（#2761；規格 §5「互動狀態」）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下的
+ *     `opacity-*` 只能是 `opacity-50`，或 `opacity-100`（這顆不靠透明度變淡，例如改用字色）。這條也連 vendor 一起掃，
+ *     vendor 今天沒有別的值。
+ *
+ * 16. **陰影不寫任意值**（規格 §13.4）：`shadow-*`、`inset-shadow-*`、`drop-shadow-*` 用具名的階（`shadow-sm`…）或引用 token 的畫法
+ *     （`shadow-[inset_0_0_0_1px_var(--border)]`），不寫 `shadow-[0_2px_8px_#0003]` 這種自己調的值。連 vendor 一起掃。
+ * 17. **層級只用 {@link LAYER_STEP} 列的幾層**（規格 §13.4）：`z-10`、`z-20` 是區塊內的疊放，`z-50` 是浮層；不寫別的數字與任意值。
+ *     連 vendor 一起掃。
+ *
+ * 第 2 條的任意值字級（`text-[12.5px]`）、第 3 條的數字圓角（`rounded-[2px]`）也連 vendor 一起掃、釘在 {@link VENDOR_PINNED}
+ * （#2761）；vendor 的 `text-sm`／`text-xs` 是 SG 原樣，不在這裡管。
+ *
+ * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
+ * 沒量的：寬高的任意值（`max-h-[300px]` 是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
+ */
+
+const SRC = fileURLToPath(new URL('..', import.meta.url));
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sourceFiles(path);
+    // vendor 上游原樣的檔放行（外觀照 SG，Q8；#1523）：名單在 `test/vendor-upstream.ts`。
+    if (isVendorUpstream(path)) return [];
+    return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+/** 拿掉區塊註解與整行的 `//` 註解（字串裡的 `//`，例如網址，不在行首，不會被拿掉）。 */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ' '))
+    .split('\n')
+    .map((line) => (/^\s*\/\//.test(line) ? '' : line))
+    .join('\n');
+}
+
+/** 去掉 variant 前綴（`dark:`、`hover:`、`[&_svg]:`…）後的 utility 本體。 */
+function utility(token: string): string {
+  let depth = 0;
+  let last = -1;
+  for (let i = 0; i < token.length; i++) {
+    if (token[i] === '[' || token[i] === '(') depth++;
+    else if (token[i] === ']' || token[i] === ')') depth--;
+    else if (token[i] === ':' && depth === 0) last = i;
+  }
+  return token.slice(last + 1).replace(/^!/, '');
+}
+
+const COLOR_PROPS =
+  'bg|text|border|ring|ring-offset|fill|stroke|from|via|to|outline|divide|decoration|accent|caret|placeholder|shadow|inset-ring';
+const PALETTE = [
+  'red',
+  'orange',
+  'amber',
+  'yellow',
+  'lime',
+  'green',
+  'emerald',
+  'teal',
+  'cyan',
+  'sky',
+  'blue',
+  'indigo',
+  'violet',
+  'purple',
+  'fuchsia',
+  'pink',
+  'rose',
+  'slate',
+  'gray',
+  'zinc',
+  'neutral',
+  'stone',
+].join('|');
+const RAW_PALETTE = new RegExp(
+  `^(?:${COLOR_PROPS})-(?:(?:${PALETTE})-\\d{2,3}|white|black)(?:/\\d+)?$`,
+);
+const RAW_TEXT_SIZE = /^text-(?:xs|sm|base|lg|xl|[2-9]xl|\[\d*\.?\d+(?:px|rem|em)\])$/;
+const RAW_RADIUS = /^rounded(?:-[a-z]{1,2})?-\[\s*\d/;
+const HEX_WHOLE = /^#[0-9a-fA-F]{3,8}$/;
+const HEX_IN_CLASS = /-\[#[0-9a-fA-F]{3,8}\]/;
+const COLOR_FUNCTION = /\b(?:oklch|oklab|rgba?|hsla?|hwb|lab|lch|color-mix)\(/;
+
+type Rule =
+  | '色板'
+  | '字級'
+  | '圓角'
+  | '色碼'
+  | '表面'
+  | '箭頭'
+  | '可展開列'
+  | '焦點'
+  | '泡泡'
+  | '程式碼小框'
+  | '輸入框'
+  | '時長'
+  | '字重'
+  | '間距'
+  | '停用'
+  | '陰影'
+  | '層級';
+
+const ROTATE = /^-?rotate-\d+$/;
+const ROTATE_ON_OPEN = /(?:state=open\]?\]?(?:>[^:]*)?|panel-open):-?rotate-\d+$/;
+const DURATION = /^(?:animation-)?duration-/;
+const DURATION_STEP = /^duration-(?:0|75|100|150|200|300|500|700|1000)\b/;
+const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
+const SPACING_PROPS =
+  'p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-x|gap-y|space-x|space-y|inset|inset-x|inset-y|top|bottom|left|right|start|end';
+const SPACING = new RegExp(`^-?(?:${SPACING_PROPS})-(\\[.+\\]|\\d+(?:\\.\\d+)?)$`);
+const SPACING_STEP = new Set(
+  '0 0.5 1 1.5 2 2.5 3 3.5 4 5 6 7 8 9 10 11 12 14 16 20 24 28 32 36 40 44 48 52 56 60 64 72 80 96'.split(
+    ' ',
+  ),
+);
+
+const RAW_SHADOW = /^(?:shadow|inset-shadow|drop-shadow)-\[(?!.*var\()/;
+const LAYER = /^-?z-(.+)$/;
+const LAYER_STEP = new Set(['0', '10', '20', '50', 'auto']);
+const DISABLED_VARIANT = /disabled/;
+const OPACITY = /^opacity-(?!(?:50|100)$)/;
+
+/** 級距外的間距：任意值（引用 token 的算式除外）或不在 {@link SPACING_STEP} 上的數字。 */
+function offSpacingScale(u: string): boolean {
+  const value = SPACING.exec(u)?.[1];
+  if (value === undefined) return false;
+  return value.startsWith('[') ? !value.includes('var(') : !SPACING_STEP.has(value);
+}
+
+function rulesBroken(text: string): { rule: Rule; what: string }[] {
+  const found: { rule: Rule; what: string }[] = [];
+  const utilities = new Set(text.split(/\s+/).map(utility));
+  if (
+    utilities.has('bg-(--hover-faint)') &&
+    utilities.has('shadow-[inset_0_0_0_1px_var(--border)]')
+  ) {
+    found.push({ rule: '表面', what: 'bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]' });
+  }
+  if (utilities.has('bg-card') && utilities.has('rounded-3xl') && !utilities.has('border')) {
+    found.push({ rule: '表面', what: 'bg-card rounded-3xl' });
+  }
+  if (utilities.has('bg-card') && utilities.has('border') && utilities.has('rounded-3xl')) {
+    found.push({ rule: '表面', what: 'bg-card border rounded-3xl' });
+  }
+  const tokens = new Set(text.split(/\s+/));
+  if (utilities.has('transition-transform') && [...utilities].some((u) => ROTATE.test(u))) {
+    found.push({ rule: '箭頭', what: 'transition-transform rotate-*' });
+  }
+  if (
+    tokens.has('hover:bg-muted') &&
+    utilities.has('w-full') &&
+    utilities.has('text-left') &&
+    utilities.has('min-h-11')
+  ) {
+    found.push({ rule: '可展開列', what: 'hover:bg-muted w-full text-left min-h-11' });
+  }
+  if (utilities.has('rounded-3xl') && utilities.has('px-4') && utilities.has('py-2.5')) {
+    found.push({ rule: '泡泡', what: 'rounded-3xl px-4 py-2.5' });
+  }
+  if (
+    utilities.has('bg-muted') &&
+    utilities.has('rounded-lg') &&
+    utilities.has('p-2') &&
+    utilities.has('font-mono')
+  ) {
+    found.push({ rule: '程式碼小框', what: 'bg-muted rounded-lg p-2 font-mono' });
+  }
+  for (const token of text.split(/\s+/)) {
+    const u = utility(token);
+    if (DURATION.test(u) && !DURATION_STEP.test(u)) found.push({ rule: '時長', what: u });
+    if (THIN_WEIGHT.test(u)) found.push({ rule: '字重', what: u });
+    if (offSpacingScale(u)) found.push({ rule: '間距', what: u });
+    if (RAW_SHADOW.test(u)) found.push({ rule: '陰影', what: u });
+    if (LAYER.test(u) && (u.startsWith('-') || !LAYER_STEP.has(LAYER.exec(u)?.[1] ?? ''))) {
+      found.push({ rule: '層級', what: u });
+    }
+    if (OPACITY.test(u) && DISABLED_VARIANT.test(token.slice(0, token.length - u.length))) {
+      found.push({ rule: '停用', what: token });
+    }
+    if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
+    if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
+      found.push({ rule: '焦點', what: token });
+    }
+    if (RAW_PALETTE.test(u)) found.push({ rule: '色板', what: u });
+    else if (RAW_TEXT_SIZE.test(u)) found.push({ rule: '字級', what: u });
+    else if (RAW_RADIUS.test(u)) found.push({ rule: '圓角', what: u });
+    else if (HEX_IN_CLASS.test(u)) found.push({ rule: '色碼', what: token });
+  }
+  // 整個字串就是一個色碼；字串裡夾著的 `#607` 多半是議題編號，不算。
+  if (HEX_WHOLE.test(text.trim())) found.push({ rule: '色碼', what: text.trim() });
+  if (COLOR_FUNCTION.test(text) && !/var\(/.test(text)) {
+    found.push({ rule: '色碼', what: text.match(COLOR_FUNCTION)![0] + '…)' });
+  }
+  return found;
+}
+
+interface Allowed {
+  readonly file: string;
+  readonly what: string;
+  readonly why: string;
+}
+
+/**
+ * 已知的例外。**只能變少**：列了卻不再命中的會紅。
+ */
+const ALLOWED: readonly Allowed[] = [
+  // 自己的元件。
+  {
+    file: 'shared/blocks/chevron.tsx',
+    what: 'group-data-panel-open:rotate-90',
+    why: '`Chevron` 本身：全站唯一該寫展開箭頭旋轉的地方',
+  },
+  {
+    file: 'shared/blocks/row-trigger.tsx',
+    what: 'hover:bg-muted w-full text-left min-h-11',
+    why: '`RowTrigger` 本身：全站唯一該寫可展開列配方的地方',
+  },
+  {
+    file: 'shared/blocks/chat-bubble.tsx',
+    what: 'rounded-3xl px-4 py-2.5',
+    why: '`ChatBubble` 本身：全站唯一該寫對話泡泡配方的地方',
+  },
+  {
+    file: 'shared/blocks/mono-block.tsx',
+    what: 'bg-muted rounded-lg p-2 font-mono',
+    why: '`MonoBlock` 本身：全站唯一該寫程式碼小框配方的地方',
+  },
+  {
+    file: 'shared/blocks/surface.tsx',
+    what: 'bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]',
+    why: '`Surface` 的 stage 配方本身：全站唯一該寫這串的地方',
+  },
+  {
+    file: 'shared/blocks/surface.tsx',
+    what: 'bg-card rounded-3xl',
+    why: '`Surface` 的 raised 配方本身：全站唯一該寫這串的地方',
+  },
+  {
+    file: 'shared/blocks/surface.tsx',
+    what: 'bg-card border rounded-3xl',
+    why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
+  },
+];
+
+/**
+ * vendor 上游原樣的檔裡現有的級距外的值（間距 #2763、字級 #2761、圓角、層級）：vendor 檔不動，現值逐條釘住。**只能變少**：
+ * 同步上游多出一條會紅，要嘛用覆寫蓋回級距，要嘛由 demian 核可後列進來；上游拿掉的也要從這裡刪。
+ * `file` 是 manifest 裡的名字。停用的透明度與陰影沒有條目：vendor 的停用只有 50 與 100，陰影沒有任意值。
+ */
+const VENDOR_PINNED: readonly { rule: Rule; file: string; what: string }[] = [
+  { rule: '間距', file: 'components/ui/composer.tsx', what: 'pr-[9px]' },
+  { rule: '間距', file: 'components/ui/dot-loader.tsx', what: 'gap-[2px]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'ml-[-0.15rem]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'ml-[-0.3rem]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'mr-[-0.15rem]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'mr-[-0.3rem]' },
+  { rule: '字級', file: 'components/ui/button.tsx', what: 'text-[0.8rem]' },
+  { rule: '字級', file: 'components/ui/composer.tsx', what: 'text-[11px]' },
+  { rule: '字級', file: 'components/ui/composer.tsx', what: 'text-[12px]' },
+  { rule: '字級', file: 'components/ui/composer.tsx', what: 'text-[13px]' },
+  { rule: '字級', file: 'components/ui/context-ring.tsx', what: 'text-[11.5px]' },
+  { rule: '字級', file: 'components/ui/context-ring.tsx', what: 'text-[12.5px]' },
+  { rule: '字級', file: 'components/ui/context-ring.tsx', what: 'text-[12px]' },
+  { rule: '字級', file: 'components/ui/diff-view.tsx', what: 'text-[11.5px]' },
+  { rule: '字級', file: 'components/ui/diff-view.tsx', what: 'text-[12px]' },
+  { rule: '字級', file: 'components/ui/questionnaire.tsx', what: 'text-[0.625rem]' },
+  { rule: '字級', file: 'components/ui/reasoning.tsx', what: 'text-[12.5px]' },
+  { rule: '字級', file: 'components/ui/reasoning.tsx', what: 'text-[13px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[11.5px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[11px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[12.5px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[13px]' },
+  { rule: '字級', file: 'components/ui/turn-status.tsx', what: 'text-[12.5px]' },
+  { rule: '圓角', file: 'components/ui/context-ring.tsx', what: 'rounded-[2px]' },
+  { rule: '圓角', file: 'components/ui/questionnaire.tsx', what: 'rounded-[4px]' },
+  { rule: '圓角', file: 'components/ui/tooltip.tsx', what: 'rounded-[2px]' },
+  { rule: '層級', file: 'components/ui/dropdown-menu.tsx', what: '-z-1' },
+];
+
+interface Violation {
+  readonly file: string;
+  readonly line: number;
+  readonly rule: Rule;
+  readonly what: string;
+}
+
+function scan(files: string[]): Violation[] {
+  const found: Violation[] = [];
+  for (const file of files) {
+    const inRegistry = relative(SRC, file).startsWith('components/ui/');
+    const source = withoutComments(readFileSync(file, 'utf8'));
+    if (!inRegistry) {
+      for (const match of source.matchAll(/<textarea\b/g)) {
+        const line = source.slice(0, match.index).split('\n').length;
+        found.push({ file: relative(SRC, file), line, rule: '輸入框', what: '<textarea' });
+      }
+    }
+    for (const match of source.matchAll(/(['"`])((?:(?!\1)[^\\\n]|\\.)*)\1/g)) {
+      const broken = rulesBroken(match[2] ?? '');
+      if (broken.length === 0) continue;
+      const line = source.slice(0, match.index).split('\n').length;
+      for (const { rule, what } of broken) {
+        found.push({ file: relative(SRC, file), line, rule, what });
+      }
+    }
+  }
+  return found;
+}
+
+const files = sourceFiles(SRC);
+const all = scan(files);
+const isAllowed = (v: Violation) => ALLOWED.some((a) => a.file === v.file && a.what === v.what);
+const vendorFiles = [...VENDOR_UPSTREAM_FILES]
+  .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
+  .map((f) => join(SRC, f));
+const PINNED_RULES: ReadonlySet<Rule> = new Set(['間距', '停用', '圓角', '陰影', '層級']);
+const vendorOffScale = scan(vendorFiles).filter(
+  (v) => PINNED_RULES.has(v.rule) || (v.rule === '字級' && v.what.startsWith('text-[')),
+);
+
+describe('元件只能用系統裡的值', () => {
+  test('沒有越過色板、字級、圓角階梯或硬寫顏色（例外見 ALLOWED）', () => {
+    const open = all.filter((v) => !isAllowed(v));
+    expect(open.map((v) => `${v.file}:${v.line}：${v.rule} ${v.what}`)).toEqual([]);
+  });
+
+  test('例外都還有命中，沒有留著過期的條目', () => {
+    const stale = ALLOWED.filter((a) => !all.some((v) => v.file === a.file && v.what === a.what));
+    expect(stale.map((a) => `${a.file} ${a.what}`)).toEqual([]);
+  });
+
+  test('每條例外都寫了理由', () => {
+    expect(ALLOWED.filter((a) => a.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具有掃到東西（不是空過）', () => {
+    expect(files.length).toBeGreaterThan(100);
+    expect(files.some((f) => f.endsWith('components/ui/button.tsx'))).toBe(true);
+  });
+
+  test('vendor 裡級距外的值就是釘住的那幾條，沒有多也沒有少', () => {
+    const found = [
+      ...new Set(vendorOffScale.map((v) => `${v.rule} ${vendorManifestName(v.file)} ${v.what}`)),
+    ].sort();
+    expect(found).toEqual(VENDOR_PINNED.map((p) => `${p.rule} ${p.file} ${p.what}`).sort());
+    expect(vendorFiles.length).toBeGreaterThan(20);
+  });
+});
+
+describe('判準', () => {
+  const rules = (text: string) => rulesBroken(text).map((b) => `${b.rule}:${b.what}`);
+
+  test('`rounded-row` 有定義，且是卡片圓角 3xl 減內距 p-1（4）：讓列與卡片同心', () => {
+    // 3xl 是 SG 的 `calc(var(--radius) * 2.2)`（#1512），在元素上才解得出來；比的是算式：row 就是 3xl 的算式再減 4px。
+    const cascade = readCascade();
+    const threeXl = /^calc\((.+)\)$/.exec(cascade.value(['@theme'], '--radius-3xl') ?? '')?.[1];
+    expect(threeXl).toBe('var(--radius) * 2.2');
+    expect(cascade.value(['@theme'], '--radius-row')).toBe(`calc(${threeXl} - 4px)`);
+    expect(rules('rounded-row rounded-3xl')).toEqual([]);
+  });
+
+  test('原生色板與 white／black，連同 variant 前綴與透明度', () => {
+    expect(rules('text-red-500')).toEqual(['色板:text-red-500']);
+    expect(rules('dark:hover:bg-blue-600/40')).toEqual(['色板:bg-blue-600/40']);
+    expect(rules('bg-white')).toEqual(['色板:bg-white']);
+    expect(rules('[&_svg]:fill-black/50')).toEqual(['色板:fill-black/50']);
+    expect(rules('ring-offset-zinc-200')).toEqual(['色板:ring-offset-zinc-200']);
+  });
+
+  test('語意 token 與只是名字像的不算', () => {
+    expect(rules('bg-card text-destructive text-muted-foreground bg-muted')).toEqual([]);
+    expect(rules('text-primary-foreground border-border ring-ring/50 bg-brand/15')).toEqual([]);
+    expect(rules('bg-background text-foreground bg-(--hover-faint)')).toEqual([]);
+  });
+
+  test('字級：預設階與任意值都擋，規格的四階與顏色的 text-* 不擋', () => {
+    expect(rules('text-xs')).toEqual(['字級:text-xs']);
+    expect(rules('md:text-sm')).toEqual(['字級:text-sm']);
+    expect(rules('text-base text-lg')).toEqual(['字級:text-base', '字級:text-lg']);
+    expect(rules('text-2xl')).toEqual(['字級:text-2xl']);
+    expect(rules('text-[0.625rem]')).toEqual(['字級:text-[0.625rem]']);
+    expect(rules('text-[11px]')).toEqual(['字級:text-[11px]']);
+    expect(rules('text-ui text-body text-tip text-micro')).toEqual([]);
+    expect(rules('text-center text-left text-pretty text-balance text-foreground')).toEqual([]);
+    expect(rules('text-[color:var(--x)] text-[length:var(--y)]')).toEqual([]);
+  });
+
+  test('圓角：數字任意值擋，階梯、full、calc 不擋', () => {
+    expect(rules('rounded-[20px]')).toEqual(['圓角:rounded-[20px]']);
+    expect(rules('rounded-t-[4px]')).toEqual(['圓角:rounded-t-[4px]']);
+    expect(rules('rounded-tl-[2px]')).toEqual(['圓角:rounded-tl-[2px]']);
+    expect(rules('rounded-lg rounded-3xl rounded-full rounded-none rounded-xs')).toEqual([]);
+    expect(rules('rounded-[calc(var(--radius)-2px)]')).toEqual([]);
+  });
+
+  test('色碼：十六進位與沒有 var 的色彩函式擋，從 token 推出來的不擋', () => {
+    expect(rules('#fff')).toEqual(['色碼:#fff']);
+    expect(rules('#cc0000')).toEqual(['色碼:#cc0000']);
+    expect(rules('bg-[#ff00aa]')).toEqual(['色碼:bg-[#ff00aa]']);
+    expect(rules('rgb(0 0 0 / 0.5)')).toEqual(['色碼:rgb(…)']);
+    expect(rules('oklch(0.5 0.1 200)')).toEqual(['色碼:oklch(…)']);
+    expect(rules('var(--destructive)')).toEqual([]);
+    expect(rules('bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]')).toEqual([]);
+    expect(rules('bg-[oklch(from_var(--primary)_0.93_calc(c*0.4)_h)]')).toEqual([]);
+    expect(rules('第 #607 號、#1033 的說明')).toEqual([]);
+  });
+
+  test('表面：手寫 stage 或 raised 的整組配方擋，只用到一部分的不擋', () => {
+    expect(
+      rules('bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)] rounded-xl p-3'),
+    ).toEqual(['表面:bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]']);
+    expect(rules('hover:bg-(--hover-faint) dark:shadow-[inset_0_0_0_1px_var(--border)]')).toEqual([
+      '表面:bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]',
+    ]);
+    expect(rules('bg-card rounded-3xl p-1')).toEqual(['表面:bg-card rounded-3xl']);
+    expect(rules('bg-card rounded-3xl')).toEqual(['表面:bg-card rounded-3xl']);
+    expect(rules('bg-(--hover-faint) sticky bottom-0 pb-4')).toEqual([]);
+    expect(rules('bg-card rounded-lg p-1')).toEqual([]);
+    expect(rules('bg-card border rounded-3xl p-1')).toEqual(['表面:bg-card border rounded-3xl']);
+    expect(rules('bg-card border rounded-lg')).toEqual([]);
+  });
+
+  test('註解裡寫到類別名不算', () => {
+    expect(withoutComments("// 以前是 'text-xs'\nconst a = 1;").includes('text-xs')).toBe(false);
+    expect(withoutComments("/* 'text-sm' */ const b = 'text-tip';").includes('text-sm')).toBe(
+      false,
+    );
+    expect(withoutComments("const c = 'https://x.test/a';").includes('https://x.test/a')).toBe(
+      true,
+    );
+  });
+
+  test('展開箭頭：手寫的旋轉轉場與跟著 data-state 轉的都擋；不轉場、不跟展開走的旋轉不擋', () => {
+    expect(
+      rules('size-4 transition-transform duration-200 group-data-[state=open]:rotate-180'),
+    ).toEqual(['箭頭:transition-transform rotate-*', '箭頭:group-data-[state=open]:rotate-180']);
+    expect(rules('[&[data-state=open]>svg]:rotate-90')).toEqual([
+      '箭頭:[&[data-state=open]>svg]:rotate-90',
+    ]);
+    // Base UI 的 Trigger 開著時掛 `data-panel-open`（#1638）：跟著它轉的照樣擋。
+    expect(rules('group-data-panel-open:rotate-180')).toEqual([
+      '箭頭:group-data-panel-open:rotate-180',
+    ]);
+    expect(rules('transition-transform rotate-180')).toEqual([
+      '箭頭:transition-transform rotate-*',
+    ]);
+    expect(rules('group-data-[side=right]:rotate-180')).toEqual([]);
+    expect(rules('transition-transform scale-95')).toEqual([]);
+  });
+
+  test('可展開列：四樣湊齊才算，按鈕的 hover 底色與一行字高的收合鈕不算', () => {
+    expect(rules('group hover:bg-muted flex min-h-11 w-full rounded-xl text-left')).toEqual([
+      '可展開列:hover:bg-muted w-full text-left min-h-11',
+    ]);
+    expect(rules('hover:bg-muted size-11 rounded-full')).toEqual([]);
+    expect(rules('hover:bg-muted rounded-lg text-left')).toEqual([]);
+    expect(rules('hover:bg-muted hover:text-foreground w-full px-3 py-0.5 text-left')).toEqual([]);
+  });
+
+  test('焦點：focus-visible 下的 ring 都擋，outline 與非焦點的 ring 不擋', () => {
+    expect(rules('outline-none focus-visible:ring-2')).toEqual(['焦點:focus-visible:ring-2']);
+    expect(rules('focus-visible:ring-ring/50 focus-visible:ring-[3px]')).toEqual([
+      '焦點:focus-visible:ring-ring/50',
+      '焦點:focus-visible:ring-[3px]',
+    ]);
+    expect(rules('group-focus-visible:ring-2')).toEqual([]);
+    expect(rules('focus-visible:-outline-offset-2 ring-ring ring-2')).toEqual([]);
+  });
+
+  test('泡泡：三樣湊齊才算，只有圓角或內距的不算', () => {
+    expect(rules('bg-muted text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap')).toEqual([
+      '泡泡:rounded-3xl px-4 py-2.5',
+    ]);
+    expect(rules('rounded-3xl px-4 py-2')).toEqual([]);
+    expect(rules('rounded-xl px-4 py-2.5')).toEqual([]);
+  });
+
+  test('程式碼小框：四樣湊齊才算，muted 底的標籤與別的等寬字不算', () => {
+    expect(
+      rules('bg-muted max-h-32 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip'),
+    ).toEqual(['程式碼小框:bg-muted rounded-lg p-2 font-mono']);
+    expect(rules('bg-muted rounded-full px-3 py-1 text-tip')).toEqual([]);
+    expect(rules('max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-tip')).toEqual([]);
+  });
+
+  test('時長：只放行 Tailwind 的級距，任意值與 animation-duration 都擋，連同 variant 前綴；delay 不擋', () => {
+    expect(rules('transition-colors duration-150 hover:duration-200')).toEqual([]);
+    expect(rules('duration-[200ms]')).toEqual(['時長:duration-[200ms]']);
+    expect(rules('duration-(--duration-fast)')).toEqual(['時長:duration-(--duration-fast)']);
+    expect(rules('duration-137')).toEqual(['時長:duration-137']);
+    expect(rules('data-[state=open]:animation-duration-350')).toEqual([
+      '時長:animation-duration-350',
+    ]);
+    expect(rules('delay-50 data-[state=closed]:delay-0')).toEqual([]);
+  });
+
+  test('字重：thin、extralight、light 擋，連同 variant 前綴；normal 以上與字型家族不擋', () => {
+    expect(rules('font-light')).toEqual(['字重:font-light']);
+    expect(rules('md:font-thin')).toEqual(['字重:font-thin']);
+    expect(rules('dark:hover:font-extralight')).toEqual(['字重:font-extralight']);
+    expect(rules('font-normal font-medium font-semibold font-bold font-mono font-sans')).toEqual(
+      [],
+    );
+    expect(rules('font-lightish')).toEqual([]);
+  });
+
+  test('間距：任意值與級距外的數字擋，連同負值與 variant 前綴；級距、引用 token 的算式、不是間距的不擋', () => {
+    expect(rules('pr-[9px]')).toEqual(['間距:pr-[9px]']);
+    expect(rules('has-[>svg]:ml-[-0.3rem]')).toEqual(['間距:ml-[-0.3rem]']);
+    expect(rules('md:gap-[2px] top-[50%]')).toEqual(['間距:gap-[2px]', '間距:top-[50%]']);
+    expect(rules('p-13 -mt-4.5 space-y-15')).toEqual([
+      '間距:p-13',
+      '間距:-mt-4.5',
+      '間距:space-y-15',
+    ]);
+    expect(rules('p-0 px-2.5 -mt-1 gap-x-3.5 space-y-11 inset-0 top-14 pb-96')).toEqual([]);
+    expect(rules('px-px m-auto top-1/2 inset-x-full left-(--offset)')).toEqual([]);
+    expect(rules('left-[calc(var(--sidebar-width)*-1)] pt-[var(--gap)]')).toEqual([]);
+    expect(
+      rules('max-h-[300px] w-[18rem] inset-ring-2 inset-shadow-[0_1px_0_var(--border)]'),
+    ).toEqual([]);
+  });
+
+  test('停用：停用類 variant 下的透明度只放行 50 與 100；不是停用的半透明不擋', () => {
+    expect(rules('disabled:opacity-60')).toEqual(['停用:disabled:opacity-60']);
+    expect(rules('data-disabled:opacity-40 aria-disabled:opacity-70')).toEqual([
+      '停用:data-disabled:opacity-40',
+      '停用:aria-disabled:opacity-70',
+    ]);
+    expect(rules('data-[disabled=true]:opacity-60 group-has-disabled:opacity-30')).toEqual([
+      '停用:data-[disabled=true]:opacity-60',
+      '停用:group-has-disabled:opacity-30',
+    ]);
+    expect(rules('disabled:opacity-50 has-disabled:opacity-50 disabled:opacity-100')).toEqual([]);
+    expect(
+      rules('opacity-70 hover:opacity-100 disabled:cursor-default enabled:opacity-80'),
+    ).toEqual([]);
+  });
+
+  test('陰影：自己調的任意值擋；具名的階、引用 token 的畫法、顏色不擋', () => {
+    expect(rules('shadow-[0_2px_8px_#0003]')).toEqual(['陰影:shadow-[0_2px_8px_#0003]']);
+    expect(
+      rules('hover:inset-shadow-[0_1px_0_0_currentColor] drop-shadow-[0_1px_1px_gray]'),
+    ).toEqual(['陰影:inset-shadow-[0_1px_0_0_currentColor]', '陰影:drop-shadow-[0_1px_1px_gray]']);
+    expect(
+      rules('shadow-none shadow-sm shadow-md shadow-lg inset-shadow-xs drop-shadow-sm'),
+    ).toEqual([]);
+    expect(
+      rules('shadow-[0_0_0_1px_var(--sidebar-border)] shadow-(--my-shadow) shadow-primary/20'),
+    ).toEqual([]);
+  });
+
+  test('層級：只放行 0、10、20、50 與 auto；別的數字、負值、任意值擋，連同 variant 前綴', () => {
+    expect(rules('z-30 md:z-40 z-999')).toEqual(['層級:z-30', '層級:z-40', '層級:z-999']);
+    expect(rules('-z-1 z-[60] z-(--layer)')).toEqual([
+      '層級:-z-1',
+      '層級:z-[60]',
+      '層級:z-(--layer)',
+    ]);
+    expect(rules('z-0 z-10 hover:z-20 z-50 z-auto')).toEqual([]);
+    expect(rules('size-10 zoom-in-95')).toEqual([]);
+  });
+
+  test('輸入框：ui/ 以外的原生 textarea 擋；Textarea 本身是 vendor 原樣（#1523），不在掃描範圍', () => {
+    expect(all.filter((v) => v.rule === '輸入框')).toEqual([]);
+    // 位置從共用名單取（`test/vendor-upstream.ts`），這裡不寫 vendor 的路徑。
+    const vendored = [...VENDOR_UPSTREAM_FILES].find((f) =>
+      f.endsWith('/components/ui/textarea.tsx'),
+    );
+    expect(vendored).toBeDefined();
+    expect(readFileSync(join(SRC, vendored ?? ''), 'utf8').includes('<textarea')).toBe(true);
+  });
+
+  test('焦點那條 ui/ 也照擋：nexus 層沒有 ring，帶 ring 的只剩 vendor 原樣', () => {
+    const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
+    expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
+    const vendored = [...VENDOR_UPSTREAM_FILES].find((f) =>
+      f.endsWith('/components/ui/sidebar.tsx'),
+    );
+    expect(vendored).toBeDefined();
+    expect(readFileSync(join(SRC, vendored ?? ''), 'utf8').includes('focus-visible:ring-')).toBe(
+      true,
+    );
+  });
+});

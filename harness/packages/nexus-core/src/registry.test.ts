@@ -1,0 +1,857 @@
+/**
+ * 每個註冊點的規則：同層報錯、跨層遮蔽、錯誤訊息指得出是誰。
+ *
+ * 對應 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 的「註冊表原語」驗收。
+ * 判準是能不能只靠 registry 的輸入輸出斷言——規則真的產生效果（權限真的擋住、
+ * subagent 真的看到那組工具）屬各擴充點落地的 phase。
+ */
+
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import { createRegistry } from './registry.js';
+import {
+  fakeBackend,
+  fakeFeedback,
+  fakeMiddleware,
+  fakeSink,
+  fakeSubAgent,
+  fakeTool,
+} from './fixtures.js';
+import { MESSAGE_FEEDBACK_SERVICE } from './feedback.js';
+import { SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
+import type { PluginOrigin } from './plugin.js';
+
+const first: PluginOrigin = { id: 'alpha#0', name: 'alpha' };
+const second: PluginOrigin = { id: 'mcp#0', name: 'mcp' };
+
+describe('tools 註冊點', () => {
+  it('同層同名報錯，訊息同時指名兩個 plugin 與那個工具名', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.tools.register(fakeTool('search'));
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.tools.register(fakeTool('search'))).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    leaveSecond();
+  });
+
+  it('同層同名的錯誤訊息含工具名', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.tools.register(fakeTool('search'));
+    expect(() => registry.tools.register(fakeTool('search'))).toThrow('"search"');
+    leave();
+  });
+
+  it('全域與 subagent 層同名不報錯，該層查找到最近的那個', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const globalTool = fakeTool('search');
+    const scopedTool = fakeTool('search');
+    registry.tools.register(globalTool);
+    expect(() => registry.tools.register(scopedTool, { scope: 'researcher' })).not.toThrow();
+    leave();
+
+    expect(registry.tools.resolve('search')?.value).toBe(globalTool);
+    expect(registry.tools.resolve('search', 'researcher')?.value).toBe(scopedTool);
+    // 沒註冊過東西的層看到的是全域那個。
+    expect(registry.tools.resolve('search', 'writer')?.value).toBe(globalTool);
+  });
+
+  it('某一層的有效集合是全域打底、該層同名項覆蓋其上', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.tools.register(fakeTool('search'));
+    registry.tools.register(fakeTool('ls'));
+    const scopedSearch = fakeTool('search');
+    registry.tools.register(scopedSearch, { scope: 'researcher' });
+    registry.tools.register(fakeTool('cite'), { scope: 'researcher' });
+    leave();
+
+    const effective = registry.tools.effective('researcher');
+    expect([...effective.keys()].sort()).toEqual(['cite', 'ls', 'search']);
+    expect(effective.get('search')?.value).toBe(scopedSearch);
+    expect([...registry.tools.effective().keys()].sort()).toEqual(['ls', 'search']);
+  });
+
+  it('subagent 層按名字延遲建立，不驗那個 subagent 存不存在', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    // requires 不排序，靠前的 plugin 本來就可以往靠後的 plugin 才註冊的 subagent 上加工具。
+    expect(() => registry.tools.register(fakeTool('cite'), { scope: 'not-yet' })).not.toThrow();
+    leave();
+    expect(registry.tools.scopes()).toEqual(['not-yet']);
+  });
+
+  it('撤銷該層最後一個工具後，那一層不再出現在 scopes()', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.tools.register(fakeTool('cite'), { scope: 'researcher' });
+    expect(registry.tools.scopes()).toEqual(['researcher']);
+    undo();
+    leave();
+    expect(registry.tools.scopes()).toEqual([]);
+  });
+
+  it('rootOnly 記在那一顆工具身上，isRootOnly 問得出來', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.tools.register(fakeTool('goal'), { rootOnly: true });
+    registry.tools.register(fakeTool('search'));
+    leave();
+    expect(registry.tools.isRootOnly('goal')).toBe(true);
+    expect(registry.tools.isRootOnly('search')).toBe(false);
+    expect(registry.tools.isRootOnly('沒註冊過的')).toBe(false);
+  });
+
+  /**
+   * 物件形式（#324）也是 root-only。三處判斷（矛盾檢查、記進表、`isRootOnly`）只要有一處還在比 `=== true`，
+   * 這一條或下面那條配 scope 的就紅——不紅的話問答那顆會原件照進子代理，照樣停下來等人。
+   */
+  it('rootOnly 給物件也是 root-only，拒絕句與碼問得出來；只給 true 的問不到', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const refusal = {
+      message: '問不到人。',
+      error: { name: 'UserQuestionError', code: 'DELEGATED_CALLER' },
+    };
+    registry.tools.register(fakeTool('ask'), { rootOnly: refusal });
+    registry.tools.register(fakeTool('goal'), { rootOnly: true });
+    leave();
+    expect(registry.tools.isRootOnly('ask')).toBe(true);
+    expect(registry.tools.rootOnlyRefusalOf('ask')).toBe(refusal);
+    expect(registry.tools.rootOnlyRefusalOf('goal')).toBeUndefined();
+    expect(registry.tools.rootOnlyRefusalOf('沒註冊過的')).toBeUndefined();
+  });
+
+  it('outputSchema 記在那一顆實例身上，撤銷就跟著沒了（#252）', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const schema = z.object({ total: z.number() });
+    const report = fakeTool('report');
+    const undo = registry.tools.register(report, { outputSchema: schema });
+    leave();
+    expect(registry.tools.outputSchemaOf(report)).toBe(schema);
+    // 以實例查：同名的另一顆不算，沒註冊過的東西也不算。
+    expect(registry.tools.outputSchemaOf(fakeTool('report'))).toBeUndefined();
+    expect(registry.tools.outputSchemaOf(undefined)).toBeUndefined();
+    undo();
+    expect(registry.tools.outputSchemaOf(report)).toBeUndefined();
+  });
+
+  it('rootOnly 配 scope 當場報錯，訊息指名那個 subagent 與工具', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    // 往 subagent 身上掛一個「不給 subagent」的工具是矛盾的，不靜默忽略。
+    expect(() =>
+      registry.tools.register(fakeTool('goal'), { scope: 'researcher', rootOnly: true }),
+    ).toThrow(/"goal"[\s\S]*"researcher"/);
+    // 物件形式同一條。
+    expect(() =>
+      registry.tools.register(fakeTool('ask'), {
+        scope: 'researcher',
+        rootOnly: { message: '問不到人。' },
+      }),
+    ).toThrow(/"ask"[\s\S]*"researcher"/);
+    leave();
+  });
+
+  /**
+   * 旗標以工具實例為鍵，不是以名字為鍵。以名字為鍵的話這一條會紅：撤銷過的
+   * root-only 註冊會把旗標留在名字上，蓋到後來占用同名的那一顆身上。
+   */
+  it('撤銷過的 rootOnly 註冊不會把旗標留給後來的同名工具', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.tools.register(fakeTool('goal'), { rootOnly: true });
+    undo();
+    registry.tools.register(fakeTool('goal'));
+    leave();
+    expect(registry.tools.isRootOnly('goal')).toBe(false);
+  });
+
+  /** 相容層的插件也能登記 `@nexus/tools` 的 `NexusTool`（#2353）：註冊當下經組裝點交的轉接器轉，表裡放轉出來的那一顆。 */
+  describe('NexusTool', () => {
+    const nexusTool = {
+      name: 'probe',
+      description: 'd',
+      parameters: { type: 'object', properties: {} },
+      execute: () => Promise.resolve({ ok: true as const, content: '' }),
+    };
+
+    it('經 adaptTool 轉：表裡是轉出來的實例，選項與撤銷都認它', () => {
+      const converted = fakeTool('probe');
+      const seen: unknown[] = [];
+      const registry = createRegistry({
+        adaptTool: (tool) => {
+          seen.push(tool);
+          return converted;
+        },
+      });
+      const leave = registry.enter(first);
+      const schema = z.object({ total: z.number() });
+      const undo = registry.tools.register(nexusTool, { rootOnly: true, outputSchema: schema });
+      leave();
+      expect(seen).toEqual([nexusTool]);
+      expect(registry.tools.resolve('probe')?.value).toBe(converted);
+      expect(registry.tools.isRootOnly('probe')).toBe(true);
+      expect(registry.tools.outputSchemaOf(converted)).toBe(schema);
+      undo();
+      expect(registry.tools.resolve('probe')).toBeUndefined();
+      expect(registry.tools.outputSchemaOf(converted)).toBeUndefined();
+    });
+
+    it('LangChain 的工具不經 adaptTool', () => {
+      const registry = createRegistry({
+        adaptTool: () => {
+          throw new Error('不該被叫到');
+        },
+      });
+      const leave = registry.enter(first);
+      const plain = fakeTool('search');
+      registry.tools.register(plain);
+      leave();
+      expect(registry.tools.resolve('search')?.value).toBe(plain);
+    });
+
+    it('組裝點沒交 adaptTool：當場拋，指名插件與工具', () => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      expect(() => registry.tools.register(nexusTool)).toThrow(
+        /alpha[\s\S]*"probe"[\s\S]*adaptTool/,
+      );
+      leave();
+      expect(registry.tools.resolve('probe')).toBeUndefined();
+    });
+  });
+});
+
+describe('subagents 註冊點', () => {
+  it('同名報錯，訊息指名兩個 plugin', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.subagents.register(fakeSubAgent('researcher'));
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.subagents.register(fakeSubAgent('researcher'))).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    leaveSecond();
+  });
+
+  it('不同名字各自登記', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.subagents.register(fakeSubAgent('researcher'));
+    registry.subagents.register(fakeSubAgent('writer'));
+    leave();
+    expect([...registry.subagents.entries()].map(([name]) => name)).toEqual([
+      'researcher',
+      'writer',
+    ]);
+  });
+
+  /**
+   * **fork 語意有兩道門，兩道都只由型別擋。**
+   *
+   * 基座的 `createDeepAgent({ subagents })` 收三種形狀：`SubAgent`（`mode?: 'handoff'`）、
+   * `ForkedSubAgent`（`mode: 'fork'`，繼承父代理的完整訊息歷史與系統提示詞）、以及帶
+   * `runnable` 的 `CompiledSubAgent`（`mode?: 'handoff' | 'fork'`）。我們的註冊點收的是
+   * `SubAgent`，而 `SubAgent.mode` 被窄成 `'handoff'` 這個字面量——所以後兩種在型別上
+   * 就進不來，`foldSubAgents` 交出去的永遠是 `SubAgent[]`。
+   *
+   * **擋的是 `tsc`，不是執行期。** 基座的 `isForkedSubAgent()` 認的是**存在的標記**
+   * （`mode === 'fork'`，不是「沒有 `systemPrompt`」），而我們這側沒有任何執行期檢查在看
+   * 那個欄位——把下面兩個 `@ts-expect-error` 拿掉，`register()` 照樣會成功。所以這條絆索的
+   * 全部載重在型別上。
+   *
+   * **它釘的是欄位，不是介面名**：`ForkedSubAgent` 這個名字今天進不來，明天也不會有人
+   * 硬寫它；真正會發生的是 `SubAgent.mode` 在某次升版後被加寬回 `'handoff' | 'fork'`，
+   * 那時這兩行會因為「沒有錯誤可期待」而紅。第三個斷言是配對的正面測試，擋的是相反的
+   * 那種漂移（欄位整個消失、或窄過頭到連 `handoff` 都寫不了）。
+   */
+  it('fork 與 compiled 兩種形狀在型別上進不來，handoff 進得來', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+
+    // @ts-expect-error `mode: 'fork'` 不是 `SubAgent`：那是 `ForkedSubAgent` 的必填標記。
+    registry.subagents.register({ name: 'forked', description: '繼承父代理的對話', mode: 'fork' });
+
+    // @ts-expect-error 帶 `runnable` 的是 `CompiledSubAgent`，它自己的 `mode` 收得下 'fork'。
+    registry.subagents.register({ name: 'compiled', description: '已編譯', runnable: {} });
+
+    expect(() =>
+      registry.subagents.register({ name: 'handoff', description: '隔離的', mode: 'handoff' }),
+    ).not.toThrow();
+
+    leave();
+  });
+});
+
+describe('subagents 註冊點：#328 第 3 項的定義欄位', () => {
+  it('maxTurns 只收正整數；不合當場拋，指名註冊者與子代理', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.subagents.register({ ...fakeSubAgent('ok'), maxTurns: 3 });
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() =>
+        registry.subagents.register({ ...fakeSubAgent(`bad${bad}`), maxTurns: bad }),
+      ).toThrow(/alpha#0 \(alpha\).*"bad.*maxTurns/);
+    }
+    leave();
+    expect(registry.subagents.get('ok')?.value.maxTurns).toBe(3);
+  });
+
+  it('validateSubagent 拋的錯被接住、補上註冊者與名字再拋；沒拋就照常登記', () => {
+    const seen: string[] = [];
+    const registry = createRegistry({
+      validateSubagent: (subagent) => {
+        seen.push(subagent.name);
+        if (subagent.model === 'nope') throw new Error('model 不在型錄');
+      },
+    });
+    const leave = registry.enter(first);
+    registry.subagents.register({ ...fakeSubAgent('fine'), model: 'known' });
+    expect(() => registry.subagents.register({ ...fakeSubAgent('broken'), model: 'nope' })).toThrow(
+      /alpha#0 \(alpha\).*"broken".*model 不在型錄/,
+    );
+    leave();
+    expect(seen).toEqual(['fine', 'broken']);
+    expect([...registry.subagents.entries()].map(([name]) => name)).toEqual(['fine']);
+  });
+
+  it('沒給 validateSubagent：不驗 model／強度（core 不認得型錄）', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    expect(() =>
+      registry.subagents.register({
+        ...fakeSubAgent('x'),
+        model: 'anything',
+        reasoningEffort: 'off',
+      }),
+    ).not.toThrow();
+    leave();
+  });
+});
+
+describe('capabilities 註冊點', () => {
+  it('同一能力被兩個 plugin 提供不報錯，對照表兩邊都在', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.capabilities.provide('filesystem');
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.capabilities.provide('filesystem')).not.toThrow();
+    leaveSecond();
+
+    expect(registry.capabilities.providers('filesystem')).toEqual([first, second]);
+  });
+});
+
+describe('註冊者身分', () => {
+  it('不在任何 plugin 的 apply 裡就註冊，當場報錯', () => {
+    const registry = createRegistry();
+    expect(() => registry.tools.register(fakeTool('search'))).toThrow('apply');
+    expect(() => registry.subagents.register(fakeSubAgent('r'))).toThrow('apply');
+    expect(() => registry.capabilities.provide('fs')).toThrow('apply');
+  });
+
+  it('apply 不巢狀執行', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    expect(() => registry.enter(second)).toThrow('alpha#0 (alpha)');
+    leave();
+    expect(() => registry.enter(second)).not.toThrow();
+  });
+});
+
+describe('其餘六個註冊點', () => {
+  it('backend 同 routePrefix 報錯，跨前綴不報錯', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.backend.mount('/memories/', fakeBackend('store'));
+    expect(() => registry.backend.mount('/workspace/', fakeBackend('disk'))).not.toThrow();
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.backend.mount('/memories/', fakeBackend('other'))).toThrow(
+      '"/memories/"',
+    );
+    leaveSecond();
+    expect(registry.backend.mounts().map(([prefix]) => prefix)).toEqual([
+      '/memories/',
+      '/workspace/',
+    ]);
+  });
+
+  it('middleware 記得註冊順序與 prepend 旗標', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.middleware.use(fakeMiddleware('a'));
+    registry.middleware.use(fakeMiddleware('b'), { prepend: true });
+    leave();
+    expect(registry.middleware.list().map((entry) => entry.value.prepend)).toEqual([false, true]);
+  });
+
+  it('middleware 記得 last 旗標；prepend 與 last 同時給當場拋', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.middleware.use(fakeMiddleware('a'), { last: true });
+    registry.middleware.use(fakeMiddleware('b'));
+    expect(() =>
+      registry.middleware.use(fakeMiddleware('c'), { prepend: true, last: true }),
+    ).toThrow(/`prepend` 與 `last` 不能同時給/u);
+    leave();
+    expect(registry.middleware.list().map((entry) => entry.value.last)).toEqual([true, false]);
+  });
+
+  it('permissions 是純累加的 deny 清單，同樣的規則兩次也是兩筆', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.permissions.deny(['/.env*']);
+    registry.permissions.deny(['/.env*']);
+    leave();
+    expect(registry.permissions.rules()).toHaveLength(2);
+  });
+
+  it('permissions 收下的路徑是複本，呼叫端事後改陣列動不到註冊表', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const paths = ['/.env*'];
+    registry.permissions.deny(paths);
+    paths.push('/injected');
+    leave();
+    expect(registry.permissions.rules()[0]?.value.paths).toEqual(['/.env*']);
+  });
+
+  it('approvals 多方掛 listener 不報錯，依註冊順序留著', () => {
+    // 匿名表沒有「同名」這回事，兩位都留著——waterfall 的順序就是註冊順序。
+    const registry = createRegistry();
+    const first_ = (): { kind: 'allow' } => ({ kind: 'allow' });
+    const second_ = (): { kind: 'allow' } => ({ kind: 'allow' });
+
+    const leaveFirst = registry.enter(first);
+    registry.approvals.gate(first_);
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.approvals.gate(second_)).not.toThrow();
+    leaveSecond();
+
+    expect(registry.approvals.listeners().map((entry) => entry.value)).toEqual([first_, second_]);
+  });
+
+  it('skills 同一來源路徑重複註冊報錯，結尾斜線不算另一個目錄', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.skills.addSource('/skills/user/');
+    // 訊息裡是正規化後的目錄（沒有結尾斜線）——重複檢查的 key 就是那一串。
+    expect(() => registry.skills.addSource('/skills/user/')).toThrow('"/skills/user"');
+    // 少了結尾斜線的同一個目錄照樣撞——這是 `assertLoadableSkillsPath` 同時接受兩種
+    // 寫法之後才有的路徑，不擋的話「同一個目錄載兩次」就從這個縫溜過去了。
+    expect(() => registry.skills.addSource('/skills/user')).toThrow('"/skills/user"');
+    expect(() => registry.skills.addSource('/skills/project/')).not.toThrow();
+    leave();
+    // 交出去的是 plugin 真正寫下的那一串，不是 key。
+    expect(registry.skills.sources()).toEqual(['/skills/user/', '/skills/project/']);
+  });
+
+  it('memory 純累加，同一路徑兩次不報錯', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.memory.addSource('/AGENTS.md');
+    expect(() => registry.memory.addSource('/AGENTS.md')).not.toThrow();
+    leave();
+    expect(registry.memory.sources()).toEqual(['/AGENTS.md', '/AGENTS.md']);
+  });
+
+  /**
+   * 路徑格式是 `memory` 註冊點唯一會擋的東西，而它擋的理由跟別處不同：**基座那一側
+   * 完全沒有檢查**。`createMemoryMiddleware` 讀不到就 `console.debug` 然後繼續，
+   * prompt 裡只會變成 `(No memory loaded)`——所以這三種寫法不擋在這裡，就永遠不會有
+   * 任何東西紅。細節見 `assertLoadableMemoryPath`。
+   */
+  describe('memory 來源的路徑格式', () => {
+    const register = (path: string): void => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      try {
+        registry.memory.addSource(path);
+      } finally {
+        leave();
+      }
+    };
+
+    // `~` 是最值得擋的那個：基座 JSDoc 的例子就長這樣，而那是已 deprecated 的
+    // `createAgentMemoryMiddleware` 留下的——現在這條路上沒有任何一處展開它。
+    it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
+      expect(() => register('~/.deepagents/AGENTS.md')).toThrow('"~"');
+      expect(() => register('~/.deepagents/AGENTS.md')).toThrow('alpha#0 (alpha)');
+    });
+
+    it('相對路徑被擋', () => {
+      expect(() => register('./AGENTS.md')).toThrow('絕對路徑');
+      expect(() => register('AGENTS.md')).toThrow('絕對路徑');
+    });
+
+    // 這三種是照 dsh 的 `RESERVED_PATH_SEGMENTS`（`'' / '.' / '..'`）對齊的，差別只在
+    // 它靜默濾掉、我們拋錯——理由見 `assertLoadableMemoryPath` 的偏離標註。
+    it('".." / "." / 空路段都被擋', () => {
+      expect(() => register('/專案/../etc/AGENTS.md')).toThrow('".."');
+      expect(() => register('/專案/./AGENTS.md')).toThrow('"."');
+      expect(() => register('/專案//AGENTS.md')).toThrow('空路段');
+      expect(() => register('/專案/')).toThrow('空路段');
+    });
+
+    // 擋得住是一半。少了這一條，一個什麼都拒絕的檢查也會讓上面每一條通過。
+    it('絕對路徑照樣進得去，含非 ASCII 與看起來像 ".." 的檔名', () => {
+      expect(() => register('/AGENTS.md')).not.toThrow();
+      expect(() => register('/專案/記憶/AGENTS.md')).not.toThrow();
+      expect(() => register('/notes/..hidden.md')).not.toThrow();
+    });
+  });
+
+  describe('skill 來源的路徑格式', () => {
+    const register = (path: string): void => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      try {
+        registry.skills.addSource(path);
+      } finally {
+        leave();
+      }
+    };
+
+    it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
+      expect(() => register('~/.skills/')).toThrow('"~"');
+      expect(() => register('~/.skills/')).toThrow('alpha#0 (alpha)');
+    });
+
+    it('相對路徑被擋', () => {
+      expect(() => register('./skills/')).toThrow('絕對路徑');
+      expect(() => register('skills/')).toThrow('絕對路徑');
+    });
+
+    it('".." / "." / 連續斜線都被擋', () => {
+      expect(() => register('/專案/../etc/skills/')).toThrow('".."');
+      expect(() => register('/專案/./skills/')).toThrow('"."');
+      expect(() => register('/專案//skills/')).toThrow('空路段');
+    });
+
+    // 基座支援 Windows 分隔（`sourcePath.includes('\\')` 決定 pathSep），我們刻意收窄。
+    // 理由見 `assertLoadableSkillsPath`：backend 命名空間不是宿主檔案系統。
+    it('反斜線被擋，即使整條看起來是合法的 Windows 路徑', () => {
+      expect(() => register('/skills\\user\\')).toThrow('"\\"');
+    });
+
+    // 這一條是 skill 與 memory 唯一分岔的地方，錯了就會被上面那些「都擋掉」的斷言蓋過去。
+    it('結尾斜線是合法的——skill 來源是目錄，不是檔', () => {
+      expect(() => register('/skills/')).not.toThrow();
+      expect(() => register('/skills')).not.toThrow();
+    });
+
+    // 接受兩種寫法就得讓重複檢查知道它們是同一個目錄，否則上面那條剛好開了個縫：
+    // 兩個 plugin 各寫一種，兩筆都進去，而基座載兩次只會讓同名 skill 自己覆蓋自己。
+    it('兩種寫法是同一個目錄，第二個撞得到第一個', () => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      registry.skills.addSource('/skills/');
+      expect(() => registry.skills.addSource('/skills')).toThrow('已經註冊過了');
+      leave();
+    });
+
+    // 擋得住是一半。少了這一條，一個什麼都拒絕的檢查也會讓上面每一條通過。
+    it('絕對目錄路徑照樣進得去，含非 ASCII 與看起來像 ".." 的目錄名', () => {
+      expect(() => register('/專案/技能/')).not.toThrow();
+      expect(() => register('/skills/..hidden/')).not.toThrow();
+    });
+  });
+
+  it('六個註冊點在 apply 之外呼叫都當場報錯', () => {
+    const registry = createRegistry();
+    expect(() => registry.backend.mount('/m/', fakeBackend('b'))).toThrow('apply');
+    expect(() => registry.middleware.use(fakeMiddleware('m'))).toThrow('apply');
+    expect(() => registry.permissions.deny(['/x'])).toThrow('apply');
+    expect(() => registry.approvals.gate(() => ({ kind: 'allow' }))).toThrow('apply');
+    expect(() => registry.skills.addSource('/skills/')).toThrow('apply');
+    expect(() => registry.memory.addSource('/AGENTS.md')).toThrow('apply');
+    expect(() => registry.lifecycle.onDispose(() => {})).toThrow('apply');
+  });
+});
+
+describe('prompt 註冊點（#2414）', () => {
+  const section = { name: 'x:policy', order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY, text: '字' };
+
+  it('收插件接得上的兩格的值；撤銷就拿掉', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.prompt.section(section);
+    registry.prompt.section({
+      ...section,
+      name: 'x:plan',
+      order: MIDDLE_SECTION_ORDERS.PLAN_POLICY,
+    });
+    leave();
+    expect(registry.prompt.sections().map((each) => each.name)).toEqual(['x:policy', 'x:plan']);
+    undo();
+    expect(registry.prompt.sections().map((each) => each.name)).toEqual(['x:plan']);
+  });
+
+  it.each([
+    ['頭', 0],
+    ['組裝點自己的先讀後改', MIDDLE_SECTION_ORDERS.FS_OBSERVATION],
+    ['組裝點自己的委派聲明', MIDDLE_SECTION_ORDERS.SUBAGENT_DELEGATION],
+    ['組裝點自己的核准政策句', MIDDLE_SECTION_ORDERS.APPROVAL_POLICY],
+  ])('%s那一格的值不收：沒有東西會渲染它，收了就是靜靜丟掉', (_label, order) => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    expect(() => registry.prompt.section({ ...section, order })).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*不是插件接得上的值/u,
+    );
+    leave();
+  });
+
+  it('同名的段報錯，訊息指名登記者', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.prompt.section(section);
+    leaveFirst();
+    const leave = registry.enter(second);
+    expect(() => registry.prompt.section(section)).toThrow(/mcp#0 \(mcp\)[\s\S]*已經登記過/u);
+    leave();
+  });
+});
+
+describe('lifecycle 通道', () => {
+  it('依登記順序留著，undo 撤掉的是登記本身、不是跑那個清理', () => {
+    const registry = createRegistry();
+    const ran: string[] = [];
+    const leave = registry.enter(first);
+    registry.lifecycle.onDispose(() => void ran.push('first'));
+    const undoSecond = registry.lifecycle.onDispose(() => void ran.push('second'));
+    leave();
+
+    undoSecond();
+    expect(ran).toEqual([]);
+    expect(registry.lifecycle.disposers().map((entry) => entry.origin.name)).toEqual(['alpha']);
+  });
+
+  it('takeDisposers 取走就清空，第二次拿到空的', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.lifecycle.onDispose(() => {});
+    leave();
+
+    expect(registry.lifecycle.takeDisposers()).toHaveLength(1);
+    expect(registry.lifecycle.takeDisposers()).toEqual([]);
+    expect(registry.lifecycle.disposers()).toEqual([]);
+  });
+});
+
+describe('tools.own', () => {
+  it('只回那一層自己註冊的，不含全域打底', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.tools.register(fakeTool('search'));
+    registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
+    leave();
+    expect([...registry.tools.own('researcher').keys()]).toEqual(['grep']);
+    expect([...registry.tools.effective('researcher').keys()]).toEqual(['search', 'grep']);
+    expect(registry.tools.own('writer').size).toBe(0);
+  });
+});
+
+describe('telemetry 註冊點', () => {
+  it('脫敏規則依註冊順序排，每一條記得是誰掛的', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.telemetry.redact((record) => record);
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    registry.telemetry.redact((record) => record);
+    leaveSecond();
+
+    expect(registry.telemetry.rules().map((entry) => entry.origin.name)).toEqual(['alpha', 'mcp']);
+  });
+
+  it('撤銷是逐條的，撤掉一條不影響另一條', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.telemetry.redact((record) => record);
+    registry.telemetry.redact((record) => record);
+    leave();
+
+    undo();
+    undo();
+    expect(registry.telemetry.rules()).toHaveLength(1);
+  });
+
+  it('redact() 只能在 apply 裡呼叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.telemetry.redact((record) => record)).toThrow(
+      'telemetry.redact()只能在 plugin 的 apply 裡呼叫',
+    );
+  });
+});
+
+/**
+ * 這一組是**翻面的絆索**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）。
+ *
+ * 遙測後端與回饋規則本來各有一個「一個 registry 只收一個」的註冊點，上面那些斷言原本釘著
+ * `telemetry.use()` / `feedback.use()`。搬到 `services` 之後**那幾條保證一條都不能少**，
+ * 只是換了載體——所以舊斷言不是刪掉，是照新機制重寫一次。
+ *
+ * **訊息換人了，這是唯一真的變的東西。** 原本是領域句（「兩個後端就是兩份出境資料」），
+ * 現在是 `services` 的通用句。照標準接受：cordis 自己就是通用的
+ * （`harness/vendor/cordis/src/reflect.ts:290` 的 `service "<name>" has been registered at <fiber>`）。
+ * 領域說明搬進各自 plugin 的文件。
+ */
+describe('遙測與回饋走 services', () => {
+  it('遙測後端仍然是單一佔位，訊息同時指名兩個 plugin', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink())).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    leaveSecond();
+  });
+
+  it('回饋規則仍然是單一佔位', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.services.provide(MESSAGE_FEEDBACK_SERVICE, fakeFeedback());
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide(MESSAGE_FEEDBACK_SERVICE, fakeFeedback())).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    leaveSecond();
+  });
+
+  it('撤掉之後那個位子是真的空的，別人提供得上', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    const undo = registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
+    leaveFirst();
+
+    undo();
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)).toBeUndefined();
+
+    const leaveSecond = registry.enter(second);
+    registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
+    leaveSecond();
+    expect(registry.services.provider(SESSION_TELEMETRY_SERVICE)?.name).toBe('mcp');
+  });
+
+  it('沒人提供時是 undefined——披露那一層要靠它回答', () => {
+    const registry = createRegistry();
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)).toBeUndefined();
+    expect(registry.services.get(MESSAGE_FEEDBACK_SERVICE)).toBeUndefined();
+  });
+
+  it('provide() 只能在 apply 裡呼叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink())).toThrow(
+      'services.provide()只能在 plugin 的 apply 裡呼叫',
+    );
+  });
+});
+
+describe('services 註冊點', () => {
+  it('提供之後取得的是同一個物件', () => {
+    const registry = createRegistry();
+    const collaborator = { kind: 'channel' };
+    const leave = registry.enter(first);
+    registry.services.provide('anything', collaborator);
+    leave();
+
+    expect(registry.services.get('anything')).toBe(collaborator);
+    expect(registry.services.use('anything')).toBe(collaborator);
+    expect(registry.services.provider('anything')).toEqual(first);
+    expect(registry.services.names()).toEqual(['anything']);
+  });
+
+  it('沒人提供時 get 回 undefined，不拋', () => {
+    const registry = createRegistry();
+    expect(registry.services.get('anything')).toBeUndefined();
+    expect(registry.services.provider('anything')).toBeUndefined();
+  });
+
+  /**
+   * **單一佔位，重名拋錯**，照 cordis 的 `reflect.provide`
+   * （`service "<name>" has been registered at <fiber>`）。這與 `capabilities.provide`
+   * 的冪等多提供者正好相反，而那個對比正是兩個點沒有合成一個的理由。
+   */
+  it('重名拋錯，訊息同時指名兩個提供者與服務名', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.services.provide('anything', {});
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide('anything', {})).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    expect(() => registry.services.provide('anything', {})).toThrow('"anything"');
+    leaveSecond();
+  });
+
+  it('撤銷之後位子是真的空出來，別人提供得上去', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    const undo = registry.services.provide('anything', { who: 'alpha' });
+    leaveFirst();
+    undo();
+    undo();
+
+    expect(registry.services.get('anything')).toBeUndefined();
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide('anything', { who: 'mcp' })).not.toThrow();
+    leaveSecond();
+    expect(registry.services.provider('anything')).toEqual(second);
+  });
+
+  it('provide 只能在 apply 裡叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.provide('anything', {})).toThrow('services.provide()');
+  });
+
+  /**
+   * **缺件的兩句話不一樣**，見 `missingServiceError`：在 `apply` 裡缺件時要指名是誰要的
+   * （#459 驗收「錯誤訊息要指名缺哪一個、是誰要的」），在載入之外缺件時沒有誰可以指。
+   */
+  it('use 在 apply 裡缺件 → 訊息指名服務與要它的 plugin', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(second);
+    expect(() => registry.services.use('anything')).toThrow('mcp#0 (mcp)');
+    expect(() => registry.services.use('anything')).toThrow('"anything"');
+    leave();
+  });
+
+  it('use 在 apply 之外缺件 → 只說沒有人提供，不留一個空的「誰要的」', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.use('anything')).toThrow('沒有人提供服務 "anything"');
+  });
+
+  it('缺件訊息列出目前有的服務，沒有時明說一個都沒有', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.use('anything')).toThrow('這個組裝一個服務都沒有');
+
+    const leave = registry.enter(first);
+    registry.services.provide('channel', {});
+    leave();
+    expect(() => registry.services.use('anything')).toThrow('channel');
+  });
+});

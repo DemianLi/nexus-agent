@@ -1,0 +1,802 @@
+/**
+ * 憑證服務與受管檔（[#730](https://github.com/DemianLi/nexus-agent/issues/730) 的 B 段）。
+ *
+ * 全部用暫存資料夾與自己的 `target`／快照，**不碰 `process.env`、不碰真的 home**。
+ */
+
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  ambientCredentials,
+  describeKeySource,
+  CREDENTIALS_FILE,
+  createCredentialService,
+  parseCredentialsDocument,
+} from './credentials.js';
+import { loadLaunchEnv } from './launch-env.js';
+
+const KEY = 'NVIDIA_API_KEY';
+/** 測試用的假秘密：訊息與日誌裡出現它就是洩漏。 */
+const SECRET = 'nvapi-secret-value-that-must-not-leak';
+
+let root: string;
+let cwd: string;
+let home: string;
+let file: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'credentials-'));
+  cwd = join(root, 'project');
+  home = join(root, 'home');
+  file = join(home, CREDENTIALS_FILE);
+  mkdirSync(cwd);
+  mkdirSync(home);
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+function managed(text: string, mode = 0o600): void {
+  writeFileSync(file, text, { mode });
+  chmodSync(file, mode);
+}
+
+function dotenv(dir: string, text: string): void {
+  writeFileSync(join(dir, '.env'), text);
+}
+
+function service(
+  inherited: NodeJS.ProcessEnv = {},
+  warn: (line: string) => void = () => undefined,
+  store = true,
+) {
+  // 用自己的 target 當「啟動環境」，載入完再交給服務。
+  const target = { ...inherited };
+  const launchEnv = loadLaunchEnv({ cwd, home, target, warn: () => undefined });
+  return { credentials: createCredentialService({ home, launchEnv, store, warn }), target };
+}
+
+describe('parseCredentialsDocument', () => {
+  it('version 與 refs', () => {
+    const { refs, ignoredKeys } = parseCredentialsDocument(
+      file,
+      `version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`,
+    );
+    expect(refs.get(KEY)).toBe(SECRET);
+    expect(ignoredKeys).toEqual([]);
+  });
+
+  it('空檔與只有 version 都是「沒有憑證」', () => {
+    expect(parseCredentialsDocument(file, '').refs.size).toBe(0);
+    expect(parseCredentialsDocument(file, '  \n').refs.size).toBe(0);
+    expect(parseCredentialsDocument(file, 'version: 1\n').refs.size).toBe(0);
+    expect(parseCredentialsDocument(file, 'version: 1\nrefs:\n').refs.size).toBe(0);
+  });
+
+  /** 整份只有註解（`toJS()` 是 `null`）與空 mapping 都是空的倉庫，不要求 `version`（#1507）。 */
+  it.each([
+    ['只有註解', '# 只有註解\n'],
+    ['註解加空白行', '# 把唯一一把 key 註解掉了\n# NVIDIA_API_KEY: x\n\n   \n'],
+    ['文件標記加註解', '---\n# 只有註解\n'],
+    ['空 mapping', '{}\n'],
+  ])('%s：空的倉庫，不要求 version', (_label, text) => {
+    expect(parseCredentialsDocument(file, text)).toEqual({
+      refs: new Map(),
+      ignoredKeys: [],
+      ignoredLines: [],
+    });
+  });
+
+  it('version、refs 之外的頂層鍵不擋：鍵名交回、refs 照解、值不在結果裡以外的任何地方（#1507）', () => {
+    const parsed = parseCredentialsDocument(
+      file,
+      `version: 1\nnote: ${SECRET}\nrefs:\n  ${KEY}: ${SECRET}\nother:\n  - 1\n`,
+    );
+    expect(parsed.refs.get(KEY)).toBe(SECRET);
+    expect(parsed.ignoredKeys).toEqual(['note', 'other']);
+    // 外來的條目留在檔案裡、不解析出東西：它的值不在 refs 裡。
+    expect([...parsed.refs.keys()]).toEqual([KEY]);
+  });
+
+  it('只有 version 加外來的鍵：沒有憑證，鍵名交回', () => {
+    expect(parseCredentialsDocument(file, 'version: 1\ncomment: hi\n')).toEqual({
+      refs: new Map(),
+      ignoredKeys: ['comment'],
+      ignoredLines: [2],
+    });
+  });
+
+  /** nexus 沒有 `records` 這種憑證：放過它，使用者會以為存進去的東西有作用。 */
+  it('records 仍然拒絕，訊息講明 nexus 沒有這種憑證，不說成「不認得的頂層鍵」', () => {
+    const text = `version: 1\nrecords:\n  a/b:\n    type: api-key\n    key: ${SECRET}\nrefs:\n  ${KEY}: ${SECRET}\n`;
+    let message = '';
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('nexus 沒有 records 這種憑證');
+    expect(message).not.toContain('不認得的頂層鍵');
+    expect(message).not.toContain(SECRET);
+    expect(() => parseCredentialsDocument(file, 'version: 1\nrecords: {}\n')).toThrow('records');
+    expect(() => parseCredentialsDocument(file, 'version: 1\nrecords:\n')).toThrow('records');
+  });
+
+  /** 每一種拒絕都不能把值帶進訊息：YAML 解析器自己的訊息會引出錯那一行。 */
+  it.each([
+    ['根不是 mapping', `- ${SECRET}\n`],
+    ['records', `version: 1\nrecords: {}\nrefs:\n  ${KEY}: ${SECRET}\n`],
+    ['沒有 version、只有外來的鍵', `note: ${SECRET}\n`],
+    ['version 不對', `version: 2\nrefs:\n  ${KEY}: ${SECRET}\n`],
+    ['沒有 version', `refs:\n  ${KEY}: ${SECRET}\n`],
+    ['refs 不是 mapping', `version: 1\nrefs:\n  - ${SECRET}\n`],
+    ['鍵不是環境變數形狀', `version: 1\nrefs:\n  "bad key": ${SECRET}\n`],
+    ['值不是字串', `version: 1\nrefs:\n  ${KEY}: 12345\n  OTHER: ${SECRET}\n`],
+    ['值是空字串', `version: 1\nrefs:\n  ${KEY}: ""\n  OTHER: ${SECRET}\n`],
+    ['重複鍵', `version: 1\nrefs:\n  ${KEY}: ${SECRET}\n  ${KEY}: other\n`],
+    ['壞掉的 YAML', `version: 1\nrefs: {${KEY}: ${SECRET}\n`],
+  ])('%s：拒絕，訊息指名檔案、不含秘密', (_label, text) => {
+    let message = '';
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain(file);
+    expect(message).not.toContain(SECRET);
+  });
+});
+
+describe('鍵名不進訊息與日誌（#2667）', () => {
+  /** 形狀合法（環境變數形狀）、看起來像 key 的鍵名：誤貼在鍵名位置的秘密。 */
+  const PASTED = 'nvapiPastedIntoTheKeyPosition0123456789';
+
+  function rejection(text: string): string {
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    throw new Error('沒有拒絕');
+  }
+
+  it.each([
+    ['頂層', `version: 1\n? [${PASTED}]\n: v\nrefs:\n  A: v\n`],
+    ['refs 裡', `version: 1\nrefs:\n  ? [${PASTED}]\n  : v\n`],
+  ])('%s的集合鍵：yaml 自己的 process 警告不把鍵印出來', (_, text) => {
+    const emitted = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      try {
+        parseCredentialsDocument(file, text);
+      } catch {
+        // refs 裡那條會因 bad-name 拒絕；這裡只看 process 警告。
+      }
+      expect(emitted).not.toHaveBeenCalled();
+    } finally {
+      emitted.mockRestore();
+    }
+  });
+
+  it.each([
+    [
+      '沒寫值（not-string）',
+      `version: 1\nrefs:\n  ${PASTED}:\n`,
+      'refs 第 3 行第 3 欄那一把要是字串',
+    ],
+    [
+      '空字串（empty-string）',
+      `version: 1\nrefs:\n  ${PASTED}: ""\n`,
+      'refs 第 3 行第 3 欄那一把是空字串',
+    ],
+    [
+      '形狀不合（bad-name）',
+      `version: 1\nrefs:\n  nvapi-${PASTED}: v\n`,
+      `refs 第 3 行第 3 欄的鍵不是環境變數形狀的名字（長 ${String(`nvapi-${PASTED}`.length)} 個字元`,
+    ],
+  ])('%s：訊息只講位置，不含鍵名', (_, text, expected) => {
+    const message = rejection(text);
+    expect(message).toContain(expected);
+    expect(message).not.toContain(PASTED);
+  });
+
+  it('不認得的頂層鍵：警告只講個數與行號，不含鍵名', () => {
+    managed(`version: 1\n${PASTED}:\nrefs:\n  ${KEY}: v\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line)).credentials.check();
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('1 個不認得的頂層鍵（第 2 行）');
+    expect(warned[0]).not.toContain(PASTED);
+  });
+});
+
+describe('指令、明示 tag、錨點與別名整份拒絕（#2667）', () => {
+  it.each([
+    ['%YAML', `%YAML 1.2\n---\nversion: 1\nrefs:\n  A: ${SECRET}\n`, 'DIRECTIVE_NOT_ALLOWED', 1, 1],
+    [
+      '%YAML 1.1（會把 yes 換成 true）',
+      `%YAML 1.1\n---\nversion: 1\nrefs:\n  A: yes\n`,
+      'DIRECTIVE_NOT_ALLOWED',
+      1,
+      1,
+    ],
+    [
+      '%TAG',
+      `%TAG !e! tag:example.com,2000:\n---\nversion: 1\nrefs:\n  A: ${SECRET}\n`,
+      'DIRECTIVE_NOT_ALLOWED',
+      1,
+      1,
+    ],
+    ['不認得的指令', `%FOO bar\n---\nversion: 1\n`, 'DIRECTIVE_NOT_ALLOWED', 1, 1],
+    ['!!str', `version: 1\nrefs:\n  A: !!str ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    ['!!binary', `version: 1\nrefs:\n  A: !!binary aGVsbG8=\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    ['自訂 tag', `version: 1\nrefs:\n  A: !foo ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    ['非特定 tag `!`', `version: 1\nrefs:\n  A: ! ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    [
+      '逐字 tag',
+      `version: 1\nrefs:\n  A: !<tag:yaml.org,2002:str> ${SECRET}\n`,
+      'TAG_NOT_ALLOWED',
+      3,
+      6,
+    ],
+    ['鍵上的 tag', `version: 1\nrefs:\n  !!str A: ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 3],
+    ['mapping 上的 tag', `version: 1\nrefs: !!map\n  A: ${SECRET}\n`, 'TAG_NOT_ALLOWED', 2, 7],
+    ['flow 裡的 tag', `version: 1\nrefs: {A: !!str ${SECRET}}\n`, 'TAG_NOT_ALLOWED', 2, 11],
+    ['文件開頭的 tag', `--- !!map\nversion: 1\n`, 'TAG_NOT_ALLOWED', 1, 5],
+    [
+      '外來頂層鍵的值',
+      `version: 1\nnote: !!binary aGVsbG8=\nrefs:\n  A: ${SECRET}\n`,
+      'TAG_NOT_ALLOWED',
+      2,
+      7,
+    ],
+    [
+      '值上的錨點與別名',
+      `version: 1\nshared: &t ${SECRET}\nrefs:\n  A: *t\n`,
+      'ANCHOR_NOT_ALLOWED',
+      2,
+      9,
+    ],
+    ['refs 本身的錨點', `version: 1\nrefs: &r\n  A: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 2, 7],
+    ['鍵上的錨點', `version: 1\nrefs:\n  &k A: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 3, 3],
+    ['文件開頭的錨點', `&top\nversion: 1\nrefs:\n  A: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 1, 1],
+    ['以 : 結尾的錨點', `version: 1\nrefs:\n  A: &a: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 3, 6],
+    [
+      '沒有錨點的別名',
+      `version: 1\nrefs:\n  A: *${SECRET.replaceAll('-', '_')}\n`,
+      'ALIAS_NOT_ALLOWED',
+      3,
+      6,
+    ],
+    ['flow 裡的別名', `version: 1\nrefs: {A: *a}\n`, 'ALIAS_NOT_ALLOWED', 2, 11],
+    ['別名當鍵', `version: 1\n*a : x\n`, 'ALIAS_NOT_ALLOWED', 2, 1],
+  ])('%s：講成 YAML 錯誤與位置，不含值', (_, text, code, line, col) => {
+    let message = '';
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 ${code}（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+  });
+
+  it.each([
+    ['值裡的 !', 'version: 1\nrefs:\n  A: abc!!def\n', 'abc!!def'],
+    ['引號裡的 !!str', 'version: 1\nrefs:\n  A: "!!str x"\n', '!!str x'],
+    [
+      '區塊值裡的 ! 與 %',
+      'version: 1\nrefs:\n  A: |\n    !!str x\n    %YAML 1.2\n',
+      '!!str x\n%YAML 1.2\n',
+    ],
+    ['% 開頭的值', 'version: 1\nrefs:\n  A: "%YAML"\n', '%YAML'],
+    ['值裡的 & 與 *', 'version: 1\nrefs:\n  A: a&b*c\n', 'a&b*c'],
+    ['引號裡的 & 與 *', 'version: 1\nrefs:\n  A: "&a *b"\n', '&a *b'],
+    ['區塊值裡的 & 與 *', 'version: 1\nrefs:\n  A: |\n    &a\n    *b\n', '&a\n*b\n'],
+  ])('%s：不是 tag 也不是指令，照收', (_, text, value) => {
+    expect(parseCredentialsDocument(file, text).refs.get('A')).toBe(value);
+  });
+
+  it('有好幾個時指到最前面那一個', () => {
+    const text = `version: 1\nrefs:\n  A: !foo x\n  !!str B: !!binary aGVsbG8=\n`;
+    expect(() => parseCredentialsDocument(file, text)).toThrow('TAG_NOT_ALLOWED（第 3 行第 6 欄）');
+  });
+
+  it('註解裡的 !、%、& 與 *：照收', () => {
+    const text = '# %YAML 1.2 &a\nversion: 1 # !!str *a\nrefs:\n  A: v # !foo &b *b\n';
+    expect(parseCredentialsDocument(file, text).refs.get('A')).toBe('v');
+  });
+});
+
+describe('換成同一個名字的兩個鍵算重複鍵（#2667）', () => {
+  it.each([
+    ['布林與字串', 'version: 1\ntrue: 1\n"true": 2\n'],
+    ['整數與字串', 'version: 1\nrefs:\n  A: v\n1: a\n"1": b\n'],
+    ['refs 裡的布林與字串', `version: 1\nrefs:\n  true: ${SECRET}\n  "true": other\n`],
+  ])('%s：整份拒絕，講成 DUPLICATE_KEY 與第二個鍵的位置', (_, text) => {
+    expect(() => parseCredentialsDocument(file, text)).toThrow(
+      /YAML 錯誤 DUPLICATE_KEY（第 \d+ 行第 \d+ 欄）/u,
+    );
+  });
+});
+
+describe('ignoredKeys 照檔案順序（#2667）', () => {
+  it('像整數的鍵不排到最前面', () => {
+    const parsed = parseCredentialsDocument(
+      file,
+      'version: 1\nnote: FAKE-note\n2024: FAKE-year\nrefs:\n  A: FAKE-a\n',
+    );
+    expect(parsed.ignoredKeys).toEqual(['note', '2024']);
+    expect(parsed.ignoredLines).toEqual([2, 3]);
+  });
+});
+
+describe('解析順序（serve，掛受管檔）：受管檔 > 啟動環境 > 目前資料夾 .env > home .env', () => {
+  it('四層各放一把不同的值，逐一拿掉最上面那層，拿到的依序是下一層（#1540）', () => {
+    dotenv(home, `${KEY}=from-home-env\n`);
+    dotenv(cwd, `${KEY}=from-project-env\n`);
+    managed(`version: 1\nrefs:\n  ${KEY}: from-file\n`);
+
+    // 受管檔在，啟動環境同名也輸：管理者寫進受管檔的 key 一定生效。
+    expect(service({ [KEY]: 'from-process' }).credentials.resolve(KEY)).toEqual({
+      value: 'from-file',
+      source: 'file',
+      path: file,
+    });
+
+    rmSync(file);
+    expect(service({ [KEY]: 'from-process' }).credentials.resolve(KEY)).toEqual({
+      value: 'from-process',
+      source: 'env',
+    });
+    expect(service().credentials.resolve(KEY)).toEqual({
+      value: 'from-project-env',
+      source: 'project-env',
+      path: join(cwd, '.env'),
+    });
+
+    rmSync(join(cwd, '.env'));
+    expect(service().credentials.resolve(KEY)).toEqual({
+      value: 'from-home-env',
+      source: 'user-env',
+      path: join(home, '.env'),
+    });
+
+    rmSync(join(home, '.env'));
+    expect(service().credentials.resolve(KEY)).toBeUndefined();
+  });
+
+  it('受管檔裡沒有這一把（只有別的名字）：才輪到啟動環境', () => {
+    managed(`version: 1\nrefs:\n  OTHER_KEY: x\n`);
+    expect(service({ [KEY]: 'from-process' }).credentials.resolve(KEY)).toEqual({
+      value: 'from-process',
+      source: 'env',
+    });
+  });
+
+  /** 受管檔存在的意義：內容不進行程的環境變數。 */
+  it('受管檔的值不會被寫進 target', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    const { credentials, target } = service();
+
+    expect(credentials.resolve(KEY)?.value).toBe(SECRET);
+    expect(target[KEY]).toBeUndefined();
+    expect(JSON.stringify(target)).not.toContain(SECRET);
+  });
+
+  it('沒有受管檔：正常，只是沒有那一層', () => {
+    dotenv(home, `${KEY}=v\n`);
+    expect(() => service().credentials.check()).not.toThrow();
+    expect(service().credentials.resolve(KEY)?.source).toBe('user-env');
+  });
+});
+
+describe('一次性入口（CLI、eval、spike，不掛受管檔）：啟動環境 > 目前資料夾 .env > home .env（#1540）', () => {
+  const oneShot = (inherited: NodeJS.ProcessEnv = {}) =>
+    service(inherited, () => undefined, false).credentials;
+
+  it('受管檔放著不用：三層各放一把不同的值，逐一拿掉最上面那層', () => {
+    dotenv(home, `${KEY}=from-home-env\n`);
+    dotenv(cwd, `${KEY}=from-project-env\n`);
+    managed(`version: 1\nrefs:\n  ${KEY}: from-file\n`);
+
+    expect(oneShot({ [KEY]: 'from-process' }).resolve(KEY)).toEqual({
+      value: 'from-process',
+      source: 'env',
+    });
+    expect(oneShot().resolve(KEY)).toMatchObject({ value: 'from-project-env' });
+    rmSync(join(cwd, '.env'));
+    expect(oneShot().resolve(KEY)).toMatchObject({ value: 'from-home-env' });
+    rmSync(join(home, '.env'));
+    // 只有受管檔有 key：這個入口找不到它。
+    expect(oneShot().resolve(KEY)).toBeUndefined();
+  });
+
+  it('壞掉的受管檔（0644、壞 YAML）不擋：check 與 resolve 都不拋，也不讀它', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: [壞的\n`, 0o644);
+    dotenv(home, `${KEY}=from-home-env\n`);
+    const credentials = oneShot();
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)).toMatchObject({ value: 'from-home-env' });
+    expect(credentials.store).toBe(false);
+  });
+});
+
+describe('describeKeySource：啟動時講「來自哪一層」，不含值（#1540）', () => {
+  it('各層一句話；只有名字與來源', () => {
+    dotenv(home, `${KEY}=${SECRET}-home\n`);
+    dotenv(cwd, `${KEY}=${SECRET}-project\n`);
+    managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    const lines = [
+      describeKeySource(service().credentials, KEY),
+      describeKeySource(service({ [KEY]: SECRET }).credentials, KEY),
+    ];
+    expect(lines[0]).toBe(`${KEY}：來自受管檔 ${file}`);
+    expect(lines[1]).toBe(`${KEY}：來自受管檔 ${file}`);
+    rmSync(file);
+    expect(describeKeySource(service({ [KEY]: SECRET }).credentials, KEY)).toBe(
+      `${KEY}：來自啟動環境`,
+    );
+    expect(describeKeySource(service().credentials, KEY)).toBe(`${KEY}：來自${join(cwd, '.env')}`);
+    rmSync(join(cwd, '.env'));
+    expect(describeKeySource(service().credentials, KEY)).toBe(`${KEY}：來自${join(home, '.env')}`);
+    rmSync(join(home, '.env'));
+    expect(describeKeySource(service().credentials, KEY)).toBeUndefined();
+  });
+
+  it('一次性入口寫明「此入口不讀受管檔」；任何一行都不含值的前 6 個字元', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    dotenv(home, `${KEY}=${SECRET}-home\n`);
+    const line = describeKeySource(service({}, () => undefined, false).credentials, KEY);
+    expect(line).toBe(`${KEY}：來自${join(home, '.env')}（此入口不讀受管檔）`);
+    for (const text of [line, describeKeySource(service().credentials, KEY)]) {
+      expect(text).not.toContain(SECRET.slice(0, 6));
+    }
+  });
+});
+
+describe('權限', () => {
+  it('0644：check 拒絕，訊息帶路徑與 chmod 600；改成 0600 就過', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`, 0o644);
+    const { credentials } = service();
+
+    expect(() => credentials.check()).toThrow(file);
+    expect(() => credentials.check()).toThrow(`chmod 600 ${file}`);
+    expect(() => credentials.resolve(KEY)).toThrow('chmod 600');
+
+    chmodSync(file, 0o600);
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)?.value).toBe(SECRET);
+  });
+
+  it.each([0o640, 0o604, 0o660, 0o666])('%o 也拒絕（group 或 other 任何一位）', (mode) => {
+    managed(`version: 1\n`, mode);
+    expect(() => service().credentials.check()).toThrow('chmod 600');
+  });
+
+  it('啟動環境已經有值時仍然檢查（check 是完整檢查，不看這次解析會不會用到它）', () => {
+    managed(`version: 1\n`, 0o644);
+    expect(() => service({ [KEY]: 'x' }).credentials.check()).toThrow('chmod 600');
+  });
+});
+
+describe('重載：每次解析先 stat，變了才重讀', () => {
+  it('改了檔，下一次解析就是新的', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: first\n`);
+    const { credentials } = service();
+    expect(credentials.resolve(KEY)?.value).toBe('first');
+
+    managed(`version: 1\nrefs:\n  ${KEY}: second-longer\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('second-longer');
+  });
+
+  it('同樣大小、只改內容：靠修改時間', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: aaaa\n`);
+    const { credentials } = service();
+    expect(credentials.resolve(KEY)?.value).toBe('aaaa');
+
+    managed(`version: 1\nrefs:\n  ${KEY}: bbbb\n`);
+    const later = new Date(statSync(file).mtimeMs + 5000);
+    utimesSync(file, later, later);
+    expect(credentials.resolve(KEY)?.value).toBe('bbbb');
+  });
+
+  it('檔案被刪掉：那一層消失，往下掉到 .env', () => {
+    dotenv(home, `${KEY}=fallback-layer\n`);
+    managed(`version: 1\nrefs:\n  ${KEY}: from-file\n`);
+    const { credentials } = service();
+    expect(credentials.resolve(KEY)?.source).toBe('file');
+
+    rmSync(file);
+    expect(credentials.resolve(KEY)?.source).toBe('user-env');
+  });
+
+  it('執行期改壞：保留最後一份可用的，警告一次，不拖垮請求', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: good-value\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+
+    managed(`version: 1\nrefs:\n  ${KEY}: [壞的\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(file);
+
+    managed(`version: 1\nrefs:\n  ${KEY}: repaired\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('repaired');
+  });
+
+  it('執行期權限被放寬：一樣保留最後一份並警告', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: good-value\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    credentials.resolve(KEY);
+
+    chmodSync(file, 0o644);
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    expect(warned.join('')).toContain('chmod 600');
+  });
+
+  it('一開始就是壞的：第一次解析就拋（沒有「最後一份」可以保留）', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: [壞的\n`);
+    expect(() => service().credentials.resolve(KEY)).toThrow(resolve(file));
+  });
+});
+
+describe('別的工具多放的頂層鍵、只剩註解的檔（#1507）', () => {
+  it('多一個頂層鍵：解得出 key，warn 恰好一次，訊息只有個數與行號、不含鍵名與值；同一份檔再解析不再警告', () => {
+    managed(`version: 1\nnote: ${SECRET}-note\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)?.value).toBe(SECRET);
+    expect(credentials.resolve(KEY)?.value).toBe(SECRET);
+    expect(credentials.resolve('OTHER')).toBeUndefined();
+
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('1 個不認得的頂層鍵（第 2 行）');
+    expect(warned[0]).not.toContain('note');
+    expect(warned[0]).toContain(file);
+    expect(warned.join('')).not.toContain(SECRET);
+    // 不是「重載失敗」：那條路徑是壞檔才走的。
+    expect(warned[0]).not.toContain('重載失敗');
+  });
+
+  it('鍵名不進警告：鍵名裡的換行也就偽造不出第二行日誌', () => {
+    managed(`version: 1\n"a\\nFAKE: line": 1\nrefs:\n  ${KEY}: v\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line)).credentials.check();
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.match(/\n/gu)).toHaveLength(1);
+    expect(warned[0]).not.toContain('FAKE');
+  });
+
+  it('沒有外來的鍵就不警告', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: v\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line)).credentials.check();
+    expect(warned).toEqual([]);
+  });
+
+  it('整份只有註解：check 不拋、沒有憑證，往下掉到 .env', () => {
+    managed('# 把唯一一把 key 註解掉了，之後改用環境變數\n# NVIDIA_API_KEY: x\n');
+    dotenv(home, `${KEY}=from-home-env\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)).toMatchObject({ value: 'from-home-env', source: 'user-env' });
+    expect(warned).toEqual([]);
+  });
+
+  it('執行期重載：多了未知頂層鍵加新值，下一次解析拿到新值；講的是外來的鍵，不是「重載失敗」', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: first\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    expect(credentials.resolve(KEY)?.value).toBe('first');
+    expect(warned).toEqual([]);
+
+    managed(`version: 1\ncomment: hi\nrefs:\n  ${KEY}: second-longer\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('second-longer');
+    expect(credentials.resolve(KEY)?.value).toBe('second-longer');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('不認得的頂層鍵（第 2 行）');
+    expect(warned.join('')).not.toContain('重載失敗');
+  });
+
+  it('執行期被改成只剩註解：那一層消失（空的倉庫），不是壞檔', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: first\n`);
+    dotenv(home, `${KEY}=fallback-layer\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    expect(credentials.resolve(KEY)?.source).toBe('file');
+
+    managed('# 註解掉了\n');
+    expect(credentials.resolve(KEY)).toMatchObject({ source: 'user-env', value: 'fallback-layer' });
+    expect(warned).toEqual([]);
+  });
+
+  it('外來的鍵之後又改壞 refs：保留最後一份好的並警告重載失敗（refs 裡面照舊嚴）', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: good-value\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    credentials.resolve(KEY);
+
+    managed(`version: 1\ncomment: hi\nrefs:\n  ${KEY}: ""\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    expect(warned.join('')).toContain('重載失敗');
+  });
+
+  it('一次性入口（不掛受管檔）不讀它：外來的鍵不警告', () => {
+    managed(`version: 1\ncomment: hi\nrefs:\n  ${KEY}: from-file\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line), false).credentials.check();
+    expect(warned).toEqual([]);
+  });
+});
+
+describe('ambientCredentials（沒掛憑證服務時的退路）', () => {
+  it('每次解析都重讀給定的環境；空字串算沒有', () => {
+    const env: NodeJS.ProcessEnv = {};
+    const ambient = ambientCredentials(env);
+    expect(ambient.resolve(KEY)).toBeUndefined();
+    env[KEY] = 'k1';
+    expect(ambient.resolve(KEY)).toEqual({ value: 'k1', source: 'env' });
+    env[KEY] = '';
+    expect(ambient.resolve(KEY)).toBeUndefined();
+  });
+});
+
+describe('巢狀層數、解析前就拒的字元與集合鍵（#2570）', () => {
+  const nested = (levels: number): string =>
+    `version: 1\nrefs:\n  A: ${SECRET}\nnote: ${'['.repeat(levels - 1)}${']'.repeat(levels - 1)}\n`;
+
+  function rejection(text: string): string {
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return '';
+  }
+
+  it('根算第 1 層：64 層照收，65 層拒絕', () => {
+    expect(parseCredentialsDocument(file, nested(64)).refs.get('A')).toBe(SECRET);
+    expect(rejection(nested(65))).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）`,
+    );
+  });
+
+  it('深到 yaml 自己會用光資源的檔：講成 YAML 錯誤，不丟 RangeError、不含值', () => {
+    for (const levels of [2000, 20_000]) {
+      const message = rejection(`${'['.repeat(levels)}${SECRET}${']'.repeat(levels)}\n`);
+      expect(message).toMatch(/^受管憑證檔 .* 認不得：YAML 錯誤 [A-Z_]+/u);
+      expect(message).not.toContain(SECRET);
+    }
+  });
+
+  it.each([
+    ['值裡的 NUL', `version: 1\nrefs:\n  A: ${SECRET}\0\n`, 3, 6 + SECRET.length],
+    ['冒號後的 tab', `version: 1\nrefs:\n  A:\t${SECRET}\n`, 3, 5],
+    ['值裡的 tab', `version: 1\nrefs:\n  A: a\t${SECRET}\n`, 3, 7],
+    ['只用 CR 換行', `version: 1\rrefs:\r  A: ${SECRET}\r`, 1, 11],
+    ['不在開頭的 BOM', `version: 1\nrefs:\n  A: \uFEFF${SECRET}\n`, 3, 6],
+  ])('%s：講成 CHARACTER_NOT_ALLOWED 與位置，不含值', (_, text, line, col) => {
+    expect(rejection(text)).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 CHARACTER_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+  });
+
+  it.each([
+    ['開頭的 BOM', `\uFEFFversion: 1\nrefs:\n  A: ${SECRET}\n`],
+    ['CRLF 換行', `version: 1\r\nrefs:\r\n  A: ${SECRET}\r\n`],
+  ])('%s：照收', (_, text) => {
+    expect(parseCredentialsDocument(file, text).refs.get('A')).toBe(SECRET);
+  });
+
+  it('要放 tab 的值用雙引號寫成 \\t', () => {
+    expect(parseCredentialsDocument(file, 'version: 1\nrefs:\n  A: "a\\tb"\n').refs.get('A')).toBe(
+      'a\tb',
+    );
+  });
+
+  it.each([
+    ['頂層、不是第一個鍵的序列鍵', `version: 1\nrefs:\n  A: v\n[${SECRET}]: x\n`, 4, 1],
+    ['flow mapping 當鍵', `version: 1\n{${SECRET}: 1}: x\n`, 2, 1],
+    ['refs 裡的集合鍵', `version: 1\nrefs:\n  [${SECRET}]: x\n`, 3, 3],
+    ['refs 裡不是第一個鍵的 flow 序列', `version: 1\nrefs:\n  A: x\n  [${SECRET}]: 1\n`, 4, 3],
+    ['檔頭有 BOM：第 1 行的欄把 BOM 算進去', `\uFEFF[${SECRET}]: 1\n`, 1, 2],
+  ])('%s：講成 COLLECTION_KEY_NOT_ALLOWED 與位置，不含鍵', (_, text, line, col) => {
+    expect(rejection(text)).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+  });
+
+  it.each([
+    ['頂層的 ?', `version: 1\n? ${SECRET}\n: 1\n`, 'EXPLICIT_KEY_NOT_ALLOWED', 2, 1],
+    ['? 後面沒有東西', 'version: 1\n?\n: x\n', 'EXPLICIT_KEY_NOT_ALLOWED', 2, 1],
+    [
+      '? 的內容是集合：先講顯式鍵',
+      `version: 1\n? [${SECRET}]: 1\n`,
+      'EXPLICIT_KEY_NOT_ALLOWED',
+      2,
+      1,
+    ],
+    [
+      'refs 底下的 ?',
+      `version: 1\nrefs:\n  ? A\n  : ${SECRET}\n`,
+      'EXPLICIT_KEY_NOT_ALLOWED',
+      3,
+      3,
+    ],
+    ['flow mapping 裡的 ?', 'version: 1\nx: {a: 1, ? b : 2}\n', 'EXPLICIT_KEY_NOT_ALLOWED', 2, 11],
+    ['沒寫鍵的 :', `version: 1\nrefs:\n  A: ${SECRET}\n  : x\n`, 'EMPTY_KEY_NOT_ALLOWED', 4, 3],
+    ['雙引號的空字串', 'version: 1\n"": x\n', 'EMPTY_KEY_NOT_ALLOWED', 2, 1],
+    ['單引號的空字串', "version: 1\n'': x\n", 'EMPTY_KEY_NOT_ALLOWED', 2, 1],
+    ['flow mapping 裡沒寫鍵', 'version: 1\nx: { : y }\n', 'EMPTY_KEY_NOT_ALLOWED', 2, 6],
+    ['序列項目裡的空字串鍵', 'version: 1\nx:\n  - "": 1\n', 'EMPTY_KEY_NOT_ALLOWED', 3, 5],
+    ['兩個都有：最前面那一個', 'version: 1\n"": 1\n? a\n: 2\n', 'EMPTY_KEY_NOT_ALLOWED', 2, 1],
+    ['檔頭有 BOM：第 1 行的欄把 BOM 算進去', '\uFEFF: x\n', 'EMPTY_KEY_NOT_ALLOWED', 1, 2],
+  ])('%s：講成 %s 與位置，不含鍵', (_, text, code, line, col) => {
+    const message = rejection(text);
+    expect(message).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 ${code}（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+    expect(message).not.toContain(SECRET);
+  });
+
+  // 沒寫鍵的 `:` 後面同一行接區塊集合，`yaml` 自己就報語法錯（在顯式鍵與空鍵的檢查之前）；Rust 宿主讀不出語法錯，
+  // 走到空鍵那一步。共用樣本只釘 `reason`，兩邊的錯誤碼各自在這裡與 `host/tests/credentials.rs` 釘住。
+  it.each([
+    [
+      '接 mapping，放在結尾',
+      `version: 1\nrefs:\n  A: ${SECRET}\n: : x\n`,
+      'BLOCK_AS_IMPLICIT_KEY（第 4 行第 3 欄）',
+    ],
+    [
+      '接 mapping，放在開頭',
+      `: : x\nversion: 1\nrefs:\n  A: ${SECRET}\n`,
+      'BLOCK_AS_IMPLICIT_KEY（第 1 行第 3 欄）',
+    ],
+    ['接序列', 'version: 1\n: - x\n', 'UNEXPECTED_TOKEN（第 2 行第 3 欄）'],
+    [
+      'refs 底下接序列',
+      `version: 1\nrefs:\n  A: ${SECRET}\n  : - x\n`,
+      'UNEXPECTED_TOKEN（第 4 行第 5 欄）',
+    ],
+    [
+      '序列項目裡接 mapping',
+      'version: 1\nextra:\n  - : : x\n',
+      'BLOCK_AS_IMPLICIT_KEY（第 3 行第 7 欄）',
+    ],
+    ['顯式鍵的內容裡接序列', 'version: 1\n? : - x\n: 1\n', 'UNEXPECTED_TOKEN（第 2 行第 5 欄）'],
+    ['接顯式鍵', 'version: 1\n: ? x\n', 'BLOCK_AS_IMPLICIT_KEY（第 2 行第 3 欄）'],
+  ])('沒寫鍵的 : 後面同一行接區塊集合（%s）：TS 講 yaml 自己的語法錯', (_, text, why) => {
+    const message = rejection(text);
+    expect(message).toBe(`受管憑證檔 ${file} 認不得：YAML 錯誤 ${why}`);
+    expect(message).not.toContain(SECRET);
+  });
+
+  it.each([
+    ['字元', 'version: 1\nnote: 😀\0\n', 'CHARACTER_NOT_ALLOWED（第 2 行第 8 欄）'],
+    ['tag', 'x: [😀, !!str a]\n', 'TAG_NOT_ALLOWED（第 1 行第 8 欄）'],
+    ['集合鍵', 'x: {😀: 1, [a]: 2}\n', 'COLLECTION_KEY_NOT_ALLOWED（第 1 行第 11 欄）'],
+    ['重複鍵', '{😀: 1, a: 1, a: 2}\n', 'DUPLICATE_KEY（第 1 行第 14 欄）'],
+  ])('BMP 以外的字元算一欄（%s）：跟 Rust 宿主一樣照字元數', (_, text, why) => {
+    expect(rejection(text)).toBe(`受管憑證檔 ${file} 認不得：YAML 錯誤 ${why}`);
+  });
+});

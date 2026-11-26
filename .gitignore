@@ -4,14 +4,15 @@ node_modules/
 
 # build output
 dist/
+dist-mock/
 build/
-# 各套件編出來的 lib/（tsdown，見 tsdown.config.ts）；vendor 的 lib/ 另外有各自 prepare 產生的宣告檔，見 vendor/README.md。
-# 只寫套件那幾層：apps/web/src/lib/ 是原始碼。
-/apps/harness/lib/
-/packages/*/lib/
-/vendor/*/lib/
+# 各套件編出來的 lib/（tsdown，見 tsdown.config.ts）；vendor 的 lib/ 另外有各自 prepare 產生的宣告檔，見 harness/vendor/README.md。
+# 只寫套件那幾層：web/src/lib/ 是原始碼。
+/harness/apps/harness/lib/
+/harness/packages/*/lib/
+/harness/vendor/*/lib/
 # 打包時寫進產物的建置戳記（#1502 刀 2 寫、build-version.ts 讀）：只存在於產物，原始碼樹不該有，更不該被提交。
-/apps/harness/build-stamp.json
+/harness/apps/harness/build-stamp.json
 .next/
 .turbo/
 *.tsbuildinfo
@@ -37,11 +38,21 @@ __pycache__/
 # eval 結果檔（eval:compare／eval:survey 逐筆寫出，不進版控）
 eval-results/
 
-# 打包產物（scripts/release/pack.ts）
+# 打包產物（harness/scripts/release/pack.ts）
 .release-out/
 
 # 沙箱 spawner 的建置輸出（#1946）。
-/native/sandbox-spawner/target/
+/harness/native/sandbox-spawner/target/
 
 # 從原始碼在 Linux 上起 serve 時放編好的 spawner 的位置（#1946）
+/harness/native/nexus-sandbox-spawner
+/native/nexus-supervisor
+/harness/native/nexus-supervisor
+
+# 搬到 harness/ 與 web/ 之前的產物位置（#3149）：既有 checkout 留下的建置輸出不該變成可 commit。只列產物，不忽略整個舊目錄，漏搬的原始碼才看得見。
+/apps/harness/lib/
+/apps/harness/build-stamp.json
+/packages/*/lib/
+/vendor/*/lib/
+/native/sandbox-spawner/target/
 /native/nexus-sandbox-spawner

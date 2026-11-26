@@ -5,11 +5,8 @@
 每天排程（`.github/workflows/audit.yml`）跑一次，發版（`release.yml`）在打包之前也跑一次，結果附在 Release 上。
 不擋 PR（#1545 Q1 (a)）。
 
-**偏離 dsh，理由 2（產品需求超出 dsh 的射程）。** dsh 沒有實作漏洞掃描：`687f282e` 整棵樹（排除 `node_modules`）grep
-`pnpm audit|npm audit|osv-scanner|trivy|ignoreGhsas|auditConfig`，只中一份 `Status: proposed` 的筆記
-（`.agents/notes/proposed/process/2026-06-11-supply-chain-and-vendor-drift.zh.md:14`：定期跑 osv-scanner 或 `pnpm audit`，
-PR 動到 lockfile 時也跑）。dsh 實際只靠 GitHub 的 alert。nexus 部署在完全內網，主機上沒辦法再查一次，發版當下就要留一份結果，
-所以補上排程與發版前兩處。跟那份提案不同的是不在 PR 上跑：#1545 Q1 (a) 拍板不擋 PR。掃描只在 GitHub runner 上跑，部署端不連外。
+nexus 部署在完全內網，主機上沒辦法再查一次，所以發版當下就要留一份結果。
+掃描只在 GitHub runner 上跑，部署端不連外。
 
 ## 例外清單為什麼不用 pnpm 的 `auditConfig.ignoreGhsas`
 

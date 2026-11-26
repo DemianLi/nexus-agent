@@ -1,14 +1,14 @@
 # 發版與升級指南
 
-版號怎麼跳、Release 怎麼跑、不相容變更怎麼寫升級指南。[`AGENTS.md`](../AGENTS.md)〈發版〉只留觸發條件，細節在這裡。
+版號怎麼跳、Release 怎麼跑、不相容變更怎麼寫升級指南。[`contributing.md`](contributing.md) 只留升級指南的位置，細節在這裡。
 
 ## 發版
 
 發版分兩段：
 
 1. **版號 PR。** 版號寫在 repo 裡，不是 CI 裡推出來的（照 dsh `scripts/release/bump.ts`）。先跑
-   `pnpm run release:bump <patch|minor|major|x.y.z>`，它把同一個版本寫進根、`apps/*`、`packages/*` 的每一份
-   `package.json`（`vendor/*` 跟著上游，不動），再開一張 `chore:` 的版號 PR 合進 `develop`，隨後照常 `develop → main`。
+   `pnpm run release:bump <patch|minor|major|x.y.z>`，它把同一個版本寫進根、`apps/*`、`harness/packages/*` 的每一份
+   `package.json`（`harness/vendor/*` 跟著上游，不動），再開一張 `chore:` 的版號 PR 合進 `develop`，隨後照常 `develop → main`。
 2. **發版。** 到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。輸入值**只拿來核對**
    manifest 裡的版本，不一樣就停。workflow 會建置、用 `pnpm deploy --prod` 打成 `nexus-agent-<版本>-linux-x64.tar.gz`
    （主機要預裝 Node：22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準），在 repo 外解開、用純 `node` 驗過起得來之後，自行打 tag 並建立 GitHub Release，
@@ -33,11 +33,13 @@
   - home 底下的檔與格式：`sessions/`、`attachments/`、`tool-results/`、`plugin-journal.jsonl`、`thread-organization.json`、
     `browser-session.json`、`.credentials.yaml`、`config-hash-key.json`、`.env`、`serve.lock`；
   - `@nexus/sdk` 給外部插件的面；
+  - 嵌入版 `<nexus-chat>` 給宿主頁的面：屬性與 property、方法、事件與它的 `detail`、`--nexus-*` 自訂屬性
+    （清單在 [`embed-chat.md`](embed-chat.md)，型別在 `web/src/app/embed/nexus-chat.d.ts`）；
   - wire 協定裡 web 以外的客戶端會用到的部分。
 
   web 與 harness 在同一張 PR 一起改的 wire 變更不必寫：消費者同一張都改到了，同 dsh。純新增、而且不改既有預設行為的
   旗標、鍵、插件也不必寫；出廠就掛上、會改變模型看到的內容或多打模型的插件不算純新增，要寫。
-  會話日誌格式的升版紀錄在 `packages/nexus-core/src/session-store.ts` 檔頭，指南只寫讀者要做的事，再連到那裡。
+  會話日誌格式的升版紀錄在 `harness/packages/nexus-core/src/session-store.ts` 檔頭，指南只寫讀者要做的事，再連到那裡。
 - **位置**：`docs/upgrade-guide/v<版號>/<item>/guide.md`。`<版號>` 是**最近一個 Release 的 tag**，也就是讀者正在跑的
   那一版；`<item>` 是 kebab-case 的變更名。每個 item 目錄只有 `guide.md` 一份。
 - **維護**：下一版發出之前，最新的版本目錄描述「那一版到 `develop`」的差異。之後的 PR 再碰同一個面，就在同一張 PR
@@ -48,7 +50,7 @@
 - **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（`.github/actions/plan-checks`，純文件 PR 也跑），檢查路徑形狀、
   版本目錄是已存在的 tag、frontmatter 與段落。tag 只驗存在，不驗是不是最近一個：發版之後還寫進
   舊目錄的，gate 擋不住，要靠審查。指南裡的相對連結由 `.github/scripts/check_md_links.py` 驗（同樣跑在 `plan-checks`，
-  掃 `README.md`、`AGENTS.md`、`GLOSSARY-MAP.md`、`docs/**`、`.docs/**`、`.github/**`、`.agents/skills/**`、`packages/*` 三層、
+  掃 `README.md`、`GLOSSARY-MAP.md`、`docs/**`、`.github/**`、`harness/packages/*` 三層、
   `apps/*` 兩層與兩份本地寫的 vendor README，目標檔要存在、`#片段` 要對到標題）。指到不進版控的 `references/` 的連結不查。
 
 Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這個目錄才連。升級前要備份什麼、怎麼確認、出事怎麼

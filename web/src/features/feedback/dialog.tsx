@@ -1,0 +1,112 @@
+/**
+ * 回饋對話框：分類加備註，可以空著送（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+ *
+ * 一張表單兩個目標：按讚或點踩時是那一則回覆，只打 `/feedback`
+ * 時是整個會話。送出失敗時框留著，失敗那句話寫在框裡。
+ *
+ * 外殼是 solid-glass 的 `Dialog`（Base UI，規格 §4.2 列 35）：蓋住底下、Esc 與點外面都算關、
+ * 焦點困在框裡、關掉後回到打開前的地方，都由 Base UI 做。這裡只管表單，開起來時游標落在備註欄。
+ *
+ * **框常駐、用 `open` 開關**，退場動效才跑得完；換目標時呼叫端換 `key`，草稿不帶過去。
+ */
+
+import { useRef, useState } from 'react';
+
+import type { WireFeedbackCategory } from '@nexus/wire';
+
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
+import { CATEGORIES, CATEGORY_LABEL, FEEDBACK_COPY } from '@/features/feedback/feedback';
+
+export interface FeedbackDraft {
+  readonly category?: WireFeedbackCategory;
+  readonly text: string;
+}
+
+export function FeedbackDialog({
+  open,
+  submitting,
+  failure,
+  onSubmit,
+  onDismiss,
+}: {
+  open: boolean;
+  submitting: boolean;
+  failure?: string;
+  onSubmit: (draft: FeedbackDraft) => void;
+  onDismiss: () => void;
+}) {
+  const [category, setCategory] = useState<WireFeedbackCategory | undefined>(undefined);
+  const [text, setText] = useState('');
+  const detailRef = useRef<HTMLTextAreaElement>(null);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
+      }}
+    >
+      <DialogContent
+        showCloseButton={false}
+        // 沒有另外的說明文字：標題與欄位的名字已經講完了。
+        aria-describedby={undefined}
+        // 寬度照 develop 實際畫出來的：窄螢幕 28rem、640 以上 32rem。前綴跟 SG 的 `sm:max-w-sm` 同一組，cn 才蓋得掉（#1583）。
+        className="max-w-md sm:max-w-lg"
+        initialFocus={detailRef}
+      >
+        <DialogHeader>
+          <DialogTitle>{FEEDBACK_COPY.title}</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-wrap gap-2" role="group" aria-label={FEEDBACK_COPY.categories}>
+          {CATEGORIES.map((candidate) => (
+            <Button
+              key={candidate}
+              type="button"
+              size="sm"
+              variant={category === candidate ? 'default' : 'outline'}
+              aria-pressed={category === candidate}
+              disabled={submitting}
+              onClick={() => setCategory(category === candidate ? undefined : candidate)}
+            >
+              {CATEGORY_LABEL[candidate]}
+            </Button>
+          ))}
+        </div>
+        <Textarea
+          ref={detailRef}
+          className="max-h-64 min-h-24"
+          aria-label={FEEDBACK_COPY.detail}
+          placeholder={FEEDBACK_COPY.hint}
+          value={text}
+          readOnly={submitting}
+          onChange={(event) => setText(event.target.value)}
+        />
+        {failure !== undefined && (
+          <p className="text-destructive text-body" role="alert">
+            {failure}
+          </p>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={submitting} onClick={onDismiss}>
+            {FEEDBACK_COPY.close}
+          </Button>
+          <Button
+            type="button"
+            disabled={submitting}
+            onClick={() => onSubmit({ ...(category === undefined ? {} : { category }), text })}
+          >
+            {submitting ? FEEDBACK_COPY.submitting : FEEDBACK_COPY.submit}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

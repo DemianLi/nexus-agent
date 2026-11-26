@@ -1,0 +1,911 @@
+import type { DeletedThread, ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
+import { Search, X } from 'lucide-react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { ReactNode } from 'react';
+import { toast } from 'sonner';
+
+import { Chevron } from '@/shared/blocks/chevron';
+import {
+  createRowMenuHandle,
+  RenameField,
+  ThreadRowMenus,
+  ThreadRowMenuTrigger,
+} from '@/features/threads/row-menu';
+import type { RowMenuActions, RowMenuHandle } from '@/features/threads/row-menu';
+import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { DotLoader } from '@/components/ui/dot-loader';
+import {
+  SidebarGroup,
+  SidebarInput,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar';
+import type { ThreadDirectory } from '@/features/threads/use-directory';
+import { Skeleton } from '@/components/ui/skeleton';
+import { BUCKET_LABEL, groupThreads } from '@/features/threads/groups';
+import type { ThreadBucket } from '@/features/threads/groups';
+import { showMore, shownCount } from '@/features/threads/show-more';
+import {
+  highlightMatches,
+  mergeThreadSearch,
+  sanitizeSearchQuery,
+  SEARCH_DEBOUNCE_MS,
+} from '@/features/threads/search';
+import type { ContentMatches } from '@/features/threads/search';
+import { daysLeft, splitThreads } from '@/features/threads/management';
+import type { ThreadManagement, ThreadSections } from '@/features/threads/management';
+import { ROW_STATUS_TEXT, withPlaceholders } from '@/features/threads/status';
+import type { RowStatus } from '@/features/threads/status';
+import { threadLabel, withCurrentTitle } from '@/features/threads/title';
+import { cn } from '@/lib/utils';
+
+export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/features/threads/title';
+
+/** 搜尋框裡 × 的名稱（#1307）。 */
+export const CLEAR_SEARCH_LABEL = '清除搜尋';
+
+/**
+ * 以前的會話——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。照 dsh 的 `session/list`：
+ * 由新到舊、正在跑的有標記，每一列寫這條會話的標題：模型產生的那一個，還沒產生時是第一則人打的字的開頭
+ * （伺服器那側的規則，見 `features/threads/title.ts`）。
+ *
+ * **每次打開都重讀**：清單會變（別的分頁剛講過話、剛開了一條），而讀一次是冷的——server 那側一條 agent 都不為它建。
+ * 清單本身由 `App` 的 `useThreadDirectory` 持有（#632），這裡掛上時請它重抓；收起來再打開之前，畫的是上一份。
+ *
+ * **空白會話只列目前這一條**（[#313](https://github.com/DemianLi/nexus-agent/issues/313)），照 dsh 側欄的
+ * `sessionVisible`（`packages/client/ui-workspace/src/client/tree.ts`）：別條空白的不是「以前的會話」，是開了沒講話
+ * 的——「新對話」會拿它們來重用（`features/threads/new-conversation.ts`）。目前這條要落了盤才在清單上，還沒落盤的不列。
+ *
+ * **沒有標題的另一種原因照講**（`ThreadSummary.title` 的說明）：有輪次、但全是目標排的。
+ *
+ * **分組、搜尋**（inventory 列 6）：按今天／昨天／過去 7 天／更早分組，規則在 `features/threads/groups.ts`。搜尋比標題，也問伺服器
+ * 比內容（[#760](https://github.com/DemianLi/nexus-agent/issues/760)），規則在 `features/threads/search.ts`：打完停 250ms 才問、下一個
+ * 字一到就取消上一次；伺服器拒絕（出廠沒開就是）或搜尋失敗，那一次只比標題，跟 #610 一樣（拋錯時多一句說明）。
+ *
+ * **狀態**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
+ * `features/threads/status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種：左邊一條該狀態顏色的
+ * 色條，等人回答的三種標題加粗（#1696）。狀態字只給報讀器（sr-only），畫面上靠色條（#3038 第 2 項）。
+ *
+ * **時間只寫分組講不完的部分**（#3038 第 3 項）：今天、昨天只寫時刻，過去 7 天加星期，更早只寫日期；已釘選與已封存不分時間組，寫完整的日期時刻。
+ *
+ * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
+ * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
+ * 自動展開）。沒給就什麼都不多畫。規則與開關見 `features/threads/management.ts`。
+ *
+ * **每組先畫幾條**（[#2960](https://github.com/DemianLi/nexus-agent/issues/2960)）：時間組、搜尋結果、已封存每組先 10 條，組尾「顯示更多」，
+ * 規則在 `features/threads/show-more.ts`。釘選區全畫。水位跟著搜尋字記：換了搜尋字就當成沒按過；側欄收起時清單卸掉，也回到起點。
+ */
+
+const NO_WATERMARKS: ReadonlyMap<string, number> = new Map();
+const NO_ROWS: readonly ThreadSummary[] = [];
+
+/** 清單合上另外拿到的幾列（server 比到的標題）：已經在的不重複，照列表的順序排。沒有另外的就原樣回傳。 */
+function withRows(
+  items: readonly ThreadSummary[],
+  extra: readonly ThreadSummary[],
+): readonly ThreadSummary[] {
+  if (extra.length === 0) return items;
+  const listed = new Set(items.map((item) => item.threadId));
+  const fresh = extra.filter((item) => !listed.has(item.threadId));
+  if (fresh.length === 0) return items;
+  return [...items, ...fresh].sort(
+    (left, right) =>
+      right.updatedAt - left.updatedAt ||
+      (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0),
+  );
+}
+
+function labelOf(item: ThreadSummary): string {
+  return threadLabel(item.title, item.blank);
+}
+
+const FULL_FORMAT = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+const CLOCK_FORMAT = new Intl.DateTimeFormat('zh-TW', { timeStyle: 'short' });
+const WEEKDAY_FORMAT = new Intl.DateTimeFormat('zh-TW', { weekday: 'short' });
+const DATE_FORMAT = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short' });
+
+/** 列上的時間；`bucket` 是那一列所在的時間組，不在時間組裡（已釘選、已封存）的寫完整日期時刻。 */
+function formatTime(updatedAt: number, bucket: ThreadBucket | undefined): string {
+  switch (bucket) {
+    case 'today':
+    case 'yesterday':
+      return CLOCK_FORMAT.format(updatedAt);
+    case 'week':
+      return `${WEEKDAY_FORMAT.format(updatedAt)} ${CLOCK_FORMAT.format(updatedAt)}`;
+    case 'older':
+      return DATE_FORMAT.format(updatedAt);
+    case undefined:
+      return FULL_FORMAT.format(updatedAt);
+  }
+}
+
+export function ThreadList({
+  directory,
+  currentThreadId,
+  currentTitle,
+  onPick,
+  search,
+  management,
+}: {
+  readonly directory: ThreadDirectory;
+  readonly currentThreadId: string;
+  /** 目前這條即時推來的標題（`ConversationState.title`）：蓋過快照裡的那一列（#655 的 Q3）。 */
+  readonly currentTitle: string | null;
+  readonly onPick: (threadId: string) => void;
+  /** 按內容搜（`WireClient.searchThreads`）；沒給就只比標題。 */
+  readonly search?: (query: string, signal: AbortSignal) => Promise<ThreadSearchOutcome>;
+  /** 釘選、封存、改名（#633）；沒給就沒有那些。 */
+  readonly management?: ThreadManagement;
+}) {
+  const {
+    listing,
+    statusOf,
+    blankOf,
+    refresh,
+    placeholders,
+    loadMore,
+    loadingMore,
+    ensureRows,
+    findTitles,
+  } = directory;
+  const hasMore = listing.kind === 'ok' && listing.result.nextCursor !== undefined;
+  const labelId = useId();
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const needle = query.trim();
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [deletedOpen, setDeletedOpen] = useState(false);
+  // 打開「已封存」：封存的那幾條照 id 補齊，不只畫載到的那幾頁裡的（#725）。
+  const archivedIds = management?.archivedIds;
+  useEffect(() => {
+    if (archivedOpen && archivedIds !== undefined && archivedIds.size > 0)
+      ensureRows([...archivedIds]);
+  }, [archivedOpen, archivedIds, ensureRows]);
+  // **被拒不記住**：`rejected` 分不出是沒開、查詢不合法還是搜尋失敗（線上只帶訊息），記住的話偶發失敗一次這一頁就再也不搜
+  // 內容。所以每一次都問，被拒或失敗就那一次只比標題。
+  // 伺服器回過一次「有」之前不畫骨架：出廠是關的，先畫的話每次搜都會閃一下，「搜不到」也晚一拍（同 #653 的選單）。
+  const [on, setOn] = useState(false);
+  const searching = needle !== '' && search !== undefined;
+  const [answer, setAnswer] = useState<{
+    readonly query: string;
+    /** 內容命中，或這一次只比了標題（拋錯時帶一句給人看的）。 */
+    readonly matches: ContentMatches | { readonly fallback: string | null };
+  } | null>(null);
+  useEffect(() => {
+    if (!searching) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      search(needle, controller.signal).then(
+        (outcome) => {
+          // 取消掉的那一次回來了也不用擋：答案按查詢記，舊查詢的對不上；打回同一個字時，回來的是同一個查詢的答案。
+          // 被拒就是 #610 的樣子，不印原因：提示字「搜尋標題」已經講了只比標題，出廠又是關的，印了每個人每次搜都看得到。
+          if (outcome.kind === 'rejected') {
+            setAnswer({ query: needle, matches: { fallback: null } });
+          } else {
+            setOn(true);
+            setAnswer({ query: needle, matches: outcome.result });
+          }
+        },
+        () => {
+          // 這一格要留著：被取消的 fetch 也從這裡拋，打回同一個字時會被當成這個查詢失敗了。
+          if (!controller.signal.aborted) {
+            setAnswer({ query: needle, matches: { fallback: '內容搜尋失敗，這一次只比了標題。' } });
+          }
+        },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searching, needle, search]);
+  // 還有沒載的頁（#725）：標題也問 server，沒載到的那幾頁一樣比得到。等的方式同內容搜尋。
+  const [titleAnswer, setTitleAnswer] = useState<{
+    readonly query: string;
+    readonly items: readonly ThreadSummary[];
+  } | null>(null);
+  useEffect(() => {
+    if (needle === '' || !hasMore) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void findTitles(needle, controller.signal).then((items) => {
+        if (items !== undefined) setTitleAnswer({ query: needle, items });
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [needle, hasMore, findTitles]);
+  const serverTitles = hasMore && titleAnswer?.query === needle ? titleAnswer.items : NO_ROWS;
+  // 回來的那一份是這個查詢的才算；不是就還在等（dsh 的 `currentRemote`）。
+  const current = searching && answer?.query === needle ? answer.matches : undefined;
+  // 內容命中、但還沒載到的那幾條：照 id 補進清單，不然合併時會被當成「清單上沒有」丟掉。
+  const contentHits = current !== undefined && 'items' in current ? current.items : undefined;
+  useEffect(() => {
+    if (contentHits !== undefined && contentHits.length > 0) {
+      ensureRows(contentHits.map((hit) => hit.threadId));
+    }
+  }, [contentHits, ensureRows]);
+  const pending = searching && on && current === undefined;
+  const fellBack = current !== undefined && 'fallback' in current;
+  const fallback = fellBack ? current.fallback : null;
+  const deletion = management?.deletion;
+  // 已經在已刪除清單上的不列：已刪除清單先讀回來、列表還沒重抓回來的那段時間，那一列不留在原處。
+  const deletedIds = useMemo(
+    () => new Set((deletion?.deleted ?? []).map((item) => item.threadId)),
+    [deletion?.deleted],
+  );
+  const visible =
+    listing.kind === 'ok'
+      ? withCurrentTitle(
+          withPlaceholders(withRows(listing.result.items, serverTitles), placeholders),
+          currentThreadId,
+          currentTitle,
+        ).filter(
+          (item) =>
+            (!blankOf(item) || item.threadId === currentThreadId) && !deletedIds.has(item.threadId),
+        )
+      : [];
+  const view = mergeThreadSearch(
+    visible,
+    needle,
+    current === undefined || 'fallback' in current ? undefined : current,
+  );
+  // 沒有 `management` 時全部歸「其餘」：不分釘選與封存。
+  const sections =
+    management === undefined
+      ? { pinned: [], rest: view.items, archived: [] }
+      : splitThreads(view.items, management.pinnedIds, management.archivedIds);
+  // 列只在自己的資料變了才重畫（`ThreadRow` 是 `memo`）：交給列的回呼身分要穩，所以經 ref 讀最新的 `onPick` 與 `management`。
+  // 外層（`ConversationView`）每一格串流都重畫，傳進來的回呼每次都是新的。
+  const latest = useRef({ onPick, management });
+  useLayoutEffect(() => {
+    latest.current = { onPick, management };
+  });
+  const [menuHandle] = useState(createRowMenuHandle);
+  const pick = useCallback((threadId: string) => latest.current.onPick(threadId), []);
+  const menuActions = useMemo<RowMenuActions>(
+    () => ({
+      onPin: (id) => latest.current.management!.onPin(id),
+      onUnpin: (id) => latest.current.management!.onUnpin(id),
+      onArchive: (id, options) => latest.current.management!.onArchive(id, options),
+      onUnarchive: (id) => latest.current.management!.onUnarchive(id),
+      onRename: (id) => setRenamingId(id),
+      onDelete: (id) =>
+        latest.current.management?.deletion?.onDelete(id) ?? Promise.resolve(undefined),
+    }),
+    [],
+  );
+  const commitRename = useCallback(async (threadId: string, title: string) => {
+    const failure = await latest.current.management!.onRename(threadId, title);
+    if (failure === undefined) setRenamingId(null);
+    return failure;
+  }, []);
+  const cancelRename = useCallback(() => setRenamingId(null), []);
+  const [watermarks, setWatermarks] = useState<{
+    readonly needle: string;
+    readonly byGroup: ReadonlyMap<string, number>;
+  }>({ needle: '', byGroup: new Map() });
+  const expanded = watermarks.needle === needle ? watermarks.byGroup : NO_WATERMARKS;
+  const expand = useCallback(
+    (group: string, count: number) =>
+      setWatermarks((before) => ({
+        needle,
+        byGroup: new Map(before.needle === needle ? before.byGroup : []).set(group, count),
+      })),
+    [needle],
+  );
+  const mustShow = useCallback(
+    (item: ThreadSummary) => item.threadId === currentThreadId || statusOf(item) !== undefined,
+    [currentThreadId, statusOf],
+  );
+
+  return (
+    <SidebarGroup role="group" aria-labelledby={labelId} className="text-body">
+      {/* 群組的名稱只給報讀器：它就是整個側欄的清單，畫面上的標題只重述面板（#3038 第 4 項）。 */}
+      <span id={labelId} className="sr-only">
+        以前的會話
+      </span>
+      {/* 讀取中畫骨架、不唸（§8「讀取中不唸」）。 */}
+      {listing.kind === 'loading' && (
+        <div aria-hidden className="px-2 pt-1" data-testid="thread-list-loading">
+          {[0, 1, 2].map((index) => (
+            <div key={index} className="flex flex-col gap-1.5 py-1.5">
+              <Skeleton className="h-3.5 w-3/5" />
+              <Skeleton className="h-3 w-2/5" />
+            </div>
+          ))}
+        </div>
+      )}
+      {/* 列不出來與「沒有」是兩件事：關掉落盤的 server（清單上 `session-persistence` 那一列，#613）走這一格，原因照 server 講的印，
+          警示色已經講了是失敗，不加前綴。 */}
+      {listing.kind === 'failed' && <p className="text-destructive px-2">{listing.message}</p>}
+      {listing.kind === 'ok' && (
+        <>
+          {/*
+           **判的是藏過之後的**：磁碟上只剩別條空白會話時，列表一列都不畫——那些不是以前的會話，所以照講「還沒有」。
+           */}
+          {visible.length === 0 ? (
+            <p className="text-muted-foreground px-2">還沒有會話</p>
+          ) : (
+            <>
+              {/* 有字才有 ×（#1307，比對文件 C6）：按下清空、焦點留在搜尋框，接著打字。Esc 照舊也是清空。
+                  瀏覽器自己的 search 清除鈕藏起來：它沒有名字、Tab 走不到，兩顆 × 並排也不對。 */}
+              {/* 放大鏡講「這是搜尋」；伺服器還沒回過一次內容搜尋（`on`）時提示字寫「搜尋標題」（#3038 第 6 項）。圖示同 SG `command` 的搜尋框。 */}
+              <div className="relative mb-1">
+                <Search
+                  aria-hidden
+                  className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 opacity-50"
+                />
+                <SidebarInput
+                  ref={searchRef}
+                  type="search"
+                  aria-label="搜尋以前的會話"
+                  placeholder={on ? '搜尋' : '搜尋標題'}
+                  value={query}
+                  onChange={(event) => setQuery(sanitizeSearchQuery(event.target.value))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && query !== '') {
+                      event.preventDefault();
+                      setQuery('');
+                    }
+                  }}
+                  className={cn(
+                    'h-11 pl-8 lg:h-8 [&::-webkit-search-cancel-button]:appearance-none',
+                    query !== '' && 'pr-11 lg:pr-8',
+                  )}
+                />
+                {query !== '' && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground absolute top-1/2 right-1 size-9 -translate-y-1/2 lg:right-0.5 lg:size-7"
+                    title={CLEAR_SEARCH_LABEL}
+                    aria-label={CLEAR_SEARCH_LABEL}
+                    onClick={() => {
+                      setQuery('');
+                      searchRef.current?.focus();
+                    }}
+                  >
+                    <X />
+                  </Button>
+                )}
+              </div>
+              {view.items.length > 0 && (
+                <ThreadGroupList
+                  sections={sections}
+                  isBlank={blankOf}
+                  mustShow={mustShow}
+                  expanded={expanded}
+                  onExpand={expand}
+                  row={(item, bucket) => {
+                    const snippet = view.snippets.get(item.threadId);
+                    const id = item.threadId;
+                    return (
+                      <ThreadRow
+                        key={id}
+                        item={item}
+                        bucket={bucket}
+                        snippet={snippet}
+                        // 只有帶摘要的列用得到搜尋字：其餘的列打字時不必重畫。
+                        query={snippet === undefined ? '' : needle}
+                        status={statusOf(item)}
+                        current={id === currentThreadId}
+                        onPick={pick}
+                        {...(management === undefined
+                          ? {}
+                          : {
+                              management: {
+                                handle: menuHandle,
+                                title: management.titles.get(id),
+                                pinned: management.pinnedIds.includes(id),
+                                archived: management.archivedIds.has(id),
+                                renaming: renamingId === id,
+                                onCommitRename: commitRename,
+                                onCancelRename: cancelRename,
+                              },
+                            })}
+                      />
+                    );
+                  }}
+                  archivedOpen={archivedOpen || needle !== ''}
+                  onArchivedOpenChange={setArchivedOpen}
+                  more={
+                    hasMore && needle === ''
+                      ? { loading: loadingMore, onLoad: loadMore }
+                      : undefined
+                  }
+                />
+              )}
+              {pending && (
+                // 標題對得上的先畫，內容那一半還在問：沒有列時兩列骨架，有列時一列（dsh）。骨架是畫給看得見的人的，
+                // 讀屏聽下面那一格的「正在搜內容…」。
+                <div aria-hidden className="px-2 pt-1" data-testid="thread-search-pending">
+                  {(view.items.length === 0 ? [0, 1] : [0]).map((index) => (
+                    <div key={index} className="flex flex-col gap-1.5 py-1.5">
+                      <Skeleton className="h-3.5 w-3/5" />
+                      <Skeleton className="h-3 w-4/5" />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* 搜尋結果的那一格（規格 §8 的例外）：人自己打的字、焦點留在搜尋框，結果在別處，沒有結果不唸就不知道。
+                  **搜尋框在它就在、內容之後才填**：連同內容一起掛上去的 live region，報讀器常常不唸——只標題的搜尋打第一個字
+                  就可能沒有結果，所以不能等有搜尋字才掛。沒有搜尋字（列出全部）與有結果時是空的（列就在下面，往下走就讀得到）。 */}
+              <p
+                className={`text-muted-foreground px-2 ${!pending && view.items.length === 0 ? '' : 'sr-only'}`}
+                role="status"
+                data-testid="thread-search-status"
+              >
+                {pending
+                  ? '正在搜內容…'
+                  : view.items.length > 0
+                    ? ''
+                    : `沒有符合「${needle}」的會話`}
+              </p>
+              {view.hasMore && (
+                <p className="text-muted-foreground px-2 pt-1 text-tip">還有更多，請縮小搜尋</p>
+              )}
+              {fallback !== null && (
+                <p className="text-muted-foreground px-2 pt-1 text-tip">{fallback}</p>
+              )}
+            </>
+          )}
+          {/* 原因寫在 `docs/operations.md`「N 份無法顯示」那一條，畫面上只講數量。 */}
+          {listing.result.unreadable > 0 && (
+            <p className="text-muted-foreground px-2 text-tip">
+              {listing.result.unreadable} 份無法顯示
+            </p>
+          )}
+        </>
+      )}
+      {listing.kind === 'ok' && deletion !== undefined && needle === '' && (
+        <RecentlyDeleted
+          items={deletion.deleted}
+          open={deletedOpen}
+          onOpenChange={setDeletedOpen}
+          expanded={expanded.get(DELETED_GROUP)}
+          onExpand={(count) => expand(DELETED_GROUP, count)}
+          onRestore={deletion.onRestore}
+        />
+      )}
+      {management !== undefined && (
+        <ThreadRowMenus
+          handle={menuHandle}
+          actions={menuActions}
+          deletable={deletion !== undefined}
+        />
+      )}
+    </SidebarGroup>
+  );
+}
+
+/**
+ * 分好組的清單：已釘選在最前面，之後空白那一列（不帶組名），之後每個時間組一個標題，最後是已封存（收合）。
+ * 釘選與封存兩區只有給了 `management` 才會有列（`splitThreads`）。
+ */
+function ThreadGroupList({
+  sections,
+  isBlank,
+  mustShow,
+  expanded,
+  onExpand,
+  row,
+  archivedOpen,
+  onArchivedOpenChange,
+  more,
+}: {
+  readonly sections: ThreadSections;
+  readonly isBlank: (item: ThreadSummary) => boolean;
+  /** 這一列要不要一定看得到；一定要看得到的列排在組內前 50 條以內時，不用按「顯示更多」也會畫出來（`show-more.ts`）。 */
+  readonly mustShow: (item: ThreadSummary) => boolean;
+  /** 按過「顯示更多」的組的水位，按組名（時間組的 bucket、已封存是 `archived`、最近刪除是 `deleted`）。 */
+  readonly expanded: ReadonlyMap<string, number>;
+  readonly onExpand: (group: string, count: number) => void;
+  /** `bucket` 是那一列所在的時間組；已釘選、已封存與空白那一列沒有。 */
+  readonly row: (item: ThreadSummary, bucket?: ThreadBucket) => ReactNode;
+  readonly archivedOpen: boolean;
+  readonly onArchivedOpenChange: (open: boolean) => void;
+  /** server 上還有沒載的（#725）：時間組最後多一顆「載入更多」。 */
+  readonly more?: { readonly loading: boolean; readonly onLoad: () => void };
+}) {
+  const { blank, groups } = groupThreads(sections.rest, Date.now(), isBlank);
+  return (
+    <>
+      {sections.pinned.length > 0 && (
+        <BucketGroup label="已釘選" testId="thread-pinned">
+          <SidebarMenu>{sections.pinned.map((item) => row(item))}</SidebarMenu>
+        </BucketGroup>
+      )}
+      {blank.length > 0 && <SidebarMenu>{blank.map((item) => row(item))}</SidebarMenu>}
+      {groups.map(({ bucket, items: members }) => (
+        <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
+          <LimitedRows
+            items={members}
+            mustShow={mustShow}
+            expanded={expanded.get(bucket)}
+            onExpand={(count) => onExpand(bucket, count)}
+            row={(item) => row(item, bucket)}
+          />
+        </BucketGroup>
+      ))}
+      {more !== undefined && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-muted-foreground mt-1 h-11 w-full justify-start px-2 text-ui font-normal lg:h-8"
+          disabled={more.loading}
+          onClick={more.onLoad}
+          data-testid="thread-load-more"
+        >
+          載入更多
+          {/* 載入中不換字：停用的鈕加旁邊的點表達（§8，`DotLoader` 沒有名稱）。 */}
+          {more.loading && <DotLoader className="shrink-0" />}
+        </Button>
+      )}
+      {sections.archived.length > 0 && (
+        <Collapsible
+          open={archivedOpen}
+          onOpenChange={onArchivedOpenChange}
+          className="mt-2"
+          data-testid="thread-archived"
+        >
+          <CollapsibleTrigger className="group text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-ui font-medium lg:min-h-8">
+            <Chevron className="size-3.5" />
+            已封存（{sections.archived.length}）
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <LimitedRows
+              items={sections.archived}
+              mustShow={mustShow}
+              expanded={expanded.get('archived')}
+              onExpand={(count) => onExpand('archived', count)}
+              row={row}
+            />
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+    </>
+  );
+}
+
+function BucketGroup({
+  label,
+  children,
+  testId = 'thread-bucket',
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+  readonly testId?: string;
+}) {
+  const labelId = useId();
+  return (
+    <div role="group" aria-labelledby={labelId} className="mt-2" data-testid={testId}>
+      <div id={labelId} className="text-muted-foreground px-2 pb-1 text-ui font-medium">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 一組的列，先畫前幾條，組尾「顯示更多（還有 N 條）」（`show-more.ts`）。
+ *
+ * 按下後焦點移到新露出的列裡第一顆可按的鈕，鍵盤與報讀器不用回頭找（會話列是它本身，目前這條落在「⋯」；最近刪除的列是「復原」），沒有就往下找。
+ */
+function LimitedRows<T>({
+  items,
+  mustShow,
+  expanded,
+  onExpand,
+  row,
+}: {
+  readonly items: readonly T[];
+  readonly mustShow: (item: T) => boolean;
+  /** 按過「顯示更多」之後的水位；沒按過是 `undefined`。 */
+  readonly expanded: number | undefined;
+  readonly onExpand: (count: number) => void;
+  readonly row: (item: T) => ReactNode;
+}) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const focusFrom = useRef<number | null>(null);
+  const shown = shownCount(items, mustShow, expanded);
+  useEffect(() => {
+    const from = focusFrom.current;
+    if (from === null) return;
+    focusFrom.current = null;
+    for (const item of Array.from(listRef.current?.children ?? []).slice(from)) {
+      const target = item.querySelector<HTMLElement>('button:not(:disabled)');
+      if (target !== null) {
+        target.focus();
+        return;
+      }
+    }
+  }, [shown]);
+  const hidden = items.length - shown;
+  return (
+    <>
+      <SidebarMenu ref={listRef}>{items.slice(0, shown).map((item) => row(item))}</SidebarMenu>
+      {hidden > 0 && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-muted-foreground h-11 w-full justify-start px-2 text-ui font-normal lg:h-8"
+          onClick={() => {
+            focusFrom.current = shown;
+            onExpand(showMore(shown));
+          }}
+        >
+          顯示更多（還有 {hidden} 條）
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** 「最近刪除」在水位表裡的組名；時間組的 bucket 與 `archived` 都不會是這個字。 */
+const DELETED_GROUP = 'deleted';
+
+/**
+ * 「最近刪除」（[#2958](https://github.com/DemianLi/nexus-agent/issues/2958)）：清單最下面、「已封存」之後，預設收著、標題帶份數。
+ * 每列寫標題與還剩幾天，唯一的動作是「復原」；列本身點不開（檔案已經搬走了）。過了寬限期的不列：server 的清單照樣帶著（索引不清），
+ * 只在這裡用 `expiresAt` 濾；濾只在重畫時做，沒有計時器。搜尋時不畫：它不在搜尋的範圍裡。
+ */
+function RecentlyDeleted({
+  items,
+  open,
+  onOpenChange,
+  expanded,
+  onExpand,
+  onRestore,
+}: {
+  readonly items: readonly DeletedThread[];
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly expanded: number | undefined;
+  readonly onExpand: (count: number) => void;
+  readonly onRestore: (threadId: string) => Promise<string | undefined>;
+}) {
+  const now = Date.now();
+  const live = items.filter((item) => item.expiresAt > now);
+  if (live.length === 0) return null;
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={onOpenChange}
+      className="mt-2"
+      data-testid="thread-deleted"
+    >
+      <CollapsibleTrigger className="group text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-ui font-medium lg:min-h-8">
+        <Chevron className="size-3.5" />
+        最近刪除（{live.length}）
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <LimitedRows
+          items={live}
+          mustShow={() => false}
+          expanded={expanded}
+          onExpand={onExpand}
+          row={(item) => {
+            const label = threadLabel(item.title, true);
+            return (
+              <SidebarMenuItem key={item.threadId} className="flex items-center gap-2 px-2 py-1">
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-muted-foreground truncate">{label}</span>
+                  <span className="text-muted-foreground text-tip">
+                    還剩 {daysLeft(item.expiresAt, now)} 天
+                  </span>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 shrink-0 px-2 text-ui lg:h-8"
+                  aria-label={`復原「${label}」`}
+                  onClick={() => {
+                    void onRestore(item.threadId).then(
+                      (message) => {
+                        if (message !== undefined)
+                          toast.error('復原失敗', { description: message });
+                      },
+                      (error: unknown) => {
+                        toast.error('復原失敗', {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      },
+                    );
+                  }}
+                >
+                  復原
+                </Button>
+              </SidebarMenuItem>
+            );
+          }}
+        />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** 色條的顏色：等人回答是警示色，在跑是品牌色，跑完沒看是完成色。 */
+const BAR_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
+  approval: 'bg-status-interrupted',
+  question: 'bg-status-interrupted',
+  'plan-review': 'bg-status-interrupted',
+  running: 'bg-brand',
+  completed: 'bg-success',
+};
+
+/**
+ * 一列上的管理（#633）：有它才畫「⋯」與改名輸入。每一欄都是原始值或身分穩定的參照（`handle` 與回呼），`ThreadRow` 的 `memo` 才擋得住。
+ */
+interface RowManagement {
+  readonly handle: RowMenuHandle;
+  /** 使用者改過的標題。 */
+  readonly title: string | undefined;
+  readonly pinned: boolean;
+  readonly archived: boolean;
+  /** 這一列正在改名：原地換成輸入框。 */
+  readonly renaming: boolean;
+  readonly onCommitRename: (threadId: string, title: string) => Promise<string | undefined>;
+  readonly onCancelRename: () => void;
+}
+
+interface ThreadRowProps {
+  readonly item: ThreadSummary;
+  /** 所在的時間組，決定時間寫多少；`undefined` 寫完整日期時刻。 */
+  readonly bucket: ThreadBucket | undefined;
+  readonly snippet: string | undefined;
+  readonly query: string;
+  readonly status: RowStatus;
+  readonly current: boolean;
+  readonly onPick: (threadId: string) => void;
+  readonly management?: RowManagement | undefined;
+}
+
+const ThreadRow = memo(function ThreadRow({
+  item,
+  bucket,
+  snippet,
+  query,
+  status,
+  current,
+  onPick,
+  management,
+}: ThreadRowProps) {
+  const label = management?.title ?? labelOf(item);
+  if (management?.renaming === true) {
+    return (
+      <SidebarMenuItem>
+        <RenameField
+          initial={label}
+          onCommit={(title) => management.onCommitRename(item.threadId, title)}
+          onCancel={management.onCancelRename}
+        />
+      </SidebarMenuItem>
+    );
+  }
+  const text = status === undefined ? undefined : ROW_STATUS_TEXT[status];
+  return (
+    // 分叉來的那一條記著來源（#1581）：畫面上不講（同 dsh），只留在屬性上。
+    <SidebarMenuItem data-parent-thread-id={item.parentThreadId}>
+      {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
+      <SidebarMenuButton
+        type="button"
+        isActive={current}
+        disabled={current}
+        onClick={() => onPick(item.threadId)}
+        className={cn(
+          'h-auto min-h-11 items-stretch gap-2.5 lg:min-h-9',
+          // 右邊留給「⋯」。
+          management !== undefined && 'pr-10 lg:pr-8',
+        )}
+      >
+        {/* 狀態是左邊 3px 色條（#1696 S1-C），字只給報讀器；沒有狀態的列也留這條空位，標題才對齊。 */}
+        <span
+          aria-hidden
+          className={cn('w-0.75 shrink-0 rounded-xs', status !== undefined && BAR_CLASS[status])}
+          data-testid="thread-status-bar"
+        />
+        {/* 這一欄是按鈕的最後一個 span，vendor 的 `[&>span:last-child]:truncate` 會讓它整欄不換行；裡面每一行自己截，才有省略號。 */}
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+          <span
+            className={cn('w-full truncate', text?.waiting === true && 'font-medium')}
+            data-testid="thread-title-text"
+          >
+            {label}
+          </span>
+          {text !== undefined && (
+            <span className="sr-only" data-testid="thread-status" data-status={status}>
+              {text.label}
+            </span>
+          )}
+          {/* 目前這一列靠高亮與停用表達，不另寫字。空白的那一列不帶時間：它的時間是建立時間，不是誰說過話。 */}
+          {!item.blank && (
+            <span
+              className="text-muted-foreground w-full truncate text-tip"
+              data-testid="thread-time"
+            >
+              {formatTime(item.updatedAt, bucket)}
+            </span>
+          )}
+          {snippet !== undefined && (
+            <span
+              className="text-muted-foreground line-clamp-2 w-full truncate text-tip"
+              data-testid="thread-snippet"
+            >
+              {highlightMatches(snippet, query).map((part, index) =>
+                part.hit ? (
+                  <mark key={index} className="bg-brand/15 text-foreground rounded-xs">
+                    {part.text}
+                  </mark>
+                ) : (
+                  part.text
+                ),
+              )}
+            </span>
+          )}
+        </span>
+      </SidebarMenuButton>
+      {management !== undefined && (
+        <ThreadRowMenuTrigger
+          handle={management.handle}
+          target={{
+            threadId: item.threadId,
+            label,
+            pinned: management.pinned,
+            archived: management.archived,
+            current,
+            active: status !== undefined && status !== 'completed',
+          }}
+        />
+      )}
+    </SidebarMenuItem>
+  );
+}, sameRow);
+
+/** `management` 每次都是新物件，逐欄比；其餘欄位逐一 `===`。`ThreadRowProps` 加欄位要一起加進來。 */
+function sameRow(before: ThreadRowProps, after: ThreadRowProps): boolean {
+  const a = before.management;
+  const b = after.management;
+  const sameManagement =
+    a === b ||
+    (a !== undefined &&
+      b !== undefined &&
+      a.handle === b.handle &&
+      a.title === b.title &&
+      a.pinned === b.pinned &&
+      a.archived === b.archived &&
+      a.renaming === b.renaming &&
+      a.onCommitRename === b.onCommitRename &&
+      a.onCancelRename === b.onCancelRename);
+  return (
+    sameManagement &&
+    before.item === after.item &&
+    before.bucket === after.bucket &&
+    before.snippet === after.snippet &&
+    before.query === after.query &&
+    before.status === after.status &&
+    before.current === after.current &&
+    before.onPick === after.onPick
+  );
+}

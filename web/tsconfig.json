@@ -1,0 +1,40 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "cn": ["./src/lib/utils.ts"],
+      // BEGIN generated package aliases — pnpm run gen-tsconfig-paths
+      "@nexus/brand": ["../harness/packages/nexus-brand/src/index.ts"],
+      "@nexus/plugin-workspace-changes/types": [
+        "../harness/packages/nexus-plugin-workspace-changes/src/types.ts"
+      ],
+      "@nexus/sdk": ["../harness/packages/nexus-sdk/src/index.ts"],
+      "@nexus/tools": ["../harness/packages/nexus-tools/src/index.ts"],
+      "@nexus/wire": ["../harness/packages/nexus-wire/src/index.ts"]
+      // END generated package aliases
+    }
+  },
+  "include": [
+    "src",
+    "guard",
+    "catalog",
+    "visual",
+    "e2e",
+    "embed-demo",
+    "vite.config.ts",
+    "vite.embed.config.ts",
+    "embed-shadow-css.ts",
+    "font-licenses.ts",
+    "resolve-alias.ts",
+    "vitest.config.ts",
+    "vitest.e2e.config.ts",
+    "vitest.catalog.config.ts",
+    "vitest.guard.config.ts",
+    "vitest.shared.ts"
+  ]
+}

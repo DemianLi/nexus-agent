@@ -1,0 +1,1741 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import { ContextOverflowError } from '@langchain/core/errors';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { ChatOpenAI, wrapOpenAIClientError } from '@langchain/openai';
+import { isEmptyAssistant } from '@nexus/core';
+import {
+  LIVE_API_KEY_ENV,
+  DEFAULT_LIVE_BASE_URL,
+  DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+  DEFAULT_LIVE_MODEL_ID,
+  DEFAULT_LIVE_TIMEOUT_MS,
+  classifyFailedAttempt,
+  classifyTurnFailure,
+  createLiveModel,
+  isDerivedContextOverflow,
+  modelGoneMessage,
+  normalizeEmptyAssistantContent,
+  stripAssistantName,
+  StreamIdleTimeoutError,
+  withEmptyAssistantContent,
+  withInbandStreamErrors,
+  withoutAssistantName,
+  withShippedRequestBody,
+  withStreamIdleTimeout,
+  EMPTY_TOOL_RESULT_TEXT,
+  fillEmptyToolContent,
+  withEmptyToolContent,
+} from './live-model.js';
+import { MEASURED_MODELS } from './eval/tiers.js';
+import { liveModelConfigForModel, liveModelConfigSchema } from './settings/live-model.js';
+
+/** schema 預設的那一組（#545）。`createLiveModel` 沒有預設參數，要建預設那顆就明著傳這個。 */
+const DEFAULTS = liveModelConfigSchema.parse({});
+
+/**
+ * 這組測試不打真實 API，也不需要任何 key —— CI 不放模型 secret（issue #31）。
+ * 驗的是 issue #31 第 4 項驗收裡「型別檢查攔不到」的那一半：缺 key 要當場失敗。
+ */
+describe('真實供應商的 key 處理', () => {
+  const original = process.env[LIVE_API_KEY_ENV];
+
+  beforeEach(() => {
+    delete process.env[LIVE_API_KEY_ENV];
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = original;
+  });
+
+  it('缺少環境變數時直接失敗，訊息指名缺哪一個', () => {
+    expect(() => createLiveModel(DEFAULTS)).toThrow(LIVE_API_KEY_ENV);
+  });
+
+  it('不 fallback 到 OPENAI_API_KEY', () => {
+    process.env.OPENAI_API_KEY = 'sk-should-not-be-used';
+    try {
+      expect(() => createLiveModel(DEFAULTS)).toThrow(LIVE_API_KEY_ENV);
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+    }
+  });
+
+  it('有 key 時組出指向 NVIDIA 端點的 model', () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    const model = createLiveModel(DEFAULTS);
+    expect(model.model).toBe(DEFAULT_LIVE_MODEL_ID);
+    expect(model.clientConfig.baseURL).toBe(DEFAULT_LIVE_BASE_URL);
+  });
+
+  it('schema 預設組出來的是預設的那個 id —— spike:live 走這條', () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    expect(createLiveModel(DEFAULTS).model).toBe(DEFAULT_LIVE_MODEL_ID);
+  });
+
+  it('modelId 傳得進去，eval:compare 才換得動模型', () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    for (const tier of MEASURED_MODELS) {
+      const model = createLiveModel(liveModelConfigForModel(tier.modelId));
+      expect(model.model).toBe(tier.modelId);
+      // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是模型。
+      expect(model.clientConfig.baseURL).toBe(DEFAULT_LIVE_BASE_URL);
+      expect(model.temperature).toBe(1);
+      expect(model.topP).toBe(0.95);
+    }
+  });
+
+  it('預設的那個 id 必須是我們真的量過的模型', () => {
+    // **這條擋的是「憑感覺換預設」。** 上一個預設（`deepseek-v4-pro-0813`）從來不是被選出來的，
+    // 它是 #57 那個不回應的模型的替代品，唯一判準是「回得出 tool_calls」——一次都沒有被
+    // 基準任務量過。現在的這個是 84 次執行的決選比出來的，這條斷言讓那件事在程式碼裡也成立：
+    // 換成一個沒進過 `MEASURED_MODELS` 的 id，這裡當場紅。
+    //
+    // **2026-09-05 換過載體。** 原本比的是 `ALL_MODELS_UNDER_TEST`（兩道尺寸階梯加判準對照），
+    // 而階梯在 #167 收掉了。階梯一直只是這條斷言順手的載體 —— 它要的是「量過的模型」，
+    // 那正是 `MEASURED_MODELS`。載體換了，擋的東西一個字都沒變。
+    expect(MEASURED_MODELS.map((model) => model.modelId)).toContain(DEFAULT_LIVE_MODEL_ID);
+  });
+
+  it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    expect(createLiveModel(DEFAULTS).timeout).toBe(DEFAULT_LIVE_TIMEOUT_MS);
+    expect(createLiveModel(liveModelConfigForModel(MEASURED_MODELS[0]!.modelId)).timeout).toBe(
+      DEFAULT_LIVE_TIMEOUT_MS,
+    );
+  });
+
+  /**
+   * **這條驗的是設定真的到得了 `AsyncCaller`，不是我們有沒有寫那一行。**
+   *
+   * `maxRetries` 與 `onFailedAttempt` 都不是 `ChatOpenAI` 的公開屬性 —— 它們被拿去建
+   * `AsyncCaller`。傳錯名字、或哪天基座換了收法，`createLiveModel` 一樣建得起來、
+   * 型別一樣是綠的，而 #1427 的前提（SDK 層不重試，重試只在 `retryModelCall` 一層）會**靜默地沒有成立**：
+   * 兩層一起重試是乘法。所以這裡直接問那個 caller。
+   */
+  it('SDK 層不重試，onFailedAttempt 裝的是我們那支 —— 不是只寫在建構參數裡', () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    const { caller } = createLiveModel(DEFAULTS) as unknown as {
+      caller: { maxRetries: number; onFailedAttempt: (error: unknown) => void };
+    };
+
+    expect(caller.maxRetries).toBe(0);
+
+    // 裝上去的必須是**我們的**那個：對限流不拋（＝交給外層那一層重試），對 4xx 拋（＝放棄）。
+    // 只斷言 `typeof === 'function'` 的話，裝到基座的預設也會是綠的。
+    expect(() =>
+      caller.onFailedAttempt(Object.assign(new Error('429'), { status: 429 })),
+    ).not.toThrow();
+    expect(() =>
+      caller.onFailedAttempt(Object.assign(new Error('400'), { status: 400 })),
+    ).toThrow();
+  });
+});
+
+/**
+ * 重試決策（#1437：只看碼）。
+ *
+ * **這一組是行為表，不是實作細節。** 它釘住的是 `onFailedAttempt` 取代掉基座預設之後，
+ * 重試與否是不是只由 {@link classifyTurnFailure} 的碼決定——碼在預設可重試集（`RATE_LIMIT`／`SERVER`／`TIMEOUT`／
+ * `TRANSPORT`／`EMPTY_RESPONSE`）裡才接著打。不打真實 API，錯誤都是手工組出來的形狀。
+ */
+describe('重試決策（碼決定）', () => {
+  const withProps = (message: string, props: Record<string, unknown>): Error =>
+    Object.assign(new Error(message), props);
+
+  /** `classifyFailedAttempt` 不拋＝接著打；拋＝放棄。 */
+  const decide = (error: unknown): 'retry' | 'give-up' => {
+    try {
+      classifyFailedAttempt(error);
+      return 'retry';
+    } catch {
+      return 'give-up';
+    }
+  };
+
+  it('沒有 retry-after 的 429 要重試 —— 基座對這個形狀是一次都不重試的', () => {
+    expect(decide(withProps('429', { status: 429 }))).toBe('retry');
+  });
+
+  it('配額耗盡的 429 不重試 —— 它跟限流共用狀態碼，但重試幾次都一樣', () => {
+    expect(decide(withProps('quota', { status: 429, code: 'insufficient_quota' }))).toBe('give-up');
+    // 基座自己的 handler 才會掛的名字，產品路徑上由我們的 `onFailedAttempt` 接手，這裡只確認分類器也認它。
+    expect(decide(withProps('quota', { status: 429, name: 'RateLimitQuotaExhaustedError' }))).toBe(
+      'give-up',
+    );
+  });
+
+  it('4xx 與沒有碼可重試的狀態不重試 —— 含基座清單沒列的 408／410／418／422／425', () => {
+    for (const status of [
+      400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 413, 418, 422, 425,
+    ]) {
+      expect(decide(withProps(String(status), { status }))).toBe('give-up');
+    }
+  });
+
+  it('5xx 與連線問題仍然重試 —— 這條擋的是「非限流一律放棄」那種退化', () => {
+    // 自訂 onFailedAttempt 會**整個**取代基座的預設，所以很容易在只想改限流時，
+    // 順手把本來會重試的那些也關掉。把它改成 give-up，這條當場紅。
+    expect(decide(withProps('500', { status: 500 }))).toBe('retry');
+    expect(decide(withProps('502', { status: 502 }))).toBe('retry');
+    // 連線層：SDK 的 `APIConnectionError` 才是 `TRANSPORT`（名字認的是建構子，不是訊息）。
+    class APIConnectionError extends Error {}
+    expect(decide(new APIConnectionError('Connection error.'))).toBe('retry');
+  });
+
+  it('沒有任何供應商痕跡的錯誤（解不開的回應、程式錯誤）不重試 —— 它不是網路問題（Q2 (a)）', () => {
+    expect(decide(new Error('socket hang up'))).toBe('give-up');
+    expect(decide(new SyntaxError('Unexpected token'))).toBe('give-up');
+  });
+
+  it('中止不重試 —— 那是我們自己要的，重試等於違抗', () => {
+    expect(decide(withProps('x', { name: 'AbortError' }))).toBe('give-up');
+    expect(decide(new Error('Cancel: 使用者中止'))).toBe('give-up');
+    expect(decide(withProps('x', { code: 'ECONNABORTED' }))).toBe('give-up');
+  });
+
+  it('包在 cause 鏈深處也認得出來 —— 包裝層數是別人家的實作細節', () => {
+    const inner = withProps('429', { status: 429 });
+    const outer = new Error('外層', { cause: new Error('中層', { cause: inner }) });
+    expect(decide(outer)).toBe('retry');
+
+    const innerBad = withProps('400', { status: 400 });
+    const outerBad = new Error('外層', { cause: new Error('中層', { cause: innerBad }) });
+    expect(decide(outerBad)).toBe('give-up');
+  });
+});
+
+/**
+ * **這個端點在上下文溢出時回什麼——2026-09-04 真打抓下來的。**
+ *
+ * 六次真請求（`openai/gpt-oss-20b`，三種輸入尺寸，送與不送 `max_tokens` 各試），
+ * 回的都是這個形狀，只有數字不同。**它不是一句「上下文太長」**：伺服器自己用
+ * `上限 − 輸入` 導 `max_tokens`，導成負的就報參數不合法。
+ *
+ * 一併量到的：`got -N` 的 N 對輸入長度線性（斜率 8/9 token/字元，三點一致），
+ * 反解出 `gpt-oss-20b` 的有效上限 131,007 ＝ 131,072（128K）− 約 65 個 chat template overhead。
+ */
+const CAPTURED_OVERFLOW_BODY = {
+  message: 'max_tokens must be at least 1, got -46771. (parameter=max_tokens, value=-46771)',
+  type: 'BadRequestError',
+  param: 'max_tokens',
+  code: 400,
+} as const;
+
+/** 供應商錯誤在 SDK 手上的樣子：`param` 攤在頂層，原始 body 掛在 `error`。 */
+function providerError(body: Record<string, unknown>): Error {
+  return Object.assign(new Error(String(body.message)), {
+    status: 400,
+    param: body.param,
+    error: body,
+  });
+}
+
+describe('把導出來的負 max_tokens 認成上下文溢出', () => {
+  it('真打抓到的那個 body，認得出來', () => {
+    expect(isDerivedContextOverflow(providerError({ ...CAPTURED_OVERFLOW_BODY }))).toBe(true);
+  });
+
+  /**
+   * **承重條：正的數字不是溢出。**
+   *
+   * 一顆輸出上限比我們送的 `DEFAULT_LIVE_MAX_OUTPUT_TOKENS` 小的模型會抱怨同一個 `param`，
+   * 而那件事**壓縮救不回來**——誤判成溢出的下場是壓一次、再送、再失敗。
+   */
+  it('抱怨的是正的 max_tokens 就不算溢出', () => {
+    expect(
+      isDerivedContextOverflow(
+        providerError({
+          message:
+            'max_tokens must be at most 4096, got 16384. (parameter=max_tokens, value=16384)',
+          param: 'max_tokens',
+          code: 400,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  /** 包過幾層都要認得——真正到手時它已經過了 SDK 與 middleware 好幾層。 */
+  it('埋在 cause 底下照樣認得', () => {
+    const buried = new Error('400 Bad Request', {
+      cause: providerError({ ...CAPTURED_OVERFLOW_BODY }),
+    });
+    expect(isDerivedContextOverflow(buried)).toBe(true);
+  });
+
+  it('別的 param、或根本不是這種錯，一律不算', () => {
+    expect(
+      isDerivedContextOverflow(providerError({ message: '壞了', param: 'messages', code: 400 })),
+    ).toBe(false);
+    expect(isDerivedContextOverflow(new Error('連線斷了'))).toBe(false);
+    expect(isDerivedContextOverflow(null)).toBe(false);
+  });
+
+  /** 取不到那個數字時**不猜**——寧可漏判維持今天的行為，也不要把別的 400 誤判成溢出。 */
+  it('訊息裡沒有數字就不猜', () => {
+    expect(
+      isDerivedContextOverflow(
+        providerError({ message: 'max_tokens is invalid', param: 'max_tokens', code: 400 }),
+      ),
+    ).toBe(false);
+  });
+
+  it('我們送出去的輸出上限是正數——判別式的前提', () => {
+    expect(DEFAULT_LIVE_MAX_OUTPUT_TOKENS).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **升版絆索：上游哪天自己認得了，我們那一層就該刪。**
+ *
+ * `wrapOpenAIClientError`（`@langchain/openai`）是分類的正主，我們只是因為
+ * 動不了那支才在工廠裡補一塊。LangChain 補 DeepSeek（`1.3.1`）、LiteLLM 補 Gemini
+ * 都是同一種缺口，補上是遲早的事。
+ *
+ * **這條紅的那天，就是刪掉 {@link isDerivedContextOverflow} 與那行 `onFailedAttempt`
+ * 的那天。** 它不是在斷言上游有缺陷，是在標記我們那塊補丁的到期條件。
+ */
+describe('上游還不認得這個 body（絆索）', () => {
+  it('wrapOpenAIClientError 對這個 body 還不回 ContextOverflowError', () => {
+    const wrapped = wrapOpenAIClientError(providerError({ ...CAPTURED_OVERFLOW_BODY }));
+
+    expect(ContextOverflowError.isInstance(wrapped)).toBe(false);
+  });
+
+  /** 對照組：它認得的那些**現在就**認得——絆索紅的時候要分得出是上游變了還是這條壞了。 */
+  it('它認得的措辭現在就認得', () => {
+    const known = wrapOpenAIClientError(
+      providerError({
+        message: "This model's maximum context length is 128000 tokens.",
+        code: 400,
+      }),
+    );
+
+    expect(ContextOverflowError.isInstance(known)).toBe(true);
+  });
+});
+
+/**
+ * **整條鏈走一遍：供應商回那個 400 → 我們手上拿到的是 `ContextOverflowError`。**
+ *
+ * 這一格量的是**唯一還沒量過的一環**：`AsyncCaller` 到底會不會為一個不可重試的 400 叫
+ * `onFailedAttempt`。讀原始碼說會（`async_caller.js:195`，`p-retry` 每次失敗都叫，預設的
+ * handler 正是靠「在裡面拋」來實作不重試），但讀到不等於量到。
+ *
+ * **零憑證、零外部連線**：端點是一個 loopback 上的假伺服器，回的是 2026-09-04 真打抓下來
+ * 的那個 body。key 是給假伺服器看的，不是秘密。
+ *
+ * 接上之後基座那側會發生什麼，由 `context-overflow.test.ts` 量（那邊證了緊急摘要接得住
+ * 這個型別，埋在 `cause` 底下也認得）。兩個檔各證一半，合起來才是整條。
+ */
+describe('假端點回那個 400，到我們手上是 ContextOverflowError', () => {
+  let server: Server;
+  let baseURL: string;
+
+  beforeEach(async () => {
+    server = createServer((_request, response) => {
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { ...CAPTURED_OVERFLOW_BODY } }));
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  /** 用的是 `createLiveModel` 那組設定的**同一支** handler，不是測試自己另寫一份。 */
+  function modelAgainstFake(onFailedAttempt?: (error: unknown) => void): ChatOpenAI {
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: 'openai/gpt-oss-20b',
+      configuration: { baseURL },
+      maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+      maxRetries: 0,
+      ...(onFailedAttempt !== undefined && { onFailedAttempt }),
+    });
+  }
+
+  it('掛上我們的 handler → 拋的是 ContextOverflowError', async () => {
+    const caught = await modelAgainstFake(classifyFailedAttempt)
+      .invoke('嗨')
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect(ContextOverflowError.isInstance(caught)).toBe(true);
+  });
+
+  /**
+   * **對照組：不掛我們那支就認不出來。**
+   *
+   * 這條證明綠的來源是我們那一層，不是 `@langchain/openai` 或別的地方本來就會做。
+   * 它同時是絆索的另一面——上游哪天自己認得了，**這條**會紅。
+   */
+  it('不掛我們的 handler → 就只是一個普通的 400', async () => {
+    const caught = await modelAgainstFake()
+      .invoke('嗨')
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect(caught).not.toBeNull();
+    expect(ContextOverflowError.isInstance(caught)).toBe(false);
+  });
+});
+
+/**
+ * 真打抓下來的 410（2026-09-04，`openai/gpt-oss-120b`）。**逐字，不改寫**——這條測試的
+ * 全部價值就在於它是端點真的說過的話。
+ */
+const CAPTURED_GONE_BODY = {
+  type: 'about:blank',
+  title: 'Gone',
+  status: 410,
+  detail:
+    "The model 'openai/gpt-oss-120b' has reached its end of life on 2026-09-03T08:00:00Z and is no longer available.",
+} as const;
+
+/** 那顆 410 穿過 `@langchain/openai` 之後的形狀（同一次真打量的：`APIError`，body 掛在 `error`）。 */
+function goneError(body: Record<string, unknown> = { ...CAPTURED_GONE_BODY }): Error {
+  return Object.assign(new Error(`410 ${JSON.stringify(body)}`), { status: 410, error: body });
+}
+
+describe('模型下架（410）', () => {
+  it('端點那句話原封不動搬進失敗訊息', () => {
+    const message = modelGoneMessage(goneError());
+
+    expect(message).toContain('2026-09-03T08:00:00Z');
+    expect(message).toContain('openai/gpt-oss-120b');
+    // 指到**設定**，不是常數（#545）：部署換模型要改的是那一列，不是原始碼。
+    expect(message).toContain('`live-model` 那一列的 `modelId`');
+  });
+
+  /**
+   * **承重條：判準是碼，不是那句話。**
+   *
+   * 這條紅的話，代表有人把判準改成比對 `detail` 的措辭——那正是
+   * `isRetryableRateLimit` 檔頭在禁的事，而供應商改一次文案就會靜靜失效。
+   */
+  it('410 但沒有 detail，照樣認得出是下架', () => {
+    const message = modelGoneMessage(
+      goneError({ type: 'about:blank', title: 'Gone', status: 410 }),
+    );
+
+    expect(message).toContain('410');
+    // 指到**設定**，不是常數（#545）：部署換模型要改的是那一列，不是原始碼。
+    expect(message).toContain('`live-model` 那一列的 `modelId`');
+  });
+
+  it('不是 410 的一律不認', () => {
+    expect(modelGoneMessage(providerError({ ...CAPTURED_OVERFLOW_BODY }))).toBeUndefined();
+    expect(modelGoneMessage(Object.assign(new Error('404'), { status: 404 }))).toBeUndefined();
+    expect(modelGoneMessage(new Error('沒有 status'))).toBeUndefined();
+  });
+
+  it('埋在 cause 底下照樣認得', () => {
+    expect(modelGoneMessage(new Error('包了一層', { cause: goneError() }))).toContain(
+      '2026-09-03T08:00:00Z',
+    );
+  });
+
+  /**
+   * **410 不重試靠的是碼，不是 `modelGoneMessage`**（#1437）：`HTTP_410` 不在可重試集裡。
+   * 原先 `retryDecision` 對它說「重試」（基座那份清單沒有 410，曾經一次等 106.7 秒），這條釘住那件事已經結束。
+   */
+  it('410 的碼是 HTTP_410，不在預設可重試集裡', () => {
+    expect(classifyTurnFailure(goneError())).toMatchObject({ code: 'HTTP_410', status: 410 });
+  });
+
+  it('classifyFailedAttempt 直接放棄，而且原錯誤留在 cause 上', () => {
+    let caught: unknown = null;
+    try {
+      classifyFailedAttempt(goneError());
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('2026-09-03T08:00:00Z');
+    expect((caught as Error).cause).toBeDefined();
+  });
+});
+
+/**
+ * **整條鏈走一遍：下架的模型只打一次，不是重試到底。**
+ *
+ * 量的是**送出去幾次請求**，不是錯誤長什麼樣——「快」才是這一段的產出，而它只有在
+ * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，當時 SDK 層 6 次，
+ * 退避 1／2／4／8／16／32 秒）。
+ *
+ * **這裡用 `maxRetries: 2` 而不是出廠的 6 次**：對照組要真的等完退避才數得到
+ * 重試次數，6 次是 63 秒，那個代價不該由每次 `pnpm test` 付。2 次是 3 秒，而它證的是同一件
+ * 事（有沒有重試），不是同一個數字。
+ *
+ * **零憑證、零外部連線**：loopback 上的假伺服器，回的是真打抓下來的那個 body。
+ */
+describe('假端點回那個 410，我們只打一次就放棄', () => {
+  const RETRIES = 2;
+  let server: Server;
+  let baseURL: string;
+  let hits = 0;
+
+  beforeEach(async () => {
+    hits = 0;
+    server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(410, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(CAPTURED_GONE_BODY));
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  function modelAgainstGone(onFailedAttempt?: (error: unknown) => void): ChatOpenAI {
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: 'openai/gpt-oss-120b',
+      configuration: { baseURL },
+      maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+      maxRetries: RETRIES,
+      ...(onFailedAttempt !== undefined && { onFailedAttempt }),
+    });
+  }
+
+  it('掛上我們的 handler → 只送一次，訊息帶著端點原話', async () => {
+    const caught = await modelAgainstGone(classifyFailedAttempt)
+      .invoke('嗨')
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect(hits).toBe(1);
+    expect((caught as Error).message).toContain('2026-09-03T08:00:00Z');
+  });
+
+  /**
+   * **對照組：不掛我們那支就會重試到底。**
+   *
+   * 它同時是絆索的另一面——上游哪天自己把 410 歸成不重試，**這條**會紅。
+   *
+   * **逾時放寬到 30 秒是必要的，不是保險。** 這一條要真的等完退避才數得到重試次數，
+   * 而 `p-retry` 的 1／2 秒帶隨機抖動，實測會擦過 vitest 預設的 5 秒——那樣紅的是時鐘
+   * 不是斷言，而且是斷續的。
+   */
+  it('不掛我們的 handler → 重試滿次數才放棄', async () => {
+    await modelAgainstGone()
+      .invoke('嗨')
+      .then(() => null)
+      .catch(() => null);
+
+    expect(hits).toBe(RETRIES + 1);
+  }, 30_000);
+});
+
+/**
+ * 用 `200 OK` 開線、再把錯誤當成一則事件送進 body 的失敗
+ * （[#516](https://github.com/DemianLi/nexus-agent/issues/516)）。
+ *
+ * ## 這一段釘的是「政策有沒有被問到」，不是「政策判得對不對」
+ *
+ * 上面那些測試釘得住 `classifyFailedAttempt` 的判斷力（400 不重試、410 不重試）。**它們釘不住
+ * 重試政策有沒有被呼叫到** —— 而 #516 正是後者：端點回 `200`，重試包裝器當場判定成功，
+ * 錯誤稍後才從串流裡冒出來，那時已經在射程外。政策整條靜默地沒有作用，
+ * 而每一條既有測試照樣是綠的。
+ *
+ * **所以判準是假端點收到幾個請求**，不是錯誤長什麼樣。這個數字沒有辦法從推論得到。
+ *
+ * | 假端點送什麼 | 期望 | 它擋住什麼回歸 |
+ * | --- | --- | --- |
+ * | HTTP 500 | `RETRIES + 1` | 重試政策整條失效（對照組） |
+ * | `200` ＋第一則事件是 503 | `RETRIES + 1` | **#516 本身**（修好前是 1） |
+ * | `200` ＋第一則事件是 400 | 1 | 修法把政策變成「一律重試」 |
+ * | 正常多 chunk ＋ tool call | 1，且 chunk 與參數逐格相同 | 修法弄壞快樂路徑 |
+ *
+ * **第四列是承重的**：前三列全綠而第四列紅，代表「修好了失敗、弄壞了成功」，
+ * 而那在只看失敗的表裡看不見。
+ *
+ * **`RETRIES = 2` 的理由同上一段**：要真的等完退避才數得到重試次數。
+ *
+ * **零憑證、零外部連線**：loopback 上的假 SSE 伺服器。
+ */
+describe('串流內回報的錯誤（#516）', () => {
+  const RETRIES = 2;
+
+  /** 2026-09-22 真打抓下來的那個信封。**逐字，不改寫。** */
+  const CAPTURED_INBAND_ERROR = {
+    error: { message: 'Service temporarily overloaded', type: 'service_unavailable', code: 503 },
+  } as const;
+
+  /** 同一個形狀，但碼是「重試無用」的那一種。 */
+  const INBAND_BAD_REQUEST = {
+    error: { message: 'Invalid tool schema', type: 'BadRequestError', code: 400 },
+  } as const;
+
+  type Cell =
+    'http500' | 'head503' | 'head400' | 'okstream' | 'mid503' | 'midslow' | 'truncated' | 'stalled';
+
+  function sseChunk(delta: Record<string, unknown>, finish: string | null = null): string {
+    return `data: ${JSON.stringify({
+      id: 'chatcmpl-1',
+      object: 'chat.completion.chunk',
+      created: 1_790_000_000,
+      model: DEFAULT_LIVE_MODEL_ID,
+      choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }],
+    })}\n\n`;
+  }
+
+  let server: Server;
+  let baseURL: string;
+  let hits = 0;
+  let cell: Cell = 'head503';
+
+  beforeEach(async () => {
+    hits = 0;
+    server = createServer((request, response) => {
+      hits += 1;
+      request.resume();
+
+      if (cell === 'http500') {
+        response.writeHead(500, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'Internal server error', code: 500 } }));
+        return;
+      }
+
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const send = (text: string): void => void response.write(text);
+
+      // 開了線就不吐任何位元組 —— #57 那個「永遠不回來」的失敗模式。
+      if (cell === 'stalled') return;
+
+      if (cell === 'head503' || cell === 'head400') {
+        const envelope = cell === 'head503' ? CAPTURED_INBAND_ERROR : INBAND_BAD_REQUEST;
+        send(`data: ${JSON.stringify(envelope)}\n\n`);
+        response.end('data: [DONE]\n\n');
+        return;
+      }
+
+      send(sseChunk({ role: 'assistant', content: '' }));
+      for (const piece of ['交付', '物已', '備妥']) send(sseChunk({ content: piece }));
+
+      if (cell === 'truncated') {
+        // 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING` 那一類）。**要等資料真的沖出去
+        // 再砍** —— 當場砍掉的話客戶端連第一則事件都沒收到，那量到的是「連線失敗」
+        // 這個完全不同的東西（實測：那樣會被重試，因為失敗落在建立串流的那次呼叫裡）。
+        setTimeout(() => response.socket?.destroy(), 50);
+        return;
+      }
+
+      const tail = (): void => {
+        send(`data: ${JSON.stringify(CAPTURED_INBAND_ERROR)}\n\n`);
+        response.end('data: [DONE]\n\n');
+      };
+      if (cell === 'mid503') {
+        tail();
+        return;
+      }
+      if (cell === 'midslow') {
+        // **刻意插延遲**，逼那則錯誤落在第一次網路讀取之外。它與 `mid503` 的結果必須
+        // 相同 —— 那正是「邊界是事件不是位元組」的判準。
+        setTimeout(tail, 300);
+        return;
+      }
+
+      send(
+        sseChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'present', arguments: '' },
+            },
+          ],
+        }),
+      );
+      for (const piece of ['{"path', '":"re', 'port.md"}']) {
+        send(sseChunk({ tool_calls: [{ index: 0, function: { arguments: piece } }] }));
+      }
+      send(sseChunk({}, 'tool_calls'));
+      response.end('data: [DONE]\n\n');
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    // `stalled` 那一格會留著一條沒關的連線，不砍掉的話 `close` 永遠不回來。
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  /**
+   * `createLiveModel` 那組設定，只換掉 baseURL 與重試次數。
+   * @param wrapped - 掛不掛 #516 那一層。不掛的那一格是**今天的行為**（對照組）。
+   */
+  function modelAgainstStream(wrapped: boolean, timeoutMs?: number, retries = RETRIES): ChatOpenAI {
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: DEFAULT_LIVE_MODEL_ID,
+      configuration: { baseURL, ...(wrapped && { fetch: withInbandStreamErrors() }) },
+      maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+      maxRetries: retries,
+      ...(timeoutMs !== undefined && { timeout: timeoutMs }),
+      onFailedAttempt: classifyFailedAttempt,
+    });
+  }
+
+  interface Run {
+    readonly outcome: 'completed' | 'threw';
+    /** **這一次**送出去幾個請求。`runCell` 自己歸零 —— 一條測試裡跑兩格時不會互相累加。 */
+    readonly requests: number;
+    readonly chunks: number;
+    readonly text: string;
+    readonly toolNames: readonly string[];
+    readonly toolArgs: string;
+    readonly error?: unknown;
+  }
+
+  async function runCell(
+    which: Cell,
+    wrapped: boolean,
+    timeoutMs?: number,
+    retries?: number,
+  ): Promise<Run> {
+    cell = which;
+    hits = 0;
+    let chunks = 0;
+    let text = '';
+    let toolArgs = '';
+    const toolNames: string[] = [];
+    try {
+      const model = modelAgainstStream(wrapped, timeoutMs, retries);
+      for await (const part of await model.stream('present report.md')) {
+        chunks += 1;
+        if (typeof part.content === 'string') text += part.content;
+        for (const call of part.tool_call_chunks ?? []) {
+          if (call.name !== undefined && call.name !== '') toolNames.push(call.name);
+          if (call.args !== undefined) toolArgs += call.args;
+        }
+      }
+      return { outcome: 'completed', requests: hits, chunks, text, toolNames, toolArgs };
+    } catch (error: unknown) {
+      return { outcome: 'threw', requests: hits, chunks, text, toolNames, toolArgs, error };
+    }
+  }
+
+  /**
+   * **對照組：政策本身是好的。** 同一個失敗用 HTTP 狀態碼送來時重試滿次數。
+   *
+   * 少了這一條，`head503` 那條紅了也分不出是「政策沒被問到」還是「政策壞了」。
+   */
+  it('HTTP 500：兩側都重試滿次數 —— 政策本身沒問題', async () => {
+    const before = await runCell('http500', false);
+    expect(before.outcome).toBe('threw');
+    expect(before.requests).toBe(RETRIES + 1);
+
+    const after = await runCell('http500', true);
+    expect(after.outcome).toBe('threw');
+    expect(after.requests).toBe(RETRIES + 1);
+  }, 30_000);
+
+  /** **這一條就是 #516。** 修好前這裡是 1。 */
+  it('第一則事件是 503：接上之後重試滿次數，沒接就只打一次', async () => {
+    const before = await runCell('head503', false);
+    expect(before.outcome).toBe('threw');
+    expect(before.chunks).toBe(0);
+    expect(before.requests).toBe(1);
+
+    const after = await runCell('head503', true);
+    expect(after.outcome).toBe('threw');
+    // **零 chunk 外洩**：錯誤發生在任何內容之前，所以沒有「丟掉已顯示內容」的問題。
+    expect(after.chunks).toBe(0);
+    expect(after.requests).toBe(RETRIES + 1);
+  }, 30_000);
+
+  /**
+   * **這一條擋的是「把政策變成一律重試」。** 同樣是串流內的錯誤，碼是 400 就該一次收工。
+   *
+   * 它同時證明供應商的原話沒有在翻譯途中掉 —— 我們回的是一個 HTTP 錯誤回應而不是拋，
+   * 所以 SDK 走它本來的錯誤路徑，訊息留在原位（拋的話會變成 `Connection error.`）。
+   */
+  it('第一則事件是 400：只打一次，而且上游原話還在', async () => {
+    const run = await runCell('head400', true);
+
+    expect(run.outcome).toBe('threw');
+    expect(run.requests).toBe(1);
+    expect(String((run.error as Error).message)).toContain('Invalid tool schema');
+  });
+
+  /**
+   * **承重的對照**：這一層要把串流開頭讀出來再接回去，這是弄壞成功路徑最可能的地方。
+   */
+  it('正常串流：兩側逐格相同，而且只打一次', async () => {
+    const before = await runCell('okstream', false);
+    expect(before.requests).toBe(1);
+    const after = await runCell('okstream', true);
+    expect(after.requests).toBe(1);
+
+    expect(after.outcome).toBe('completed');
+    expect(after.chunks).toBe(before.chunks);
+    expect(after.text).toBe('交付物已備妥');
+    expect(after.text).toBe(before.text);
+    expect(after.toolNames).toEqual(['present']);
+    expect(after.toolArgs).toBe('{"path":"report.md"}');
+    expect(after.toolArgs).toBe(before.toolArgs);
+  });
+
+  /**
+   * ## 明確未涵蓋，而且這兩條就是那個宣告
+   *
+   * 這一層（翻成 HTTP 錯誤、交 `onFailedAttempt` 回報）涵蓋的是**第一則 SSE 事件**。中段才出錯的串流在這一層仍然只打一次 ——
+   * 它的整次重打在更上面的 `stream-retry`（#520，端到端的測試在 `stream-retry.test.ts`），這裡的 `ChatOpenAI` 直接
+   * 呼叫不經過那一顆（偏離登記見 {@link withInbandStreamErrors} 的檔頭）。
+   *
+   * **`mid503` 與 `midslow` 必須給出相同的結果**，那是「邊界是事件、不是位元組」的判準：
+   * 前者整份 body 在 loopback 上會被併成一段送達，後者插了 0.3 秒逼它分段。
+   * 一個實作若是拿「第一次網路讀取拿到的位元組」當邊界，`mid503` 會**意外地**被涵蓋，
+   * 而 `midslow` 不會 —— 這兩條就會分岔。
+   */
+  it.each([
+    ['mid503', '整份 body 一次送達'],
+    ['midslow', '插了延遲、逼它分段'],
+  ] as const)('中段才出錯（%s，%s）：不涵蓋，行為與今天相同', async (which, _why) => {
+    const before = await runCell(which, false);
+    const after = await runCell(which, true);
+
+    expect(after.outcome).toBe('threw');
+    expect(after.requests).toBe(1);
+    expect(before.requests).toBe(1);
+    // 已經吐出來的內容照樣到得了消費端 —— 我們沒有把它吃掉。
+    expect(after.chunks).toBe(before.chunks);
+    expect(after.chunks).toBeGreaterThan(0);
+    expect(after.text).toBe('交付物已備妥');
+  });
+
+  /**
+   * **開了線卻不吐位元組**（#57 那個「永遠不回來」的失敗模式）**：這一層沒有動到它。**
+   *
+   * 這條是為了一個**看起來很合理但實測不成立**的顧慮而存在的。嗅探迴圈是在 fetch
+   * **裡面** await `read()` 的，所以掛住的連線會變成從 `configuration.fetch` 逃出去的
+   * 東西，落進 {@link classifyFailedAttempt} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
+   * 於是 {@link DEFAULT_LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
+   *
+   * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
+   * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
+   * 所以 `TIMEOUT` 本來就在可重試碼裡）。**這個乘法在這一刀之前就存在**，不是
+   * 這一層帶來的。
+   *
+   * 這條的價值就是把那件事釘住：哪天兩側分岔了，那才是這一層動到了掛住的連線。
+   *
+   * **`retries` 壓到 1**：這裡要等完退避才數得到次數，而它證的是「兩側相同」，不是那個數字。
+   */
+  it('開了線卻不吐位元組：兩側相同 —— 這一層沒有把它搬進重試射程', async () => {
+    const wrapped = await runCell('stalled', true, 300, 1);
+    const control = await runCell('stalled', false, 300, 1);
+
+    expect(wrapped.outcome).toBe('threw');
+    expect(control.outcome).toBe('threw');
+    expect(wrapped.requests).toBe(control.requests);
+    expect(wrapped.requests).toBe(2);
+  }, 30_000);
+
+  /** 串流中途斷掉（#516 的 Q3）：同樣落在第一則事件之外，同樣不涵蓋。 */
+  it('串流中途斷掉：不涵蓋，只打一次', async () => {
+    const run = await runCell('truncated', true);
+
+    expect(run.outcome).toBe('threw');
+    expect(run.requests).toBe(1);
+    // **前提**：沒收到內容就代表這一格量的是「連線失敗」而不是「中途斷」 —— 那是完全
+    // 不同的東西（而且會被重試）。第一次寫這條時正是踩在這裡。
+    expect(run.chunks).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **接上去了沒有。**
+ *
+ * 上面那一段量的是 {@link withInbandStreamErrors} 這支函式，用的是測試自己組的
+ * `ChatOpenAI`。**那證不了 `createLiveModel` 真的把它掛上去** —— 拿掉工廠裡那一行，
+ * 上面每一條照樣全綠。這一條把那個缺口補起來：問的是工廠**真的建出來的那顆** client。
+ */
+describe('createLiveModel 真的掛上了那一層（#516）', () => {
+  const original = process.env[LIVE_API_KEY_ENV];
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = original;
+  });
+
+  it('工廠建出來的 client，它的 fetch 會把串流內錯誤翻成 HTTP 錯誤回應', async () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    // 這一層的底層 fetch 是它被建出來那一刻的全域 fetch，所以先換掉再建工廠。
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          'data: {"error":{"message":"Service temporarily overloaded","code":503}}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      )) as typeof fetch;
+
+    const wired = createLiveModel(DEFAULTS).clientConfig.fetch;
+    expect(wired).toBeDefined();
+
+    const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain('Service temporarily overloaded');
+  });
+});
+
+/**
+ * **串流吐了內容之後停住**（[#521](https://github.com/DemianLi/nexus-agent/issues/521)）。
+ *
+ * SDK 的 `timeout` 在 `fetch` 回來時就清掉，所以第一則事件之後什麼都不管；修之前 serve 上那一輪會
+ * 一直等到有人按停止。這一組釘住 {@link withStreamIdleTimeout} 的五件事：
+ *
+ * | 格 | 接上之後 | 釘住的是 |
+ * | --- | --- | --- |
+ * | 吐一段就停（`midstall`） | 拋 {@link StreamIdleTimeoutError}、打 1 次 | 缺口補上了（這一層不重打，整次重打在 `stream-retry`，#520） |
+ * | 同一格不接（對照組） | 掛到外面的時限 | 缺口是真的，不是這一組量錯 |
+ * | 段與段隔 200ms、總長超過逾時（`slowdrip`） | 完整讀完 | 是**閒置**逾時，不是整條串流一個總時限 |
+ * | 開了線不吐位元組（`stalled`） | 兩側請求數相同 | 第一則事件之前照舊歸 SDK 管、照舊重試 |
+ * | 讀到一半使用者中止 | 兩側結果相同、不是逾時 | 中止沒被報成逾時 |
+ *
+ * **零憑證、零外部連線**：loopback 上的假 SSE 伺服器。
+ */
+describe('串流閒置逾時（#521）', () => {
+  const IDLE_MS = 300;
+
+  type Cell = 'midstall' | 'slowdrip' | 'stalled';
+
+  function sseChunk(delta: Record<string, unknown>, finish: string | null = null): string {
+    return `data: ${JSON.stringify({
+      id: 'chatcmpl-1',
+      object: 'chat.completion.chunk',
+      created: 1_790_000_000,
+      model: DEFAULT_LIVE_MODEL_ID,
+      choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }],
+    })}\n\n`;
+  }
+
+  const DRIP = ['交付', '物已', '備妥', '，請', '查收'];
+
+  let server: Server;
+  let baseURL: string;
+  let hits = 0;
+  let cell: Cell = 'midstall';
+
+  beforeEach(async () => {
+    hits = 0;
+    server = createServer((request, response) => {
+      hits += 1;
+      request.resume();
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const send = (text: string): void => void response.write(text);
+      if (cell === 'stalled') return;
+      send(sseChunk({ role: 'assistant', content: '' }));
+      if (cell === 'midstall') {
+        send(sseChunk({ content: '交付' }));
+        return;
+      }
+      // slowdrip：每段隔 200ms，比閒置逾時短，但總長（約 1 秒）比它長得多。
+      DRIP.forEach((piece, index) => {
+        setTimeout(
+          () => {
+            send(sseChunk({ content: piece }));
+            if (index === DRIP.length - 1) {
+              send(sseChunk({}, 'stop'));
+              response.end('data: [DONE]\n\n');
+            }
+          },
+          200 * (index + 1),
+        );
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  /** `createLiveModel` 那兩層 fetch 的疊法；`watched` 為假時只剩 #516 那層（今天的行為）。 */
+  function model(watched: boolean, retries = 0): ChatOpenAI {
+    const inner = withInbandStreamErrors();
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: DEFAULT_LIVE_MODEL_ID,
+      configuration: { baseURL, fetch: watched ? withStreamIdleTimeout(IDLE_MS, inner) : inner },
+      timeout: IDLE_MS,
+      maxRetries: retries,
+      onFailedAttempt: classifyFailedAttempt,
+    });
+  }
+
+  interface Run {
+    readonly outcome: 'completed' | 'threw' | 'hung';
+    readonly requests: number;
+    readonly chunks: number;
+    readonly text: string;
+    readonly elapsedMs: number;
+    readonly error?: unknown;
+  }
+
+  /** 讀完一條串流；過了 `capMs` 還沒結束就判成 `hung`（對照組要量得到「掛住」）。 */
+  async function run(
+    which: Cell,
+    watched: boolean,
+    options: { retries?: number; capMs?: number; abortAfterFirst?: boolean } = {},
+  ): Promise<Run> {
+    cell = which;
+    hits = 0;
+    let chunks = 0;
+    let text = '';
+    const started = Date.now();
+    const controller = new AbortController();
+    const reading = (async (): Promise<Omit<Run, 'requests' | 'elapsedMs'>> => {
+      try {
+        const stream = await model(watched, options.retries).stream('present report.md', {
+          signal: controller.signal,
+        });
+        for await (const part of stream) {
+          chunks += 1;
+          if (typeof part.content === 'string') text += part.content;
+          if (options.abortAfterFirst === true && text !== '') controller.abort();
+        }
+        return { outcome: 'completed', chunks, text };
+      } catch (error: unknown) {
+        return { outcome: 'threw', chunks, text, error };
+      }
+    })();
+    const cap = new Promise<Omit<Run, 'requests' | 'elapsedMs'>>((resolve) => {
+      setTimeout(() => resolve({ outcome: 'hung', chunks, text }), options.capMs ?? 3_000);
+    });
+    const result = await Promise.race([reading, cap]);
+    return { ...result, requests: hits, elapsedMs: Date.now() - started };
+  }
+
+  it('吐一段就停：接上之後拋閒置逾時、只打一次', async () => {
+    const after = await run('midstall', true, { retries: 2 });
+
+    expect(after.outcome).toBe('threw');
+    expect(after.error).toBeInstanceOf(StreamIdleTimeoutError);
+    // **前提**：收到過內容，才是「中段停住」而不是「連線失敗」（同 #516 `truncated` 那條）。
+    expect(after.text).toBe('交付');
+    expect(after.requests).toBe(1);
+    expect(after.elapsedMs).toBeLessThan(2_000);
+  }, 10_000);
+
+  it('對照組：同一格不接這一層，就掛著', async () => {
+    const before = await run('midstall', false, { capMs: 1_500 });
+
+    expect(before.outcome).toBe('hung');
+    expect(before.text).toBe('交付');
+  }, 10_000);
+
+  it('段與段隔得比逾時短、總長比逾時長：完整讀完 —— 是閒置逾時，不是總時限', async () => {
+    const after = await run('slowdrip', true);
+
+    expect(after.outcome).toBe('completed');
+    expect(after.text).toBe(DRIP.join(''));
+    expect(after.elapsedMs).toBeGreaterThan(IDLE_MS * 2);
+  }, 10_000);
+
+  it('開了線不吐位元組：兩側請求數相同 —— 第一則事件之前照舊歸 SDK 管、照舊重試', async () => {
+    const after = await run('stalled', true, { retries: 1 });
+    const before = await run('stalled', false, { retries: 1 });
+
+    expect(after.outcome).toBe('threw');
+    expect(before.outcome).toBe('threw');
+    expect(after.error).not.toBeInstanceOf(StreamIdleTimeoutError);
+    expect(after.requests).toBe(before.requests);
+    expect(after.requests).toBe(2);
+  }, 30_000);
+
+  it('讀到一半使用者中止：兩側結果相同，不會被報成逾時', async () => {
+    const after = await run('slowdrip', true, { abortAfterFirst: true });
+    const before = await run('slowdrip', false, { abortAfterFirst: true });
+
+    expect(after.outcome).toBe(before.outcome);
+    expect(after.outcome).not.toBe('hung');
+    expect(after.error).not.toBeInstanceOf(StreamIdleTimeoutError);
+    expect(after.text).toBe(before.text);
+  }, 10_000);
+});
+
+/** 計時器在三種收尾都要清掉：留一顆 90 秒的計時器，serve 就掛著一個沒人要的 closure。 */
+describe('閒置計時器的收尾（#521）', () => {
+  /**
+   * 這條測試期間建出來、還沒清掉也還沒觸發的計時器。**只數這段期間建的**：數整個行程的
+   * `getActiveResourcesInfo()` 會被前面幾條測試留下的計時器干擾——它們剛好在這裡到期，數字
+   * 就少一個，跟被測的這一層無關。
+   */
+  const live = new Set<unknown>();
+  let created = 0;
+
+  beforeEach(() => {
+    live.clear();
+    created = 0;
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      const id = realSet(() => {
+        live.delete(id);
+        callback(...args);
+      }, ms);
+      live.add(id);
+      created += 1;
+      return id;
+    }) as typeof setTimeout);
+    vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((id?: unknown) => {
+      live.delete(id);
+      realClear(id as Parameters<typeof clearTimeout>[0]);
+    }) as typeof clearTimeout);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 量具有接上：這一層真的建過計時器，「一顆都沒留」才有意義。 */
+  function expectNoneLeft(): void {
+    expect(created).toBeGreaterThan(0);
+    expect(live.size).toBe(0);
+  }
+
+  /** 底下那條被取消時收到的理由。 */
+  let cancelledWith: unknown;
+
+  function sse(parts: readonly string[], end: boolean): typeof fetch {
+    cancelledWith = undefined;
+    return (() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const part of parts) controller.enqueue(new TextEncoder().encode(part));
+              if (end) controller.close();
+            },
+            cancel(reason) {
+              cancelledWith = reason;
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      )) as typeof fetch;
+  }
+
+  it('讀完：不留計時器', async () => {
+    const response = await withStreamIdleTimeout(60_000, sse(['data: 1\n\n'], true))('x');
+    await response.text();
+    expectNoneLeft();
+  });
+
+  it('下游取消：不留計時器，底下那條也被取消', async () => {
+    const response = await withStreamIdleTimeout(60_000, sse(['data: 1\n\n'], false))('x');
+    const reader = response.body!.getReader();
+    await reader.read();
+    const pending = reader.read();
+    await reader.cancel('不要了');
+    await pending;
+    expectNoneLeft();
+    expect(cancelledWith).toBe('不要了');
+  });
+
+  it('逾時：拋閒置逾時，不留計時器', async () => {
+    const response = await withStreamIdleTimeout(50, sse(['data: 1\n\n'], false))('x');
+    const reader = response.body!.getReader();
+    await reader.read();
+    await expect(reader.read()).rejects.toBeInstanceOf(StreamIdleTimeoutError);
+    expectNoneLeft();
+    // 底下那條要放掉。經過 `ChatOpenAI` 時 SDK 自己也會中止請求，直接讀這個 fetch 的就只剩這一道。
+    expect(cancelledWith).toBeInstanceOf(StreamIdleTimeoutError);
+  });
+
+  it('非 SSE 的回應原樣放行', async () => {
+    const plain = new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+    const response = await withStreamIdleTimeout(50, (() =>
+      Promise.resolve(plain)) as typeof fetch)('x');
+    expect(response).toBe(plain);
+  });
+});
+
+/** 工廠建出來的 client 真的帶著閒置計時，而且用的是設定裡的 `streamIdleTimeoutMs`（#1251 從 `timeoutMs` 拆出來）。 */
+describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
+  const original = process.env[LIVE_API_KEY_ENV];
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = original;
+  });
+
+  it('吐一則事件就停：用 config.streamIdleTimeoutMs 逾時', async () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    // 底層 fetch 是工廠建出來那一刻的全域 fetch，所以先換掉再建工廠。
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"choices":[]}\n\n'));
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      )) as typeof fetch;
+
+    const wired = createLiveModel({ ...DEFAULTS, streamIdleTimeoutMs: 80 }).clientConfig.fetch;
+    const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
+    const reader = response.body!.getReader();
+    await reader.read();
+    const started = Date.now();
+    const error = await reader.read().then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(StreamIdleTimeoutError);
+    expect((error as StreamIdleTimeoutError).timeoutMs).toBe(80);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('空的助手內容的送法（#592）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } };
+
+  it('有工具呼叫、內容是空陣列：換成 null，其餘欄位原樣', () => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: [], tool_calls: [call], name: 'a' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: null, tool_calls: [call], name: 'a' },
+    ]);
+  });
+
+  it('沒有工具呼叫、內容是空陣列：整則不送', () => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: [] },
+      { role: 'user', content: '二' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'user', content: '二' },
+    ]);
+  });
+
+  it('只有空白的文字段也算空（同 pi-ai 的 trim）', () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'text', text: ' \n' }], tool_calls: [call] },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'assistant', content: null, tool_calls: [call] },
+    ]);
+  });
+
+  it.each([
+    ['空字串', ''],
+    ['只有空白的字串', ' \n'],
+    ['有字的字串', '好'],
+    ['空陣列', []],
+    ['空字串的文字段', [{ type: 'text', text: '' }]],
+    ['只有空白的文字段', [{ type: 'text', text: ' \n' }]],
+    ['有字的文字段', [{ type: 'text', text: ' 好 ' }]],
+    ['不是文字的一段', [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }]],
+  ])('沒有工具呼叫、內容是%s：整則不送的判法與從日誌推歷史時丟掉的是同一支', (_label, content) => {
+    const dropped = normalizeEmptyAssistantContent([{ role: 'assistant', content }]).length === 0;
+    expect(dropped).toBe(isEmptyAssistant({ type: 'ai', data: { content: content as string } }));
+  });
+
+  it.each([
+    ['空字串', ''],
+    ['只有空白的字串', ' \n'],
+    ['null', null],
+    ['缺席', undefined],
+  ])('沒有工具呼叫、內容是%s：整則不送', (_label, content) => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', ...(content === undefined ? {} : { content }) },
+      { role: 'user', content: '二' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'user', content: '二' },
+    ]);
+  });
+
+  it('不動的：有字的陣列、字串、null、別的角色的空陣列——一則都沒換時回原本那個陣列', () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'text', text: '好。' }] },
+      { role: 'assistant', content: '', tool_calls: [call] },
+      { role: 'assistant', content: null, tool_calls: [call] },
+      { role: 'assistant', content: [{ type: 'image_url', image_url: { url: 'x' } }] },
+      { role: 'user', content: [] },
+      { role: 'tool', content: [], tool_call_id: 'call-1' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toBe(messages);
+  });
+
+  /** 記下底層收到的每一次呼叫。 */
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  const EMPTY = JSON.stringify({
+    model: 'm',
+    messages: [{ role: 'assistant', content: [], tool_calls: [call] }],
+  });
+
+  it('只改 /chat/completions 的 POST，而且只換 messages', async () => {
+    const { calls, base } = recording();
+    const wrapped = withEmptyAssistantContent(base);
+    const init = { method: 'POST', body: EMPTY, headers: { 'x-a': '1' } };
+    await wrapped('http://h/v1/chat/completions', init);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init!.headers).toEqual({ 'x-a': '1' });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [{ role: 'assistant', content: null, tool_calls: [call] }],
+    });
+  });
+
+  it('其餘原樣交下去：同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const wrapped = withEmptyAssistantContent(base);
+    const cases: [string, RequestInit | undefined][] = [
+      ['http://h/v1/chat/completions', { method: 'GET' }],
+      ['http://h/v1/models', { method: 'POST', body: EMPTY }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: '不是 JSON' }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: JSON.stringify({ messages: 1 }) }],
+      [
+        'http://h/v1/chat/completions',
+        { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: '一' }] }) },
+      ],
+      ['http://h/v1/chat/completions', undefined],
+    ];
+    for (const [url, init] of cases) await wrapped(url, init);
+    expect(calls.map((c) => c.init)).toEqual(cases.map(([, init]) => init));
+    for (const [index, [, init]] of cases.entries()) expect(calls[index]!.init).toBe(init);
+  });
+
+  describe('經過 createLiveModel：產品路徑上會送出 [] 的兩個來源', () => {
+    const original = process.env[LIVE_API_KEY_ENV];
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = original;
+    });
+
+    /** 換掉全域 fetch 再建工廠，回傳每一次請求裡原樣的助手訊息。 */
+    function wiredModel() {
+      process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+      const sent: unknown[][] = [];
+      globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as { messages: { role: string }[] };
+        sent.push(body.messages.filter((message) => message.role === 'assistant'));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: `c${sent.length}`,
+              object: 'chat.completion',
+              created: 0,
+              model: 'm',
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: '好。' },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }) as typeof fetch;
+      return { model: createLiveModel(DEFAULTS), sent };
+    }
+
+    it('truncateArgs 重建的推理＋工具呼叫那則：送 null，不送 []', async () => {
+      const { model, sent } = wiredModel();
+      // 照 deepagents@1.13.1 的 truncateArgs：只帶 content、tool_calls、additional_kwargs，
+      // response_metadata（含 output_version: 'v1'）丟了，所以走 @langchain/openai 的舊路。
+      const streamed = new AIMessage({
+        content: [
+          { type: 'reasoning', reasoning: '先想' },
+          { type: 'tool_call', id: 'call-1', name: 'noop', args: {} },
+        ],
+        tool_calls: [{ id: 'call-1', name: 'noop', args: {} }],
+        response_metadata: { output_version: 'v1' },
+      });
+      const rebuilt = new AIMessage({
+        content: streamed.content,
+        tool_calls: streamed.tool_calls,
+        additional_kwargs: streamed.additional_kwargs,
+      });
+      await model.invoke([
+        new HumanMessage('一'),
+        rebuilt,
+        new ToolMessage({ content: '做完了', tool_call_id: 'call-1' }),
+        new HumanMessage('二'),
+      ]);
+      expect(sent).toEqual([
+        [
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } },
+            ],
+          },
+        ],
+      ]);
+    });
+
+    it('按停止時只收到推理的那則（#561）：整則不送', async () => {
+      const { model, sent } = wiredModel();
+      const interrupted = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: '先想' }],
+        response_metadata: { output_version: 'v1' },
+      });
+      await model.invoke([new HumanMessage('一'), interrupted, new HumanMessage('二')]);
+      expect(sent).toEqual([[]]);
+    });
+  });
+});
+
+describe('助手訊息不送 name（#1392）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } };
+
+  it('只拿掉助手訊息的 name，其餘欄位與順序原樣；別的角色的 name 不動', () => {
+    const out = stripAssistantName([
+      { role: 'user', content: '嗨', name: 'u' },
+      { role: 'assistant', content: '好。', name: 'model' },
+      { role: 'assistant', content: null, name: 'model', tool_calls: [call] },
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+    expect(out).toEqual([
+      { role: 'user', content: '嗨', name: 'u' },
+      { role: 'assistant', content: '好。' },
+      { role: 'assistant', content: null, tool_calls: [call] },
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+    expect(Object.keys((out as Record<string, unknown>[])[2]!)).toEqual([
+      'role',
+      'content',
+      'tool_calls',
+    ]);
+  });
+
+  it('沒有助手訊息帶 name 時回原本那個陣列', () => {
+    const messages = [
+      { role: 'user', content: '嗨' },
+      { role: 'assistant', content: '好。' },
+      { role: 'tool', content: '結果', name: 'noop', tool_call_id: 'call-1' },
+    ];
+    expect(stripAssistantName(messages)).toBe(messages);
+  });
+
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  const NAMED = JSON.stringify({
+    model: 'm',
+    messages: [{ role: 'assistant', name: 'model', content: '好。' }],
+  });
+
+  it('只改 /chat/completions 的 POST，而且只換 messages', async () => {
+    const { calls, base } = recording();
+    await withoutAssistantName(base)('http://h/v1/chat/completions', {
+      method: 'POST',
+      body: NAMED,
+      headers: { 'x-a': '1' },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init!.headers).toEqual({ 'x-a': '1' });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [{ role: 'assistant', content: '好。' }],
+    });
+  });
+
+  it('其餘原樣交下去：同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const wrapped = withoutAssistantName(base);
+    const cases: [string, RequestInit | undefined][] = [
+      ['http://h/v1/chat/completions', { method: 'GET' }],
+      ['http://h/v1/models', { method: 'POST', body: NAMED }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: '不是 JSON' }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: JSON.stringify({ messages: 1 }) }],
+      [
+        'http://h/v1/chat/completions',
+        {
+          method: 'POST',
+          body: JSON.stringify({ messages: [{ role: 'assistant', content: '好。' }] }),
+        },
+      ],
+      ['http://h/v1/chat/completions', undefined],
+    ];
+    for (const [url, init] of cases) await wrapped(url, init);
+    for (const [index, [, init]] of cases.entries()) expect(calls[index]!.init).toBe(init);
+  });
+
+  describe('經過 createLiveModel：出貨的 fetch 疊裡有這一層', () => {
+    const original = process.env[LIVE_API_KEY_ENV];
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = original;
+    });
+
+    it('非串流的歷史裡帶 name: "model" 的助手訊息，送出去的 body 沒有 name', async () => {
+      process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+      const sent: { role: string; name?: string }[][] = [];
+      globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as { messages: { role: string }[] };
+        sent.push(body.messages);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'c1',
+              object: 'chat.completion',
+              created: 0,
+              model: 'm',
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: '好。' },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }) as typeof fetch;
+      const model = createLiveModel(DEFAULTS);
+      await model.invoke([
+        new HumanMessage('一'),
+        new AIMessage({ content: '好。', name: 'model' }),
+        new HumanMessage('二'),
+      ]);
+      expect(sent).toHaveLength(1);
+      const assistants = sent[0]!.filter((message) => message.role === 'assistant');
+      expect(assistants).toHaveLength(1);
+      expect('name' in assistants[0]!).toBe(false);
+    });
+  });
+});
+
+/**
+ * MCP 工具可以回空的 `content` 陣列，`@langchain/openai` 原樣送出（`""` 或 `[]`）。只換「沒有內容」的工具訊息，其餘一律不碰。
+ * 接線（真的 `runServe --live`＋夾具的 `empty_result`）在 `live-model-attribution.test.ts`。
+ */
+describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）', () => {
+  it('字面是 (no output)', () => {
+    expect(EMPTY_TOOL_RESULT_TEXT).toBe('(no output)');
+  });
+
+  it.each([
+    ['空字串', ''],
+    ['空陣列', []],
+    ['文字區塊的 text 串起來是空字串', [{ type: 'text', text: '' }]],
+    [
+      '好幾個空的文字區塊',
+      [
+        { type: 'text', text: '' },
+        { type: 'text', text: '' },
+      ],
+    ],
+    ['null', null],
+  ])('換成 (no output)，tool_call_id 與其他欄位不變：%s', (_label, content) => {
+    const messages = [
+      { role: 'user', content: '嗨' },
+      { role: 'tool', content, tool_call_id: 'call-1', name: 'noop' },
+    ];
+    expect(fillEmptyToolContent(messages)).toEqual([
+      { role: 'user', content: '嗨' },
+      { role: 'tool', content: '(no output)', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+  });
+
+  it('缺席的 content 也補（沒有這個鍵）', () => {
+    expect(fillEmptyToolContent([{ role: 'tool', tool_call_id: 'call-1' }])).toEqual([
+      { role: 'tool', tool_call_id: 'call-1', content: '(no output)' },
+    ]);
+  });
+
+  it('不動的：有字的結果、只有空白的結果、帶圖的陣列、別的角色的空內容——一則都沒換時回原本那個陣列', () => {
+    const messages = [
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1' },
+      { role: 'tool', content: [{ type: 'text', text: '好' }], tool_call_id: 'call-2' },
+      { role: 'tool', content: '  ', tool_call_id: 'call-4' },
+      { role: 'tool', content: ' \n\t ', tool_call_id: 'call-5' },
+      { role: 'tool', content: [{ type: 'text', text: ' ' }], tool_call_id: 'call-6' },
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'text', text: ' ' },
+        ],
+        tool_call_id: 'call-7',
+      },
+      // 空的文字區塊加一段圖：有一段不是文字就算有內容。
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'image_url', image_url: { url: 'x' } },
+        ],
+        tool_call_id: 'call-8',
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'image_url', image_url: { url: 'x' } }],
+        tool_call_id: 'call-3',
+      },
+      { role: 'assistant', content: [] },
+      { role: 'user', content: '' },
+      { role: 'system', content: '' },
+      'not-an-object',
+      null,
+    ];
+    expect(fillEmptyToolContent(messages)).toBe(messages);
+  });
+
+  it('同一串裡只換空的那一則，其餘原樣、順序不變', () => {
+    const kept = { role: 'tool', content: '有字', tool_call_id: 'call-1' };
+    const out = fillEmptyToolContent([kept, { role: 'tool', content: [], tool_call_id: 'call-2' }]);
+    expect(out[0]).toBe(kept);
+    expect(out[1]).toEqual({ role: 'tool', content: '(no output)', tool_call_id: 'call-2' });
+  });
+
+  it('withEmptyToolContent：/chat/completions 的 POST 換掉；沒有空的就是同一個 init 物件；別的路徑與 GET 不碰', async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    const body = JSON.stringify({
+      messages: [{ role: 'tool', content: '', tool_call_id: 'call-1' }],
+    });
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', { method: 'POST', body });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      messages: [{ role: 'tool', content: '(no output)', tool_call_id: 'call-1' }],
+    });
+
+    const clean = {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'tool', content: '好', tool_call_id: 'c' }] }),
+    };
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', clean);
+    expect(calls[1]!.init).toBe(clean);
+
+    const other = { method: 'POST', body };
+    await withEmptyToolContent(base)('http://h/v1/embeddings', other);
+    expect(calls[2]!.init).toBe(other);
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', { method: 'GET' });
+    expect(calls[3]!.init).toEqual({ method: 'GET' });
+  });
+});
+
+/**
+ * **夾具與出貨共用的那一組 body 改寫**（[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)）。
+ *
+ * `createLiveModel` 與 `log-derived-history.fixture.ts` 的 `model()` 都用 `withShippedRequestBody`，所以夾具量到的是出貨時線上的
+ * 形狀。這裡釘住「這一組裡有哪三格」：少了任何一格，下面那條就紅（三格各自的細節在上面三個 describe）。
+ *
+ * 突變（#1398 實測）：函式裡拿掉 `withEmptyAssistantContent` → 紅（空內容還是 `[]`）；拿掉 `withoutAssistantName` → 紅（`name` 還在）。
+ * #1562 加的第三格：拿掉 `withEmptyToolContent` → 紅（空的工具結果還是空的）。
+ */
+describe('夾具與出貨共用的 body 改寫（#1398）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'echo', arguments: '{}' } };
+
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  it('同一個請求裡：空的助手內容換成 null、空的工具結果補 (no output)、助手訊息的 name 拿掉，其餘原樣', async () => {
+    const { calls, base } = recording();
+    const body = JSON.stringify({
+      model: 'm',
+      messages: [
+        { role: 'user', content: '嗨' },
+        { role: 'assistant', name: 'model', content: [], tool_calls: [call] },
+        { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', name: 'model', content: [], tool_calls: [{ ...call, id: 'call-2' }] },
+        { role: 'tool', content: [], tool_call_id: 'call-2' },
+        { role: 'assistant', name: 'model', content: '好。' },
+      ],
+    });
+    await withShippedRequestBody(base)('http://h/v1/chat/completions', { method: 'POST', body });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [
+        { role: 'user', content: '嗨' },
+        { role: 'assistant', content: null, tool_calls: [call] },
+        // 工具訊息的 `name` 不是這一組的事（只動 `role: assistant`）。
+        { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', content: null, tool_calls: [{ ...call, id: 'call-2' }] },
+        { role: 'tool', content: '(no output)', tool_call_id: 'call-2' },
+        { role: 'assistant', content: '好。' },
+      ],
+    });
+  });
+
+  it('什麼都不用換的請求：原樣交下去，同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const init = {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: '嗨' }] }),
+    };
+    await withShippedRequestBody(base)('http://h/v1/chat/completions', init);
+    expect(calls[0]!.init).toBe(init);
+  });
+});

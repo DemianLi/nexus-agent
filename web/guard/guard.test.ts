@@ -1,0 +1,1084 @@
+// @vitest-environment node
+/** 瀏覽器護欄（#1512）：出貨 CSS 的焦點、對比、陰影與 modal 浮層。量具與 Chrome、伺服器的生命週期在 `harness.ts`。 */
+import { readFileSync } from 'node:fs';
+
+import { type Page } from 'playwright-core';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { parseColor, shadowLayers } from '../src/styles/color-math';
+
+import {
+  CHIP_STATES,
+  CHIP_STATUS,
+  type BackdropSample,
+  type ChipSample,
+  type ChoiceSample,
+  type FieldSample,
+  type FocusSample,
+  type HoverSample,
+  MODES,
+  OVERLAYS,
+  OVERLAY_SHADOW_LIMITS,
+  PRESS_STATES,
+  type PressSample,
+  REQUIRED_TEXTS,
+  SHADOWED,
+  SHADOW_LIMITS,
+  STATUS_MIN,
+  type ShadowSample,
+  TEXT_MIN,
+  type TextSample,
+  type Theme,
+  AXE_KNOWN,
+  AXE_KNOWN_OVERLAYS,
+  AXE_PAGE_RULES,
+  collectAxe,
+  collectBackdrops,
+  collectChips,
+  collectChoices,
+  collectFields,
+  collectFocus,
+  collectHovers,
+  collectPresses,
+  collectShadows,
+  collectSurfaces,
+  collectTexts,
+  expectFocus,
+  expectTexts,
+  open,
+  openOverlay,
+  report,
+  round,
+  scrimDimming,
+  worstContrast,
+  worstOn,
+} from './harness';
+
+test('量具自檢：往上任一層的 opacity 不是 1 就判不合格，全是 1 才照常算', () => {
+  const layer = (backgroundColor: string, opacity = '1') => ({
+    backgroundColor,
+    backgroundImage: 'none',
+    opacity,
+  });
+  expect(worstOn('rgb(0, 0, 0)', [layer('rgb(255, 255, 255)')]).ratio).toBe(21);
+  expect(
+    worstOn('rgb(0, 0, 0)', [layer('rgba(0, 0, 0, 0)'), layer('rgb(255, 255, 255)', '0.5')]),
+  ).toEqual({ ratio: 0, on: '往上第 1 層的 opacity 是 0.5，量具不算整組透明度' });
+});
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme) => {
+  let page: Page;
+  let texts: TextSample[];
+  let focus: FocusSample[];
+  let fields: FieldSample[];
+  let docked: { borderTopWidth: string; boxShadow: string }[];
+  let located: { borderTopLeftRadius: string; backgroundColor: string }[];
+  let shadows: ShadowSample[];
+  let chips: ChipSample[];
+  let choices: ChoiceSample[];
+  let hovers: HoverSample[];
+  let presses: PressSample[];
+  let glass: { name: string; backdropFilter: string }[];
+  let expanded: Record<
+    string,
+    { backgroundColor: string; ariaExpanded: string | null; popupOpen: boolean }
+  >;
+  let groups: Record<string, { opacity: string; backgroundColor: string }>;
+
+  beforeAll(async () => {
+    page = await open(theme);
+    texts = await collectTexts(page);
+    shadows = await collectShadows(page);
+    chips = await collectChips(page);
+    choices = await collectChoices(page);
+    hovers = await collectHovers(page);
+    presses = await collectPresses(page);
+    glass = await page.$$eval('[data-guard-glass]', (els) =>
+      els.map((el) => ({
+        name: el.getAttribute('data-guard-glass') ?? '',
+        backdropFilter: getComputedStyle(el).backdropFilter,
+      })),
+    );
+    expanded = Object.fromEntries(
+      await page.$$eval('[data-guard-expanded]', (els) =>
+        els.map((el) => [
+          el.getAttribute('data-guard-expanded') ?? '',
+          {
+            backgroundColor: getComputedStyle(el).backgroundColor,
+            ariaExpanded: el.getAttribute('aria-expanded'),
+            popupOpen: el.hasAttribute('data-popup-open'),
+          },
+        ]),
+      ),
+    );
+    groups = Object.fromEntries(
+      await page.$$eval('[data-guard-opacity]', (els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return [
+            el.getAttribute('data-guard-opacity') ?? '',
+            { opacity: style.opacity, backgroundColor: style.backgroundColor },
+          ];
+        }),
+      ),
+    );
+    focus = await collectFocus(page);
+    fields = await collectFields(page);
+    docked = await page.$$eval('[data-guard-docked]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return { borderTopWidth: style.borderTopWidth, boxShadow: style.boxShadow };
+      }),
+    );
+    located = await page.$$eval('[data-guard-located]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          borderTopLeftRadius: style.borderTopLeftRadius,
+          backgroundColor: style.backgroundColor,
+        };
+      }),
+    );
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('量具有抓到東西：每個標了的元素都量到', () => {
+    expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
+    expect(focus.map((f) => f.name)).toEqual(
+      expect.arrayContaining([
+        'button-default',
+        'input-group',
+        'sidebar-menu-button',
+        'sidebar-menu-action',
+        'sidebar-trigger',
+      ]),
+    );
+    expect(shadows.length).toBeGreaterThan(0);
+  });
+
+  test('每個字對它實際的底色過門檻（往上疊到不透明為止、漸層取最差的停點）', () => {
+    const measured = texts.map((t) => ({ name: t.name, min: t.min, ...worstContrast(t) }));
+    report[`${theme}:contrast`] = measured.map((m) => ({ ...m, ratio: round(m.ratio) }));
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.name} ${round(m.ratio)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('鍵盤焦點：box-shadow 不帶 ring（跟沒聚焦時一樣），外框是 2px 實線、頁面的字色', () => {
+    expectFocus(focus, theme);
+  });
+
+  test('欄位聚焦：邊框四邊都換成頁面的字色', () => {
+    report[`${theme}:fields`] = fields;
+    // 量具自檢：四種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
+    expect(fields.map((f) => f.name).sort()).toEqual([
+      'input',
+      'input-group',
+      'sidebar-input',
+      'textarea',
+    ]);
+    expect(fields.filter((f) => !f.focusVisible).map((f) => f.name)).toEqual([]);
+    expect(
+      fields
+        .filter((f) => JSON.stringify(f.borderBefore) === JSON.stringify(f.borderAfter))
+        .map((f) => f.name),
+    ).toEqual([]);
+    expect(
+      fields
+        .filter((f) => f.borderAfter.some((c) => c !== f.pageColor))
+        .map((f) => `${f.name}：${f.borderAfter.join(' ')}（字色 ${f.pageColor}）`),
+    ).toEqual([]);
+  });
+
+  test('輸入框底列的 Pick 平常、滑鼠移上去、清單開著，12px 的次要字過 4.5；「全開」平常與移上去是警示色、清單開著換回字色（#1591）', () => {
+    const measured = chips.map((c) => ({
+      key: `${c.name}:${c.state}`,
+      ...c,
+      min: CHIP_STATUS.has(`${c.name}:${c.state}`) ? STATUS_MIN : TEXT_MIN,
+      ...worstOn(c.color, c.chain),
+    }));
+    report[`${theme}:chips`] = measured.map((m) => ({
+      key: m.key,
+      min: m.min,
+      color: m.color,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: Math.round(m.ratio * 10000) / 10000,
+    }));
+    // 量具自檢：兩顆 Pick 都量到三種狀態、真的在那個狀態。
+    expect(measured.map((m) => m.key)).toEqual(
+      ['pick', 'pick-danger'].flatMap((name) => CHIP_STATES.map((state) => `${name}:${state}`)),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    // 一般的 Pick 移上去換成字色（vendor 的 `hover:text-foreground`，量具自檢：量到的確實是 hover）；「全開」那顆平常與移上去
+    // 是同一個警示色，跟一般那顆的次要色、字色都不同（拿掉覆寫檔第 35 條，它會跟一般那顆一樣）；開著時跟一般那顆一樣是字色。
+    const color = (key: string) => measured.find((m) => m.key === key)?.color;
+    expect(color('pick:hover')).not.toBe(color('pick:rest'));
+    expect(color('pick-danger:hover')).toBe(color('pick-danger:rest'));
+    expect(color('pick-danger:rest')).not.toBe(color('pick:rest'));
+    expect(color('pick-danger:rest')).not.toBe(color('pick:hover'));
+    expect(color('pick-danger:open')).toBe(color('pick:open'));
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('頂列用量鈕：平常的次要字、移上去與按著的 foreground（SG 的 --hover，按著跟移上去同一階）都過 4.5', () => {
+    const measured = presses.map((p) => ({
+      key: `${p.name}:${p.state}`,
+      ...p,
+      ...worstOn(p.color, p.chain),
+    }));
+    report[`${theme}:presses`] = measured.map((m) => ({
+      key: m.key,
+      color: m.color,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: Math.round(m.ratio * 10000) / 10000,
+    }));
+    // 量具自檢：三種狀態都量到、真的在那個狀態；移上去真的換了底（`bg-card` 之類蓋掉的話會跟平常一樣），按著跟移上去同一階。
+    expect(measured.map((m) => m.key)).toEqual(
+      PRESS_STATES.map((state) => `session-usage:${state}`),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    const by = Object.fromEntries(measured.map((m) => [m.state, m]));
+    expect(by.hover!.backgroundColor).not.toBe(by.rest!.backgroundColor);
+    expect(by.pressed!.backgroundColor).toBe(by.hover!.backgroundColor);
+    // 移上去與按著的字是 foreground（跟平常的次要字不同色）。
+    expect(by.hover!.color).not.toBe(by.rest!.color);
+    expect(by.pressed!.color).toBe(by.hover!.color);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= TEXT_MIN))
+        .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${TEXT_MIN}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('問答的選項：勾選的底蓋得過卡片、移上去不變，勾選框只填勾選的那個，停用的半透明、點不到（shadcn 的 data-* variant，#1523）', () => {
+    report[`${theme}:choices`] = choices;
+    const by = Object.fromEntries(choices.map((c) => [c.name, c]));
+    const { checked, unchecked, disabled } = by;
+    expect(Object.keys(by).sort()).toEqual(['checked', 'disabled', 'unchecked']);
+    // 量具自檢：真的移上去了。
+    expect([checked!.hovered, unchecked!.hovered]).toEqual([true, true]);
+    // 勾選的底跟沒勾選的不一樣（data-checked 要蓋得過 SG 的 `.bg-card`），移上去也不變。
+    // 沒勾選的移上去不是這裡要守的行為，不斷言。
+    expect(checked!.rest).not.toBe(unchecked!.rest);
+    expect(checked!.hover).toBe(checked!.rest);
+    // group-data-checked：勾選框只有勾選的那一個填上 primary。
+    expect(checked!.indicator).not.toBe(unchecked!.indicator);
+    expect([disabled!.opacity, disabled!.pointerEvents, disabled!.cursor]).toEqual([
+      '0.5',
+      'none',
+      'not-allowed',
+    ]);
+    expect([unchecked!.opacity, unchecked!.pointerEvents]).toEqual(['1', 'auto']);
+  });
+
+  test('destructive 按鈕：平常與 hover 的字對底色都過 4.5（hover 底由覆寫檔調淡，#1523 第 17 條）', () => {
+    const measured = hovers.map((h) => ({
+      key: `${h.name}:${h.state}`,
+      ...h,
+      ...worstOn(h.color, h.chain),
+    }));
+    report[`${theme}:hovers`] = measured.map((m) => ({
+      key: m.key,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: round(m.ratio),
+    }));
+    // 量具自檢：兩顆都量到兩種狀態、真的在那個狀態，hover 的底跟平常不一樣（量到的是 hover 那一層）。
+    expect(measured.map((m) => m.key)).toEqual(
+      ['button-destructive', 'button-destructive-card'].flatMap((n) => [`${n}:rest`, `${n}:hover`]),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    for (const name of ['button-destructive', 'button-destructive-card'])
+      expect(
+        new Set(measured.filter((m) => m.name === name).map((m) => m.backgroundColor)).size,
+      ).toBe(2);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= TEXT_MIN))
+        .map((m) => `${m.key} ${round(m.ratio)} < ${TEXT_MIN}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('SG 的玻璃按鈕吃到 SG 的規則：outline、secondary、glass 都有 backdrop-filter（data-variant 命中 solid-glass.css:642-679，#1523）', () => {
+    report[`${theme}:glass`] = glass;
+    expect(glass.map((g) => g.name).sort()).toEqual(['glass', 'outline', 'secondary']);
+    expect(glass.filter((g) => g.backdropFilter === 'none').map((g) => g.name)).toEqual([]);
+  });
+
+  test('浮層 Trigger（render 接 Base UI 的 Button）開著時掛 data-popup-open 與 aria-expanded，SG 換成按下去的底色（#1523、#1583）', () => {
+    report[`${theme}:expanded`] = expanded;
+    expect(expanded.trigger?.ariaExpanded).toBe('true');
+    expect(expanded.trigger?.popupOpen).toBe(true);
+    expect(expanded.reference?.ariaExpanded).toBeNull();
+    expect(expanded.reference?.popupOpen).toBe(false);
+    expect(expanded.trigger?.backgroundColor).not.toBe(expanded.reference?.backgroundColor);
+  });
+
+  test('輸入框群組只在欄位停用時變淡：只有送出鈕停用的不透明、底色跟一般的一樣，欄位停用的是 0.5（#1523 第 18 條）', () => {
+    report[`${theme}:input-group-opacity`] = groups;
+    expect(Object.keys(groups).sort()).toEqual(['control-disabled', 'reference', 'send-disabled']);
+    expect(groups['send-disabled']).toEqual(groups.reference);
+    expect(groups.reference!.opacity).toBe('1');
+    expect(groups['control-disabled']!.opacity).toBe('0.5');
+  });
+
+  test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色有畫出來', () => {
+    report[`${theme}:located`] = located;
+    expect(located).toHaveLength(1);
+    const [only] = located;
+    // 量具自檢：規則真的套上了（底色不是透明），圓角是 0 才算數，不是整條規則沒中。
+    expect(parseColor(only!.backgroundColor).alpha).toBeGreaterThan(0);
+    expect(Number.parseFloat(only!.borderTopLeftRadius)).toBeGreaterThan(0);
+  });
+
+  test('貼在輸入框上方的卡片是平的：邊 1px、沒有投影', () => {
+    report[`${theme}:docked`] = docked;
+    expect(docked).toEqual([{ borderTopWidth: '1px', boxShadow: 'none' }]);
+  });
+
+  // 只有亮色有上限：暗底上投影要更濃才看得到（同 `shadow-alpha.test.ts`）。暗色不定義這條，不是跳過。
+  if (theme === 'light')
+    test('亮色陰影：每層投影的透明度不超過該元素的上限（邊緣那一層、inset 的高光與凹槽不算）', () => {
+      const layers = shadows.flatMap((s) =>
+        shadowLayers(s.boxShadow)
+          .filter((l) => !l.edge && !l.inset && l.color !== undefined)
+          .map((l) => ({ name: s.name, alpha: parseColor(l.color ?? '').alpha })),
+      );
+      report[`${theme}:shadow`] = layers;
+      // 量具自檢：Tailwind 清掉的層是全透明的（alpha 0），不算數；看得見的投影要正好落在這幾個元素上，
+      // 投影整個消失或搬到別的元素上都紅，不讓「沒量到」看起來像「全部達標」。
+      expect(new Set(layers.filter((l) => l.alpha > 0).map((l) => l.name))).toEqual(
+        new Set(SHADOWED),
+      );
+      expect(
+        layers
+          .filter((l) => !(l.alpha <= (SHADOW_LIMITS[l.name] ?? 0)))
+          .map((l) => `${l.name} ${l.alpha} > ${SHADOW_LIMITS[l.name]}`),
+      ).toEqual([]);
+    });
+});
+
+/** 不透明的兩種退路：面真的不透明、字一樣過門檻。 */
+describe.each(
+  MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
+    (['light', 'dark'] as const).map((theme) => [mode, theme] as const),
+  ),
+)('瀏覽器量出貨的 CSS：%s、%s', (mode, theme) => {
+  let page: Page;
+  let texts: TextSample[];
+  let surfaces: { name: string; backgroundColor: string; backdropFilter: string }[];
+
+  beforeAll(async () => {
+    page = await open(theme, mode);
+    texts = await collectTexts(page);
+    surfaces = await page.$$eval('[data-guard-surface]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          name: el.getAttribute('data-guard-surface') ?? '',
+          backgroundColor: style.backgroundColor,
+          backdropFilter: style.backdropFilter,
+        };
+      }),
+    );
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('面是不透明的、沒有 blur', () => {
+    report[`${mode}:${theme}:surfaces`] = surfaces;
+    expect(surfaces.map((s) => s.name).sort()).toEqual(['card', 'popover', 'sidebar', 'tooltip']);
+    expect(
+      surfaces
+        .filter((s) => parseColor(s.backgroundColor).alpha !== 1 || s.backdropFilter !== 'none')
+        .map((s) => `${s.name}：${s.backgroundColor}、backdrop-filter ${s.backdropFilter}`),
+    ).toEqual([]);
+  });
+
+  test('每個字對它實際的底色過門檻', () => {
+    // 量具自檢：不透明的頁面也真的量到字，不然下面那條在空陣列上會綠。
+    expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
+    const measured = texts.map((t) => ({ name: t.name, min: t.min, ...worstContrast(t) }));
+    report[`${mode}:${theme}:contrast`] = measured.map((m) => ({ ...m, ratio: round(m.ratio) }));
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.name} ${round(m.ratio)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
+});
+
+describe.each(
+  OVERLAYS.flatMap((overlay) =>
+    (['light', 'dark'] as const).map((theme) => [overlay.name, theme, overlay] as const),
+  ),
+)('瀏覽器量 modal 浮層（#1583）：%s、%s', (_name, theme, overlay) => {
+  const key = `${overlay.name}:${theme}`;
+  let page: Page;
+  let texts: TextSample[];
+  let focus: FocusSample[];
+  let shadows: ShadowSample[];
+  let backdrops: BackdropSample[];
+  let borders: { name: string; widths: string[] }[];
+  let rows: { name: string; backgroundColor: string; highlighted: boolean; selected: boolean }[];
+  let shown: Record<string, string>;
+  let checks: { name: string; visible: string[]; hidden: number }[];
+
+  beforeAll(async () => {
+    page = await openOverlay(overlay.name, theme, {
+      ...(overlay.viewport === undefined ? {} : { viewport: overlay.viewport }),
+      marks: overlay.marks,
+      ...(overlay.prepare === undefined ? {} : { prepare: overlay.prepare }),
+    });
+    texts = await collectTexts(page);
+    rows = await page.$$eval(
+      '[data-guard-text^="dropdown-item"], [data-guard-text^="command-item"]',
+      (els) =>
+        els.map((el) => ({
+          name: el.getAttribute('data-guard-text') ?? '',
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          highlighted: el.hasAttribute('data-highlighted'),
+          selected: el.getAttribute('data-selected') === 'true',
+        })),
+    );
+    shown = Object.fromEntries(
+      await page.$$eval('[data-guard-shown]', (els) =>
+        els.map((el) => [el.getAttribute('data-guard-shown') ?? '', getComputedStyle(el).opacity]),
+      ),
+    );
+    checks = await page.$$eval('[data-guard-checks]', (els) =>
+      els.map((el) => {
+        const svgs = [...el.querySelectorAll('svg')];
+        const isVisible = (svg: Element) => {
+          const box = svg.getBoundingClientRect();
+          return getComputedStyle(svg).display !== 'none' && box.width > 0 && box.height > 0;
+        };
+        return {
+          name: el.getAttribute('data-guard-checks') ?? '',
+          visible: svgs.filter(isVisible).map((svg) => svg.getAttribute('aria-label') ?? ''),
+          hidden: svgs.filter((svg) => !isVisible(svg)).length,
+        };
+      }),
+    );
+    shadows = await collectShadows(page);
+    backdrops = await collectBackdrops(page);
+    borders = await page.$$eval('[data-guard-border]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          name: el.getAttribute('data-guard-border') ?? '',
+          widths: [
+            style.borderTopWidth,
+            style.borderRightWidth,
+            style.borderBottomWidth,
+            style.borderLeftWidth,
+          ],
+        };
+      }),
+    );
+    focus = await collectFocus(page);
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('字對它實際的底色過門檻', () => {
+    expectTexts(texts, overlay.texts, key);
+  });
+
+  if (overlay.focus.length > 0)
+    test('鍵盤焦點（關閉鈕、確認框的按鈕、搜尋框）：不帶 ring，外框是 2px 實線、頁面的字色', () => {
+      expect(focus.map((f) => f.name).sort()).toEqual([...overlay.focus].sort());
+      expectFocus(focus, key);
+    });
+
+  if (overlay.backdrops.length > 0)
+    test('遮罩照 SG 有 blur（量具自檢：不透明的退路那邊量到 none 才算數）', () => {
+      report[`${key}:backdrops`] = backdrops;
+      expect(backdrops.map((b) => b.name)).toEqual(overlay.backdrops);
+      expect(backdrops.filter((b) => b.backdropFilter === 'none').map((b) => b.name)).toEqual([]);
+    });
+
+  if (overlay.backdrops.length > 0)
+    test('遮罩的顏色照 SG 是 10% 的黑（本地修改第 84 條：平常跟 SG 同值）', () => {
+      expect(backdrops.map((b) => parseColor(b.backgroundColor))).toEqual(
+        backdrops.map(() => parseColor('rgb(0 0 0 / 10%)')),
+      );
+    });
+
+  if (overlay.name === 'alert-dialog')
+    test('Tab 與 Shift+Tab 各繞兩圈，焦點都留在確認框裡', async () => {
+      const where = () =>
+        page.evaluate(() => {
+          const el = document.activeElement;
+          return el?.closest('[data-slot="alert-dialog-content"]')
+            ? (el.textContent ?? '')
+            : '框外';
+        });
+      const seen: string[] = [];
+      for (const press of [
+        'Tab',
+        'Tab',
+        'Tab',
+        'Tab',
+        'Shift+Tab',
+        'Shift+Tab',
+        'Shift+Tab',
+        'Shift+Tab',
+      ]) {
+        await page.keyboard.press(press);
+        // 走出兩端時焦點先落在 Base UI 的隱形哨兵上，下一幀才被接回框裡；等它離開哨兵再記，不然量到的是中間那一幀。
+        await page.waitForFunction(
+          () => !document.activeElement?.hasAttribute('data-base-ui-focus-guard'),
+          undefined,
+          { timeout: 2_000 },
+        );
+        seen.push(await where());
+      }
+      report[`${key}:tab-trap`] = seen;
+      expect(seen).not.toContain('框外');
+      // 量具自檢：焦點真的在兩顆按鈕之間動，不是停在同一顆上。
+      expect(new Set(seen).size).toBe(2);
+    });
+
+  if (overlay.name === 'dropdown') {
+    test('滑鼠移上去的選項掛 data-highlighted、底色跟平常的不同（量具自檢：上面量的確實是兩種狀態）', () => {
+      report[`${key}:rows`] = rows;
+      expect(rows.map((r) => [r.name, r.highlighted])).toEqual([
+        ['dropdown-item', false],
+        ['dropdown-item-highlighted', true],
+      ]);
+      expect(rows[0]!.backgroundColor).not.toBe(rows[1]!.backgroundColor);
+    });
+
+    test('「⋯」選單開著時看得見（Trigger 開著掛 aria-expanded，vendor 的 SidebarMenuAction 認它）', () => {
+      report[`${key}:shown`] = shown;
+      // 量具自檢：lg 寬度下沒開的「⋯」照樣藏著（滑過那一列才現身）。
+      expect(shown).toEqual({ open: '1', closed: '0' });
+    });
+  }
+
+  if (overlay.name === 'command') {
+    test('選中與沒選中的選項底色不同（量具自檢：上面量的確實是兩種狀態）', () => {
+      report[`${key}:rows`] = rows;
+      const selected = rows.filter((r) => r.selected);
+      expect(selected.map((r) => r.name)).toEqual(['command-item-selected']);
+      expect(rows.filter((r) => !r.selected).length).toBeGreaterThan(0);
+      expect(
+        rows.filter((r) => !r.selected && r.backgroundColor === selected[0]!.backgroundColor),
+      ).toEqual([]);
+    });
+
+    test('勾選的那一列只有一顆看得見的勾，報讀名稱是「目前選的」（vendor 附的那顆藏掉，本地修改第 27 條）', () => {
+      report[`${key}:checks`] = checks;
+      // 量具自檢：vendor 那顆確實在 DOM 裡、只是看不見。
+      expect(checks).toEqual([{ name: 'checked', visible: ['目前選的'], hidden: 1 }]);
+    });
+  }
+
+  if (overlay.name === 'mobile-sidebar')
+    test('手機側欄的抽屜只留陰影、四邊都沒有邊（本地修改第 21 條）', () => {
+      report[`${key}:borders`] = borders;
+      expect(borders).toEqual([{ name: 'mobile-sidebar', widths: ['0px', '0px', '0px', '0px'] }]);
+    });
+
+  if (theme === 'light' && overlay.name in OVERLAY_SHADOW_LIMITS)
+    test('亮色陰影：每層投影的透明度不超過上限', () => {
+      const layers = shadows.flatMap((s) =>
+        shadowLayers(s.boxShadow)
+          .filter((l) => !l.edge && !l.inset && l.color !== undefined)
+          .map((l) => ({ name: s.name, alpha: parseColor(l.color ?? '').alpha })),
+      );
+      report[`${key}:shadow`] = layers;
+      // 量具自檢：這個浮層真的有看得見的投影。
+      expect(new Set(layers.filter((l) => l.alpha > 0).map((l) => l.name))).toEqual(
+        new Set([overlay.name]),
+      );
+      expect(
+        layers
+          .filter((l) => !(l.alpha <= (OVERLAY_SHADOW_LIMITS[l.name] ?? 0)))
+          .map((l) => `${l.name} ${l.alpha} > ${OVERLAY_SHADOW_LIMITS[l.name]}`),
+      ).toEqual([]);
+    });
+});
+
+/** modal 浮層在不透明的兩種退路下：面不透明、面與遮罩都沒有 blur（本地修改第 22 條）、遮罩看得出來（第 84 條）、字照樣過門檻。 */
+describe.each(
+  MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
+    OVERLAYS.flatMap((overlay) =>
+      (['light', 'dark'] as const).map((theme) => [mode, overlay.name, theme, overlay] as const),
+    ),
+  ),
+)('瀏覽器量 modal 浮層（#1583）：%s、%s、%s', (mode, _name, theme, overlay) => {
+  const key = `${mode}:${overlay.name}:${theme}`;
+  let page: Page;
+  let texts: TextSample[];
+  let surfaces: { name: string; backgroundColor: string; backdropFilter: string }[];
+  let backdrops: BackdropSample[];
+
+  beforeAll(async () => {
+    page = await openOverlay(overlay.name, theme, {
+      mode,
+      ...(overlay.viewport === undefined ? {} : { viewport: overlay.viewport }),
+      marks: overlay.marks,
+      ...(overlay.prepare === undefined ? {} : { prepare: overlay.prepare }),
+    });
+    texts = await collectTexts(page);
+    surfaces = await collectSurfaces(page);
+    backdrops = await collectBackdrops(page);
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('面不透明、面與遮罩都沒有 blur', () => {
+    report[`${key}:surfaces`] = surfaces;
+    report[`${key}:backdrops`] = backdrops;
+    expect(surfaces.map((s) => s.name)).toEqual(overlay.surfaces);
+    expect(backdrops.map((b) => b.name)).toEqual(overlay.backdrops);
+    expect(
+      surfaces
+        .filter((s) => parseColor(s.backgroundColor).alpha !== 1 || s.backdropFilter !== 'none')
+        .map((s) => `${s.name}：${s.backgroundColor}、backdrop-filter ${s.backdropFilter}`),
+    ).toEqual([]);
+    expect(backdrops.filter((b) => b.backdropFilter !== 'none').map((b) => b.name)).toEqual([]);
+  });
+
+  if (overlay.backdrops.length > 0)
+    test('遮罩看得出來：頁面最亮的那一類蓋住前後 ≥ 3:1（本地修改第 84 條）', async () => {
+      const dimming = await Promise.all(backdrops.map((b) => scrimDimming(page, b)));
+      report[`${key}:scrim`] = dimming.map(round);
+      expect(dimming.filter((ratio) => !(ratio >= 3))).toEqual([]);
+    });
+
+  test('字對它實際的底色過門檻', () => {
+    expectTexts(texts, overlay.texts, key);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：%s', (theme) => {
+  let page: Page;
+  let axe: Awaited<ReturnType<typeof collectAxe>>;
+
+  beforeAll(async () => {
+    page = await open(theme);
+    axe = await collectAxe(page);
+    report[`${theme}:axe`] = axe;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  test('沒有已知清單以外的違規（含 color-contrast、target-size）', () => {
+    const known = new Set(AXE_KNOWN.map((k) => k.key));
+    expect(
+      axe.violations.filter((v) => !known.has(v.key)).map((v) => `${v.key}（${v.help}）`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    const found = new Set(axe.violations.map((v) => v.key));
+    expect(AXE_KNOWN.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('側欄選項鈕的點擊區是 24×24（本地修改第 86 條）', async () => {
+    const box = await page.locator('[data-guard-focus="sidebar-menu-action"]').boundingBox();
+    expect(box).toMatchObject({ width: 24, height: 24 });
+  });
+
+  test('量具自檢：axe 真的跑了看像素的規則（判不出來的 color-contrast 有記到）', () => {
+    expect(axe.incomplete['color-contrast']).toBeGreaterThan(0);
+  });
+});
+
+/** `?overlay=` 的每個子頁名，從測試頁的原始碼讀：加了子頁就會被下面逐頁掃的測試掃到。 */
+const OVERLAY_SOURCE = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+const OVERLAY_NAMES = [
+  ...new Set(
+    [
+      ...OVERLAY_SOURCE.slice(OVERLAY_SOURCE.indexOf('function OverlayPage')).matchAll(
+        /case '([\w-]+)':/g,
+      ),
+    ].map((m) => m[1] ?? ''),
+  ),
+];
+
+/**
+ * axe 掃每個子頁（#2765）：上面那一組只掃總覽，浮層開著、選單展開的樣子都在子頁上。
+ * 每頁亮暗各掃一次；違規照「規則 元素」合起來比，不分是哪一頁的。問整份文件結構的規則不跑（`AXE_PAGE_RULES`）。
+ */
+describe.each<Theme>(['light', 'dark'])('axe 掃每個子頁（#2765）：%s', (theme) => {
+  /** 一次開幾頁。 */
+  const BATCH = 4;
+  const found = new Map<string, { help: string; pages: string[] }>();
+  let scanned = 0;
+  /** axe 判不出來的 color-contrast 筆數：有記到表示看像素的規則真的跑了。 */
+  let judged = 0;
+
+  beforeAll(async () => {
+    for (let i = 0; i < OVERLAY_NAMES.length; i += BATCH) {
+      const batch = OVERLAY_NAMES.slice(i, i + BATCH);
+      const results = await Promise.all(
+        batch.map(async (name) => {
+          const page = await openOverlay(name, theme, { marks: {} });
+          try {
+            return await collectAxe(page, AXE_PAGE_RULES);
+          } finally {
+            await page.close();
+          }
+        }),
+      );
+      results.forEach((result, offset) => {
+        scanned += 1;
+        judged += result.incomplete['color-contrast'] ?? 0;
+        for (const v of result.violations) {
+          const entry = found.get(v.key) ?? { help: v.help, pages: [] };
+          entry.pages.push(batch[offset] ?? '');
+          found.set(v.key, entry);
+        }
+      });
+    }
+    report[`${theme}:axe-overlays`] = Object.fromEntries(found);
+  }, 240_000);
+
+  test('沒有已知清單以外的違規', () => {
+    const known = new Set(AXE_KNOWN_OVERLAYS.map((k) => k.key));
+    expect(
+      [...found]
+        .filter(([key]) => !known.has(key))
+        .map(([key, v]) => `${key}（${v.help}）：${[...new Set(v.pages)].join('、')}`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    expect(AXE_KNOWN_OVERLAYS.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN_OVERLAYS.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具自檢：每個子頁都掃到了，看像素的規則真的跑了', () => {
+    expect(scanned).toBe(OVERLAY_NAMES.length);
+    expect(scanned).toBeGreaterThan(40);
+    expect(judged).toBeGreaterThan(0);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：%s', (theme) => {
+  let page: Page;
+  let buttons: Record<string, { height: number; opacity: string; pointerEvents: string }>;
+
+  beforeAll(async () => {
+    page = await openOverlay('buttons', theme, { marks: { '[data-guard-button]': {} } });
+    buttons = Object.fromEntries(
+      await page.$$eval('[data-guard-button]', (els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return [
+            el.getAttribute('data-guard-button') ?? '',
+            {
+              height: el.getBoundingClientRect().height,
+              opacity: style.opacity,
+              pointerEvents: style.pointerEvents,
+            },
+          ];
+        }),
+      ),
+    );
+    report[`${theme}:buttons`] = buttons;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  const VARIANTS = ['default', 'outline', 'secondary', 'ghost', 'destructive', 'glass', 'link'];
+  const HEIGHTS = { xs: 24, sm: 28, default: 32, lg: 36 };
+
+  test('每種 variant 的四個尺寸高度是 24、28、32、36，圖示鈕同高', () => {
+    const wrong = VARIANTS.flatMap((variant) =>
+      Object.entries(HEIGHTS).flatMap(([size, height]) =>
+        [size, size === 'default' ? 'icon' : `icon-${size}`]
+          .map((name) => `${variant}:${name}`)
+          .filter((key) => buttons[key]?.height !== height)
+          .map((key) => `${key} ${buttons[key]?.height}，應該是 ${height}`),
+      ),
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  test('停用的每種 variant 透明度都是 0.5、點不到；沒停用的是 1', () => {
+    expect(
+      VARIANTS.map((variant) => buttons[`${variant}:disabled`]).filter(
+        (b) => b?.opacity !== '0.5' || b.pointerEvents !== 'none',
+      ),
+    ).toEqual([]);
+    expect(VARIANTS.filter((variant) => buttons[`${variant}:default`]?.opacity !== '1')).toEqual(
+      [],
+    );
+  });
+
+  test('滑上去每種 variant 的樣子都會變', async () => {
+    const look = (variant: string) =>
+      page.$eval(`[data-guard-button="${variant}:default"]`, (el) => {
+        const style = getComputedStyle(el);
+        return [
+          style.backgroundColor,
+          style.backgroundImage,
+          style.color,
+          style.boxShadow,
+          style.textDecorationLine,
+          style.filter,
+        ].join('|');
+      });
+    const same: string[] = [];
+    for (const variant of VARIANTS) {
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(300);
+      const rest = await look(variant);
+      await page.hover(`[data-guard-button="${variant}:default"]`);
+      await page.waitForTimeout(300);
+      if ((await look(variant)) === rest) same.push(variant);
+    }
+    expect(same).toEqual([]);
+  });
+});
+
+/**
+ * Windows 高對比的通用門檻（#2796）：每一個測試頁上，表示選取的元素與 SG 的面在 `forced-colors: active` 下都要有邊框或外框。
+ * 新元件畫在測試頁上就會被量到，不必逐個加案例。只開亮色：高對比下顏色由系統色決定，亮暗畫出來一樣。
+ * `data-active`、`data-checked`、`data-state` 不算在內：它們的意思每個元件不一樣，有的自己另畫了記號（勾、圓點）。
+ */
+describe('Windows 高對比：每個測試頁（#2796）', () => {
+  const SELECTED = [
+    "[aria-selected='true']",
+    "[data-selected='true']",
+    "[aria-current]:not([aria-current='false'])",
+    "[aria-pressed='true']",
+    '[data-highlighted]',
+    '[data-located]',
+    "[data-popup-open]:not([data-slot='tooltip-trigger'])",
+  ].join(',');
+  const PANES = '.bg-card,.bg-popover,.glass-panel';
+  /** 選取與三種面之外，本來就該有外框的：覆寫檔列名字的面、目前這條會話、聚焦中的（外框畫在自己或外殼上）。 */
+  const FRAMED = [
+    "[data-slot='dialog-content']",
+    "[data-slot='alert-dialog-content']",
+    "[data-slot='sheet-content']",
+    "[data-slot='tooltip-content']",
+    "[data-slot='card']",
+    "[data-slot='composer']",
+    "[data-slot='sidebar-menu-button'][data-active]:disabled",
+    ':focus-visible',
+    ':has(:focus-visible)',
+  ].join(',');
+  /** 一次開幾頁。 */
+  const BATCH = 4;
+
+  async function scan(
+    name: string,
+  ): Promise<{ missing: string[]; clipped: string[]; stray: string[]; kinds: string[] }> {
+    const page =
+      name === ''
+        ? await open('light')
+        : await openOverlay(name, 'light', { forcedColors: true, marks: {} });
+    try {
+      if (name === '') await page.emulateMedia({ forcedColors: 'active' });
+      return await page.evaluate(
+        ({ selected, panes, expected }) => {
+          const missing: string[] = [];
+          const clipped: string[] = [];
+          const kinds: string[] = [];
+          /** 外框畫到哪裡：元素的框往外推 offset 加線寬（offset 是負的就往內）。超出會裁切的祖先就看不到。 */
+          const cutBy = (el: HTMLElement, style: CSSStyleDeclaration): boolean => {
+            const box = el.getBoundingClientRect();
+            const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+            for (let up = el.parentElement; up !== null; up = up.parentElement) {
+              const overflow = getComputedStyle(up);
+              if (overflow.overflowX === 'visible' && overflow.overflowY === 'visible') continue;
+              const frame = up.getBoundingClientRect();
+              const left = frame.left + up.clientLeft;
+              const top = frame.top + up.clientTop;
+              const slack = 0.5;
+              if (
+                box.left - reach < left - slack ||
+                box.right + reach > left + up.clientWidth + slack ||
+                // 捲出去的那幾項本來就看不到，只看整個在框裡的。
+                (box.top >= top &&
+                  box.bottom <= top + up.clientHeight &&
+                  (box.top - reach < top - slack ||
+                    box.bottom + reach > top + up.clientHeight + slack))
+              ) {
+                return true;
+              }
+            }
+            return false;
+          };
+          for (const [kind, selector] of [
+            ['選取', selected],
+            ['面', panes],
+          ] as const) {
+            for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+              const box = el.getBoundingClientRect();
+              const style = getComputedStyle(el);
+              if (box.width === 0 || box.height === 0 || style.visibility === 'hidden') continue;
+              const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+              const border = (['Top', 'Right', 'Bottom', 'Left'] as const).some(
+                (side) =>
+                  style[`border${side}Style`] !== 'none' &&
+                  parseFloat(style[`border${side}Width`]) > 0,
+              );
+              kinds.push(kind);
+              if (!outline && !border) {
+                const what =
+                  el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase();
+                missing.push(`${kind} ${what}`);
+              }
+              if (kind === '選取' && outline && cutBy(el, style)) {
+                clipped.push(
+                  el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase(),
+                );
+              }
+            }
+          }
+          // 反過來：不是選取、不是面、沒聚焦的元素不該有外框，否則選中的那一個認不出來。
+          const framed = `${selected},${panes},${expected}`;
+          const stray: string[] = [];
+          for (const el of document.querySelectorAll<HTMLElement>('*')) {
+            const box = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (box.width === 0 || box.height === 0 || style.visibility === 'hidden') continue;
+            if (style.outlineStyle === 'none' || parseFloat(style.outlineWidth) === 0) continue;
+            if (el.matches(framed)) continue;
+            stray.push(el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase());
+          }
+          return { missing, clipped, stray, kinds };
+        },
+        { selected: SELECTED, panes: PANES, expected: FRAMED },
+      );
+    } finally {
+      await page.close();
+    }
+  }
+
+  test('選取與面都有邊框或外框，選取的外框沒被裁掉，其餘沒有外框', async () => {
+    const missing = new Set<string>();
+    const clipped = new Set<string>();
+    const stray = new Set<string>();
+    const kinds = new Set<string>();
+    const pages = ['', ...OVERLAY_NAMES];
+    for (let i = 0; i < pages.length; i += BATCH) {
+      const batch = pages.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(scan));
+      results.forEach((result, offset) => {
+        for (const kind of result.kinds) kinds.add(kind);
+        for (const label of result.missing) missing.add(`${batch[offset] || 'main'}：${label}`);
+        for (const label of result.clipped) clipped.add(`${batch[offset] || 'main'}：${label}`);
+        for (const label of result.stray) stray.add(`${batch[offset] || 'main'}：${label}`);
+      });
+    }
+    // 量具自檢：兩類都真的量到東西。
+    expect([...kinds].sort()).toEqual(['選取', '面'].sort());
+    expect([...missing].sort()).toEqual([]);
+    expect([...clipped].sort()).toEqual([]);
+    expect([...stray].sort()).toEqual([]);
+  }, 240_000);
+});
+
+/**
+ * Windows 高對比（#2796）：瀏覽器把底色換成系統色、拿掉陰影之後，選取與面的邊界要靠外框看得出來。
+ * 量的是 Chrome 模擬的 `forced-colors: active`，不是真的 Windows。
+ */
+describe.each<Theme>(['light', 'dark'])('Windows 高對比（#2796）：%s', (theme) => {
+  const CASES: Record<string, Record<string, string>> = {
+    command: { "[data-slot='command-item'][data-selected='true']": '2px' },
+    dialog: { "[data-slot='dialog-content']": '1px' },
+    'composer-pick-open': {
+      "[data-slot='dropdown-menu-trigger'][data-popup-open]": '2px',
+      "[data-slot='composer']": '1px',
+    },
+    'thread-statuses': { "[data-slot='sidebar-menu-button'][data-active]:disabled": '2px' },
+  };
+
+  const outlines = (page: Page, selectors: string[]) =>
+    page.evaluate(
+      (list) =>
+        list.map((selector) => {
+          const el = document.querySelector(selector);
+          if (el === null) return `${selector} 不在頁上`;
+          const style = getComputedStyle(el);
+          return `${selector} ${style.outlineStyle} ${style.outlineWidth}`;
+        }),
+      selectors,
+    );
+
+  test.each(Object.keys(CASES))('%s：選取與面有實線外框', async (name) => {
+    const expected = CASES[name] ?? {};
+    const marks = Object.fromEntries(Object.keys(expected).map((selector) => [selector, {}]));
+    const page = await openOverlay(name, theme, { forcedColors: true, marks });
+    try {
+      expect(await outlines(page, Object.keys(expected))).toEqual(
+        Object.entries(expected).map(([selector, width]) => `${selector} solid ${width}`),
+      );
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('目前這條會話不畫成停用：不變淡，字色跟其他會話列一樣', async () => {
+    const current = "[data-slot='sidebar-menu-button'][data-active]:disabled";
+    const page = await openOverlay('thread-statuses', theme, {
+      forcedColors: true,
+      marks: { [current]: {} },
+    });
+    try {
+      const look = await page.evaluate((selector) => {
+        const el = document.querySelector(selector);
+        const other = document.querySelector(
+          "[data-slot='sidebar-menu-button']:not([data-active]):not(:disabled)",
+        );
+        if (el === null || other === null) return null;
+        const colors = [el, ...el.querySelectorAll('*')].map(
+          (node) => getComputedStyle(node).color,
+        );
+        return {
+          opacity: getComputedStyle(el).opacity,
+          colors: [...new Set(colors)],
+          other: getComputedStyle(other).color,
+        };
+      }, current);
+      expect(look).not.toBeNull();
+      expect(look?.opacity).toBe('1');
+      expect(look?.colors).toEqual([look?.other]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('一般模式下沒有這些外框', async () => {
+    const page = await openOverlay('dialog', theme, {
+      marks: { "[data-slot='dialog-content']": {} },
+    });
+    try {
+      expect(await outlines(page, ["[data-slot='dialog-content']"])).toEqual([
+        expect.stringContaining(' none '),
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+});

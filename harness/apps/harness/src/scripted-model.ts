@@ -1,0 +1,348 @@
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { BaseChatModelParams } from '@langchain/core/language_models/chat_models';
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import { AIMessage, AIMessageChunk } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
+import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
+import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
+import { assertImageBudget, IMAGE_BUDGET_PROPERTY } from '@nexus/core';
+import type { ImageBudget } from '@nexus/core';
+
+import { passAroundOnce, takeAround, withoutAround } from './base-chat-openai.js';
+
+/**
+ * bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。
+ *
+ * **匯出是為了讓測試自己建一份**：`prompts` 是「模型真的讀到了什麼」唯一的證據，而有些
+ * 驗收（`goal-driver-pump.test.ts`）要拿它跟日誌上寫的字逐字比對。
+ */
+export interface ScriptedModelState {
+  turn: number;
+  boundToolNames: readonly string[];
+  /** `bindTools` 收到的工具物件本身（#442：工具目錄要讀模型實際拿到的名稱、描述與 schema）。省略就是還沒綁過。 */
+  boundTools?: readonly unknown[];
+  lastPrompt: readonly BaseMessage[];
+  prompts: (readonly BaseMessage[])[];
+  /** 被圖片額度擋下的嘗試次數（#1270）。省略＝沒擋過。 */
+  rejectedImageRequests?: number;
+}
+
+/** 腳本裡的一次工具呼叫。 */
+export interface ScriptedToolCall {
+  readonly name: string;
+  readonly args: Record<string, unknown>;
+  /**
+   * 指定 `tool_call_id`。預設是 `call_<輪>_<序>`——**兩顆假模型（root 與子代理）的編號會撞**，
+   * 而線上的折疊器照 id 認卡，撞了就是同一張卡；要在同一條線上看兩邊的卡時，子代理那邊給一個不撞的。
+   */
+  readonly id?: string;
+}
+
+/**
+ * 這一輪的 token 用量。
+ *
+ * **假模型不會自己編這個數字**：省略即這一輪不帶 `usage_metadata`，跟真模型沒回報用量
+ * 時一樣。給了才有，這樣「成本算得出來」與「成本是我們捏的」在測試裡分得開。
+ */
+export interface ScriptedUsage {
+  /** 完整的 prompt token 數，**含**下面兩格快取（LangChain 的 `input_tokens` 語義；日誌記的未快取那桶是記錄器減出來的）。 */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /**
+   * 快取讀（#724）：翻成 `input_token_details.cache_read`。**省略就不放 key**，跟真模型沒報快取細節時一樣；
+   * `undefined` 的形狀由 `cacheDetailsUndefined` 另造。
+   */
+  readonly cacheReadTokens?: number;
+  /** 快取寫：翻成 `input_token_details.cache_creation`。省略就不放 key。 */
+  readonly cacheWriteTokens?: number;
+  /**
+   * 造出 LangChain 在 `prompt_tokens_details` 整個缺席時建出的那個形狀：`input_token_details: { cache_read: undefined }`
+   * （基座用 `!== null` 判斷，`undefined` 也會進去）。用來證明記錄器遇到 `undefined` 當沒報、不寫 key。
+   */
+  readonly cacheDetailsUndefined?: true;
+  /** 覆寫 `total_tokens`（預設 `inputTokens + outputTokens`）：造「總量與組成對不上」的回應。 */
+  readonly totalTokens?: number;
+}
+
+/** agent 迴圈的一輪：模型講一段話，並可選擇呼叫工具。 */
+export interface ScriptedTurn {
+  readonly content: string;
+  readonly toolCalls?: readonly ScriptedToolCall[];
+  /** 這一輪的 token 用量。省略即不帶——見 {@link ScriptedUsage}。 */
+  readonly usage?: ScriptedUsage;
+  /**
+   * 給了就代表這一輪的模型呼叫**拋錯**，訊息就是這個字串——代替供應商回錯（例如過載）。
+   * `content` 與 `toolCalls` 在這一輪不會被用到。
+   */
+  readonly error?: string;
+  /**
+   * 給了就**每吐一個字**等這麼多毫秒：回覆串流到一半的那一段，測試可以停在裡面
+   * （[#953](https://github.com/DemianLi/nexus-agent/issues/953)）。是資料，所以腳本設定（`settings/scripted-model.ts`）也收。
+   * 只對串流那條路有作用——web 與產品路徑走的是它。
+   */
+  readonly tokenDelayMs?: number;
+}
+
+/**
+ * 腳本的用量翻成 LangChain 的 `usage_metadata`。
+ *
+ * `total_tokens` 由基座那邊的消費者拿來當單一數字用，所以這裡自己加總而不是留白——
+ * 真模型回的也是三個欄位都齊。
+ */
+function toUsageMetadata(usage: ScriptedUsage): {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  input_token_details?: { cache_read?: number | undefined; cache_creation?: number | undefined };
+} {
+  const reported = usage.cacheReadTokens !== undefined || usage.cacheWriteTokens !== undefined;
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+    ...(reported
+      ? {
+          input_token_details: {
+            ...(usage.cacheReadTokens === undefined ? {} : { cache_read: usage.cacheReadTokens }),
+            ...(usage.cacheWriteTokens === undefined
+              ? {}
+              : { cache_creation: usage.cacheWriteTokens }),
+          },
+        }
+      : usage.cacheDetailsUndefined === true
+        ? { input_token_details: { cache_read: undefined } }
+        : {}),
+  };
+}
+
+interface ScriptedChatModelOptions extends BaseChatModelParams {
+  readonly turns: readonly ScriptedTurn[];
+  /** bindTools 產生的副本要與本體共用這份狀態，否則每次綁定都會從第一輪重來。 */
+  readonly shared?: ScriptedModelState;
+  /**
+   * 圖片額度（#1270）：跟真 adapter 一樣，**請求進來先量，超額就拋 `IMAGE_OFFLOAD_REQUIRED`**——拋在記 prompt 與取腳本之前，
+   * 所以被拒的嘗試不佔一輪腳本、不進 `prompts`，只進 {@link ScriptedChatModel.rejectedImageRequests}。
+   */
+  readonly imageBudget?: ImageBudget;
+}
+
+/**
+ * 照腳本回答的假模型。
+ *
+ * Phase 0 spike 沒有可用的模型 API key，所以用它把 agent 迴圈跑起來：
+ * 迴圈的形狀、工具呼叫的接線、虛擬檔案的寫入、streaming 的事件序列
+ * 都是真的，只有「模型決定要呼叫哪個工具」這一步是寫死的。
+ * 真實供應商接線另外驗，見 PR 內文。
+ */
+export class ScriptedChatModel extends BaseChatModel {
+  private readonly turns: readonly ScriptedTurn[];
+  private readonly shared: ScriptedModelState;
+  private readonly imageBudget: ImageBudget | undefined;
+
+  constructor(options: ScriptedChatModelOptions) {
+    const { turns, shared, imageBudget, ...rest } = options;
+    super(rest);
+    this.turns = turns;
+    this.imageBudget = imageBudget;
+    this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
+  }
+
+  /** 這顆模型的圖片額度，給上層先量（`@nexus/core` 的 `imageBudgetOf`），同真 adapter。 */
+  get [IMAGE_BUDGET_PROPERTY](): ImageBudget | undefined {
+    return this.imageBudget;
+  }
+
+  /** bindTools 收到什麼，spike 用它斷言基座真的把工具交給了模型。 */
+  get boundToolNames(): readonly string[] {
+    return this.shared.boundToolNames;
+  }
+
+  /** `bindTools` 最近一次收到的工具物件，沒綁過是空陣列。 */
+  get boundTools(): readonly unknown[] {
+    return this.shared.boundTools ?? [];
+  }
+
+  /**
+   * 最近一輪送進模型的完整訊息串，含基座組出來的 system prompt。
+   *
+   * 組裝點傳給 `createDeepAgent` 的 `systemPrompt` 是否真的到得了模型，只有從這裡看得到
+   * ——型別檢查擋不住「參數收下了但沒往下傳」。
+   */
+  get lastPrompt(): readonly BaseMessage[] {
+    return this.shared.lastPrompt;
+  }
+
+  /**
+   * 依發生順序的每一輪 prompt。
+   *
+   * **`lastPrompt` 看不到 subagent 那幾輪**——subagent 跑完之後 root 還會再問一次模型，
+   * 所以最後一輪永遠是 root 的。「subagent 收到的 system prompt 長什麼樣」只有從這裡
+   * 看得到，而那正是 memory 與 skills 這類「注入 system prompt」的擴充點在 subagent
+   * 邊界上唯一的觀測點。
+   *
+   * 記在共用狀態上而不是實例上，理由跟 `turn` 一樣：`bindTools` 會產生新實例。
+   */
+  get prompts(): readonly (readonly BaseMessage[])[] {
+    return this.shared.prompts;
+  }
+
+  _llmType(): string {
+    return 'scripted';
+  }
+
+  override bindTools(tools: readonly unknown[]): ScriptedChatModel {
+    this.shared.boundTools = tools;
+    this.shared.boundToolNames = tools.map((candidate) => {
+      const name = (candidate as { name?: unknown }).name;
+      return typeof name === 'string' ? name : '<anonymous>';
+    });
+    return new ScriptedChatModel({
+      turns: this.turns,
+      shared: this.shared,
+      ...(this.imageBudget !== undefined && { imageBudget: this.imageBudget }),
+    });
+  }
+
+  /** native 的 `llm/stream`：環繞函式從 `configurable` 搬成呼叫選項，同 `BaseChatOpenAI.invoke`。 */
+  override async invoke(
+    input: BaseLanguageModelInput,
+    options?: Parameters<BaseChatModel['invoke']>[1],
+  ): ReturnType<BaseChatModel['invoke']> {
+    return super.invoke(input, takeAround(options as never) as never);
+  }
+
+  override _getCallOptionsForTracing(
+    options: this['ParsedCallOptions'],
+    invocationParams: ReturnType<this['invocationParams']>,
+  ): this['ParsedCallOptions'] {
+    return withoutAround(super._getCallOptionsForTracing(options, invocationParams));
+  }
+
+  /** 腳本用完就代表 agent 迴圈跑得比預期多，直接失敗比靜默重播容易查。 */
+  private nextTurn(): ScriptedTurn {
+    const turn = this.turns[this.shared.turn];
+    if (turn === undefined) {
+      throw new Error(
+        `腳本只有 ${this.turns.length} 輪，但 agent 迴圈要求第 ${this.shared.turn + 1} 輪`,
+      );
+    }
+    this.shared.turn += 1;
+    if (turn.error !== undefined) throw new Error(turn.error);
+    return turn;
+  }
+
+  /** 被圖片額度擋下的嘗試次數：拋在記 prompt 之前，所以不在 {@link ScriptedChatModel.prompts} 裡。 */
+  get rejectedImageRequests(): number {
+    return this.shared.rejectedImageRequests ?? 0;
+  }
+
+  private record(messages: BaseMessage[]): void {
+    if (this.imageBudget !== undefined) {
+      try {
+        assertImageBudget(messages, this.imageBudget);
+      } catch (error) {
+        this.shared.rejectedImageRequests = this.rejectedImageRequests + 1;
+        throw error;
+      }
+    }
+    this.shared.lastPrompt = messages;
+    this.shared.prompts.push(messages);
+  }
+
+  private toMessage(turn: ScriptedTurn): AIMessage {
+    return new AIMessage({
+      content: turn.content,
+      tool_calls: turn.toolCalls?.map((call, index) => ({
+        id: call.id ?? `call_${this.shared.turn}_${index}`,
+        name: call.name,
+        args: call.args,
+        type: 'tool_call' as const,
+      })),
+      ...(turn.usage === undefined ? {} : { usage_metadata: toUsageMetadata(turn.usage) }),
+    });
+  }
+
+  async _generate(
+    messages: BaseMessage[],
+    options?: this['ParsedCallOptions'],
+  ): Promise<ChatResult> {
+    this.record(messages);
+    const turn = this.nextTurn();
+    const message = this.toMessage(turn);
+    await passAroundOnce(options ?? {}, message);
+    return { generations: [{ text: turn.content, message }], llmOutput: {} };
+  }
+
+  /**
+   * 逐字吐 token，讓 `streamMode: 'messages'` 真的有多個 chunk 可收，
+   * 而不是退回 _generate 產生的單一 chunk。
+   *
+   * **走 v3 typed stream 時，agent 迴圈整條都靠這個方法。** 基座裝上 stream 的 callback
+   * handler 之後，`invoke` 也會被導到這裡來（`_generateUncached` 改走
+   * `_streamChatModelEvents`），所以 `_generate` 的那條路上對的事情，在這裡不會自動成立。
+   * 兩條路徑的一致性由 `stream-parity.test.ts` 釘住。
+   */
+  override async *_streamResponseChunks(
+    messages: BaseMessage[],
+    options?: this['ParsedCallOptions'],
+    runManager?: CallbackManagerForLLMRun,
+  ): AsyncGenerator<ChatGenerationChunk> {
+    this.record(messages);
+    const turn = this.nextTurn();
+    const message = this.toMessage(turn);
+    await passAroundOnce(options ?? {}, message);
+
+    for (const token of [...turn.content]) {
+      // handleLLMNewToken 要自己呼叫，基座才收得到 token 事件；
+      // 少了這行，streamMode: 'messages' 只會拿到聚合後的整段訊息。
+      if (turn.tokenDelayMs !== undefined) {
+        await new Promise((resolve) => setTimeout(resolve, turn.tokenDelayMs));
+      }
+      await runManager?.handleLLMNewToken(token);
+      yield {
+        text: token,
+        message: new AIMessageChunk({ content: token }),
+      } as ChatGenerationChunk;
+    }
+
+    const toolCalls = message.tool_calls ?? [];
+    if (toolCalls.length === 0) {
+      // 用量掛在**最後一顆** chunk 上：`AIMessageChunk` 相加時 `usage_metadata` 會累加，
+      // 每顆文字 chunk 都掛的話這一輪的數字會被乘上字數。
+      if (turn.usage !== undefined) {
+        yield {
+          text: '',
+          message: new AIMessageChunk({
+            content: '',
+            usage_metadata: toUsageMetadata(turn.usage),
+          }),
+        } as ChatGenerationChunk;
+      }
+      return;
+    }
+
+    // **這裡只能給 tool_call_chunks，不能給 tool_calls。**
+    // 走 v3 typed stream 時基座會裝上 callback handler，`_generateUncached` 因而改走
+    // `_streamChatModelEvents` → `convertChunksToEvents`
+    // （`@langchain/core` `dist/language_models/compat.js`），而它**只讀
+    // `tool_call_chunks`**。給 `tool_calls` 的話 v3 那條路上工具呼叫會整個消失，
+    // 而且不拋錯——迴圈只跑一輪就乾淨地結束，測試照樣是綠的。
+    yield {
+      text: '',
+      message: new AIMessageChunk({
+        content: '',
+        ...(turn.usage === undefined ? {} : { usage_metadata: toUsageMetadata(turn.usage) }),
+        // id 一律取自 `toMessage()`，兩條路徑的 tool_call_id 才是同一份而不是碰巧相同。
+        tool_call_chunks: toolCalls.map((call, index) => ({
+          id: call.id,
+          name: call.name,
+          args: JSON.stringify(call.args),
+          // **index 從 1 起跳。** 它與上面那些文字 chunk 的 content block 共用同一個
+          // 編號空間，0 已經被那段文字佔走了；從 0 起跳會把文字那一塊寫壞。
+          index: index + 1,
+          type: 'tool_call_chunk' as const,
+        })),
+      }),
+    } as ChatGenerationChunk;
+  }
+}

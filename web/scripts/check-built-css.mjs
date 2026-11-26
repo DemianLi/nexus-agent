@@ -1,0 +1,469 @@
+/* global console, process, URL */
+/**
+ * 量**建置出來的 CSS**（`dist/assets/*.css`），不是原始碼：Tailwind 只產出用得到的東西、基礎元件的 class
+ * 少了套件就一筆都不產出也不報錯，原始碼看起來對不代表產物對。`pnpm build` 的最後一步，失敗就讓建置失敗。
+ *
+ * 對應 `docs/web-ui.md` §11：
+ * - 第 3 條：reduced-motion 下 `--animate-in`／`--animate-out` 換成只有透明度的版本。
+ * - 第 4 條：`@keyframes` 名稱都在允許清單上。
+ * - 第 5 條：每個 `infinite` 動畫在 reduced-motion 下都有一條蓋得過它的 `animation: none`。
+ * 另外兩條同一類的無聲失效：
+ * - 宣告裡引用的 `motion-*` keyframes 都真的存在（keyframes 定義在 `styles/motion.css`）。
+ * - 沒有外部網址（完全內網：字型等資源一律打包）。
+ * - 產物裡沒有只來自測試檔或說明文件的 class：Tailwind 預設掃整個專案，測試裡的範例字串（`bg-red-500`、`container`…）
+ *   與說明文件裡提到的類別名都會被編成真的規則，裸的 `.container`、`.shadow` 這類還會套用到不相干的元素。
+ *   `src/index.css` 用 `@source not` 排除，這裡量產物確認真的排除了。
+ * - dark variant 包含 `.dark` 本身（#1468 Q8 保留的機制）：solid-glass 的 `@custom-variant dark (&:is(.dark *))` 只認子孫，
+ *   `<html class="dark">` 上的元素吃不到 `dark:`；`src/styles/solid-glass.overrides.css` 排在它後面重新定義成 `&:is(.dark, .dark *)`。產物裡只能有後者。
+ * - 自動捲動不改內容寬度（#1363）：選擇器帶 `[data-autoscrolling]` 的規則不准宣告會動到捲軸佔位的屬性。
+ *   `scrollbar-width: none` 會連 `scrollbar-gutter: stable` 留的位置一起拿掉，窄欄時折行變、高度變、又觸發貼底捲動。
+ */
+
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+
+/**
+ * `@keyframes` 允許清單。新增或刪掉 keyframes 時，同一個 PR 改這裡（§12）。
+ * 只寫第一段的話第一次跑就紅：第三方的名字也會出現在產物裡。
+ */
+const KEYFRAMES_ALLOWED = new Set([
+  // 我們的（`src/styles/motion.css`）
+  'motion-fade-in',
+  'motion-fade-out',
+  'motion-rise-in',
+  'motion-rise-in-micro',
+  'motion-swap-in',
+  'motion-swap-out',
+  'motion-page-in-next',
+  'motion-page-in-prev',
+  'motion-beam-pulse',
+  'motion-shimmer',
+  'motion-caret',
+  // 第三方：tw-animate-css（collapsible-down／up 隨 #1687 拿掉高度動效一起退出；之後裝 accordion 會多 accordion-*）
+  'enter',
+  'exit',
+  // 第三方：Tailwind
+  'spin',
+  'pulse',
+  // 第三方：sonner
+  'sonner-fade-in',
+  'sonner-fade-out',
+  'sonner-spin',
+  'swipe-out-left',
+  'swipe-out-right',
+  'swipe-out-up',
+  'swipe-out-down',
+  // 第三方：solid-glass（`src/vendor/solid-glass/solid-glass.css`，#1512；reduced-motion 的處理見 `styles/solid-glass.overrides.css`）
+  'sg-dot-flash',
+  'sg-status-shimmer',
+  'sg-sweep',
+  'sg-float-in',
+  'sg-fade-in',
+  // 第三方：shadcn 的 tailwind.css（`src/vendor/solid-glass/shadcn/tailwind.css`，#1523）。跟著 `@utility scroll-fade-*`、`shimmer`
+  // 產出，原始碼裡出現那個字就會產出那個 utility，所以只列真的有元件用到的那幾個。
+  // - `scroll-fade-reveal-b`：對話捲動區（vendor `message-scroller.tsx` 的 viewport）的 `scroll-fade-b`，底部淡出跟著捲動位置收放
+  //   （scroll-driven，時長 1ms 只是佔位，不是時間動畫；#1638 PR B，Q8 照 SG）。
+  // - `scroll-fade-reveal-t`：同一個捲動區的頂端淡出（覆寫檔照 `scroll-fade-y` 寫的雙向那一份，README 本地修改第 83 條），跟著捲動位置收放（scroll-driven，同上；#2407）。
+  // - `scroll-fade-reveal-s`／`scroll-fade-reveal-e`：一排附件（vendor `attachment.tsx` 的 `AttachmentGroup`）的 `scroll-fade-x`，
+  //   左右淡出跟著橫向捲動位置收放（scroll-driven，同上；#1638 PR C）。
+  // - `tw-shimmer`：附件上傳中、處理中的標題（vendor `attachment.tsx` 的 `AttachmentTitle`）的 `shimmer`，infinite；reduced-motion 的
+  //   `animation: none` 寫在同一個 utility 裡（第 5 條認得到；#1638 PR C）。
+  'scroll-fade-reveal-t',
+  'scroll-fade-reveal-b',
+  'scroll-fade-reveal-s',
+  'scroll-fade-reveal-e',
+  'tw-shimmer',
+]);
+
+const REDUCED_MOTION = /prefers-reduced-motion:\s*reduce/;
+
+// ── 極小的 CSS 解析：只認得 minify 後的產物需要的形狀 ──
+
+/** 從 `start`（指向 `{` 之後）找到對應的 `}`，略過字串。 */
+function matchBrace(css, start) {
+  let depth = 1;
+  for (let i = start; i < css.length; i++) {
+    const c = css[i];
+    if (c === '"' || c === "'") {
+      i = css.indexOf(c, i + 1);
+      continue;
+    }
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i;
+  }
+  throw new Error('大括號不成對');
+}
+
+const GROUPING = /^@(media|supports|layer|container|scope|starting-style)\b/;
+
+/**
+ * 回傳平的節點列表：`{ kind: 'rule', selector, body, media, order }`、`{ kind: 'keyframes', name }`。
+ * `media` 是外層所有條件接起來的字串，用來判斷是不是在 reduced-motion 裡。
+ */
+function parse(css, media = '', out = { nodes: [], order: 0 }) {
+  let i = 0;
+  while (i < css.length) {
+    const brace = css.indexOf('{', i);
+    const semi = css.indexOf(';', i);
+    if (brace === -1) break;
+    if (semi !== -1 && semi < brace) {
+      i = semi + 1; // `@layer a, b;`、`@charset` 這類沒有區塊的
+      continue;
+    }
+    const prelude = css.slice(i, brace).trim();
+    const end = matchBrace(css, brace + 1);
+    const inner = css.slice(brace + 1, end);
+    if (GROUPING.test(prelude)) parse(inner, `${media} ${prelude}`, out);
+    else if (/^@(-webkit-)?keyframes\s/.test(prelude))
+      out.nodes.push({ kind: 'keyframes', name: prelude.replace(/^@\S+\s+/, '').trim() });
+    else if (!prelude.startsWith('@'))
+      out.nodes.push({ kind: 'rule', selector: prelude, body: inner, media, order: out.order++ });
+    i = end + 1;
+  }
+  return out.nodes;
+}
+
+/** 以頂層逗號切開（略過括號裡的）。 */
+function splitTop(text, sep) {
+  const parts = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (c === '"' || c === "'") i = text.indexOf(c, i + 1);
+    else if (c === sep && depth === 0) {
+      parts.push(text.slice(from, i));
+      from = i + 1;
+    }
+  }
+  parts.push(text.slice(from));
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+function declarations(body) {
+  const map = new Map();
+  for (const d of splitTop(body, ';')) {
+    const colon = d.indexOf(':');
+    if (colon > 0) map.set(d.slice(0, colon).trim(), d.slice(colon + 1).trim());
+  }
+  return map;
+}
+
+// ── specificity 與「蓋不蓋得過」 ──
+
+const LEGACY_PSEUDO_ELEMENTS = /^:(before|after|first-line|first-letter)$/;
+
+/** 把一個 compound 切成簡單選擇器：`.a[x='1']:not(:disabled)::before` → 四段。 */
+function simples(compound) {
+  const out = [];
+  let i = 0;
+  while (i < compound.length) {
+    let j = i + 1;
+    if (compound[i] === '[') j = compound.indexOf(']', i) + 1;
+    else {
+      if (compound[i] === ':' && compound[j] === ':') j++;
+      while (j < compound.length && !/[.#[:]/.test(compound[j])) {
+        if (compound[j] === '(') {
+          let depth = 1;
+          j++;
+          while (depth > 0) {
+            if (compound[j] === '(') depth++;
+            if (compound[j] === ')') depth--;
+            j++;
+          }
+          break;
+        }
+        j++;
+      }
+    }
+    out.push(normalize(compound.slice(i, j)));
+    i = j;
+  }
+  return out;
+}
+
+/** 產物會把 `::before` 寫成 `:before`、把屬性值的引號拿掉；比對前統一。 */
+function normalize(simple) {
+  if (LEGACY_PSEUDO_ELEMENTS.test(simple)) return `:${simple}`;
+  if (simple.startsWith('[')) return simple.replace(/["']/g, '');
+  return simple;
+}
+
+/** 以後代／子代組合子切開成 compound 列表（只處理本專案會出現的空白與 `>`）。 */
+function compounds(selector) {
+  return splitTop(selector.replace(/\s*>\s*/g, ' '), ' ');
+}
+
+function specificity(selector) {
+  const s = [0, 0, 0];
+  for (const compound of compounds(selector))
+    for (const simple of simples(compound)) {
+      if (simple.startsWith('#')) s[0]++;
+      else if (simple.startsWith('::')) s[2]++;
+      else if (/^:(where)\(/.test(simple)) continue;
+      else if (/^:(is|not|has)\(/.test(simple)) {
+        const args = splitTop(simple.slice(simple.indexOf('(') + 1, -1), ',');
+        const max = args.map(specificity).sort(compare).at(-1) ?? [0, 0, 0];
+        s[0] += max[0];
+        s[1] += max[1];
+        s[2] += max[2];
+      } else if (/^[.[:]/.test(simple)) s[1]++;
+      else if (simple !== '*') s[2]++;
+    }
+  return s;
+}
+
+function compare(a, b) {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/**
+ * `reducer` 這條是否一定作用在 `target` 選到的每個元素上、而且蓋得過它：
+ * 最後一個 compound 的簡單選擇器是 target 的子集，前面只能是 `:root`（不加額外的祖先條件），
+ * specificity 比較大，或一樣大但在產物裡排在後面。
+ */
+function overrides(reducer, target) {
+  const r = compounds(reducer.selector);
+  const t = compounds(target.selector);
+  const ancestorsOk = r.slice(0, -1).every((c) => /^(:root)+$/.test(c));
+  const subjectOk = simples(r.at(-1)).every((simple) => simples(t.at(-1)).includes(simple));
+  const order = compare(specificity(reducer.selector), specificity(target.selector));
+  return ancestorsOk && subjectOk && (order > 0 || (order === 0 && reducer.order > target.order));
+}
+
+// ── 檢查 ──
+
+const dir = new URL('../dist/assets/', import.meta.url);
+const files = readdirSync(dir).filter((f) => f.endsWith('.css'));
+if (files.length === 0) {
+  console.error('check-built-css：dist/assets 裡沒有 CSS，先跑 vite build');
+  process.exit(1);
+}
+
+const failures = [];
+const all = files.flatMap((f) => parse(readFileSync(new URL(f, dir), 'utf8')));
+const keyframes = new Set(all.filter((n) => n.kind === 'keyframes').map((n) => n.name));
+const rules = all
+  .filter((n) => n.kind === 'rule')
+  .flatMap((n) => splitTop(n.selector, ',').map((selector) => ({ ...n, selector })));
+const reduced = rules.filter((r) => REDUCED_MOTION.test(r.media));
+
+// 第 3 條
+for (const [name, fade, forbidden] of [
+  ['--animate-in', 'motion-fade-in', /\benter\b/],
+  ['--animate-out', 'motion-fade-out', /\bexit\b/],
+]) {
+  const values = reduced.map((r) => declarations(r.body).get(name)).filter(Boolean);
+  if (values.length === 0) failures.push(`第 3 條：reduced-motion 裡沒有覆寫 ${name}`);
+  for (const v of values)
+    if (!v.includes(fade) || forbidden.test(v))
+      failures.push(`第 3 條：reduced-motion 的 ${name} 不是只有透明度：${v}`);
+}
+
+// 第 3 條的延伸（#1687）：進出場照 SG 的機制，時長讀元件自己的 `duration-*`（tw-animate 的 `--tw-duration`）。
+// - utility 要寫成 `animation: var(--animate-in)`：`@theme` 改成 inline 或整段刪掉時，utility 直接展開數值，上面換掉的變數就沒人讀。
+// - 值要宣告在 `*` 上：只宣告在 `:root` 的話 `var(--tw-duration)` 在 `:root` 就解掉，元素讀不到自己的 `duration-100`。
+// - reduced-motion 的覆寫也要寫到 `*` 上，只寫 `:root:root` 會被 `*` 那條在每個元素上蓋回去。
+const leadingClass = (selector) => {
+  const raw = /^\.((?:\\.|[\w-])+)/.exec(selector)?.[1];
+  return raw === undefined ? undefined : raw.replace(/\\(.)/g, '$1');
+};
+for (const name of ['--animate-in', '--animate-out']) {
+  const utility = name.slice(2);
+  const users = rules.filter(
+    (r) =>
+      !REDUCED_MOTION.test(r.media) &&
+      new RegExp(`(^|:)${utility}$`).test(leadingClass(r.selector) ?? ''),
+  );
+  if (users.length === 0) failures.push(`第 3 條：產物裡沒有 .${utility}（量具自檢）`);
+  for (const r of users)
+    if (declarations(r.body).get('animation') !== `var(${name})`)
+      failures.push(
+        `第 3 條：${r.selector} 不是 animation: var(${name})（@theme 不能用 inline）：${declarations(r.body).get('animation')}`,
+      );
+  const plain = rules.filter(
+    (r) => !REDUCED_MOTION.test(r.media) && declarations(r.body).has(name),
+  );
+  if (!plain.some((r) => r.selector === '*'))
+    failures.push(`第 3 條：${name} 沒有宣告在 * 上，元素讀不到自己的 --tw-duration`);
+  for (const r of plain)
+    if (!declarations(r.body).get(name).includes('var(--tw-duration'))
+      failures.push(
+        `第 3 條：${r.selector} 的 ${name} 不讀 --tw-duration：${declarations(r.body).get(name)}`,
+      );
+  const everyReduced = reduced.filter((r) => {
+    const c = compounds(r.selector);
+    return c.at(-1) === '*' && c.slice(0, -1).every((a) => /^(:root)+$/.test(a)) && c.length > 1;
+  });
+  if (!everyReduced.some((r) => declarations(r.body).get(name)?.includes('motion-fade-')))
+    failures.push(`第 3 條：reduced-motion 的 ${name} 沒有寫到 * 上，會被每個元素上的宣告蓋回去`);
+}
+
+// 第 4 條
+for (const name of keyframes)
+  if (!KEYFRAMES_ALLOWED.has(name)) failures.push(`第 4 條：@keyframes ${name} 不在允許清單上`);
+
+// 第 5 條：Tailwind 的 `.animate-spin` 寫成 `animation: var(--animate-spin)`，infinite 藏在變數裡，要先展開
+const customProperties = new Map();
+for (const rule of rules)
+  for (const [name, value] of declarations(rule.body))
+    if (name.startsWith('--') && !REDUCED_MOTION.test(rule.media))
+      customProperties.set(name, value);
+function expand(value, depth = 0) {
+  if (depth > 10) return value;
+  return value.replace(/var\((--[\w-]+)(?:,([^()]*))?\)/g, (_, name, fallback) =>
+    expand(customProperties.get(name) ?? fallback ?? '', depth + 1),
+  );
+}
+const stoppers = reduced.filter((r) => declarations(r.body).get('animation') === 'none');
+for (const rule of rules) {
+  if (REDUCED_MOTION.test(rule.media)) continue;
+  const d = declarations(rule.body);
+  const infinite = /\binfinite\b/.test(
+    expand(d.get('animation') ?? d.get('animation-iteration-count') ?? ''),
+  );
+  if (infinite && !stoppers.some((s) => overrides(s, rule)))
+    failures.push(`第 5 條：${rule.selector} 的 infinite 動畫在 reduced-motion 下沒有被蓋掉`);
+}
+
+// 第 3 條的延伸：`animation-duration-*` 直接設時長，會蓋掉 reduced-motion 換成 150 的那組變數（#403：抽屜淡入卻還是 350）。
+// 規則 12 不掃 vendor 原樣的檔，這裡是最後一道：同步帶進超過 150ms 的，要在 `motion.css` 的 reduced-motion 段補一條壓回 150 以下。
+const seconds = (v) => (/ms$/.test(v) ? parseFloat(v) / 1000 : parseFloat(v));
+const longDurations = rules.filter(
+  (r) =>
+    !REDUCED_MOTION.test(r.media) &&
+    /animation-duration-/.test(r.selector) &&
+    seconds(declarations(r.body).get('animation-duration') ?? '0') > 0.15,
+);
+const durationCap = reduced.some(
+  (r) =>
+    /\[class\*=["']?animation-duration-/.test(r.selector) &&
+    seconds(declarations(r.body).get('animation-duration') ?? '1') <= 0.15,
+);
+if (longDurations.length > 0 && !durationCap)
+  failures.push(
+    `第 3 條：reduced-motion 沒有壓住 animation-duration-*（${longDurations.map((r) => r.selector).join('、')}）`,
+  );
+
+// 第 3 條的延伸：用 transition 滑入的面（#1583：vendor 的 sheet 在 `data-starting-style`／`data-ending-style` 設位移，不走 `--animate-in`）。
+// 產物裡有這種位移，reduced-motion 裡就要有針對那些面的規則：拿掉位移（`translate: none`）、transition 時長 ≤ 150ms。
+// 位移寫在 Tailwind 的 class 上，量具對不到是哪個元素，所以面列在這裡；新的滑入元件出現時，同一個 PR 補進來。
+// 手機側欄的抽屜也是 sheet，但 `data-slot` 被 vendor 的 `components/ui/sidebar.tsx` 蓋成 `sidebar`，用 `data-mobile` 認。
+const SLIDING_SURFACES = [
+  '[data-slot=sheet-content]',
+  '[data-slot=sidebar][data-mobile=true]',
+  '[data-slot=sheet-overlay]',
+];
+const slides = rules.filter(
+  (r) =>
+    !REDUCED_MOTION.test(r.media) &&
+    /data-(starting|ending)-style/.test(r.selector) &&
+    [...declarations(r.body).keys()].some((k) =>
+      /^(--tw-translate-[xy]|translate|transform)$/.test(k),
+    ),
+);
+if (slides.length > 0)
+  for (const surface of SLIDING_SURFACES) {
+    const mine = reduced.filter((r) => {
+      const subject = simples(compounds(r.selector).at(-1));
+      return simples(surface).every((simple) => subject.includes(simple));
+    });
+    if (!mine.some((r) => declarations(r.body).get('translate') === 'none'))
+      failures.push(`第 3 條：reduced-motion 下 ${surface} 沒有拿掉位移（translate: none）`);
+    if (
+      !mine.some(
+        (r) => seconds(expand(declarations(r.body).get('transition-duration') ?? '1s')) <= 0.15,
+      )
+    )
+      failures.push(`第 3 條：reduced-motion 下 ${surface} 的 transition 時長沒有壓到 150ms 以下`);
+  }
+
+// `var()` 指到沒宣告的時長、位移、縮放、模糊、曲線變數時 CSS 不報錯，動效會無聲變樣（#1687 驗收 D1）。
+const declared = new Set(
+  rules.flatMap((r) => [...declarations(r.body).keys()].filter((k) => k.startsWith('--'))),
+);
+for (const rule of rules)
+  for (const [, value] of declarations(rule.body))
+    for (const [, name] of value.matchAll(/var\((--(?:duration|distance|scale|blur|ease)-[\w-]+)/g))
+      if (!declared.has(name)) failures.push(`${rule.selector} 引用了沒有宣告的 ${name}`);
+
+// 引用到的 motion-* keyframes 要存在
+for (const rule of rules)
+  for (const [, value] of declarations(rule.body))
+    for (const [name] of value.matchAll(/\bmotion-[a-z-]+\b/g))
+      if (!keyframes.has(name)) failures.push(`${rule.selector} 引用了不存在的 @keyframes ${name}`);
+
+// 自動捲動不改內容寬度（#1363）
+const GUTTER_PROPERTIES =
+  /^(scrollbar-width|scrollbar-gutter|overflow|overflow-y|overflow-x|padding|padding-inline|padding-right|padding-left|width)$/;
+for (const rule of rules) {
+  if (!/\[data-autoscrolling\b/.test(rule.selector)) continue;
+  for (const [name, value] of declarations(rule.body))
+    if (GUTTER_PROPERTIES.test(name))
+      failures.push(`${rule.selector} 在自動捲動時改了 ${name}: ${value}，會改內容寬度（#1363）`);
+}
+
+// 外部網址
+for (const f of files)
+  for (const [match] of readFileSync(new URL(f, dir), 'utf8').matchAll(
+    /(url\(\s*["']?|@import\s+["'])(https?:)?\/\/[^)"']+/g,
+  ))
+    failures.push(`${f}：外部網址 ${match}`);
+
+// 只來自測試檔或說明文件的 class（`@source not` 失效或新增了沒排除的檔案時才會有）
+const APP = new URL('../', import.meta.url);
+function walk(dir, keep, out = []) {
+  for (const name of readdirSync(dir)) {
+    if (['node_modules', 'dist', 'scripts', 'tokengen'].includes(name)) continue;
+    const isDir = statSync(new URL(name, dir)).isDirectory();
+    const url = new URL(isDir ? `${name}/` : name, dir);
+    if (isDir) walk(url, keep, out);
+    else if (keep(name)) out.push(url);
+  }
+  return out;
+}
+const classTokens = (urls) =>
+  new Set(urls.flatMap((u) => readFileSync(u, 'utf8').split(/[\s"'`]+/)).filter(Boolean));
+const productSource = walk(
+  new URL('src/', APP),
+  (n) => /\.(tsx?|css)$/.test(n) && !/\.test\.tsx?$/.test(n),
+);
+const onlyInDocs = walk(APP, (n) => /\.test\.tsx?$|\.md$/.test(n));
+const productTokens = classTokens([...productSource, new URL('index.html', APP)]);
+const docTokens = classTokens(onlyInDocs);
+const unescape = (cls) => cls.replace(/\\(.)/g, '$1');
+const leaked = new Set();
+// Tailwind 的規則以那個 class 起頭（`.container{…}`、`.hover\\:bg-x:hover{…}`）；第三方的像 `.katex .accent`，class 在後面，不算。
+for (const rule of rules) {
+  const raw = /^\.((?:\\.|[\w-])+)/.exec(rule.selector)?.[1];
+  if (raw === undefined) continue;
+  const cls = unescape(raw);
+  if (docTokens.has(cls) && !productTokens.has(cls)) leaked.add(cls);
+}
+if (leaked.size > 0)
+  failures.push(
+    `產物裡有只來自測試檔或說明文件的 class（${leaked.size} 個：${[...leaked].join('、')}）：` +
+      '`src/index.css` 的 `@source not` 要排除這些檔案',
+  );
+
+// dark variant：Tailwind 只用最後一個定義；產物裡出現 SG 那一版，表示覆寫檔的重新定義不見了或排到前面去了。
+const builtCss = files.map((f) => readFileSync(new URL(f, dir), 'utf8')).join('\n');
+if (builtCss.includes(':is(.dark *)'))
+  failures.push(
+    'dark variant 是 solid-glass 那一版 `:is(.dark *)`，`<html class="dark">` 本身吃不到 `dark:`',
+  );
+if (!builtCss.includes(':is(.dark,.dark *)'))
+  failures.push(
+    '產物裡沒有 `:is(.dark,.dark *)`：`src/styles/solid-glass.overrides.css` 的 `@custom-variant dark` 沒有生效',
+  );
+
+if (failures.length > 0) {
+  console.error(`check-built-css：${failures.length} 條失敗`);
+  for (const f of [...new Set(failures)]) console.error(`  - ${f}`);
+  process.exit(1);
+}
+console.log(
+  `check-built-css：通過（${files.length} 個 CSS、${keyframes.size} 個 keyframes、` +
+    `${stoppers.length} 條 reduced-motion 停止規則）`,
+);

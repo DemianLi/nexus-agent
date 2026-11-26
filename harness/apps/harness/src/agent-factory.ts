@@ -1,0 +1,1520 @@
+/**
+ * agent 工廠——**plugin 清單組出來的 agent 只有這一個組裝點**。
+ *
+ * 整個 repo 只有一處例外：[`assembly-parity.test.ts`](./assembly-parity.test.ts) 直接呼叫
+ * `createDeepAgent` 當對照組，那是刻意的——它斷言「自有組裝點組出來的東西與基座逐位元組相同」，
+ * 中間隔著我們自己的 fold 就驗不到那件事了。基座拿乾淨之後那條測試跟著拿掉。
+ *
+ * 三步：`loadPlugins()` 把清單跑進 registry、`foldRegistry()` 折成參數、
+ * `assembleAgent()` 收下。前兩步與第三步都住在 `@nexus/core`（`agent-assembly.ts` 是自有的組裝，
+ * 取代 `deepagents` 的 `createDeepAgent`），這裡只負責把組裝點自有的東西餵進去。換模型、換儲存、
+ * 換工具組合＝換 plugin 清單，core 不動。
+ *
+ * 「組裝點自有、plugin 不得提供」的那些（default backend、工具呈現順序、model、
+ * checkpointer / store、核准政策的 session 開關、摘要的門檻與去向、重複呼叫提醒的門檻與
+ * 射程，加一份基座工具名單）
+ * 從 {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
+ *
+ * 基座在建構時有兩道自己的檢查是 fold 看不到的；自有組裝點之後，只剩第一道還需要我們自己守：
+ *
+ * 1. **工具名撞到內建**——基座的 `createDeepAgent()` 開頭會丟 `ConfigurationError('TOOL_NAME_COLLISION')`，
+ *    自有組裝點**沒有**這道。我們在 fold 之前先擋（{@link assertNoBaseToolNameCollision}），而且比基座
+ *    多擋一半（subagent 層）。**這道不能拆**：檔案工具與 `task` 還是基座的 middleware 在注入，名字照樣會撞。
+ * 2. **`permissions` 的路徑格式**與**配上支援命令執行的 backend**——都是 `createFilesystemMiddleware()`
+ *    自己跑的，自有組裝點照樣呼叫它，所以照樣會在這裡失敗。路徑格式：非絕對路徑、含 `..`、含 `~` 一律拋錯，
+ *    而 `registry.permissions.deny()` 明文不驗第二次，所以這條的失敗只會在這裡出現。後者拋的是普通的
+ *    `Error`；現在觸發不到——`StateBackend` 的 `isSandboxBackend` 是 false——所以不寫測試，
+ *    留給 Phase 2 的 `feat/sandbox-plugin` 當場驗。
+ *
+ * **曾經有第三條，是改寫不是檢查：按模型改寫組裝（harness profile）。** 基座從 `model` 解出一份 profile，
+ * 拿得掉工具、改得動我們自己註冊的工具的 description、加得了 middleware、換得掉系統提示詞，
+ * 而且不拒絕任何東西。自有組裝點之後**沒有這回事**：模型字串不再影響組成，所以原本那道「要求宣告」的
+ * 檢查（`expectedHarnessProfile`、`harness-profile.ts`）整個拿掉了。
+ *
+ * 組裝點還負責一件基座**設了但等於沒設**的事：agent 迴圈的上限。值由
+ * {@link recursionLimitFor} 的三態決定（明著傳的 > `#settings/recursion-limit` 那一列提供的
+ * 服務 > {@link DEFAULT_RECURSION_LIMIT}），常數與它的校準住在
+ * [`settings/recursion-limit.ts`](./settings/recursion-limit.ts)。
+ */
+
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import {
+  assembleAgent,
+  assertInvariantSelection,
+  createFsService,
+  createHostServicesPlugin,
+  createHistoryShadowTally,
+  createInvariantRunner,
+  createSessionRunner,
+  compileSubagentGraph,
+  foldRegistry,
+  formatOrigin,
+  createBackgroundApprovalGate,
+  createBackgroundApprovalPolicyPrompt,
+  createRegistry,
+  createSubagentDelegationMiddleware,
+  isFeedbackEvent,
+  loadPlugins,
+  MESSAGE_FEEDBACK_SERVICE,
+  ModifiedOrderCompositeBackend,
+  resolveEntriesPerEntry,
+  SESSION_TELEMETRY_SERVICE,
+  SessionTelemetryCoordinator,
+  type AgentCheckpointer,
+  type AgentLoopKind,
+  type AgentModel,
+  type AgentStore,
+  type ToolFilter,
+  type ApprovalPolicy,
+  type InvariantError,
+  type InvariantSelection,
+  type FoldOptions,
+  type HistoryShadowSink,
+  type HistorySource,
+  type InvariantTap,
+  type DroppedEntry,
+  type FileToolsOptions,
+  type ModelContextLimits,
+  type ModelSelectionController,
+  type NexusSubAgent,
+  type PluginEntry,
+  type PluginOrigin,
+  type PluginRegistry,
+  type PluginWarning,
+  type SessionLog,
+  type SessionRegistry,
+  type SessionTelemetrySharingStatus,
+  type RepeatReminderSettings,
+  type SearchOverflowOptions,
+  type StreamRetryOptions,
+  type SummarizationSettings,
+  type TokenAnchorBook,
+  type ToolResultPruneConfig,
+  TOOL_RESULT_EVICTION_PREFIX,
+} from '@nexus/core';
+import type { SystemPromptVariables } from '@nexus/system-prompt';
+import { toLangChainTool } from '@nexus/tool-adapter';
+import type { AnyBackendProtocol } from 'deepagents';
+import { BackgroundDelegation } from './background-delegation.js';
+import type { SessionLookupRegistrar } from './thread-sessions.js';
+import { subagentDefinitionValidator } from './subagent-definition.js';
+import type { DelegationBaseline } from './subagent-model-selection.js';
+import type { BackgroundSubagentsOptions } from './background-delegation.js';
+import { recordedModelSelectionPolicy } from './model-selection-policy.js';
+import type {
+  BackgroundAgent,
+  BackgroundParentPort,
+  SessionDetach,
+} from './background-subagents.js';
+import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
+import { TextOnlyStateBackend } from './binary-read.js';
+import { createAttachmentScope } from './attachment-route.js';
+import { ATTACHMENTS_PREFIX } from './attachment-store.js';
+import { copyFileEntry } from './copy-file-tool.js';
+import { historyRecallEntry } from './history-recall-tools.js';
+import { embedApprovalEntry } from './embed-profile.js';
+import { createHostToolsSlot, hostToolsEntry } from './host-tools.js';
+import type { HostToolsSlot } from './host-tools.js';
+import type { ThreadProfile } from './embed-profile.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { SandboxModeSource } from './contained-backend.js';
+import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
+import type { AttachmentStore } from './attachment-store.js';
+import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
+import { createToolResultStash } from './tool-result-stash.js';
+import type { StashRoute } from './tool-result-stash.js';
+import type { ToolResultStashOptions } from './tool-result-stash.js';
+import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
+import { DEFAULT_HISTORY_SOURCE, HISTORY_SOURCE_SERVICE } from './settings/history-source.js';
+import { toolResultAsSeen } from './conversation-restore.js';
+import {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  MAX_PARALLEL_TOOL_CALLS_SERVICE,
+  MIN_LANGGRAPH_MAX_CONCURRENCY,
+} from './settings/agent-loop.js';
+import { SEARCH_RESULT_LIMITS_SERVICE } from './settings/tool-fs-search.js';
+import { TOOL_FS_SERVICE } from './settings/tool-fs.js';
+
+/** 組裝時掉了的一列（#751）：載入器交出來的原因，加上它是清單上哪一個條目。 */
+export interface AssemblyDrop {
+  /** 放進 {@link CreateNexusAgentOptions.plugins} 的那一顆條目物件。 */
+  readonly entry: PluginEntry;
+  readonly drop: DroppedEntry;
+}
+
+/**
+ * 組裝時有不能少掛的條目掉了：整個組裝失敗（#751）。**拋出之前已經收掉**這次組裝開的資源。
+ *
+ * 帶著這一次掉了的全部（可少掛的也在），呼叫端要跟讀清單那一次的一起列時從這裡讀。
+ */
+export class AssemblyDropError extends Error {
+  readonly dropped: readonly AssemblyDrop[];
+  /** 不能少掛、卻掉了的那幾個條目。 */
+  readonly fatal: ReadonlySet<PluginEntry>;
+
+  constructor(dropped: readonly AssemblyDrop[], fatal: ReadonlySet<PluginEntry>) {
+    const lines = dropped.map(
+      ({ entry, drop }) => `  ${drop.message}${fatal.has(entry) ? '〔不能少掛〕' : ''}`,
+    );
+    super(
+      `組裝失敗：${String(fatal.size)} 個不能少掛的條目沒有掛上。這一次掉了的全部：\n${lines.join('\n')}`,
+    );
+    this.name = 'AssemblyDropError';
+    this.dropped = dropped;
+    this.fatal = fatal;
+  }
+}
+
+/**
+ * `createNexusAgent` 回來之後、組裝點自己做的一步在某一列的名義下失敗，換成**以那一列為不能少掛條目**的 {@link AssemblyDropError}
+ * （[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q3 更正 1）。
+ *
+ * serve 記「這一列掉了」只認 `AssemblyDropError`（試組與逐條 thread 兩處都是 `instanceof`），CLI 的 `startupErrorFrom` 也是；
+ * 換成別的錯誤型別，三條路都會直接重拋、不記。內層訊息逐字原樣放進 `drop.message`。
+ *
+ * @param plugins - 這一次組裝的清單（找那一列的條目與身分）。
+ * @param pluginName - 那一列的 plugin `name`。
+ * @param error - 拋出來的錯誤。
+ * @param dropped - `createNexusAgent` 已經回報的掉了的列（可少掛的也在），一起列。
+ * @returns 包好的錯誤；清單上找不到那一列時是 `undefined`，呼叫端原樣重拋。
+ */
+export function assemblyDropErrorFor(
+  plugins: readonly PluginEntry[],
+  pluginName: string,
+  error: unknown,
+  dropped: readonly AssemblyDrop[],
+): AssemblyDropError | undefined {
+  const resolved = resolveEntriesPerEntry(plugins);
+  const index = plugins.findIndex((entry) => entry.plugin.name === pluginName);
+  const entry = plugins[index];
+  const origin = resolved[index]?.origin;
+  if (entry === undefined || origin === undefined) return undefined;
+  const reason = error instanceof Error ? error.message : String(error);
+  const drop: AssemblyDrop = {
+    entry,
+    drop: {
+      origin,
+      stage: 'apply',
+      message: `${formatOrigin(origin)} 在組裝這條 thread 時失敗 — ${reason}`,
+      cause: error,
+    },
+  };
+  return new AssemblyDropError([...dropped, drop], new Set([entry]));
+}
+
+export interface CreateNexusAgentOptions {
+  /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
+  readonly plugins: readonly PluginEntry[];
+  /**
+   * 過大的工具結果暫存到主機上的哪個私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）。
+   * 給了，基座的 `/large_tool_results/` 前綴就路由到那個根底下按會話分的目錄，續接之後讀得回；寫不進去退回記憶體。
+   * **省略就是今天的記憶體暫存**：eval、spike 與沒有會話日誌的組裝沒有「續接時回到同一個會話」的身分，落盤只會留下
+   * 沒人清的檔。細節與偏離見 `tool-result-stash.ts` 的檔頭。
+   */
+  readonly toolResultStash?: ToolResultStashOptions;
+  /**
+   * 附件儲存（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：給了就把它的 `files` 目錄以唯讀路由掛在
+   * {@link ATTACHMENTS_PREFIX} 底下，模型用 `read_file` 讀使用者上傳的檔案。**省略就不掛**（CLI、eval、spike）。
+   */
+  readonly attachments?: AttachmentStore;
+  /**
+   * **唯讀共用參考區**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：給了就把 `rootDir`（`--workspace`）以固定 `read-only` 的圍堵 backend 掛在
+   * {@link SHARED_WORKSPACE_PREFIX} 底下，併進 `offWorkspacePrefixes()`（`present` 據它拒絕：這個前綴不在這條 thread 的可寫根上）。
+   * 只有這條 thread 有私有可寫根時才給；舊 thread 的可寫根本來就是共用區，不再另掛。**省略就不掛**（CLI、eval、spike）。
+   *
+   * 偏離登記（理由 2，#1775 兩條之第 2 條；延伸＝工作區指示檔從共用區讀、落盤關掉時可寫根在記憶體，登記在 `thread-roots.ts` 檔頭）：`--workspace` 退成唯讀共用區，且**不吃升級**（Q8 (a)）。部署方要放全員共用的參考資料，
+   * 又不能讓一條對話改到別條對話看得到的檔；一條 thread 的核准，別條 thread 的使用者沒有核准過。補的是**一條固定唯讀的路由**：檔案政策是字面值
+   * `'read-only'`（不接沙箱控制器的 source；只有 `toolMode` 跟會話，決定 `rg` 上不上 OS 沙箱），也不傳 `grants`（認領不到任何 grant），所以 `danger-full-access` 與核准過的升級都改不了它。
+   * 同附件路由的形狀（`attachment-store.ts` 的 `readOnlyRoute`：固定 `read-only`、不吃控制器與 grant）。
+   */
+  readonly sharedWorkspace?: { readonly rootDir: string };
+  /**
+   * 工具結果外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
+   * 全文存進 {@link toolResultStash} 的主機目錄，模型只收到頭尾預覽加路徑。**省略就不掛**；**沒有
+   * {@link toolResultStash}（沒有會話鑰匙、沒有存處）也不掛**，那時超過 80,000 字元的結果仍由基座換成預覽。細節見 `@nexus/core` 的 `spill-policy.ts`。
+   */
+  readonly spillPolicy?: { readonly maxInlineTokens: number };
+  /**
+   * **哪幾個條目可以少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），以條目物件比對
+   * （放進 {@link plugins} 的那一顆）。
+   *
+   * 給了就用載入器的逐列掉模式：這幾個條目自己的失敗——`apply` 拋錯、`requires` 缺件、撞到基座保留的
+   * 工具名——只讓它掉，組出來的 agent 照樣有其餘的，掉了哪幾個從回傳的 `dropped` 讀。**不在這份裡的條目掉了，
+   * 整個組裝失敗**（{@link AssemblyDropError}）：產品路徑上那是組裝點自己加的外掛與必掛的列。組裝點的外掛不能
+   * 少掛，因為有些使用方查不到它們給的服務就自己退回預設值照樣跑（例如 `ask-user` 查不到對話管道）。
+   *
+   * 省略即全有全無，手搭清單的呼叫端照舊。
+   */
+  readonly optionalEntries?: ReadonlySet<PluginEntry>;
+  /**
+   * 模型。**刻意是必填**——組裝點沒有預設模型（基座的 `createDeepAgent` 省略時會退到
+   * `anthropic:claude-sonnet-4-6`，自有組裝點沒有這個退路），因為那會讓「忘了指定」與「就是要
+   * Anthropic」看起來一模一樣，而前者的代價是打一支沒人預期的付費 API。
+   */
+  readonly model: AgentModel;
+  /**
+   * 系統提示詞前後綴的 `{{model}}` 與 `{{cwd}}`（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）。
+   *
+   * 出貨清單的 `system-prompt` 那一列折進 thread 時要讀這兩個預設值（#1477：宿主那顆 `nexusSystemPrompt` middleware 用，經宿主內部的路
+   * 交，見 `system-prompt-middleware.ts`；不再是 `NexusServices` 的服務），而**這裡是唯一的提供者**：手搭的呼叫端不必為了一個它們不關心的
+   * 東西各交一份，也就不會有兩份撞在一起。省略時 `model` 取模型物件自己報的型號（`model`／`modelName`，
+   * 都沒有就用 `_llmType()`——每個 `BaseChatModel` 都有），`cwd` 是 `/`：檔案工具的位址空間裡的根，不是主機路徑
+   * （理由見 `@nexus/plugin-system-prompt` 的檔頭）。`--live` 的兩個入口明著傳 `live-model` 那一列的 `modelId`，
+   * 跟建模型讀的是同一份。
+   */
+  readonly systemPromptVariables?: Partial<SystemPromptVariables>;
+  /**
+   * default backend。plugin 掛的是路由分支（`backend.mount()`），兜底的這個是組裝點的事。
+   * 省略即 `StateBackend`（跑在 state 裡的虛擬 FS，不碰真實磁碟）。**含路徑圍堵的
+   * default backend 是 Phase 2 `feat/fs-backends` 的事**，現在這個不設防。
+   */
+  readonly backend?: AnyBackendProtocol;
+  /** 路由起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。省略就各照路由自己的模式。 */
+  readonly toolMode?: SandboxModeSource;
+  /** 工具呈現順序。省略即字典序（省略不代表隨便排，代表另一種確定的排法）。 */
+  readonly toolOrder?: readonly string[];
+  /**
+   * 基座工具的名字宇宙。省略即 {@link BASE_TOOL_NAMES}。
+   * 會想覆寫它的只有測試，以及哪天真的開了 async subagent 的組裝。
+   */
+  readonly baseToolNames?: readonly string[];
+  /**
+   * 子代理的工具允許／拒絕清單（[#707](https://github.com/DemianLi/nexus-agent/issues/707)），套在每個子代理上（含 `general-purpose`、
+   * 前景的 `task` 與背景的 `subagent` 派出的），root 不受影響。省略＝沒有，組裝產物與沒這一格時逐字相同。
+   * 規則與檢查見 `@nexus/core` 的 `subagent-tool-filter`；來源是 `background-subagents` 那一列的 `toolFilter`。
+   */
+  readonly subagentToolFilter?: ToolFilter;
+  /**
+   * 「先讀後改」策略的開關。省略即開著——**除非**清單上
+   * `@nexus/core/observation-policy` 那一列標了 `disabled: true`，三態見 `@nexus/core` 的
+   * `FoldOptions.observationPolicy`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+   *
+   * `false` 是明著接受盲改——一個只寫新檔、從不編輯既有檔的批次流程用得到它。
+   * 形狀與理由見 `@nexus/core` 的 `observation.ts`。
+   */
+  readonly observationPolicy?: boolean;
+  /**
+   * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著——**除非**清單上
+   * `@nexus/core/model-usage` 那一列標了 `disabled: true`，三態見 `@nexus/core` 的
+   * `FoldOptions.modelUsage`（#456）。
+   *
+   * `false` 之後落盤日誌裡不會有 `model/usage`。**評估那條路的數字不受影響**——
+   * `eval/runner.ts` 是自己從 `usage_metadata` 加的，而且它不接 `attachSession`。
+   * 形狀與理由見 `@nexus/core` 的 `model-usage.ts`。
+   */
+  readonly modelUsage?: boolean;
+  /**
+   * 模型呼叫失敗的整次重打政策（[#520](https://github.com/DemianLi/nexus-agent/issues/520)、
+   * [#1427](https://github.com/DemianLi/nexus-agent/issues/1427)：首事件之前與之後共用），原樣轉給
+   * `FoldOptions.streamRetry`。省略（或 `maxRetries` 為 0）就不重打。產品路徑由 `settings/live-model.ts` 的 `retryPolicy` 給。
+   */
+  readonly streamRetry?: StreamRetryOptions;
+  /**
+   * 掛不掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。省略即不掛。**只有 serve 開**：
+   * 插話由 web 的 pump 經 `configurable` 送進圖裡，CLI 一行一輪沒有插話。開了之後每一步多一個 super-step，
+   * 換算見 `settings/recursion-limit.ts`。形狀見 `@nexus/core` 的 `step-inbox.ts`。
+   *
+   * 開沒開從回傳的 `stepInbox` 讀：pump 據它決定插話放 `next-step` 還是退成排隊——沒掛的組裝放進 `next-step`
+   * 的話，永遠沒有人領。
+   */
+  readonly stepInbox?: boolean;
+  /**
+   * 每會話模型選擇的控制器（[#723](https://github.com/DemianLi/nexus-agent/issues/723)），原樣轉給 `FoldOptions.modelSelection`。
+   * 省略即不掛：請求逐欄與沒有這一格時一樣（假模型與評估路徑都不給）。控制器由 `model-selection-host.ts` 建。
+   */
+  readonly modelSelection?: ModelSelectionController;
+  /** 一顆模型自己的窗口與輸出上限，原樣轉給 `FoldOptions.modelLimits`；只在 {@link modelSelection} 給了時有意義。 */
+  readonly modelLimits?: (model: unknown) => ModelContextLimits | undefined;
+  /**
+   * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)，地圖
+   * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。**省略就完全不變**：沒有這顆 middleware，
+   * 模型看到的還是基座的 `task`。給了：`task` 從模型視野拿掉、換成 `subagent`（`run_in_background` 預設 true），
+   * 背景那一輪由 `attachSession` 建的 host 拉起。`langgraph` 下**需要 {@link checkpointer}**（沒有存檔點就沒有第二輪）；
+   * `native` 下不用，第二輪看得到第一輪靠同一個 native agent 實例。
+   * 偏離登記與細節見 `background-delegation.ts`。
+   */
+  readonly backgroundSubagents?: BackgroundSubagentsOptions;
+  /**
+   * 照哪一份設定檔組（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)），省略即 `full`。`embed`：不掛子代理（`task` 與
+   * {@link backgroundSubagents} 都不掛，給了後者就拋），工具照 `embedApprovalGate` 要核准，`subagentKinds` 缺席。
+   */
+  readonly profile?: ThreadProfile;
+  /**
+   * 嵌入版的宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：免核准名單與宿主頁幾毫秒沒回算逾時。只在 {@link profile} 是
+   * `embed` 時有作用，那時一律掛上 `host-tools.ts` 的 middleware、回傳的 `hostTools` 是這條 thread 的插槽；省略就是空名單、30 秒。
+   */
+  readonly hostTools?: { readonly exempt?: readonly string[]; readonly timeoutMs?: number };
+  /**
+   * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
+   * **省略＝關**。給了：`attachSession` 在 root 日誌還沒有 `subagent/model-selection-policy` 時把它寫進去（有了就不再寫，
+   * 所以續接不會第二次寫）。取樣在呼叫端（serve 的 `createAgent`）——這裡只負責「日誌上有一顆」。
+   */
+  readonly modelSelectionPolicy?: { readonly allowedModels: readonly string[] };
+  /**
+   * 行程級的會話查找登記面（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)）：`attachSession` 在綁上註冊表**之後**
+   * 才往它登記，撤除掛在回傳的 detach 上。**省略就不登記**——沒有樹的組裝（手搭清單的測試、eval）只有相容層自己的
+   * `registry.sessions`，樹上那一列的查找走 `bindDetached` 交進去的那一份。兩個產品入口都走樹，由 `PluginTree.threadSessions` 給。
+   */
+  readonly sessionLookup?: SessionLookupRegistrar;
+  /**
+   * 註冊 subagent 的當下驗它的定義（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：`model` 是字串時要在型錄裡、`reasoningEffort` 要是
+   * 那顆模型宣告過而且今天實作的等級，認不得當場拋錯（指名註冊者），不等到委派。型錄由組裝點傳進來（`subagentDefinitionValidator`）；
+   * **省略＝沒有型錄**：字串 `model` 與 `reasoningEffort` 一律拒絕，只收 `maxTurns` 與給實例的 `model`。
+   */
+  readonly validateSubagent?: (subagent: NexusSubAgent) => void;
+  /**
+   * checkpointer。`langgraph` 停下來問人要靠它接回：{@link awaitsAnswer} 給 `true` 卻沒給時 fold 在組裝期拋，兩者都沒給時核准管道是
+   * `no-channel`。`native` 下不用。
+   */
+  readonly checkpointer?: AgentCheckpointer;
+  /** 這次組裝等不等得到答覆，原樣轉給 `FoldOptions.awaitsAnswer`；省略照 {@link checkpointer} 在不在算。 */
+  readonly awaitsAnswer?: boolean;
+  /** 長期記憶用的 store。 */
+  readonly store?: AgentStore;
+  /** 核准政策的 session 開關。省略即「這個 session 有人在」。 */
+  readonly approvals?: ApprovalPolicy;
+  /**
+   * 摘要的門檻與去向。給物件就逐格淺合併到 `DEFAULT_SUMMARIZATION` 上，`false` 是真的
+   * 關掉：沒有摘要、沒有歷史 offload，也沒有工具結果剪刀（#446）。**省略時由清單上
+   * `@nexus/core/summarization` 那一列決定**，手搭清單（沒有那一列）才是內建預設；四態見
+   * `@nexus/core` 的 `FoldOptions.summarization`（#456）。
+   *
+   * **這一格存在是因為基座沒有這個參數。** `createSummarizationMiddleware({ backend })`
+   * 被無條件寫死進 root 與每個 subagent 的 stack，`CreateDeepAgentParams` 上一個
+   * summarization 欄位都沒有；門檻由基座在執行期從模型 profile 二選一挑，而我們的模型
+   * 解不出 profile，於是拿到一組與模型無關的常數，**沒有任何一側在檢查它跟真實窗口的
+   * 關係**。唯一的縫是同名取代，fold 走的就是那條。
+   *
+   * `fraction` 型別的門檻在型別層與執行期都被擋掉——它需要 `profile.maxInputTokens`，
+   * 缺值時 `trigger` 一輩子不觸發、基座的 `keep` 一則逐字訊息都不留，兩個方向都不警告。
+   * 實測與決議見 [#142](https://github.com/DemianLi/nexus-agent/issues/142)，形狀與
+   * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
+   */
+  readonly summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 錨定估算的帳，原樣轉給 `FoldOptions.tokenAnchorBook`（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）。
+   * **省略即這次組裝各建一本**：eval 每題一個組裝，題與題之間本來就不該借彼此的第一次；`runServe` 建一本傳給每條 thread。
+   */
+  readonly tokenAnchorBook?: TokenAnchorBook;
+  /**
+   * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到 `DEFAULT_TOOL_RESULT_PRUNE`
+   * 上，`false` 是摘要照跑、只是不先剪。**省略時由清單上
+   * `@nexus/core/tool-result-pruner` 那一列決定**，手搭清單（沒有那一列）才是內建預設；
+   * 四態見 `@nexus/core` 的 `FoldOptions.toolResultPruning`（#456）。CLI 與 serve 走的就是
+   * 那一列——部署在 patch 裡改它。
+   *
+   * 只在摘要開著時有作用；給了物件照樣在組裝時驗。形狀見 `@nexus/core` 的
+   * `tool-result-pruner.ts`。
+   */
+  readonly toolResultPruning?: Partial<ToolResultPruneConfig> | false;
+  /**
+   * 重複工具呼叫的提醒門檻與射程。給物件就逐格淺合併到 `DEFAULT_REPEAT_REMINDER`
+   * （門檻 3／5／8）上，`false` 是明著不要。**省略時由清單上 `@nexus/core/repeat-reminder`
+   * 那一列決定**，手搭清單（沒有那一列）才是內建預設；四態見 `@nexus/core` 的
+   * `FoldOptions.repeatReminder`（#456）。
+   *
+   * **這一格存在是因為基座沒有這種 middleware。** 模型以同參數重複呼叫同一個工具時，
+   * 今天唯一會讓它停下來的是 {@link DEFAULT_RECURSION_LIMIT}，而那個上限不分辨「在
+   * 進展」與「在打轉」——它只會在跑了夠久之後把整輪掐掉。提醒器是**建議不是阻止**：
+   * 合理的重複一秒都不會被延遲。形狀與門檻見
+   * [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
+   *
+   * **開著會吃掉迴圈預算**：它掛在 `beforeModel` 上，那在圖裡是一個節點，每一輪多一個
+   * super-step，於是每輪格數從兩格變三格，換算見 {@link recursionLimit}（{@link stepInbox}
+   * 再多一格）。見 {@link DEFAULT_RECURSION_LIMIT}。
+   */
+  readonly repeatReminder?: Partial<RepeatReminderSettings> | false;
+  /** 系統提示詞，原樣送給模型（基座的 base prompt 預設本來就不注入，自有組裝點也不墊）。 */
+  readonly systemPrompt?: string;
+  /**
+   * agent 迴圈的上限，單位是 LangGraph 的 super-step。
+   *
+   * **省略不等於內建預設**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：省略之後
+   * 由 {@link recursionLimitFor} 的三態決定——{@link plugins} 裡有 `#settings/recursion-limit`
+   * 那一列就用它提供的值，連那一列都沒有才是 {@link DEFAULT_RECURSION_LIMIT}。**這一格在場時
+   * 永遠贏**。
+   *
+   * **一定要設，因為基座的預設等於沒有上限**——見 {@link DEFAULT_RECURSION_LIMIT}。
+   * 裸組裝的換算是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`：每輪兩格（模型、工具各一），
+   * 提醒器與 {@link stepInbox} 各再加一格，100 因此是 49／33／24 輪。出貨清單每次 invoke 多走的 `beforeAgent` 節點
+   * 各從分子再扣一格：基座 skills 中介層一顆、pre-step listener 三顆（#1574），每輪三格時是
+   * `floor((recursionLimit - 2 - 3) / 3)`，CLI 因此是 31 輪；serve 每輪四格是 23 輪。逐段實測見 `settings/recursion-limit.ts`。
+   */
+  readonly recursionLimit?: number;
+  /**
+   * 哪些 package 的不變量檢查要真的裝上去。省略即全裝。
+   *
+   * **這是次要的那個開關。** 條目層的 {@link PluginEntry.disabled} 才是主要答案：一個配套
+   * 入口 plugin 對一個 package 名，關掉那個條目就等於關掉那個 package 的檢查，而且
+   * 錯誤訊息裡指得出是誰。這裡收的 selection 補的是條目層表達不了的兩件事——`enabled:
+   * false` 這個總開關，以及跨多個 package 的 regex 樣式。
+   *
+   * **原樣轉給 `createInvariantRunner`，這裡不加任何語意**：驗證與過濾規則只有
+   * {@link InvariantSelection} 那一份。
+   */
+  readonly invariants?: InvariantSelection;
+  /**
+   * 違規往哪裡講。省略即 `createInvariantRunner` 的預設，也就是 `console.error`。
+   *
+   * **這道縫存在的理由不是「換一個 fd」**——預設的 `console.error` 本來就是 stderr。它買到
+   * 的是三件事，缺一件違規就會變成一個沒有人管得到的輸出：呼叫端**指得出格式**（CLI 有
+   * 自己的 `Printer`，違規不繞過它）、**測得到**（在這道縫之前，唯一驗違規的辦法是去攔
+   * `console.error`），以及**歸得了因**（違規跟 agent 的輸出落在同一個終端機上，沒有前綴
+   * 就分不出誰是誰）。
+   *
+   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve-run.ts` 那條
+   * 路徑傳的是伺服器日誌的 `invariant` logger**（[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)：改走伺服器日誌的 error 等級，
+   * 才分得出等級、也跟著 `format: json`；以前維持預設，預設的 `console.error` 進的是 stderr，撞不到任何人的終端機，也進不了伺服器日誌的門檻）。
+   * 兩條進入點答案不同是選的，不是漏的。
+   */
+  readonly onInvariantViolation?: (error: InvariantError) => void;
+  /**
+   * 只記錄的旁路（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）：每一份日誌**裝上了
+   * 哪幾個** package 的檢查，以及報了哪一條違規，原樣轉給每個 runner。**它不取代
+   * {@link CreateNexusAgentOptions.onInvariantViolation}**——違規照舊走那條路，tap 另外收一份；
+   * tap 拋了一律吞掉。為第二刀的決策量測用，第二刀若選全部拿掉，這個選項跟著拿掉。
+   */
+  readonly invariantTap?: InvariantTap;
+  /**
+   * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），CLI 的 `--history-source`。由 {@link historyFor}
+   * 的四層決定：明著傳的 > `#settings/history-source` 那一列 > {@link defaultHistorySource} > {@link DEFAULT_HISTORY_SOURCE}。
+   */
+  readonly historySource?: HistorySource;
+  /**
+   * 呼叫端給的預設：那一列關掉、掉下來時用它。`createCliAgent`（四個入口都走它）給 `log`；裸 `createNexusAgent` 不給，落到
+   * {@link DEFAULT_HISTORY_SOURCE}（`state`，裸組裝不掛日誌）。
+   */
+  readonly defaultHistorySource?: HistorySource;
+  /**
+   * `shadow` 時比對結果的去處。serve 一台一份、每條 thread 傳同一份；省略時這次組裝自己建一份不往外講的計數。
+   */
+  readonly historyShadow?: HistoryShadowSink;
+  /**
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)），CLI 與 serve 的 `--agent-loop`。省略時是 `langgraph`。
+   * 入口給的管道兩個 loop 一樣（`entryApprovalChannel`）。`native` 下帶 thread 的 `streamEvents` 停下來問人（前景子代理那一層也是，問的是 root
+   * 的使用者），`invoke`／`stream` 沒人可問，閘門與 `exec.interrupt` 照沒有管道回絕（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
+   * 前景與背景子代理跟 root 一樣跑 native。
+   */
+  readonly agentLoop?: AgentLoopKind;
+}
+
+/**
+ * 沒有人在的那些入口用的核准政策。
+ *
+ * **這是入口層的一個事實，不是一個偏好。** 一個收不了核准決定的入口把 `enabled` 留在
+ * 預設的 `true`，等於保證每次碰到核准點都停在那裡等一個不會來的答案 —— CLI 是整輪
+ * 作廢，eval 是一條基準任務作廢。關掉之後 agent 照樣跑得完：不需要核准的照跑，需要
+ * 核准的回一則說明是「沒有人被問到」的拒絕（[#113](https://github.com/DemianLi/nexus-agent/issues/113)
+ * 拍板 (a)：不加旗標，因為旗標是為了讓人選，而這裡沒有第二個值得選的行為）。
+ *
+ * `ApprovalChannel` 只從 checkpointer 在不在推出 `no-channel`，所以「有 resume
+ * 管道但沒有介面」沒有表示法，退到 `never`。
+ *
+ * **不是每個入口都該用它。** `serve-run.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
+ * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
+ */
+export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
+
+/**
+ * 組裝好的 agent，加上收掉它的方法。
+ *
+ * **刻意是推導出來的別名，不是自己打一份 interface**：`createAgent` 的回傳型別帶著
+ * 一整串由參數推導的型別參數，手寫一份會退回預設值，呼叫端的 `result.messages` 當場變成 `any`。
+ *
+ * `dispose` 收的是清單裡的 plugin 經 `registry.lifecycle.onDispose()` 登記的活資源
+ * （MCP 的 stdio 子行程是第一個），逆序、冪等，**外加還接著的遙測協調器**。
+ * **不收 agent 本身**——agent 建構後不可變，也沒有東西要關。不呼叫的下場是行程
+ * 不退出：子行程的 stdio pipe 是活的 handle。
+ *
+ * `attachTelemetry` 是遙測的接線口。它在這裡而不在 `@nexus/core`，因為接線需要同時
+ * 拿到 registry（誰掛了後端、誰掛了脫敏規則）與一份 {@link SessionLog}，而**只有組裝點
+ * 同時看得到這兩個**——core 那側不知道日誌是誰建的，兩條進入點那側不知道 registry。
+ *
+ * `attachInvariants` 同一個理由，接的是不變量配套入口。兩者**不合併**：遙測是把事件
+ * 送出去，不變量是檢查事件之間的關係，一個有出境資料一個沒有，開關與失敗語意都不一樣。
+ *
+ * `attachSession` 是第三個，接的是 `sessions` 通道的參與者。它與另外兩個的差別是**方向**：
+ * 那兩個只讀，這一個交出去的日誌**寫得動**——`goal/change` 這種權威 domain 事件就是從
+ * 這裡進日誌的。理由與否掉沿用 `invariants` 的兩條見
+ * {@link @nexus/core!SessionSubject}。
+ */
+export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
+
+/**
+ * 依一份 plugin 清單建一個 agent。
+ *
+ * **組裝失敗時這裡自己收拾**：`loadPlugins` 過了才發現 fold 的前置條件不成立、或基座
+ * 擋下這份組裝時，已經開好的資源沒有第二個人知道——呼叫端拿到的是一個 exception，
+ * 不是 handle。所以先 `dispose()` 再把原本的錯誤往外拋。
+ *
+ * @param options - 清單，加上組裝點自有的那些。
+ * @returns 建好的 agent 與收掉它的方法。
+ * @throws 模型解出來的 harness profile 與宣告不符、清單載入失敗（重名、`requires` 缺件、
+ *   `apply` 拋錯）、`invariants` 的 pattern 不合法、fold 的前置條件不成立，或基座自己在
+ *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
+ */
+/**
+ * 暫存路由接的那個前綴：組裝點那一格（core 的 `toolResultEvictionWrap`）在工具結果超過 80,000 字元時寫
+ * `<前綴>/<sanitized tool_call_id>.txt`，路由要蓋住同一個前綴。字串照基座寫死的那一個（`deepagents@1.13.1`），由 core 的
+ * `tool-result-eviction.test.ts` 對著真的基座比。
+ *
+ * **匯出是刻意的**：`tool-result-stash.test.ts` 的絆索斷言組裝好的 agent 指去的路徑落在這個前綴底下。
+ */
+export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
+
+/**
+ * 把工具結果暫存那一格路由到獨立的去處，不讓它落在 agent 的工作區上。
+ *
+ * ## 它修的是一個會丟資料的缺陷（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）
+ *
+ * 基座那次 `backend.write()` **失敗時不會保留原文**——它把訊息換成
+ * `Tool result too large, but the result could not be saved to the filesystem: <error>`
+ * （`:2437`），於是模型剛要到手的東西整個沒了，只剩一句「存不進去」。
+ *
+ * **而那不是稀有路徑。** `ContainedFilesystemBackend` 的 `read-only` mode 對**每一次**
+ * write 回 `{ error }`，所以那個組裝底下**每一則**超過 80,000 字元的工具結果都會這樣：
+ * 實測 80,014 個字元換成 166 個，模型接著 `read_file` 拿到 `ENOENT`。
+ *
+ * ## 為什麼修在 backend 這一層，而不是包一層 middleware
+ *
+ * **因為原文在基座那一層裡面。** 我們自己的 `wrapToolCall` 包在外面時，拿到的已經是
+ * 基座換過的訊息；要握住原文得再有一層跑在裡面，兩層之間對 `tool_call_id`，而且
+ * 「認出基座失敗了」只能去比對那句英文——基座沒有給碼。路由讓那次 write **不會失敗**，
+ * 於是這些都不必發生。
+ *
+ * ## 為什麼是無條件的，不是「唯讀時才路由」
+ *
+ * `fold.ts` 已經畫過這條線：**歷史是基礎建設，不是 agent 的工作區**（摘要器因此拿的是
+ * default backend，不是折出來的那個）。工具結果暫存落在同一側 —— 它是 harness 的暫存，
+ * 不是模型在做的事。所以它不該取決於工作區的寫入政策：
+ *
+ * - **`read-only`**：那次 write 不再被 fence 擋掉，缺陷消失。
+ * - **`workspace-write`**：暫存不再落在使用者的專案目錄裡。今天它會留下永遠沒人清的
+ *   `<root>/large_tool_results/*.txt`。
+ * - 而且它不必知道那次 write **為什麼**會失敗——`ENOSPC`、`EACCES`、掛載唯讀，一起蓋掉。
+ *
+ * ## 去向：主機上的私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），退路是記憶體
+ *
+ * 給了 `stash`（產品路徑上兩個入口都給）：路由到主機上按會話分的私有目錄，目錄 0700、檔案 0600，所以 CLI
+ * `--resume` 或 serve 重開之後，預覽指著的路徑還讀得到同一個檔（`conversation-restore.ts` 照同一條規則重算路徑）。
+ * 這一改**推翻了原本「放記憶體」的理由**——「唯讀模式不該碰磁碟、state 不需要清理政策」是偏好，不是基座做不到：
+ * 唯讀指的是使用者的**工作區**，這個私有目錄不在工作區裡；清理政策由啟動時的保留期
+ * 清理承擔（`tool-result-stash.ts` 的 `cleanupToolResultStash`）。
+ * **寫不進主機目錄就退回記憶體**（今天的 {@link TextOnlyStateBackend}），所以 #170 的「存不下就丟原文」不會復發。
+ *
+ * 沒給 `stash`（eval、spike、沒有會話日誌的組裝）維持記憶體：它是 graph state 的一部分，會進 checkpoint，
+ * 跑完也不留在磁碟上供事後翻查。固定根、檔名由工具呼叫編號推出、會話鑰匙由呼叫端給，
+ * 這三點見 `tool-result-stash.ts` 的檔頭。
+ *
+ * @param backend - 組裝點的 default backend。
+ * @param stash - 主機暫存的根與會話鑰匙；省略就是記憶體。
+ * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
+ */
+function withToolResultStash(
+  backend: AnyBackendProtocol,
+  stash?: StashRoute,
+  attachments?: AnyBackendProtocol,
+  shared?: AnyBackendProtocol,
+): AnyBackendProtocol {
+  // **路由鍵要有結尾斜線**（[#354](https://github.com/DemianLi/nexus-agent/issues/354)），理由同
+  // {@link withConversationHistory}。少了它，照確切路徑 `read_file` 仍讀得到，但在這個目錄底下
+  // `ls` 列出 `/large_tool_result// (directory)`、`grep` 回 No matches（實測）。代價同歷史那一格：
+  // 預設組裝裡 state 的 `files` 是共用的，模型在根目錄看得到 `/call_<id>.txt`——斜線之前也看得到，
+  // 只是形狀是 `//call_<id>.txt`（`tool-result-stash.test.ts` 的 state 那條記著）。
+  // 給了 `stash` 之後，暫存不再放在對話狀態裡，那一格只剩退回記憶體時才會出現。
+  //
+  // **附件那一格（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）掛在同一個 composite 上，不另包一層**：巢狀的
+  // `CompositeBackend` 會藏住內層的路由前綴（根目錄 `ls` 看不到它），見 `tool-result-stash.ts` 那一條的實測。它是唯讀路由，
+  // 根是附件儲存的 `files` 子目錄（`attachment-store.ts`），模型用 `read_file` 讀上傳的檔案。
+  return new ModifiedOrderCompositeBackend(backend, {
+    [`${TOOL_RESULT_STASH_PREFIX}/`]: stash === undefined ? new TextOnlyStateBackend() : stash,
+    ...(attachments === undefined ? {} : { [`${ATTACHMENTS_PREFIX}/`]: attachments }),
+    // 唯讀共用參考區（#1775）：同一個 composite 上的另一格，理由同附件那一格（巢狀會藏住路由前綴）。
+    ...(shared === undefined ? {} : { [`${SHARED_WORKSPACE_PREFIX}/`]: shared }),
+  });
+}
+
+/**
+ * 會話歷史落在 backend 的哪個前綴。**抄自基座，不是我們選的。**
+ *
+ * 兩個寫入者都用它：摘要器 offload 的預設前綴（`@nexus/core` 的 `DEFAULT_SUMMARIZATION` 的
+ * `historyPathPrefix` 同值明寫），與 `createFilesystemMiddleware` 的 `beforeAgent` 把超大 human
+ * message 搬走時**寫死**的 `/conversation_history/<uuid>`（`deepagents@1.13.1`，
+ * `dist/langsmith-zm0ILQsV.js:2468`，不吃 `historyPathPrefix`）。
+ *
+ * **匯出是刻意的**，理由同 {@link TOOL_RESULT_STASH_PREFIX}：測試拿它跟摘要器的預設前綴對。
+ */
+export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
+
+/**
+ * 把會話歷史那一格路由到獨立的 {@link TextOnlyStateBackend}，不讓它落在 agent 的工作區上
+ * （[#348](https://github.com/DemianLi/nexus-agent/issues/348)）。
+ *
+ * ## 缺的是什麼
+ *
+ * `fold.ts` 畫的線是「歷史是基礎建設，不是 agent 的工作區」，摘要器因此拿 default backend
+ * 而不是折出來的那個。**但 default backend 就是工作區**：CLI 給了 `--workspace`，
+ * default backend 就是那個 `ContainedFilesystemBackend`，於是
+ * `<workspace>/conversation_history/*.md` 一直都在使用者的目錄裡。那條線只擋住了 plugin 的
+ * 路由，沒擋住工作區本身。#335 的量測在 8 次呼叫裡量到 6 份；放到 Proteus 底下，快照會把
+ * 它們量成「演化」。
+ *
+ * ## 為什麼路由而不是換 `historyPathPrefix`
+ *
+ * **第二個寫入者不吃那個前綴。** eviction 的路徑寫死在基座裡，換前綴只搬得走摘要器那一半。
+ * 路由按路徑前綴接住兩個。
+ *
+ * **只路由基座那個常數，不路由呼叫端自訂的前綴。** 明著設了 `historyPathPrefix` 等於明著選了
+ * 去向，那一條照舊寫進 default backend（`conversation-history-route.test.ts` 釘著）。
+ *
+ * ## 去向：graph state，與 {@link withToolResultStash} 同一個理由
+ *
+ * 我們的日誌從 [#305](https://github.com/DemianLi/nexus-agent/issues/305) 起也記著對話
+ * （`assistant/message`、`tool/result`），所以耐久的那一份已經在日誌裡；backend 上這一份只是
+ * **這個行程內**讓模型照摘要那句話去 `read_file` 的便利，只有原文讀不回來的呼叫（沒接會話日誌）才寫。放 state 不必碰磁碟（`read-only` 也
+ * 留得住，以前那次寫入被 fence 擋掉、歷史直接消失），也不必有清理政策。
+ *
+ * 基座把歷史寫成檔、還在摘要裡告訴模型路徑；這條路基座無條件
+ * 建、關不掉（`contained-backend.ts` 的 `read-only` 那段），所以退到「照舊寫，但寫到工作區外」。
+ *
+ * **代價講明白**，都跟暫存那一格同形：
+ *
+ * - 它進 checkpoint，跑完就不在磁碟上，**續接（`--resume`、serve 重開）帶不回來**。
+ *   接上會話日誌的呼叫不寫這個檔（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：`history_read`／`history_search`
+ *   從日誌讀回原文（`history-recall-tools.ts`），續接後仍讀得到，摘要的前言指向它們。
+ * - `CompositeBackend` 把路由前綴剝掉再交給 `StateBackend`，而 `StateBackend` 讀寫的是 graph
+ *   state 的 `files`。沒給 `--workspace` 時 default backend 也是一個 `StateBackend`，所以 agent
+ *   在自己的根目錄 `grep` 得到歷史檔（實測）。暫存那一格是同一個機制。
+ *
+ * @param backend - 組裝點的 default backend（已經包過暫存那一格）。
+ * @returns 同一個 backend，外面再包一層只有這一條路由的 `CompositeBackend`。
+ */
+function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtocol {
+  // **路由鍵要有結尾斜線。** `CompositeBackend.getBackendAndKey` 拿 `prefix.slice(0, -1)` 比對
+  // 目錄本身、`key.substring(prefix.length)` 剝前綴，兩個都假設鍵以 `/` 結尾。少了它，寫進去
+  // 的鍵變成 `//session_x.md`，照確切路徑 `read_file` 仍讀得到（兩邊同樣錯），但在這個目錄底下
+  // `ls`／`grep` 都對不上（實測 `grep` 回 No matches）。
+  return new ModifiedOrderCompositeBackend(backend, {
+    [`${CONVERSATION_HISTORY_PREFIX}/`]: new TextOnlyStateBackend(),
+  });
+}
+
+/**
+ * 這一次組裝的迴圈上限，三態：**明著傳的 > 條目提供的服務 > 內建預設**。
+ *
+ * 形狀照 #456 那三列的 `repeatReminderDisposition`（`@nexus/core` 的 `fold.ts`），但**刻意少一
+ * 態**。那邊有第四格（`registry.disabledEntries.has(...)`）是因為「條目被關掉」與「清單上沒有那
+ * 一列」在 `services.get()` 眼中一模一樣、而正確答案相反；這裡兩件事都不成立：
+ *
+ * - **這一列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）。設定寫壞時它會掉、記成沒掛（#751），但那時
+ *   也不需要第四格，理由是下一條。
+ * - **就算關得掉，兩種成因的答案相同**——都是 {@link DEFAULT_RECURSION_LIMIT}，因為護欄沒有
+ *   「不掛」這個狀態，基座那層 `withConfig({ recursionLimit: 1e4 })` 永遠在下面。
+ *
+ * 多寫那一格不會改變任何行為，只會讓讀的人以為那裡有一個分岔。
+ *
+ * **第一態是一條登記過的偏離，不是順手寫的。** 形狀上它跟 #456 那三列的第一態一樣
+ * （`options.X !== undefined`），但那三列沒有旗標，所以它們沒回答過「旗標與設定誰贏」。這裡沒有
+ * `inject`、也沒有延後解析的設定值，所以在讀它的這個函式裡排優先序。逐條登記見
+ * [`settings/recursion-limit.ts`](./settings/recursion-limit.ts) 的偏離 2。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns super-step 上限，不是模型輪數。換算見 {@link DEFAULT_RECURSION_LIMIT}。
+ */
+function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOptions): number {
+  if (options.recursionLimit !== undefined) return options.recursionLimit;
+  return registry.services.get(RECURSION_LIMIT_SERVICE) ?? DEFAULT_RECURSION_LIMIT;
+}
+
+/**
+ * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：明著傳的 > 那一列 > 呼叫端給的預設 > {@link DEFAULT_HISTORY_SOURCE}。
+ * 這一列關得掉：關掉與沒有那一列落到呼叫端的預設（入口給 `log`），沒給才是 `state`。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 交給 fold 的 `history`。
+ */
+function historyFor(
+  registry: PluginRegistry,
+  options: CreateNexusAgentOptions,
+): NonNullable<FoldOptions['history']> {
+  const source =
+    options.historySource ??
+    registry.services.get(HISTORY_SOURCE_SERVICE) ??
+    options.defaultHistorySource ??
+    DEFAULT_HISTORY_SOURCE;
+  if (source === 'state') return { source };
+  if (source === 'log') return { source, toolResultAsSeen };
+  return {
+    source,
+    sink: options.historyShadow ?? createHistoryShadowTally(),
+    toolResultAsSeen,
+  };
+}
+
+/**
+ * 每步同時在跑的工具呼叫上限（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）：`#settings/agent-loop` 那一列
+ * 提供的值，沒有那一列就是 {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}。兩態，理由同 {@link recursionLimitFor} 少一態那段：
+ * 這一列關不掉，就算關得掉答案也一樣是內建值。沒有旗標，所以也沒有第一態。帶進 LangGraph 的 `maxConcurrency`，見
+ * `settings/agent-loop.ts` 的檔頭。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @returns 同一步最多幾顆工具呼叫同時在跑。
+ */
+function maxParallelToolCallsFor(registry: PluginRegistry): number {
+  return registry.services.get(MAX_PARALLEL_TOOL_CALLS_SERVICE) ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS;
+}
+
+/**
+ * 帶進 LangGraph `maxConcurrency` 的值：上限，但**至少 2**。上限 1 的串行由屏障承擔
+ * （{@link serialToolCallsFor}），而 LangGraph 的 `maxConcurrency: 1` 會把第一顆之後的呼叫靜靜丟掉，
+ * 見 `settings/agent-loop.ts` 檔頭偏離 0。
+ */
+function maxConcurrencyFor(registry: PluginRegistry): number {
+  return Math.max(MIN_LANGGRAPH_MAX_CONCURRENCY, maxParallelToolCallsFor(registry));
+}
+
+/** 上限是 1 ＝ 串行：屏障把每一顆都當獨佔。 */
+function serialToolCallsFor(registry: PluginRegistry): boolean {
+  return maxParallelToolCallsFor(registry) === 1;
+}
+
+/**
+ * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`#settings/tool-fs-search` 那一列
+ * 提供了服務才掛，見那一列的檔頭。完整結果存進工具結果暫存（同外溢層那一份存檔服務）；沒有暫存（eval、spike、沒有會話
+ * 日誌的組裝）只留前段、註明沒存到。
+ */
+function searchOverflowFor(
+  registry: PluginRegistry,
+  stashRoute: StashRoute | undefined,
+  options: CreateNexusAgentOptions,
+): { readonly searchOverflow?: SearchOverflowOptions } {
+  const limits = registry.services.get(SEARCH_RESULT_LIMITS_SERVICE);
+  if (limits === undefined) return {};
+  const warn = options.toolResultStash?.warn;
+  return {
+    searchOverflow: {
+      limits,
+      ...(stashRoute !== undefined && { store: stashRoute.spillStore(TOOL_RESULT_STASH_PREFIX) }),
+      ...(warn !== undefined && { warn }),
+    },
+  };
+}
+
+/**
+ * 檔案工具的組態（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：`#settings/tool-fs` 那一列提供了服務才有，
+ * 見那一列的檔頭。**沒有就什麼都不傳**——所有工具都在、上限是常數，`foldRegistry` 的產出與沒有這個選項時逐位元組相同。
+ */
+function fileToolsFor(registry: PluginRegistry): { readonly fileTools?: FileToolsOptions } {
+  const fileTools = registry.services.get(TOOL_FS_SERVICE);
+  return fileTools === undefined ? {} : { fileTools };
+}
+
+/** 模型物件自己報的型號；沒有的話退到它的種類名，每個 `BaseChatModel` 都有。字串形式的模型（基座的 `provider:model`）原樣用。 */
+function modelLabelOf(model: AgentModel): string {
+  if (typeof model === 'string') return model;
+  // 型別上 `AgentModel` 含 `undefined`（基座的參數是選填），但這個選項是必填的；真的漏了，基座退到它自己的預設。
+  if (model === undefined) return 'default';
+  const named = model as unknown as { model?: unknown; modelName?: unknown };
+  for (const candidate of [named.model, named.modelName]) {
+    if (typeof candidate === 'string' && candidate !== '') return candidate;
+  }
+  return model._llmType();
+}
+
+export async function createNexusAgent(options: CreateNexusAgentOptions) {
+  const embedded = options.profile === 'embed';
+  if (embedded && options.backgroundSubagents !== undefined) {
+    throw new Error('嵌入版設定檔不掛子代理：不能同時給 backgroundSubagents');
+  }
+  const hostTools: HostToolsSlot | undefined = embedded
+    ? createHostToolsSlot(options.hostTools?.timeoutMs)
+    : undefined;
+  if (
+    options.backgroundSubagents !== undefined &&
+    options.agentLoop !== 'native' &&
+    options.checkpointer == null
+  ) {
+    throw new Error(
+      'langgraph 下 backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
+    );
+  }
+  // 背景委派的基線（#328 第 3 項）：定義釘的 ?? 父代理**此刻**的選擇。定義要等 registry 載完才讀得到，所以閉包讀這個參照。
+  const loaded: { registry?: PluginRegistry } = {};
+  const controller = options.modelSelection;
+  const delegationBaseline =
+    controller === undefined
+      ? undefined
+      : (subagent: string): DelegationBaseline => {
+          const definition = loaded.registry?.subagents.get(subagent)?.value;
+          const pinModel = typeof definition?.model === 'string' ? definition.model : undefined;
+          const pinEffort = definition?.reasoningEffort;
+          const parent = controller.next();
+          return {
+            parent: {
+              model: parent.model,
+              ...(parent.effort !== undefined && { effort: parent.effort }),
+            },
+            defaultModelId: controller.defaultRoute.model,
+            ...((pinModel !== undefined || pinEffort !== undefined) && {
+              pin: {
+                ...(pinModel !== undefined && { model: pinModel }),
+                ...(pinEffort !== undefined && { reasoningEffort: pinEffort }),
+              },
+            }),
+          };
+        };
+  const delegation =
+    options.backgroundSubagents === undefined
+      ? undefined
+      : new BackgroundDelegation({
+          ...options.backgroundSubagents,
+          ...(delegationBaseline !== undefined && { delegationBaseline }),
+        });
+
+  // 這次組裝的 fs 把手：**只建這一份**，host-services 提供它（`present`、`submit_record` 的舊路徑從 `registry.services` 讀），
+  // `attachSession` 登記進行程級的 fs 查找的也是它（#1466）——兩邊是同一個物件，fold 填一次、兩邊都讀得到。
+  const fsService = createFsService({
+    // 這兩格是組裝點在 fold 之前包的（`withToolResultStash`／`withConversationHistory`），不在工作區磁碟上；
+    // 交付的讀端只認磁碟，`present` 靠這份清單拒掉它們（#951）。
+    offWorkspacePrefixes: [
+      TOOL_RESULT_STASH_PREFIX,
+      CONVERSATION_HISTORY_PREFIX,
+      ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
+      ...(options.sharedWorkspace === undefined ? [] : [SHARED_WORKSPACE_PREFIX]),
+    ],
+  });
+  // **放在最前面**：`system-prompt` 那一列折進 thread 時（`registerFolded`）要讀這次組裝的 `model`／`cwd`（#720、#1477）。這個條目
+  // 不提供服務，只把值記在這次組裝的 registry 上（`system-prompt-middleware.ts`）：宿主內部的路，不是 `NexusServices` 擴充。
+  const plugins: readonly PluginEntry[] = [
+    systemPromptDefaultsEntry({
+      model: options.systemPromptVariables?.model ?? modelLabelOf(options.model),
+      cwd: options.systemPromptVariables?.cwd ?? '/',
+    }),
+    // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
+    // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
+    createHostServicesPlugin({ fs: fsService }, 'fs'),
+    ...options.plugins,
+    // `copy_file`（#2289）：只在 default 是工作區時掛；排在清單之後，`tool-fs` 的 `write: false` 讀得到。
+    ...(options.backend instanceof ContainedFilesystemBackend ? [copyFileEntry(fsService)] : []),
+    // 讀回被摘掉的原文（#2777）：不摘要的組裝沒有東西可讀，不掛。
+    ...(options.summarization === false ? [] : [historyRecallEntry()]),
+    ...(delegation === undefined ? [] : [delegation.entry()]),
+    ...(hostTools === undefined
+      ? []
+      : [embedApprovalEntry(new Set(options.hostTools?.exempt)), hostToolsEntry(hostTools)]),
+  ];
+  const optional = options.optionalEntries;
+  const { registry, dispose, dropped } = await loadPlugins(
+    plugins,
+    createRegistry({
+      validateSubagent: options.validateSubagent ?? subagentDefinitionValidator(undefined),
+      adaptTool: toLangChainTool,
+    }),
+    optional === undefined
+      ? {}
+      : {
+          perEntry: true,
+          // **撞名算那一列 `apply` 失敗**（#751）：在它 `apply` 完的當下查整份，前面每一列都已經查過、保留名單又是
+          // 固定的，所以查得到的只會是它剛註冊的，掉的就只有它。
+          afterApply: (loading) => void assertNoBaseToolNameCollision(loading),
+        },
+  );
+  loaded.registry = registry;
+  const assemblyDrops = optional === undefined ? [] : pairWithEntries(plugins, dropped);
+
+  try {
+    const fatal = new Set(
+      assemblyDrops
+        .filter(({ entry }) => !(optional?.has(entry) ?? false))
+        .map(({ entry }) => entry),
+    );
+    if (fatal.size > 0) throw new AssemblyDropError(assemblyDrops, fatal);
+    // 逐列掉模式下每一列已經查過自己的了；整份再查一次當安全網，全有全無那條路則靠它。
+    assertNoBaseToolNameCollision(registry);
+    // 選擇的合法性在**這裡**驗，不是等接線時才驗：runner 是每一份會話日誌各建一個的，
+    // 壞掉的 regex 預設會拖到第一輪對話才炸，那不是組裝失敗該出現的地方。
+    if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
+
+    // 暫存的路由目標與外溢層的存檔服務是**同一個實例**：同一個會話目錄、同一套權限，外溢的檔與基座 eviction 的檔
+    // 都落在模型 `read_file` 讀得到的同一條前綴底下（#719）。
+    // 附件路由只露出這條 thread 的 root 日誌引用過的檔（#1773）：路由在這裡建、比日誌接上還早，所以先建一個沒綁日誌的 scope，
+    // `attachSession` 才綁 root 日誌；綁之前路由什麼都不露出，每次呼叫當下才讀日誌（不是快照）。
+    const attachmentScope = createAttachmentScope();
+    const stashRoute =
+      options.toolResultStash === undefined
+        ? undefined
+        : createToolResultStash({
+            ...options.toolResultStash,
+            ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+          });
+    // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
+    const sharedBackend =
+      options.sharedWorkspace === undefined
+        ? undefined
+        : new ContainedFilesystemBackend({
+            rootDir: options.sharedWorkspace.rootDir,
+            mode: 'read-only',
+            // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
+            tolerateUnreadable: true,
+            routePrefix: SHARED_WORKSPACE_PREFIX,
+            ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+          });
+    const attachmentsBackend =
+      options.attachments === undefined
+        ? undefined
+        : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode);
+    const history = historyFor(registry, options);
+    const params = foldRegistry(registry, {
+      // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
+      events: registry.dispatch,
+      // 插件的路由包在這一層外面：跟下面任何一條重疊就遮住它（唯讀共用區會變可寫），fold 當場拋。
+      // 保留清單只列**這一次組裝真的啟用的**路由：沒有工具結果暫存（落盤關掉時）或沒有附件時，那個前綴不在清單裡、外掛可以掛。
+      // 沒有暫存時下面 composite 那一格只是記憶體墊底（`TextOnlyStateBackend`，不碰磁碟），被外掛遮住沒有安全後果；
+      // 有暫存、有附件、有共用區時那一格碰得到磁碟，所以列進來。
+      reservedBackendPrefixes: [
+        CONVERSATION_HISTORY_PREFIX,
+        ...(stashRoute === undefined ? [] : [TOOL_RESULT_STASH_PREFIX]),
+        ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
+        ...(options.sharedWorkspace === undefined ? [] : [SHARED_WORKSPACE_PREFIX]),
+      ],
+      defaultBackend: withConversationHistory(
+        // 墊底的虛擬 FS 讀到二進位檔就拒絕（#642），路由那兩格同一種。
+        withToolResultStash(
+          options.backend ?? new TextOnlyStateBackend(),
+          stashRoute,
+          attachmentsBackend,
+          sharedBackend,
+        ),
+      ),
+      ...(options.spillPolicy !== undefined &&
+        stashRoute !== undefined && {
+          spillPolicy: {
+            maxInlineTokens: options.spillPolicy.maxInlineTokens,
+            store: stashRoute.spillStore(TOOL_RESULT_STASH_PREFIX),
+            ...(options.toolResultStash?.warn !== undefined && {
+              warn: options.toolResultStash.warn,
+            }),
+          },
+        }),
+      ...searchOverflowFor(registry, stashRoute, options),
+      ...fileToolsFor(registry),
+      // 搜尋工具的說明（`grep` 正規式、`glob` 比基名）只在 default 真的是工作區 backend 時講；記憶體的 StateBackend 是字面比對（#1605）。
+      ...(options.backend instanceof ContainedFilesystemBackend && { workspaceSearch: true }),
+      toolOrder: options.toolOrder,
+      baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
+      ...(options.subagentToolFilter !== undefined && {
+        subagentToolFilter: options.subagentToolFilter,
+      }),
+      model: options.model,
+      checkpointer: options.checkpointer,
+      ...(options.awaitsAnswer !== undefined && { awaitsAnswer: options.awaitsAnswer }),
+      ...(options.agentLoop !== undefined && { loop: options.agentLoop }),
+      store: options.store,
+      approvals: options.approvals,
+      ...(options.summarization !== undefined && { summarization: options.summarization }),
+      ...(options.tokenAnchorBook !== undefined && { tokenAnchorBook: options.tokenAnchorBook }),
+      ...(options.toolResultPruning !== undefined && {
+        toolResultPruning: options.toolResultPruning,
+      }),
+      ...(options.repeatReminder !== undefined && { repeatReminder: options.repeatReminder }),
+      ...(options.observationPolicy !== undefined && {
+        observationPolicy: options.observationPolicy,
+      }),
+      ...(options.modelUsage !== undefined && { modelUsage: options.modelUsage }),
+      ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
+      ...(options.stepInbox === true && { stepInbox: true }),
+      ...(serialToolCallsFor(registry) && { serialToolCalls: true }),
+      ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
+      ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
+      history,
+    });
+    // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
+    // 附件那一格也要（#2289）：`copy_file` 開來源時拿它比模型給的路徑，讀取經連結解開後的重比也一起生效。
+    for (const contained of [options.backend, sharedBackend, attachmentsBackend]) {
+      if (contained instanceof ContainedFilesystemBackend) {
+        contained.usePermissions(params.permissions ?? []);
+      }
+    }
+
+    // **推導出來的型別沒有塌**：`assembleAgent` 回 `createAgent` 的型別，`invoke()` 的 `messages` 仍然是
+    // `BaseMessage[]` 而不是 `any`，所以 {@link NexusAgentHandle} 那個別名照樣成立——這件事驗過，
+    // 因為 `any` 是不會讓 typecheck 紅的那種壞掉。
+    //
+    // 基座那一層 `withConfig({ recursionLimit: 10_000 })` 不再有：以前我們的 `withConfig` 疊在它上面、
+    // 靠「後者贏」蓋掉它（實測 `8` → 模型只被叫 3 輪），現在只有這一層。
+    const agent = assembleAgent({
+      ...params,
+      ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
+      ...(embedded && { withoutSubagents: true }),
+      ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
+    }).withConfig({
+      recursionLimit: recursionLimitFor(registry, options),
+      // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
+      // 繼承同一個值（實測）。
+      maxConcurrency: maxConcurrencyFor(registry),
+    });
+
+    // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
+    // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
+    const attached = new Set<TelemetryAttachment>();
+    /** detach 時還在收的背景 host：`dispose` 要等它們，不然後端先關、進行中的輪寫到一半。 */
+    const hostCloses = new Set<Promise<void>>();
+    /**
+     * 把 fold 過的子代理規格編成一張**帶存檔點的圖**，給背景續行用（[#825](https://github.com/DemianLi/nexus-agent/issues/825)，
+     * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。一次性的委派仍走基座的 `task`；這是另一條路，
+     * 細節與為什麼要另編見 {@link @nexus/core!compileSubagentGraph}。
+     *
+     * @param name - 子代理名（`general-purpose` 或某個 plugin 註冊的）。
+     * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。`native` 下是 `undefined`。
+     * @returns 編好的圖。
+     * @throws 沒有這個子代理、規格不合。
+     */
+    const backgroundApprovalGate = createBackgroundApprovalGate(registry);
+    const backgroundApprovalPolicyPrompt = createBackgroundApprovalPolicyPrompt();
+    const compileSubagent = (
+      name: string,
+      checkpointer: NonNullable<AgentCheckpointer> | undefined,
+      model?: BaseChatModel,
+    ) => {
+      // **背景圖要自己帶上限**（#858 的量測）：它是 `createAgent` 直接編的，沒有 root 那層
+      // `withConfig`，也沒有一次性子代理從 `task` 那次呼叫繼承來的 root 上限，於是落在 LangGraph 的預設 25——
+      // 連續 8 次工具呼叫就 `GraphRecursionError`。給它跟 root 同一個值（旗標 > 設定列 > 預設），背景子代理每一輪才跟
+      // 一次性的、跟 root 一樣長。
+      return compileSubagentGraph(params, name, {
+        ...(checkpointer !== undefined && { checkpointer }),
+        ...(model !== undefined && { model }),
+        // 背景子代理的模型在委派那一刻定了（`delegationBaseline`），不跟著使用者後來換的模型走（#328）。
+        follow: false,
+        // 背景子代理背後沒有人（#328 第 1 項只開前景）：換成 `policy-never` 的閘門，要核准的操作確定性回絕，不發中斷（#737）。
+        approvalGate: backgroundApprovalGate,
+        // 政策句跟閘門用同一組事實（#1986）：閘門換成 `policy-never`，這一句也換成「一律自動回絕」那句。
+        approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
+        // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
+        delegation: createSubagentDelegationMiddleware(),
+        ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
+      }).withConfig({
+        recursionLimit: recursionLimitFor(registry, options),
+        // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。
+        maxConcurrency: maxConcurrencyFor(registry),
+      });
+    };
+
+    return {
+      agent,
+      /**
+       * 這一次組裝掉了的可少掛條目（#751）。沒給 {@link CreateNexusAgentOptions.optionalEntries} 時一律是空的：
+       * 全有全無的組裝一列失敗就整個拋，走不到這裡。
+       */
+      dropped: assemblyDrops,
+      /**
+       * 外掛在 `apply` 裡交出的警告（#751，`registry.logger`），例如 MCP 連不上而照樣掛上。呼叫端跟掉了的列印在同一段。
+       */
+      warnings: registry.logger.warnings(),
+      /**
+       * 組裝完之後外掛**執行期**交出的警告（#1099，`registry.logger.bind()`），例如 MCP 掉線重連的進度。外掛不自己寫標準錯誤，
+       * 印在哪由呼叫端決定（CLI 與 serve）；`warnings` 是掛上那一刻的快照，這裡只收訂閱之後的。
+       */
+      onWarning: (listener: (warning: PluginWarning) => void) =>
+        registry.logger.exporter({ export: listener }),
+      /**
+       * 這一次組裝收不收插話（#710），見 {@link CreateNexusAgentOptions.stepInbox}。
+       */
+      stepInbox: options.stepInbox === true,
+      /**
+       * 這一次組裝實際用的模型歷史來源（{@link historyFor} 的結果）。`log` 時 root 與子代理各從自己的日誌推；
+       * `shadow` 的比對只在 root，子代理那一份仍是 `state`。
+       */
+      historySource: history.source,
+      /**
+       * 這一次組裝的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948），**沒給
+       * {@link CreateNexusAgentOptions.toolResultStash} 時是 `undefined`**。跟外溢層、搜尋上限是同一個暫存實例：同一個會話目錄、
+       * 同一套權限，模型 `read_file` 讀得到。pump 拿它存被截斷的跨會話引用全文。
+       */
+      spillStore: stashRoute?.spillStore(TOOL_RESULT_STASH_PREFIX),
+      /**
+       * plugin 註冊的**人的命令**。進入點靠它把一行 `/name` 發派出去。
+       *
+       * 交出去的是整個註冊點而不是只有 `find`，理由是 `register()` 自己就擋得住誤用：
+       * 它要 `requireOrigin()`，而組裝之後沒有任何 plugin 的 `apply` 在跑，呼叫它會
+       * 當場拋。所以這裡沒有「組裝後偷偷加命令」這條路。
+       */
+      commands: registry.commands,
+      /**
+       * plugin 註冊的**會話投影**（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）。pump 與歷史路由讀 `list()`，
+       * 同 `commands` 的理由：組裝之後沒有 `apply` 在跑，`register()` 呼叫了會當場拋。
+       */
+      projections: registry.projections,
+      /**
+       * 評分與評語的規則，**沒掛時是 `undefined`**。讀它的是 web 的 wire-handler：評分沒有模型
+       * 那一側，所以它跟 `commands` 一樣從組裝點交出去（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+       */
+      feedback: registry.services.get(MESSAGE_FEEDBACK_SERVICE),
+      /**
+       * plugin 提供的**服務**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+       *
+       * 交出去的是整個註冊點而不是某幾個名字，理由有兩條。一是**這個檔案一顆 plugin 都不
+       * import**：`feedback` 與 `telemetry` 走的是 `@nexus/core` 自己的通道，而服務名住在
+       * 各個 plugin 裡，在這裡列名字等於讓通用工廠認得特定 plugin。二是 `provide()` 自己
+       * 就擋得住誤用——它要 `requireOrigin()`，而組裝之後沒有任何 `apply` 在跑，呼叫它會
+       * 當場拋（同 `commands` 那一格的理由）。
+       *
+       * 今天的消費者是續行排程器（`cli.ts` 的 `goalDriverPort` 讀 `goals`）。
+       */
+      services: registry.services,
+      /** 折進這次組裝的 `memory` 來源，舊 thread 的保留清單用（`shared-reserved-writes.ts`）。 */
+      memorySources: registry.memory.sources(),
+      /**
+       * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
+       *
+       * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」，
+       * 所以這裡回的是「有沒有掛」而不是一個保險的預設值。
+       */
+      telemetrySharing: registry.services.get(SESSION_TELEMETRY_SERVICE)?.sharing,
+      /**
+       * 把一次組裝的**每一份**會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端
+       * 就沒有出口，建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
+       *
+       * **一份會話一個協調器，而且新開的那些自動有。**
+       * subagent 的日誌因此不必有人記得重接。
+       *
+       * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
+       * `feedback-only` 是 on-demand，只在人送出回饋時補送（{@link watchFeedback}）；其餘是 live。
+       * 分叉來的會話，live 從繼承標記起送，`feedback-only` 補送整份、連繼承來的前綴（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
+       * 協調器在這裡組（[#89](https://github.com/DemianLi/nexus-agent/issues/89)），plugin 碰不到日誌，所以
+       * 策略跟著協調器住在這裡。協調器本身不讀 `sharing`。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
+       * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
+       */
+      attachTelemetry(sessions: SessionRegistry): (() => Promise<void>) | undefined {
+        const mounted = registry.services.get(SESSION_TELEMETRY_SERVICE);
+        if (mounted === undefined) return undefined;
+        const { sharing } = mounted;
+        const mine = new Set<TelemetryAttachment>();
+        const unobserve = sessions.observe(({ log }) => {
+          const coordinator = new SessionTelemetryCoordinator({
+            log,
+            sink: mounted,
+            // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
+            // 掛著的策略。
+            rules: () => registry.telemetry.rules(),
+            capture: sharing === 'feedback-only' ? 'on-demand' : 'live',
+            // `feedback-only` 補送整份，連分叉繼承來的前綴；
+            // `full` 從這一份自己的第一顆起，分叉來的不重送來源的前綴（#1580）。
+            includeHistory: sharing === 'feedback-only',
+          });
+          const unwatch = watchFeedback(log, sharing, coordinator);
+          // 退訂跟協調器綁成一個：組裝整個收掉時（下面的 `dispose`）只知道逐個收，
+          // 分開記的話觸發器會留下來，對一個關掉的後端補送。
+          const attachment: TelemetryAttachment = {
+            dispose: async () => {
+              unwatch();
+              await coordinator.dispose();
+            },
+          };
+          attached.add(attachment);
+          mine.add(attachment);
+        });
+        return async () => {
+          unobserve();
+          for (const attachment of [...mine]) {
+            mine.delete(attachment);
+            attached.delete(attachment);
+            await attachment.dispose();
+          }
+        };
+      },
+      /**
+       * 把一份會話日誌接上註冊著的不變量配套入口。**沒有人註冊時回 `undefined`**——
+       * 同 `attachTelemetry` 的理由：沒有檢查就不要在熱路徑上多掛一個訂閱。
+       *
+       * 過濾器（`enabled` / allowlist / blocklist）從 {@link CreateNexusAgentOptions.invariants}
+       * 來，**原樣轉下去**。沒給就是全裝。違規的去處同理，從
+       * {@link CreateNexusAgentOptions.onInvariantViolation} 來，沒給就是 runner 的預設。
+       *
+       * **`companions.length === 0` 這一條擋在過濾之前，不是之後**：這裡問的是「有沒有
+       * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
+       * 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
+       *
+       * **每一份會話各一個 runner**。subagent 的日誌因此不會變成
+       * 一個沒有檢查的角落。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
+       * @returns 收掉這一次接線的函式，或沒有配套入口時的 `undefined`。
+       */
+      attachInvariants(sessions: SessionRegistry): (() => void) | undefined {
+        const companions = registry.invariants.companions();
+        if (companions.length === 0) return undefined;
+        const runners: (() => void)[] = [];
+        const unobserve = sessions.observe(({ log }) => {
+          runners.push(
+            createInvariantRunner({
+              log,
+              companions,
+              ...(options.invariants !== undefined && { selection: options.invariants }),
+              ...(options.onInvariantViolation !== undefined && {
+                onViolation: options.onInvariantViolation,
+              }),
+              ...(options.invariantTap !== undefined && { tap: options.invariantTap }),
+            }),
+          );
+        });
+        return () => {
+          unobserve();
+          // 倒著收，同 `load.ts` 收 lifecycle disposer 的順序。
+          for (const stop of [...runners].reverse()) stop();
+          runners.length = 0;
+        };
+      },
+      /**
+       * 把會話註冊表接上來：**綁給模型工具，並把每一份會話裝上 `sessions` 參與者**。
+       *
+       * **它做兩件事，而且不再有「沒有人註冊就回 `undefined`」那條短路。** 短路以前成立
+       * 是因為這個口只餵參與者；現在它同時是模型工具問「我該寫進哪一份日誌」的那條線
+       * （`registry.sessions.forCall`）。一個只註冊工具、沒有 `join` 任何參與者的 plugin
+       * 在短路底下會永遠拿到「沒接上」，而那是一個**看起來像設定問題的假象**。
+       *
+       * **這裡沒有 selection 也沒有 `onViolation`。** 那兩樣是不變量的東西：一個回答
+       * 「這個 package 的檢查要不要裝」，一個回答「違規往哪裡印」。參與者不產生違規，
+       * 它產生的是事件；要不要裝它由清單那一層答（條目層的 `disabled`），而它自己壞掉
+       * 只換來一行 warn。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
+       * @param backgroundPort - 背景子代理往主對話這個方向的出口：結算通知（#840）與寫來的話（#849）。
+       *   **省略即沒有人被通知、子代理也寄不出去**（cli 的 REPL 一行一輪）；serve 傳 pump 的 `notifySettled` 與
+       *   `receiveAgentMessage`。
+       * @returns 收掉這一次接線的函式：退訂、解綁，再倒著收每一份會話的 runner。
+       */
+      attachSession(
+        sessions: SessionRegistry,
+        backgroundPort?: BackgroundParentPort,
+      ): SessionDetach {
+        const installers = registry.sessions.installers();
+        const unbind = registry.sessions.bind(sessions);
+        // 附件路由的判準讀這條 thread 的 root 日誌（#1773）。子代理用的是 root 的這一份 backend，所以子代理也讀 root 的，不讀自己的。
+        const unbindAttachmentScope = attachmentScope.bind(sessions.root);
+        // 背景派出的 host：**在這裡建**（任何圖的環境之外），detach 時等進行中的輪收完。
+        const closeHost = delegation?.attach(
+          sessions,
+          (subagent, choice) => {
+            let model: BaseChatModel | undefined;
+            if (choice !== undefined) {
+              const modelFor = options.backgroundSubagents?.modelFor;
+              if (modelFor === undefined) {
+                throw new Error(
+                  `這份組裝建不出別的模型，背景子代理 "${subagent}" 不能指定 "${choice.model}"`,
+                );
+              }
+              model = modelFor(choice);
+            }
+            return compileSubagent(
+              subagent,
+              options.agentLoop === 'native' ? undefined : options.checkpointer!,
+              model,
+            ) as unknown as BackgroundAgent;
+          },
+          backgroundPort,
+        );
+        const runners: (() => void)[] = [];
+        const unobserve = sessions.observe(({ address, log }) => {
+          // 子代理選模型的政策（#875）：只寫 root、只在日誌還沒有時寫一顆。
+          if (
+            options.modelSelectionPolicy !== undefined &&
+            address.kind === 'root' &&
+            recordedModelSelectionPolicy(log.events) === undefined
+          ) {
+            log.append('subagent/model-selection-policy', {
+              allowedModels: [...options.modelSelectionPolicy.allowedModels],
+            });
+          }
+          // root 日誌以唯讀視圖交出（#1491 Q2-1）：子代理的參與者要看父代理的狀態，但不能寫 root。root 本身接上時它就是這一份。
+          if (installers.length > 0)
+            runners.push(
+              createSessionRunner({
+                address,
+                log,
+                rootLog: address.kind === 'root' ? log : sessions.root,
+                installers,
+              }),
+            );
+        });
+        // **登記排在這一步**：綁上、背景 host 建好、參與者訂閱都成功之後才登記（#1463），前面任何一步拋，樹上的查找都不會
+        // 留下一張沒收的註冊表。同一條 thread id 重組時後登記的取代先登記的，見 `thread-sessions.ts`。
+        const unregister = options.sessionLookup?.register(sessions, fsService);
+        const teardown = (): void => {
+          unobserve();
+          unbind();
+          unbindAttachmentScope();
+          unregister?.();
+          for (const stop of [...runners].reverse()) stop();
+          runners.length = 0;
+        };
+        if (closeHost === undefined) return teardown;
+        // **先等背景 host 收完，才撤登記**（#1482：先收子代理、flush，最後才 dispose）。`closeHost()` 會中止進行中的輪並等它收尾，
+        // 那一輪還會寫 `turn/end`（aborted）、結算通知，輪裡還在跑的工具也還會問會話與 fs 的查找：登記、綁定、參與者都得還在——
+        // 撤得太早，行程裡剛好只剩另一條 thread 時，那一輪的查找會被挑到別人身上；落盤也先退訂的話，這些事件到不了後端。
+        const detach = async (): Promise<void> => {
+          const closing = closeHost().finally(() => hostCloses.delete(closing));
+          hostCloses.add(closing);
+          try {
+            await closing;
+          } finally {
+            teardown();
+          }
+        };
+        return Object.assign(detach, { background: closeHost.control });
+      },
+      compileSubagent,
+      /**
+       * 這條 thread 的宿主頁工具插槽（#2374）：pump 開一輪時寫進這一輪的宣告。**只有嵌入版有**，其餘是 `undefined`。
+       */
+      hostTools,
+      /**
+       * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
+       * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
+       */
+      subagentKinds: embedded
+        ? undefined
+        : (params.subagents ?? []).map(({ name, description }) => ({
+            name,
+            description,
+          })),
+      /**
+       * root 的模型手上的委派工具（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)），點名提示照它組字：掛了背景續行
+       * （{@link BackgroundDelegation}）時 `task` 被藏起來、只剩 `subagent`，否則是 `task`。嵌入版沒有子代理，缺席。
+       */
+      delegationTool: embedded
+        ? undefined
+        : delegation === undefined
+          ? ('task' as const)
+          : ('subagent' as const),
+      async dispose() {
+        // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
+        // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。
+        // 背景 host 比它更早：它們還在往日誌寫，遙測要收得到最後那幾顆。
+        await Promise.all([...hostCloses]);
+        for (const attachment of [...attached]) {
+          attached.delete(attachment);
+          await attachment.dispose();
+        }
+        await dispose();
+      },
+    };
+  } catch (error) {
+    // 清理自己失敗的話不能蓋掉原本的錯誤——那個才是使用者要修的東西。
+    await dispose().catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * 把載入器交出來的掉了的列對回清單上的條目物件。身分照載入器同一支算（補號、重複 id），所以 `origin.id`
+ * 對得上。
+ */
+function pairWithEntries(
+  plugins: readonly PluginEntry[],
+  dropped: readonly DroppedEntry[],
+): AssemblyDrop[] {
+  const byId = new Map(
+    resolveEntriesPerEntry(plugins).map(({ origin }, index) => [origin.id, plugins[index]]),
+  );
+  return dropped.flatMap((drop) => {
+    const entry = byId.get(drop.origin.id);
+    return entry === undefined ? [] : [{ entry, drop }];
+  });
+}
+
+/** 一份日誌的遙測接線：協調器，加上 `feedback-only`／`disabled` 那個看回饋的訂閱。 */
+interface TelemetryAttachment {
+  dispose(): Promise<void>;
+}
+
+/** 策略是關閉時收到回饋講的那一句。 */
+export const DISABLED_FEEDBACK_WARNING = '遙測：策略是關閉，這則回饋不會經遙測送出去。';
+
+/**
+ * 共享策略裡跟回饋有關的兩格：
+ *
+ * - `feedback-only`：每收到一顆回饋（{@link isFeedbackEvent}），就把日誌從上次交到的地方補送到
+ *   現在。第一次是整份——前面的輪、續接帶進來的歷史都在內。
+ * - `disabled`：收到回饋時講一聲，這則不會經遙測出去。
+ * - `full` 本來就每顆都送，不用看。
+ *
+ * **用 `log.subscribe`，不用 `SessionSubject.observe`**：後者一接上就把日誌重播一遍，而續接回來的
+ * 日誌裡可能本來就有上一個行程的回饋——重播到它，就等於在接上的當下把整份歷史送出去，這一次
+ * 沒有人按過送出。
+ *
+ * **補送沒有上界**，靠的是 `subscribe`
+ * 在 append 之後同步叫：listener 跑的當下日誌剛好到那一顆回饋。除非另一個訂閱者在同一次通知裡
+ * 又寫了一顆，今天沒有這種寫者。
+ *
+ * @param log - 這一份會話日誌。
+ * @param sharing - 掛著的後端說的策略。
+ * @param coordinator - 這一份日誌的協調器，`feedback-only` 時是 on-demand。
+ * @returns 退訂；`full` 沒有訂閱，回 no-op。
+ */
+function watchFeedback(
+  log: SessionLog,
+  sharing: SessionTelemetrySharingStatus,
+  coordinator: SessionTelemetryCoordinator,
+): () => void {
+  if (sharing === 'full') return () => {};
+  return log.subscribe((event) => {
+    if (!isFeedbackEvent(event)) return;
+    if (sharing === 'feedback-only') coordinator.captureNow();
+    else console.warn(DISABLED_FEEDBACK_WARNING);
+  });
+}
+
+/**
+ * plugin 註冊的工具不得佔用基座內建的名字。
+ *
+ * 基座的 `createDeepAgent()` 開頭有一道同樣意思的檢查（`BUILTIN_TOOL_NAMES`
+ * → `ConfigurationError('TOOL_NAME_COLLISION')`），**自有組裝點之後那道不在了，這裡是唯一一道**。
+ * 先前先擋是為了兩件事，現在多了第三件：
+ *
+ * - **沒有別人擋。** 檔案工具與 `task` 還是基座的 middleware 在注入，名字照樣會撞，撞了之後
+ *   `createAgent` 不會拒絕，要到供應商那邊才炸。
+ * - **指名是誰。** 基座的訊息只說哪個工具名撞了，不知道是清單裡哪一個 plugin 註冊的——
+ *   而 registry 每次註冊都記著 origin，這是我們比基座多知道的東西。
+ * - **補上基座沒查的那半。** 它只檢查 root 的 `tools`。註冊到 subagent 層、或 subagent
+ *   定義自帶的同名工具**不會**觸發它：那些工具跟該 subagent 那份 middleware stack 帶的
+ *   內建檔案工具擠在同一個名字上，誰贏由基座內部的合併順序決定，而且是無聲的。
+ *
+ * 用的是 {@link RESERVED_BASE_TOOL_NAMES} 而不是 `foldRegistry` 收的 `baseToolNames`：
+ * 那是兩個不同的集合，前者多了 async 那五個。理由見
+ * [`base-tools.ts`](./base-tools.ts)——基座的保留是無條件的，而名字宇宙是條件式的。
+ */
+function assertNoBaseToolNameCollision(registry: PluginRegistry): void {
+  const collisions: string[] = [];
+
+  const collect = (name: string, where: string, origin: PluginOrigin): void => {
+    if (RESERVED_BASE_TOOL_NAMES.has(name)) {
+      collisions.push(`${formatOrigin(origin)} 在${where}註冊了 "${name}"`);
+    }
+  };
+
+  for (const [name, entry] of registry.tools.effective()) {
+    collect(name, '全域', entry.origin);
+  }
+  for (const scope of registry.tools.scopes()) {
+    for (const [name, entry] of registry.tools.own(scope)) {
+      collect(name, `subagent "${scope}"`, entry.origin);
+    }
+  }
+  for (const [name, entry] of registry.subagents.entries()) {
+    for (const tool of entry.value.tools ?? []) {
+      collect(tool.name, `subagent "${name}" 自帶的工具裡`, entry.origin);
+    }
+  }
+
+  if (collisions.length === 0) return;
+  throw new Error(
+    `工具名撞到基座保留的名字：${collisions.join('；')}。` +
+      `這些名字歸基座的 middleware stack 所有（檔案系統工具、task、async 任務那組），` +
+      `佔用它們不會取代基座的版本，只會讓兩個同名工具擠在一起。換個名字。` +
+      `目前被保留的：${[...RESERVED_BASE_TOOL_NAMES].sort().join('、')}`,
+  );
+}

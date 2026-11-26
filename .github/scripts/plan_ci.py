@@ -1,4 +1,4 @@
-"""決定這一輪 CI 要跑什麼。規範與取捨見 .github/workflows/ci.yml 檔頭與 AGENTS.md。
+"""決定這一輪 CI 要跑什麼。規範與取捨見 .github/workflows/ci.yml 檔頭與 docs/contributing.md。
 
 兩個子指令：
 
@@ -17,6 +17,9 @@ import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from project_paths import HARNESS_DIR, WEB_DIR, actual, canonical, unknown_source  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -79,17 +82,19 @@ RUST_RE = re.compile(
     r'|^packages/nexus-plugin-workspace-changes/src/git\.'
     r'|^packages/nexus-host-bridge/'
     r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
-    r'|^apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|host-client|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
+    r'|^apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|pair-leaf\S*|host-client|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
 )
 
 
 def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False) -> dict[str, str]:
     """`force_full` 是合併後完整一輪（`post-merge.yml` 呼叫 ci.yml 時帶 `full: true`）：不看異動，一律全跑。"""
+    unrecognized = any(unknown_source(p) for p in changed)
+    changed = [canonical(p) for p in changed]
     feature_pr = event == 'pull_request' and base_ref == 'develop'
-    rust = 'true' if force_full or any(RUST_RE.search(p) or FULL_RE.search(p) for p in changed) else 'false'
-    if feature_pr and not force_full and not any(FULL_RE.search(p) for p in changed):
+    rust = 'true' if force_full or unrecognized or any(RUST_RE.search(p) or FULL_RE.search(p) for p in changed) else 'false'
+    if feature_pr and not force_full and not any(FULL_RE.search(p) for p in changed) and not unrecognized:
         return {'mode': 'light', 'ts': 'false', 'rust': rust}
-    scan = force_full or any(TS_RE.search(p) or any(rx.search(p) for rx in SCAN_RES) for p in changed)
+    scan = force_full or unrecognized or any(TS_RE.search(p) or any(rx.search(p) for rx in SCAN_RES) for p in changed)
     return {'mode': 'full', 'ts': 'true' if scan else 'false', 'rust': 'true' if scan else rust}
 
 
@@ -97,6 +102,7 @@ def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False
 # 這些異動影響每一個套件，一律全查：相依與工具鏈、根的 tsconfig（paths 也在這裡）、vendor 的 Cordis。
 TYPECHECK_ALL_RE = re.compile(r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$|^vendor/')
 
+TYPECHECK_ALL_FILTERS = ('--filter=./**/packages/*', '--filter=./**/apps/*', '--filter=./web')
 # 型別檢查的範圍是 `packages/*` 與 `apps/*`，跟全跑那一層的 typecheck job 一樣。
 PROJECT_RE = re.compile(r'^((?:packages|apps)/[^/]+)/')
 # 套件裡會改變型別檢查結果的檔：原始碼、`package.json`、`tsconfig*.json`、可被 import 的 JSON。只改 README 不查。
@@ -121,21 +127,73 @@ SNAPSHOT_TRIGGER_RE = re.compile(
     r'|^packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
 )
 
+# web 的設計護欄（#2757）：掃原始碼與樣式的測試，改到的檔的同名規則排不到它們。動到 `apps/web/src` 的 tsx、css（測試檔除外）
+# 或顏色 token 的產生器時，輕的模式也跑 `web_design_guards()` 那幾檔；真瀏覽器的 `guard/` 留在全跑那一層。
+WEB = 'apps/web'
+WEB_DESIGN_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.test\.tsx$).*\.(tsx|css)$|^apps/web/tokengen/')
+
+# web 的結構護欄（#2883）：掃整個 `apps/web/src` 的 import 與檔案配置，改到的檔的同名規則排不到它們。切片的 import 方向、公開入口、循環、
+# `features/tool/` 的檔不按工具名分支、`styles/` 的檔名不重複資料夾名，任何 `.ts`、`.tsx` 的新增、搬動、刪除都可能違反，所以只看 `changed`、
+# 不看檔還在不在（刪檔也會弄壞 import）。測試檔與 `.d.ts` 不觸發。
+WEB_STRUCTURE_GUARDS = [
+    'apps/web/src/architecture.test.ts',
+    'apps/web/src/features/tool/adapter.test.ts',
+    'apps/web/src/styles/naming-deprecation.test.ts',
+]
+WEB_STRUCTURE_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.(test\.tsx?|d\.ts)$).*\.tsx?$')
+
+
+def web_design_guards(root: Path = ROOT) -> list[str]:
+    base = root / actual(WEB, lambda p: (root / p).is_dir())
+    found = [*(base / 'src/styles').glob('*.test.ts'), base / 'src/components/ui/local-edits.test.ts']
+    return sorted(f'{WEB}/{f.relative_to(base).as_posix()}' for f in found if f.is_file())
+
+
+def project_dirs(root: Path = ROOT) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for prefix in ('', f'{HARNESS_DIR}/'):
+        for kind in ('packages', 'apps'):
+            for manifest in sorted(root.glob(f'{prefix}{kind}/*/package.json')):
+                real = manifest.parent.relative_to(root).as_posix()
+                found.setdefault(canonical(real), real)
+    if (root / WEB_DIR / 'package.json').is_file():
+        found.setdefault('apps/web', WEB_DIR)
+    return found
+
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
-    """`packages/*`、`apps/*` 的目錄 → 套件名。"""
-    manifests = sorted([*root.glob('packages/*/package.json'), *root.glob('apps/*/package.json')])
-    return {m.parent.relative_to(root).as_posix(): json.loads(m.read_text(encoding='utf-8'))['name'] for m in manifests}
+    return {
+        d: json.loads((root / real / 'package.json').read_text(encoding='utf-8'))['name']
+        for d, real in sorted(project_dirs(root).items())
+    }
 
 
-def light(changed: list[str], names: dict[str, str], exists: Callable[[str], bool]) -> dict:
-    """輕的模式的範圍（#2088 決議第 5、7 條）。`exists` 判斷檔案在這一版還在不在：刪掉的檔不 format、不 lint、不測。"""
+def light(
+    changed: list[str],
+    names: dict[str, str],
+    exists: Callable[[str], bool],
+    design_guards: list[str] | None = None,
+    dirs: dict[str, str] | None = None,
+) -> dict:
+    """輕的模式的範圍（#2088 決議第 5、7 條）。`exists` 判斷檔案在這一版還在不在：刪掉的檔不 format、不 lint、不測。
+
+    `design_guards` 是 web 的設計護欄測試檔（`web_design_guards()`）。`names` 與判斷用的路徑都是舊形狀；
+    `dirs` 把舊形狀的專案目錄對到磁碟上的真目錄，format 的檔與 lint、測試的目錄輸出真路徑。
+    """
+    dirs = dirs or {d: d for d in names}
+    present: list[str] = []
+    seen: set[str] = set()
+    for path in changed:
+        if exists(path) and canonical(path) not in seen:
+            seen.add(canonical(path))
+            present.append(path)
+    changed = [canonical(p) for p in changed]
+    def is_present(path: str) -> bool:
+        return exists(actual(path, exists))
 
     def project(path: str) -> str | None:
         match = PROJECT_RE.match(path)
         return match.group(1) if match and match.group(1) in names else None
-
-    present = [p for p in changed if exists(p)]
 
     if any(TYPECHECK_ALL_RE.search(p) for p in changed):
         typecheck: str | list[str] = 'all'
@@ -144,8 +202,8 @@ def light(changed: list[str], names: dict[str, str], exists: Callable[[str], boo
 
     lint: dict[str, list[str]] = {}
     for p in present:
-        if (d := project(p)) and LINT_RE.search(p):
-            lint.setdefault(d, []).append(p[len(d) + 1:])
+        if (d := project(canonical(p))) and LINT_RE.search(p):
+            lint.setdefault(dirs[d], []).append(canonical(p)[len(d) + 1:])
 
     # 這次改到的測試檔，加上改到的原始檔在同一目錄下的同名測試檔（`foo.ts` → `foo.test.ts`、`foo.test.tsx`）。
     tests: dict[str, set[str]] = {}
@@ -160,17 +218,23 @@ def light(changed: list[str], names: dict[str, str], exists: Callable[[str], boo
         else:
             continue
         for c in candidates:
-            if exists(c):
+            if is_present(c):
                 tests.setdefault(d, set()).add(c[len(d) + 1:])
-    if any(SNAPSHOT_TRIGGER_RE.search(p) for p in changed) and exists(SNAPSHOT_TEST):
+    if any(SNAPSHOT_TRIGGER_RE.search(p) for p in changed) and is_present(SNAPSHOT_TEST):
         d = 'apps/harness'
         tests.setdefault(d, set()).add(SNAPSHOT_TEST[len(d) + 1:])
+    if design_guards and WEB in names and any(WEB_DESIGN_TRIGGER_RE.search(p) for p in changed):
+        tests.setdefault(WEB, set()).update(g[len(WEB) + 1:] for g in design_guards)
+    if WEB in names and any(WEB_STRUCTURE_TRIGGER_RE.search(p) for p in changed):
+        found = [g[len(WEB) + 1:] for g in WEB_STRUCTURE_GUARDS if is_present(g)]
+        if found:
+            tests.setdefault(WEB, set()).update(found)
 
     return {
         'typecheck': typecheck,
         'format': [p for p in present if not FORMAT_SKIP_RE.search(p)],
         'lint': lint,
-        'tests': {d: sorted(files) for d, files in tests.items()},
+        'tests': {dirs.get(d, d): sorted(files) for d, files in tests.items()},
     }
 
 
@@ -178,7 +242,7 @@ def write_light(scope: dict, out: Path) -> None:
     """寫成 shell 好讀的檔：`typecheck.txt` 是 pnpm 的參數，`lint.tsv`、`tests.tsv` 一行是「目錄<TAB>檔」。"""
     out.mkdir(parents=True, exist_ok=True)
     if scope['typecheck'] == 'all':
-        args = ['--filter=./packages/*', '--filter=./apps/*']
+        args = list(TYPECHECK_ALL_FILTERS)
     else:
         args = [f'--filter=...{name}' for name in scope['typecheck']]
     (out / 'typecheck.txt').write_text(''.join(f'{a}\n' for a in args), encoding='utf-8')
@@ -210,7 +274,7 @@ def main(argv: list[str]) -> int:
                     fh.write(f'{key}={value}\n')
         return 0
     if cmd == 'light' and len(argv) > 2:
-        scope = light(read_changed(), project_names(), lambda p: (ROOT / p).is_file())
+        scope = light(read_changed(), project_names(), lambda p: (ROOT / p).is_file(), web_design_guards(), project_dirs())
         print(json.dumps(scope, ensure_ascii=False, indent=2))
         write_light(scope, Path(argv[2]))
         target = os.environ.get('GITHUB_OUTPUT')

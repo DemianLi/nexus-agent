@@ -1,28 +1,27 @@
-"""檢查 `docs/upgrade-guide/` 的升級指南：路徑形狀、frontmatter、段落（#1537）。規則見 AGENTS.md「發版」。
+"""檢查 `docs/upgrade-guide/` 的升級指南：路徑形狀、frontmatter、段落（#1537）。規則見 docs/release.md〈升級指南〉。
 
-規則逐條照 dsh `scripts/verify-upgrade-guides.ts`（687f282e）：
+規則：
 
 - 目錄裡只准有 `v<semver>/<kebab-case>/guide.md`，其他檔一律報；
 - frontmatter 的鍵恰好是 `description` 與 `kind`，`kind` 是 `upgrade-guide`，`description` 是非空字串；
 - 深度 ≤ 2 的標題恰好是一個 `#` 標題，接著 `## 變更`、`## 遷移`，順序不能換；
 - 目錄不存在就沒有違規。
 
-另外多驗一條：版本目錄的 `v<版號>` 必須是已存在的 git tag。dsh 的 `<version>` 是讀者正在跑的那一版、也就是上一個
-發出的版本（SKILL.md:8、:26），它從根 `package.json` 讀。本 repo 的 manifest 今天還是 0.0.0，對不上已發出的 tag；
+另外多驗一條：版本目錄的 `v<版號>` 必須是已存在的 git tag。`<版號>` 是讀者正在跑的那一版、也就是上一個
+發出的版本，不能直接讀根 `package.json`：本 repo 的 manifest 今天還是 0.0.0，對不上已發出的 tag；
 版號 PR 合進去到 Release 發出之間，manifest 又是還沒發的那一版。所以改取最近一個 Release tag，並由這裡擋住寫錯的目錄
-（#1537 偏離 2，理由 1；撤除條件見 AGENTS.md「升級指南」）。這裡只驗 tag 存在，不驗是不是最近一個。
+（#1537 偏離 2，理由 1；撤除條件見 docs/release.md「升級指南」）。這裡只驗 tag 存在，不驗是不是最近一個。
 
-指南裡的相對連結不在這裡驗：同 dsh 由 `verify-md-links` 管，本 repo 是 `check_md_links.py`，`docs/**` 在它的範圍裡。
+指南裡的相對連結不在這裡驗：由 `check_md_links.py` 管，`docs/**` 在它的範圍裡。
 
-和 dsh 不同的地方：
+其他取捨：
 
-- 只收 `guide.md` 一份中文（dsh 的 `guide.zh.md`、`guide.i18n.yaml` 是雙語配對，本 repo 文件只有中文，見 #1537 偏離 1）。
-  段落名照 dsh 中文版的「变更」「迁移」，寫成正體；字數上限照 dsh 中文版，不設。
 - 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job：純文件 PR 會跳過 `static`，只有 `plan` 每張都跑。`plan` 不裝相依，
   所以 YAML 與 Markdown 都沒有真的解析器，下面兩處是近似，各自往哪一邊偏寫在這裡：
   - frontmatter 只收單行的 `鍵: 值`。不加引號、YAML 不會讀成這一整行字串的值（流式集合、錨點、標籤、區塊純量、
-    值裡的「: 」與「 #」等）一律要求加引號：會報一些 dsh 放行的寫法（例如 `說明 #註解`，YAML 讀成「說明」，仍是非空字串），
-    不會放過 dsh 擋的。
+    值裡的「: 」與「 #」等）一律要求加引號：會多報一些 YAML 解析器放行的寫法（例如 `說明 #註解`，YAML 讀成「說明」，仍是非空字串）。
+    非字串只認 `NON_STRING` 列的 null、布林與十進位數字：`0x10`、`+1`、`.inf`、`yes` 這類 PyYAML 預設會讀成非字串的值，
+    這裡照字串放行；`1e5` 相反，PyYAML 讀成字串，這裡當成數字報。
   - 頂層標題自己掃：跳過 fenced code、引言、HTML 註解、清單項目裡的標題；縮排程式碼、HTML 區塊這類少見形狀沒有照
     CommonMark 細分。
 """
@@ -43,7 +42,7 @@ GUIDE_PATH = re.compile(rf'^v{SEMVER}/[a-z0-9]+(?:-[a-z0-9]+)*/guide\.md$')
 
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
 FIELD = re.compile(r'^([A-Za-z_][\w-]*):(?:[ \t]+(.*?))?[ \t]*$')
-# 不加引號時 YAML 會讀成非字串的值（照 dsh 的 JSON_SCHEMA）。
+# 不加引號時 YAML 會讀成非字串的值：null（含 `~` 與空值）、布林、十進位數字。
 NON_STRING = re.compile(r'^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?)?$')
 # 不加引號時 YAML 不會讀成「整行就是這個字串」的：流式集合、錨點與別名、標籤、區塊純量、保留字元開頭，
 # 以及中間的「: 」（變成巢狀映射或語法錯）與「 #」（後面變成註解）。
@@ -89,7 +88,7 @@ def _indent(line: str) -> int:
 
 
 def outline(body: str) -> list[str]:
-    """頂層、深度 ≤ 2 的標題，取原文（同 dsh 用 mdast 根節點的子節點切出來的那段）。
+    """頂層、深度 ≤ 2 的標題，取原文。
 
     不算頂層的：fenced code、引言、HTML 註解，以及清單項目裡的標題（縮排到項目內容那一欄的行屬於那個項目，
     同 CommonMark）。清單在縮排不夠的標題、fence，或空行之後縮排不夠的段落結束；空行之前縮排不夠的段落行是
@@ -223,7 +222,7 @@ def main() -> int:
     for violation in violations:
         print(f'::error::{violation}')
     if violations:
-        print('升級指南的格式不對，規則見 AGENTS.md「發版」。')
+        print('升級指南的格式不對，規則見 docs/release.md〈升級指南〉。')
         return 1
     print('升級指南格式通過。')
     return 0

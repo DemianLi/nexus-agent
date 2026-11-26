@@ -1,0 +1,1083 @@
+/**
+ * 壓力閘門量的是**摘要器眼中的那一串**，不是 `request.messages` 原串。
+ *
+ * 這一格分不出來的話，剪刀會在第一次摘要之後**永遠**開著——圖的狀態只會長不會縮，所以
+ * 原串的門檻從那時起恆成立。那正是 [#149](https://github.com/DemianLi/nexus-agent/issues/149)
+ * 明著否掉的「每次超預算就剪」，而且它不拋、不少剪，只多剪，行為上幾乎看不出來。
+ * 走 agent 迴圈驗不到這一格：腳本模型的輪數會被摘要器自己那次呼叫吃掉，
+ * 「摘要之後才叫工具」排不出穩定的位置——所以判準放在這裡。
+ */
+
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
+import { describe, expect, it } from 'vitest';
+import {
+  createSummarizer,
+  DEFAULT_SUMMARIZATION,
+  isUnderCompactionPressure,
+  retainedMessageCount,
+} from './summarization.js';
+import type { SummarizationThreshold } from './summarization.js';
+import { SummaryCutoffTable } from './summary-cutoffs.js';
+import type { SummaryCutoff } from './summary-cutoffs.js';
+import { SessionLog } from './session-log.js';
+import type { SessionEventMap } from './session-log.js';
+import {
+  estimateMessageTokens,
+  estimateRequestParts,
+  estimateRequestTokens,
+  TokenAnchorBook,
+} from './token-estimate.js';
+import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
+
+/** 一串長到任何門檻都會成立的原始訊息。 */
+function longHistory(count: number): BaseMessage[] {
+  return Array.from({ length: count }, (_, index) =>
+    index % 2 === 0 ? new HumanMessage(`問 ${index}`) : new AIMessage(`答 ${index}`),
+  );
+}
+
+/**
+ * 每則都墊長的歷史：框好的摘要比被取代那段小才會提交（#1396），框架（含歷史檔路徑）約 60–70 token，
+ * 一則「問 0」連它都比不過。要走到「摘要真的提交」的測試用這一份。
+ */
+function fatHistory(count: number): BaseMessage[] {
+  return Array.from({ length: count }, (_, index) =>
+    index % 2 === 0
+      ? new HumanMessage(`問 ${index} ${'內容'.repeat(120)}`)
+      : new AIMessage(`答 ${index} ${'內容'.repeat(120)}`),
+  );
+}
+
+/**
+ * 讓摘要逐字留下最近 `count` 則的 `retainTokens`：前面 `count − 1` 則的 token 加一。dsh 的選尾巴是累加到 **≥** 保留量、
+ * 跨過的那則也留，所以前 `count − 1` 則還不夠、第 `count` 則一加就跨過去，剛好留 `count` 則（`count` 為 1 時是 1）。
+ */
+function retainLast(messages: readonly BaseMessage[], count: number): number {
+  const tail = count <= 1 ? [] : messages.slice(Math.max(0, messages.length - (count - 1)));
+  return tail.reduce((sum, message) => sum + estimateMessageTokens(message), 0) + 1;
+}
+
+const SUMMARY = new AIMessage('這是摘要。');
+const cutoffAt = (cutoffIndex: number): SummaryCutoff => ({
+  summaryMessage: SUMMARY,
+  cutoffIndex,
+  filePath: null,
+});
+
+describe('壓力閘門', () => {
+  const BY_MESSAGES: SummarizationThreshold[] = [{ type: 'messages', value: 6 }];
+  const BY_TOKENS: SummarizationThreshold[] = [{ type: 'tokens', value: 5_000 }];
+  /** 一段 o200k 大約八千 token 的中文。 */
+  const BIG_TEXT = '壓力閘門要量的是摘要器眼中的那一串。'.repeat(800);
+  const pressure = (
+    messages: readonly BaseMessage[],
+    trigger: readonly SummarizationThreshold[],
+    cutoff?: SummaryCutoff,
+    // 預設尾巴一則不留：這一組多數條目量的是門檻本身，不是「摘不摘得到東西」。
+    retainedCount: (messages: readonly BaseMessage[]) => number = () => 0,
+  ) =>
+    isUnderCompactionPressure({ messages }, cutoff, trigger, new TokenAnchorBook(), retainedCount);
+
+  it('門檻陣列並聯，任何一道成立就算壓力到了', () => {
+    expect(pressure(longHistory(6), BY_MESSAGES)).toBe(true);
+    expect(pressure(longHistory(5), BY_MESSAGES)).toBe(false);
+    expect(pressure(longHistory(5), [...BY_MESSAGES, { type: 'tokens', value: 1 }])).toBe(true);
+  });
+
+  /**
+   * **則數到了、尾巴卻蓋住全部：不算壓力。** 基座這時切不出東西、原樣送出，這一步不會摘要；照則數判壓力的話，
+   * 剪刀會在離任何門檻都還很遠的對話上剪掉大工具結果（2026-10-14 發版模擬的形狀）。差一則就要翻過來。
+   */
+  it('messages 那道要摘得到東西才算：尾巴蓋住全部就不是壓力', () => {
+    const messages = longHistory(6);
+    expect(pressure(messages, BY_MESSAGES, undefined, () => 6)).toBe(false);
+    expect(pressure(messages, BY_MESSAGES, undefined, () => 7)).toBe(false);
+    expect(pressure(messages, BY_MESSAGES, undefined, () => 5)).toBe(true);
+  });
+
+  it('尾巴量的是有效串，不是原串', () => {
+    const messages = longHistory(12);
+    const seen: number[] = [];
+    pressure(messages, BY_MESSAGES, cutoffAt(4), (view) => {
+      seen.push(view.length);
+      return 0;
+    });
+    expect(seen).toEqual([9]);
+  });
+
+  it('token 那道用的是錨定估算，沒錨時就是 o200k 的純估算', () => {
+    const big = [new ToolMessage({ content: BIG_TEXT, tool_call_id: 'c1' })];
+    // 前提：那段真的超過門檻，短的那句真的沒有。
+    expect(estimateRequestTokens({ messages: big })).toBeGreaterThan(5_000);
+    expect(pressure(big, BY_TOKENS)).toBe(true);
+    expect(pressure([new HumanMessage('短')], BY_TOKENS)).toBe(false);
+  });
+
+  /**
+   * **這是整組的承重條：摘要之後，長長的原串是「沒有壓力」的。**
+   *
+   * 同一串訊息，量原串成立、量有效串不成立。閘門要跟後者走。
+   */
+  it('摘要之後：原串越得過門檻，有效串越不過——閘門要跟有效串走', () => {
+    const messages = [...longHistory(9), new ToolMessage({ content: '收到', tool_call_id: 'c1' })];
+
+    expect(pressure(messages, BY_MESSAGES)).toBe(true);
+    expect(pressure(messages, BY_MESSAGES, cutoffAt(9))).toBe(false);
+  });
+
+  it('摘要之後但有效串真的很大時，壓力照樣算到', () => {
+    const messages = [
+      ...longHistory(9),
+      new ToolMessage({ content: BIG_TEXT, tool_call_id: 'c1' }),
+    ];
+
+    expect(pressure(messages, BY_TOKENS, cutoffAt(9))).toBe(true);
+  });
+});
+
+/**
+ * **接線那一格**：`createSummarizer` 包出來的那顆，真的是拿有效串去量的嗎？
+ *
+ * 上面兩組驗的是兩個純函式；這一組驗的是它們**被接在一起**。少了它，把閘門改回量原串
+ * 那個突變在整個測試樹上一條都不紅——而那正是這個缺陷會回來的方式。
+ *
+ * 這裡直接叫 middleware 的 `wrapModelCall`，不走 agent 迴圈：腳本模型的輪數會被摘要器
+ * 自己那次呼叫吃掉，「摘要之後才叫工具」在迴圈裡排不出穩定的位置。
+ */
+describe('壓力閘門接在有效串上（接線）', () => {
+  /** 基座那顆只會讀 `profile`；門檻我們自己給，所以它不會去算模型預設。 */
+  const FAKE_MODEL = { profile: {} } as never;
+
+  async function messagesSeenByModel(
+    trigger: readonly SummarizationThreshold[],
+    messages: readonly BaseMessage[],
+    cutoff: SummaryCutoff | undefined,
+    options: {
+      /** 給了就是「真的摘得到東西」的那種組裝：保留量照給、摘要模型會回話。 */
+      retainTokens?: number;
+      limits?: { contextWindow: number; maxOutputTokens: number };
+    } = {},
+  ): Promise<readonly BaseMessage[]> {
+    const runtime = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
+    const cutoffs = new SummaryCutoffTable();
+    if (cutoff !== undefined) cutoffs.record(runtime, messages, cutoff);
+    // 沒給 `retainTokens` 也沒型錄時，保留量退到 {@link RETAIN_FALLBACK_MESSAGES}（20 則）：串比它短就是尾巴蓋住全部，
+    // `determineCutoffIndex` 算出 `<= 0`、基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**。
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger,
+        ...(options.retainTokens !== undefined && { retainTokens: options.retainTokens }),
+      },
+      new TokenAnchorBook(),
+      undefined,
+      undefined,
+      options.limits === undefined ? undefined : () => options.limits,
+      undefined,
+      undefined,
+      undefined,
+      cutoffs,
+    );
+    let seen: readonly BaseMessage[] = [];
+    await middleware.wrapModelCall?.(
+      {
+        messages,
+        state: { messages },
+        runtime,
+        model: options.retainTokens === undefined ? FAKE_MODEL : SUMMARY_MODEL,
+        systemMessage: new SystemMessage('系統。'),
+        tools: [],
+      } as never,
+      ((request: { messages: readonly BaseMessage[] }) => {
+        seen = request.messages;
+        return new AIMessage('好。');
+      }) as never,
+    );
+    return seen;
+  }
+
+  /** 會回話的摘要模型：「真的摘得到東西」的那幾條要它。 */
+  const SUMMARY_MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
+
+  const HUGE = 'X'.repeat(40_000);
+
+  function withHugeTool(history: BaseMessage[] = longHistory(9)): BaseMessage[] {
+    return [...history, new ToolMessage({ content: HUGE, tool_call_id: 'c1' })];
+  }
+
+  /**
+   * **承重條。** 原串 10 則越得過「6 則」，有效串只有 2 則越不過——量對的話一個字都不動。
+   * 閘門改回量原串就會在這裡紅。
+   */
+  it('摘要之後有效串在門檻下 → 那坨大東西一個字都沒被動', async () => {
+    const seen = await messagesSeenByModel(
+      [{ type: 'messages', value: 6 }],
+      withHugeTool(),
+      cutoffAt(9),
+    );
+
+    expect(String(seen.at(-1)?.content)).toBe(HUGE);
+  });
+
+  /**
+   * 對照組：同一道門檻、沒有摘要事件、尾巴只留最後一則——這一步真的會摘要，壓力是真的到了，這時候就該剪。
+   * 歷史墊長，框好的摘要才比被取代的那段小、提交得了（#1396）。
+   */
+  it('沒有摘要事件、摘得到東西時就會被剪', async () => {
+    const seen = await messagesSeenByModel(
+      [{ type: 'messages', value: 6 }],
+      // 結果前面要有發出它的那則呼叫：孤兒結果會被基座的安全切點一起摘掉（`findSafeCutoffPoint`）。尾巴就是這一對。
+      withHugeTool([
+        ...fatHistory(8),
+        new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'lookup', args: {} }] }),
+      ]),
+      undefined,
+      { retainTokens: 1 },
+    );
+
+    expect(String(seen[0]?.content)).toContain('這是摘要。');
+    expect(String(seen.at(-1)?.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+  });
+
+  /**
+   * **2026-10-14 發版模擬的形狀**：出廠門檻（100,000 token／60 則）、預設模型的窗口，則數過了 60，訊息本身卻遠小於
+   * 20,000 token 的保留量。基座切不出東西、這一步不摘要，所以剪刀也不准動——模型剛查回來的那一則大結果要整則送上去。
+   * 閘門只看則數的話，這裡會剪。
+   */
+  it('出廠門檻下則數過了 60、尾巴卻蓋住全部：不摘要，那坨大東西也一個字都不動', async () => {
+    const messages = withHugeTool(longHistory(61));
+    const seen = await messagesSeenByModel(DEFAULT_SUMMARIZATION.trigger, messages, undefined, {
+      limits: { contextWindow: 700_045, maxOutputTokens: 16_384 },
+    });
+
+    expect(seen).toHaveLength(messages.length);
+    expect(String(seen.at(-1)?.content)).toBe(HUGE);
+  });
+});
+
+/**
+ * **`context/measure` 帶 `messagesCompactable`**（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：`messages` 那道到了的話
+ * 摘不摘得到東西。web 的用量環靠它分辨「70／60 則」是真的要摘要，還是尾巴蓋住全部、什麼都不會發生（#1441）。
+ *
+ * 一律走 `createSummarizer` 加出廠門檻與出廠的 `truncateArgs`（20／20）：這一格要等於那一步交給基座的保留決定，只有走完整條鏈才問得到。
+ */
+describe('context/measure 帶 messagesCompactable（接線）', () => {
+  /** 預設模型的上限：保留量 = min((700,045 − 16,384) × 0.16, 100,000 × 0.2) = 20,000 token。 */
+  const LIMITS = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+  const SUMMARY_MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
+
+  /** 一顆摘要器配一份日誌；`call` 可以連叫，後一次讀得到前一次記下的東西（例如參數截斷）。 */
+  function summarizer(trigger: readonly SummarizationThreshold[], retainTokens?: number) {
+    const log = new SessionLog('measure');
+    const settings = {
+      ...DEFAULT_SUMMARIZATION,
+      trigger,
+      ...(retainTokens !== undefined && { retainTokens }),
+    };
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      settings,
+      new TokenAnchorBook(),
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      undefined,
+      () => LIMITS,
+    );
+    const countOf = (type: string) => log.events.filter((event) => event.type === type).length;
+    return {
+      log,
+      settings,
+      async call(messages: readonly BaseMessage[]) {
+        const measuredBefore = countOf('context/measure');
+        const summarizedBefore = countOf('compaction/summary');
+        let seen: readonly BaseMessage[] = [];
+        await middleware.wrapModelCall?.(
+          {
+            messages,
+            state: {},
+            model: SUMMARY_MODEL,
+            systemMessage: new SystemMessage('系統。'),
+            tools: [],
+          } as never,
+          ((request: { messages: readonly BaseMessage[] }) => {
+            seen = request.messages;
+            return new AIMessage('好。');
+          }) as never,
+        );
+        const measures = log.events.flatMap((event) =>
+          event.type === 'context/measure'
+            ? [event.data as SessionEventMap['context/measure']]
+            : [],
+        );
+        // 前提：一次呼叫一筆。
+        expect(measures).toHaveLength(measuredBefore + 1);
+        return {
+          seen,
+          measure: measures.at(-1)!,
+          summarized: countOf('compaction/summary') - summarizedBefore,
+        };
+      },
+    };
+  }
+
+  const measureOf = (
+    trigger: readonly SummarizationThreshold[],
+    messages: readonly BaseMessage[],
+    retainTokens?: number,
+  ) => summarizer(trigger, retainTokens).call(messages);
+
+  /** A：發版模擬的形狀。則數過了 60，訊息本身遠小於 20,000 token 的保留量，尾巴蓋住全部。 */
+  it('則數到了門檻、整串都在保留的尾巴裡：false，這一步也沒摘要', async () => {
+    const messages = longHistory(61);
+    const { seen, measure, summarized } = await measureOf(DEFAULT_SUMMARIZATION.trigger, messages);
+
+    expect(summarized).toBe(0);
+    expect(seen).toHaveLength(61);
+    expect(measure).toMatchObject({ messageCount: 61, messagesCompactable: false });
+  });
+
+  /** A2：不看門檻。還沒到 60 則，但尾巴只留一則——到了的話摘得到，所以是 true，環才不會在跨過門檻那一刻跳。 */
+  it('則數還沒到門檻、尾巴比整串短：true', async () => {
+    const { measure, summarized } = await measureOf(
+      DEFAULT_SUMMARIZATION.trigger,
+      longHistory(10),
+      1,
+    );
+
+    expect(summarized).toBe(0);
+    expect(measure).toMatchObject({ messageCount: 10, messagesCompactable: true });
+  });
+
+  /**
+   * B：出廠設定下則數到了、訊息本身超過 20,000 token 的保留量，這一步真的摘要了。旗標量的是選尾巴的那一串，也就是摘要前的串，
+   * 所以是 true；`messageCount` 是交下去的 `[摘要, ...留下的]` 的則數。
+   */
+  it('則數到了門檻、尾巴比整串短：true，而且這一步真的摘要了', async () => {
+    const messages = fatHistory(200);
+    // 前提：整串真的超過保留量，尾巴蓋不住全部。
+    expect(
+      messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0),
+    ).toBeGreaterThan(20_000);
+    const { seen, measure, summarized } = await measureOf(DEFAULT_SUMMARIZATION.trigger, messages);
+
+    expect(summarized).toBe(1);
+    expect(String(seen[0]?.content)).toContain('這是摘要。');
+    expect(seen.length).toBeLessThan(messages.length);
+    expect(measure).toMatchObject({ messageCount: seen.length, messagesCompactable: true });
+  });
+
+  /**
+   * 會分辨三種串的對話（PM 在 #1447 審查要的）：第 1 則是帶長 `write_file` 參數的呼叫，後面接一串短訊息，讓它落在出廠
+   * `truncateArgs` 會截的範圍（最新 20 則之前）。保留量夾在中間：算原文時尾巴在那則呼叫切開，算截過的時尾巴蓋住全部。
+   */
+  const LONG_ARG = '寫進檔案的一大段內容。'.repeat(1500);
+  function writeThenChat(count: number): BaseMessage[] {
+    return [
+      new HumanMessage('把這段寫進檔案。'),
+      new AIMessage({
+        content: '',
+        tool_calls: [
+          { id: 'w1', name: 'write_file', args: { file_path: '/notes.md', content: LONG_ARG } },
+        ],
+      }),
+      new ToolMessage({ content: '寫好了。', tool_call_id: 'w1' }),
+      ...longHistory(count - 3),
+    ];
+  }
+  /** 第二次呼叫的那一串（61 則）除了那則呼叫以外的 token，再加一點：截過的那則呼叫遠小於這點餘裕。 */
+  const BETWEEN = (() => {
+    const all = writeThenChat(61);
+    return (
+      all.reduce(
+        (sum, message, index) => (index === 1 ? sum : sum + estimateMessageTokens(message)),
+        0,
+      ) + 200
+    );
+  })();
+  const argOf = (messages: readonly BaseMessage[]) =>
+    String(
+      (
+        messages.find(
+          (message) => AIMessage.isInstance(message) && message.tool_calls?.length,
+        ) as AIMessage
+      )?.tool_calls?.[0]?.args.content,
+    );
+
+  /**
+   * 沒摘要的那一步：選尾巴的有效串（原文）切得出東西，交下去的那份（基座截過參數）卻蓋得住全部。旗標要跟前者——那才是交給基座的
+   * `keep`。量交下去的那份會在這裡記 false，門檻一到卻真的摘要。
+   */
+  it('量的是選尾巴的有效串，不是交下去的那份', async () => {
+    const messages = writeThenChat(25);
+    const { settings, call } = summarizer(DEFAULT_SUMMARIZATION.trigger, BETWEEN);
+    const { seen, measure, summarized } = await call(messages);
+
+    // 前提：基座真的截了那則參數；有效串的尾巴比整串短，交下去那份的尾巴蓋住全部。
+    expect(argOf(messages)).toBe(LONG_ARG);
+    expect(argOf(seen).length).toBeLessThan(LONG_ARG.length);
+    expect(retainedMessageCount(messages, settings, LIMITS)).toBeLessThan(messages.length);
+    expect(retainedMessageCount(seen, settings, LIMITS)).toBeGreaterThanOrEqual(seen.length);
+    expect(summarized).toBe(0);
+    expect(measure).toMatchObject({ messageCount: 25, messagesCompactable: true });
+  });
+
+  /**
+   * 記過截斷之後：日誌上的截斷在交給選尾巴那層之前就換上去了（`withArgTruncationLog`），那串的尾巴蓋住全部，門檻到了也不摘。
+   * 旗標要說 false。在預算層拿原文的有效串重算的話，這裡會記 true、實際卻不摘——#1441 那種不誠實。
+   */
+  it('記過的參數截斷換上去之後才選尾巴：旗標跟著它，不跟原文', async () => {
+    const { settings, log, call } = summarizer(DEFAULT_SUMMARIZATION.trigger, BETWEEN);
+    await call(writeThenChat(25));
+    // 前提：第一次真的把截斷記進日誌了。
+    expect(log.events.some((event) => event.type === 'compaction/truncate-args')).toBe(true);
+
+    const messages = writeThenChat(61);
+    // 前提：拿原文算，尾巴切得出東西。
+    expect(retainedMessageCount(messages, settings, LIMITS)).toBeLessThan(messages.length);
+    const { seen, measure, summarized } = await call(messages);
+
+    expect(summarized).toBe(0);
+    expect(seen).toHaveLength(61);
+    expect(measure).toMatchObject({ messageCount: 61, messagesCompactable: false });
+  });
+
+  /** C：沒有 `messages` 門檻就沒有這一格——不是 false。 */
+  it('沒有 messages 門檻時不出這一格', async () => {
+    const { measure } = await measureOf([{ type: 'tokens', value: 100_000 }], longHistory(61));
+
+    expect(measure.messageCount).toBe(61);
+    expect('messagesCompactable' in measure).toBe(false);
+  });
+});
+
+/**
+ * **`context/measure` 帶 `breakdown`**（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）：系統提示、工具定義、對話訊息各約多少 token。
+ * 一律走 `createSummarizer`，看日誌上摘要器真的寫的那一筆——拿掉 `withTokenBudget` 寫 `breakdown` 的那幾行，這一組全紅。
+ */
+describe('context/measure 帶 breakdown（接線）', () => {
+  const LIMITS = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+  const MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
+  const TOOLS = [
+    {
+      type: 'function',
+      function: {
+        name: 'read_file',
+        description: '讀一個檔案。',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_file',
+        description: '寫一個檔案。',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    },
+  ];
+
+  async function measureOf(request: {
+    readonly messages: readonly BaseMessage[];
+    readonly systemMessage?: SystemMessage;
+    readonly tools?: readonly unknown[];
+  }) {
+    const log = new SessionLog('breakdown');
+    const book = new TokenAnchorBook();
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      DEFAULT_SUMMARIZATION,
+      book,
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      undefined,
+      () => LIMITS,
+    );
+    await middleware.wrapModelCall?.(
+      { ...request, state: {}, model: MODEL } as never,
+      (() => new AIMessage('好。')) as never,
+    );
+    const measure = log.events.flatMap((event) =>
+      event.type === 'context/measure' ? [event.data as SessionEventMap['context/measure']] : [],
+    );
+    expect(measure).toHaveLength(1);
+    return measure[0]!;
+  }
+
+  it('帶系統提示與兩個工具：三格都是非負整數，加起來等於 approxTokens，前兩格等於 estimateRequestParts', async () => {
+    const request = {
+      messages: longHistory(6),
+      systemMessage: new SystemMessage('你是助理。請簡短回答。'),
+      tools: TOOLS,
+    };
+    const measure = await measureOf(request);
+    const parts = estimateRequestParts(request as never);
+
+    const { breakdown } = measure;
+    expect(breakdown).toBeDefined();
+    const { messageParts, ...three } = breakdown!;
+    for (const value of [...Object.values(three), ...Object.values(messageParts!)]) {
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+    expect(breakdown!.systemTokens).toBeGreaterThan(0);
+    expect(breakdown!.toolsTokens).toBeGreaterThan(0);
+    expect(breakdown!.systemTokens).toBe(parts.system);
+    expect(breakdown!.toolsTokens).toBe(parts.tools);
+    expect(breakdown!.systemTokens + breakdown!.toolsTokens + breakdown!.messageTokens).toBe(
+      measure.approxTokens,
+    );
+  });
+
+  it('沒有工具、沒有系統提示：兩格是 0（不是缺席），訊息那一格就是整個 approxTokens', async () => {
+    const measure = await measureOf({ messages: longHistory(6) });
+    expect(measure.breakdown).toEqual({
+      systemTokens: 0,
+      toolsTokens: 0,
+      messageTokens: measure.approxTokens,
+      messageParts: {
+        summaryTokens: 0,
+        injectedTokens: 0,
+        toolResultTokens: 0,
+        conversationTokens: measure.approxTokens,
+      },
+    });
+  });
+
+  it('錨在供應商實數上：修正量全算給訊息那一格，三格仍然等於環上的數', async () => {
+    const reply = new AIMessage({
+      content: '答',
+      id: 'a1',
+      usage_metadata: { input_tokens: 5000, output_tokens: 1, total_tokens: 5001 },
+    });
+    const request = {
+      messages: [new HumanMessage('問'), reply, new HumanMessage('再問')],
+      systemMessage: new SystemMessage('你是助理。'),
+      tools: TOOLS,
+    };
+    const measure = await measureOf(request);
+    const parts = estimateRequestParts(request as never);
+    // 前提：真的錨上了（環上的數不是純估算）。
+    expect(measure.approxTokens).toBeGreaterThan(parts.system + parts.tools + parts.messages);
+    expect(measure.breakdown!.systemTokens).toBe(parts.system);
+    expect(measure.breakdown!.toolsTokens).toBe(parts.tools);
+    expect(
+      measure.breakdown!.systemTokens +
+        measure.breakdown!.toolsTokens +
+        measure.breakdown!.messageTokens,
+    ).toBe(measure.approxTokens);
+  });
+
+  it('系統與工具兩格就比 approxTokens 大：訊息那一格夾在 0（三格相加會比 approxTokens 大，欄位說明寫了）', async () => {
+    const reply = new AIMessage({
+      content: '答',
+      id: 'a1',
+      usage_metadata: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+    });
+    const measure = await measureOf({
+      messages: [new HumanMessage('問'), reply],
+      systemMessage: new SystemMessage('你是助理。'.repeat(200)),
+      tools: TOOLS,
+    });
+    expect(measure.approxTokens).toBeLessThan(
+      measure.breakdown!.systemTokens + measure.breakdown!.toolsTokens,
+    );
+    expect(measure.breakdown!.messageTokens).toBe(0);
+    expect(measure.breakdown!.messageParts).toEqual({
+      summaryTokens: 0,
+      injectedTokens: 0,
+      toolResultTokens: 0,
+      conversationTokens: 0,
+    });
+  });
+
+  /** 四類各至少一則：摘要、機器塞的（帶來源的與重複工具提醒）、工具結果、人與助手的對話。 */
+  function mixedMessages() {
+    const summary = new HumanMessage({
+      content: `Here is a summary of the conversation to date:\n\n${'先前談過的事。'.repeat(40)}`,
+      additional_kwargs: { lc_source: 'summarization' },
+    });
+    const instructions = new HumanMessage({
+      content: '專案說明：一律用繁體中文回答。'.repeat(10),
+      additional_kwargs: { nexus_source: { kind: 'plugin', plugin: 'agent-instructions' } },
+    });
+    const reminder = new HumanMessage({
+      content: '你一直在重複同一個呼叫。',
+      additional_kwargs: { nexus_repeat_reminder: { tool: 'read_file', count: 3 } },
+    });
+    const human = new HumanMessage('幫我讀一下設定檔。');
+    const call = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c1', name: 'read_file', args: { path: '/etc/app.toml' } }],
+    });
+    const result = new ToolMessage({ content: 'port = 8080\n'.repeat(120), tool_call_id: 'c1' });
+    return { summary, instructions, reminder, human, call, result };
+  }
+
+  it('messageParts 把訊息分成四類：沒錨、沒有系統提示與工具時，每一格就是那一類訊息的純估算', async () => {
+    const m = mixedMessages();
+    const measure = await measureOf({
+      messages: [m.summary, m.instructions, m.human, m.call, m.result, m.reminder],
+    });
+    expect(measure.breakdown!.messageParts).toEqual({
+      summaryTokens: estimateMessageTokens(m.summary),
+      injectedTokens: estimateMessageTokens(m.instructions) + estimateMessageTokens(m.reminder),
+      toolResultTokens: estimateMessageTokens(m.result),
+      conversationTokens: estimateMessageTokens(m.human) + estimateMessageTokens(m.call),
+      // 這則摘要的本文沒有 `<index>`：整份是現況。
+      summaryIndexTokens: 0,
+    });
+    const { summaryIndexTokens: _index, ...four } = measure.breakdown!.messageParts!;
+    for (const value of Object.values(four)) expect(value).toBeGreaterThan(0);
+  });
+
+  it('summaryIndexTokens：摘要那一格裡索引佔的那一截，照字元比例分，不動四格的總和', async () => {
+    const index = `[#1 messages 0-41] 備份排程\n- ${'查了三台主機的排程。'.repeat(20)}\nAnchors: ENOSPC`;
+    const state = '## 現況\n還沒決定保留天數。';
+    const summary = new HumanMessage({
+      content: `Here is a summary of the conversation to date:\n\n<index>\n${index}\n</index>\n<state>\n${state}\n</state>`,
+      additional_kwargs: { lc_source: 'summarization' },
+    });
+    const m = mixedMessages();
+    const measure = await measureOf({ messages: [summary, m.human, m.call, m.result] });
+    const {
+      summaryTokens,
+      injectedTokens,
+      toolResultTokens,
+      conversationTokens,
+      summaryIndexTokens,
+    } = measure.breakdown!.messageParts!;
+    expect(summaryTokens + injectedTokens + toolResultTokens + conversationTokens).toBe(
+      measure.breakdown!.messageTokens,
+    );
+    const share = ('<index>\n'.length + index.length + '\n</index>'.length) / summary.text.length;
+    expect(summaryIndexTokens).toBe(Math.floor(summaryTokens * share));
+    // 這份索引比現況長得多：大半格是索引，但不是整格。
+    expect(summaryIndexTokens).toBeGreaterThan(summaryTokens / 2);
+    expect(summaryIndexTokens).toBeLessThan(summaryTokens);
+  });
+
+  it('messageParts 錨在供應商實數上：四格照比例分攤修正量，相加仍等於 messageTokens', async () => {
+    const m = mixedMessages();
+    const reply = new AIMessage({
+      content: '讀到了。',
+      id: 'a1',
+      usage_metadata: { input_tokens: 7001, output_tokens: 1, total_tokens: 7002 },
+    });
+    const request = {
+      messages: [m.summary, m.instructions, m.human, m.call, m.result, reply, m.reminder],
+      systemMessage: new SystemMessage('你是助理。'),
+      tools: TOOLS,
+    };
+    const measure = await measureOf(request);
+    const parts = estimateRequestParts(request as never);
+    // 前提：真的錨上了，訊息那一格不等於純估算，四格要靠分攤才加得回來。
+    expect(measure.breakdown!.messageTokens).not.toBe(parts.messages);
+    const { summaryTokens, injectedTokens, toolResultTokens, conversationTokens } =
+      measure.breakdown!.messageParts!;
+    expect(summaryTokens + injectedTokens + toolResultTokens + conversationTokens).toBe(
+      measure.breakdown!.messageTokens,
+    );
+    // 比例照純估算：每一格離「照比例的精確值」不到 1。
+    const scale = measure.breakdown!.messageTokens / parts.messages;
+    expect(Math.abs(summaryTokens - estimateMessageTokens(m.summary) * scale)).toBeLessThan(1);
+    expect(Math.abs(toolResultTokens - estimateMessageTokens(m.result) * scale)).toBeLessThan(1);
+  });
+});
+
+/**
+ * **`compaction/summary` 帶 `durationMs`**（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：生摘要那一次模型呼叫的牆鐘。
+ * 走 `createSummarizer`，生摘要的假模型固定等一段時間才回。
+ */
+describe('compaction/summary 帶 durationMs（接線）', () => {
+  const SUMMARY_DELAY_MS = 40;
+
+  it('摘要了：事件帶非負整數的 durationMs，不小於生摘要那次呼叫實際等的時間', async () => {
+    const log = new SessionLog('duration');
+    const model = {
+      profile: {},
+      invoke: async () => {
+        await new Promise((resolve) => setTimeout(resolve, SUMMARY_DELAY_MS));
+        return { text: '這是摘要。' };
+      },
+    };
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      { ...DEFAULT_SUMMARIZATION, trigger: [{ type: 'tokens', value: 2_000 }], retainTokens: 400 },
+      new TokenAnchorBook(),
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      false,
+    );
+    await middleware.wrapModelCall?.(
+      {
+        messages: fatHistory(30),
+        state: {},
+        model,
+        systemMessage: new SystemMessage('系統。'),
+      } as never,
+      (() => new AIMessage('好。')) as never,
+    );
+    const summaries = log.events.flatMap((event) =>
+      event.type === 'compaction/summary'
+        ? [event.data as SessionEventMap['compaction/summary']]
+        : [],
+    );
+    expect(summaries).toHaveLength(1);
+    const { durationMs } = summaries[0]!;
+    expect(Number.isInteger(durationMs)).toBe(true);
+    // 計時器可能早一點點醒，留 5 毫秒的餘裕；上限只擋「量到別的東西」。
+    expect(durationMs).toBeGreaterThanOrEqual(SUMMARY_DELAY_MS - 5);
+    expect(durationMs).toBeLessThan(5_000);
+    // 摘要過的那份請求，量測裡的摘要那一格不是 0。
+    const measure = log.events.flatMap((event) =>
+      event.type === 'context/measure' ? [event.data as SessionEventMap['context/measure']] : [],
+    );
+    expect(measure).toHaveLength(1);
+    expect(measure[0]!.breakdown!.messageParts!.summaryTokens).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **生摘要的那次呼叫帶「不上線」的標記，交下去的是本尊**（[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
+ *
+ * 即時與重新整理對得上的那條驗收在 `harness/apps/harness/src/context-pressure.test.ts`，走的是產品路徑。那條驗不到「換回本尊」：
+ * 主模型那次先經過 `bindTools`，拿到的是新實例，替身的 `invoke` 本來就碰不到它。換回本尊防的是下一層直接
+ * `invoke`、不先 `bindTools` 的那條路，所以釘在這裡：直接叫 `wrapModelCall`，看交下去的是哪一顆。
+ */
+describe('生摘要的那次呼叫不上線（接線）', () => {
+  function fakeModel() {
+    const calls: { tags: unknown }[] = [];
+    return {
+      calls,
+      // 基座只讀 `profile`、只呼叫 `invoke`。
+      model: {
+        profile: {},
+        invoke: async (_input: unknown, config?: { tags?: unknown }) => {
+          calls.push({ tags: config?.tags });
+          return { text: '這是摘要。' };
+        },
+      },
+    };
+  }
+
+  async function modelHandedDown(trigger: readonly SummarizationThreshold[], model: object) {
+    const middleware = createSummarizer(
+      { write: async (path: string) => ({ path }) } as never,
+      { ...DEFAULT_SUMMARIZATION, trigger, retainTokens: retainLast(fatHistory(10), 2) },
+      new TokenAnchorBook(),
+    );
+    let handed: unknown;
+    await middleware.wrapModelCall?.(
+      {
+        messages: fatHistory(10),
+        state: {},
+        model,
+        systemMessage: new SystemMessage('系統。'),
+        tools: [],
+      } as never,
+      ((request: { model: unknown }) => {
+        handed = request.model;
+        return new AIMessage('好。');
+      }) as never,
+    );
+    return handed;
+  }
+
+  it('摘要了：生摘要那次帶 nostream，交下去的是本尊', async () => {
+    const { model, calls } = fakeModel();
+    const handed = await modelHandedDown([{ type: 'messages', value: 6 }], model);
+    // 前提：真的摘要了。索引條目一次、現況一次，兩次都不上線。
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => call.tags)).toEqual([['nostream'], ['nostream']]);
+    expect(handed).toBe(model);
+  });
+
+  it('沒摘要：交下去的也是本尊，一次都沒叫', async () => {
+    const { model, calls } = fakeModel();
+    const handed = await modelHandedDown([{ type: 'messages', value: 1_000 }], model);
+    expect(calls).toEqual([]);
+    expect(handed).toBe(model);
+  });
+});
+
+/**
+ * **`tokens` 門檻由錨定估算比，超過就借基座的溢出恢復路徑摘要**（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
+ *
+ * 走真的 `createSummarizationMiddleware`：這一層靠的是基座那條 `catch` 真的認得我們拋的那顆、而且只在它接得住的
+ * 地方拋，用替身驗不到。
+ */
+describe('tokens 門檻（接線）', () => {
+  /** o200k 大約三千 token 的中文。 */
+  const BIG = '這一段很長，要讓估算越過門檻。'.repeat(300);
+
+  function fakeModel() {
+    const invokes: unknown[] = [];
+    return {
+      invokes,
+      model: {
+        profile: {},
+        invoke: async (_input: unknown, config?: { tags?: unknown }) => {
+          invokes.push(config?.tags);
+          return { text: '這是摘要。' };
+        },
+      },
+    };
+  }
+
+  async function run(options: {
+    trigger: readonly SummarizationThreshold[];
+    keep?: number;
+    messages: readonly BaseMessage[];
+    pruning?: false;
+    book?: TokenAnchorBook;
+    reply?: (sent: readonly BaseMessage[]) => AIMessage;
+  }) {
+    const { model, invokes } = fakeModel();
+    const middleware = createSummarizer(
+      { write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger: options.trigger,
+        retainTokens: retainLast(options.messages, options.keep ?? 20),
+      },
+      options.book ?? new TokenAnchorBook(),
+      undefined,
+      options.pruning,
+    );
+    const sent: { messages: readonly BaseMessage[]; model: unknown }[] = [];
+    const result = await middleware.wrapModelCall?.(
+      { messages: options.messages, state: {}, model, systemMessage: SYSTEM, tools: [] } as never,
+      ((request: { messages: readonly BaseMessage[]; model: unknown }) => {
+        sent.push(request);
+        return options.reply?.(request.messages) ?? new AIMessage('好。');
+      }) as never,
+    );
+    return { sent, invokes, model, result };
+  }
+
+  const SYSTEM = new SystemMessage('系統。');
+  const history = (last: BaseMessage) => [
+    new HumanMessage(BIG),
+    new AIMessage('一'),
+    new HumanMessage('二'),
+    new AIMessage('三'),
+    new HumanMessage('四'),
+    new AIMessage('五'),
+    last,
+  ];
+
+  it('超過預算：摘要剛好一次，送出去的是摘要過的那串，而且只送一次', async () => {
+    const { sent, invokes, result } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages: history(new HumanMessage('短問題')),
+      pruning: false,
+    });
+    // 索引條目一次、現況一次。
+    expect(invokes).toHaveLength(2);
+    expect(sent).toHaveLength(1);
+    expect(String(sent[0]!.messages[0]!.content)).toContain('這是摘要。');
+    expect(sent[0]!.messages).toHaveLength(3);
+    // 切點落在組裝的切點表（#2416），回到圖上的是模型那一步的回覆，不是帶私有鍵的 Command。
+    expect(result).toBeInstanceOf(AIMessage);
+    expect((result as AIMessage).content).toBe('好。');
+  });
+
+  it('預算觸發的那次摘要照樣不上線，交下去的是本尊', async () => {
+    const { sent, invokes, model } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages: history(new HumanMessage('短問題')),
+      pruning: false,
+    });
+    expect(invokes).toEqual([['nostream'], ['nostream']]);
+    expect(sent[0]!.model).toBe(model);
+  });
+
+  it('沒超過：不摘要，原串交下去', async () => {
+    const messages = history(new HumanMessage('短問題')).slice(1);
+    const { sent, invokes } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages,
+      pruning: false,
+    });
+    expect(invokes).toEqual([]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.messages).toHaveLength(messages.length);
+  });
+
+  /** 基座走 `messages` 那條路、又切不出東西時，`handler` 沒有 `try`——拋了就是整輪失敗。 */
+  it('messages 門檻成立、則數不夠切：超過預算也不拋，原串交下去', async () => {
+    const messages = history(new HumanMessage('短問題'));
+    const { sent, invokes } = await run({
+      trigger: [
+        { type: 'tokens', value: 2_000 },
+        { type: 'messages', value: 3 },
+      ],
+      keep: 20,
+      messages,
+      pruning: false,
+    });
+    expect(invokes).toEqual([]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.messages).toHaveLength(messages.length);
+  });
+
+  it('摘要完還是超過：放行，不摘第二次', async () => {
+    const { sent, invokes } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages: history(new HumanMessage(BIG)),
+      pruning: false,
+    });
+    // 索引條目一次、現況一次；第二次摘要不發生。
+    expect(invokes).toHaveLength(2);
+    expect(sent).toHaveLength(1);
+    expect(String(sent[0]!.messages.at(-1)!.content)).toBe(BIG);
+  });
+
+  /**
+   * **剪刀不來回震盪。** 剪刀估的是沒剪的那一份、錨在上一次**送出去**（剪過）的那份上：上一次剪過，被剪掉的
+   * 那一截會出現在增量裡，這一次照樣判成有壓力。錨在「這串訊息裡錨之前那段」的話，剪掉的那一截兩邊抵消，
+   * 第二次會判成沒壓力、原封送出去。
+   */
+  it('連續兩次都超過：兩次都剪', async () => {
+    const book = new TokenAnchorBook();
+    const huge = '工具結果很大，剪刀要剪它。'.repeat(2_000);
+    const first = [
+      new HumanMessage('讀檔'),
+      new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'read_file', args: {} }] }),
+      new ToolMessage({ content: huge, tool_call_id: 'c1' }),
+    ];
+    // 前提：沒剪之前遠超過門檻，剪過之後在門檻下。
+    expect(estimateRequestTokens({ messages: first, systemMessage: SYSTEM })).toBeGreaterThan(
+      10_000,
+    );
+    const reply = (id: string) => (sent: readonly BaseMessage[]) =>
+      new AIMessage({
+        id,
+        content: '好。',
+        usage_metadata: {
+          input_tokens: estimateRequestTokens({ messages: sent, systemMessage: SYSTEM }),
+          output_tokens: 1,
+          total_tokens: 1,
+        },
+      });
+    const trigger: SummarizationThreshold[] = [{ type: 'tokens', value: 10_000 }];
+    const one = await run({ trigger, messages: first, book, reply: reply('r1') });
+    expect(String(one.sent[0]!.messages[2]!.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(
+      estimateRequestTokens({ messages: one.sent[0]!.messages, systemMessage: SYSTEM }),
+    ).toBeLessThan(10_000);
+
+    const second = [...first, reply('r1')(one.sent[0]!.messages), new HumanMessage('再問一次')];
+    const two = await run({ trigger, messages: second, book, reply: reply('r2') });
+    expect(String(two.sent[0]!.messages[2]!.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(two.invokes).toEqual([]);
+  });
+});
+
+/**
+ * **摘要器看到的附件是文字，留給主模型的仍是原本的區塊**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
+ *
+ * 基座把訊息串成文字時，對不認得的區塊只寫 `[nexus-file]`；沒有這一層，摘要與歷史檔裡就沒有「使用者附過哪個檔、存在哪」。
+ * 另一頭同樣要釘：留下來的那則訊息裡有圖，主模型還要看，換成文字只能發生在摘要的輸入上。
+ */
+describe('摘要輸入裡的附件', () => {
+  const FILE = {
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    name: 'report.csv',
+    bytes: 12,
+  };
+  const IMAGE = {
+    attachmentId: `sha256:${'b'.repeat(64)}`,
+    mediaType: 'image/png' as const,
+    bytes: 90,
+    width: 3,
+    height: 2,
+    name: 'shot.png',
+  };
+
+  async function summarize(messages: readonly BaseMessage[]) {
+    const prompts: string[] = [];
+    const model = {
+      profile: {},
+      invoke: async (input: readonly BaseMessage[]) => {
+        prompts.push(String(input[0]?.content));
+        return { text: '這是摘要。' };
+      },
+    };
+    const middleware = createSummarizer(
+      { write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger: [{ type: 'messages', value: 3 }],
+        retainTokens: retainLast(messages, 2),
+      },
+      new TokenAnchorBook(),
+      undefined,
+      false,
+    );
+    let sent: readonly BaseMessage[] = [];
+    await middleware.wrapModelCall?.(
+      {
+        messages,
+        state: {},
+        model,
+        systemMessage: new SystemMessage('系統。'),
+        tools: [],
+      } as never,
+      ((request: { messages: readonly BaseMessage[] }) => {
+        sent = request.messages;
+        return new AIMessage('好。');
+      }) as never,
+    );
+    return { prompts, sent };
+  }
+
+  it('被摘要的那段：檔案是組請求時同一行字，圖是佔位字；留下的那則原樣交給主模型', async () => {
+    const old = new HumanMessage({
+      content: [
+        { type: 'nexus-file', attachment: FILE },
+        { type: 'nexus-image', attachment: IMAGE },
+        { type: 'text', text: '看這兩個' },
+      ] as never,
+    });
+    const kept = new HumanMessage({
+      content: [
+        { type: 'nexus-image', attachment: IMAGE },
+        { type: 'text', text: '再看一次' },
+      ] as never,
+    });
+    const { prompts, sent } = await summarize([
+      old,
+      new AIMessage('一'),
+      new HumanMessage('二'),
+      new AIMessage('三'),
+      kept,
+      new AIMessage('五'),
+    ]);
+
+    // 索引條目一次、現況一次；兩次的輸入都由同一段訊息組成，附件都照樣寫進去。
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('File "report.csv" (12 bytes, sha256:aaaaaaaa)');
+      expect(prompt).toContain('/attachments/aa/' + 'a'.repeat(64) + '/report.csv');
+      expect(prompt).toContain('"shot.png" (sha256:bbbbbbbb, 3x2) was attached here');
+      expect(prompt).not.toContain('[nexus-file]');
+      expect(prompt).not.toContain('[nexus-image]');
+    }
+    // 前提：摘要真的提交了（交下去的是「摘要 ＋ 留下的兩則」），不是被 shrink 檢查擋掉後照原串送（#1396）。
+    expect(sent).toHaveLength(3);
+    // 留下的那則：同一個物件、區塊沒被換。
+    expect(sent.at(-2)).toBe(kept);
+  });
+
+  it('沒有附件時，訊息串原樣進基座', async () => {
+    // 訊息要夠長（#1396）：見 `fatHistory`。
+    const { prompts, sent } = await summarize(fatHistory(6));
+    // 索引條目一次、現況一次。
+    expect(prompts).toHaveLength(2);
+    expect(sent.slice(1)).toHaveLength(2);
+  });
+});

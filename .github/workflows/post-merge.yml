@@ -2,7 +2,7 @@ name: 合併後完整一輪
 
 # 每個合進 develop 的 commit 各跑一輪完整的 ci.yml（不看異動、一律全跑），而且不被下一個 commit 取消，
 # 紅了就能指出是哪一張 PR。不擋合併，也不能設成 required check：它只在 push 時跑，PR 上永遠等不到它。
-# 紅了怎麼處理見 AGENTS.md「分支策略」。
+# 紅了先只重跑失敗的 job 一次；仍紅就分類，撤回與否由合併的人判斷。
 #
 # 這支刻意不設 concurrency：ci.yml 被呼叫時用 sha 當 group、不取消（見 ci.yml 的 concurrency）。
 # 呼叫端若設成同一個 group，兩邊會搶同一組。
@@ -65,7 +65,7 @@ jobs:
           restore-keys: native-durations-4-
           lookup-only: true
 
-  # harness 全套在 native agent loop 下再跑一輪（#2356）：登記過的已知差異照登記跑（`apps/harness/native-loop.runner.ts`），其餘要跟
+  # harness 全套在 native agent loop 下再跑一輪（#2356）：登記過的已知差異照登記跑（`harness/apps/harness/native-loop.runner.ts`），其餘要跟
   # LangGraph 一樣綠。只在這裡跑，不進 gate；紅了跟完整一輪一樣處理。切四片照耗時分，同 ci.yml 的 test-harness。
   native-loop:
     name: native agent loop (${{ matrix.shard }}/4)
@@ -106,19 +106,86 @@ jobs:
       - name: Test
         env:
           NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.native-durations
-        run: pnpm --filter @nexus/harness exec vitest run --config vitest.native.config.ts --shard="${{ matrix.shard }}/4"
+        run: pnpm --filter @nexus/harness --fail-if-no-match exec vitest run --config vitest.native.config.ts --shard="${{ matrix.shard }}/4"
       # 同 ci.yml 的 test-harness：vitest 把這一片每個檔的耗時寫進結果快取，存成這一片自己那一份。測試紅了也存。
       - name: 收這一片的耗時
         if: ${{ !cancelled() }}
         run: |
           mkdir -p .native-durations
-          cp apps/harness/node_modules/.vite/vitest/*/results.json ".native-durations/results-${{ matrix.shard }}.json"
+          cp harness/apps/harness/node_modules/.vite/vitest/*/results.json ".native-durations/results-${{ matrix.shard }}.json"
       - name: 存這一片的耗時
         if: ${{ !cancelled() }}
         uses: actions/cache/save@v6
         with:
           path: .native-durations/results-${{ matrix.shard }}.json
           key: native-durations-${{ matrix.shard }}-${{ github.sha }}
+
+  # 視覺差異（#2766）：在同一台 runner 上把這個 commit 與上一個 commit 的 `guard/` 測試頁各拍一次（亮暗、每個子頁），列出畫面有差的。
+  # **只報告、不紅**：`continue-on-error`，`report` 也不看它，所以不影響這一輪的結論；畫面本來就會改，有差不等於壞掉。
+  # 有差（或多了、少了畫面）時在對應的 PR 留言請作者確認，所以這個 job 另給 `pull-requests: write`；其他 job 照檔頭的 read。
+  # 不存基準：兩邊都是當場拍的，字型與 Chrome 版本一定相同。拍照與比對在 `web/visual/`，容差寫在 `compare.ts`。
+  # 排在 `full` 後面（`needs`）而不是同時跑：同時跑會讓 ci.yml 檔頭算的同時 job 數多一個。`full` 紅了照跑。
+  visual-diff:
+    name: 視覺差異（只報告）
+    needs: full
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 要拿得到上一個 commit。
+          fetch-depth: 2
+      - uses: ./.github/actions/setup
+      - name: 這個 commit 的畫面
+        run: |
+          pnpm --filter @nexus/web --fail-if-no-match run build
+          pnpm --filter @nexus/web --fail-if-no-match exec vite build --config guard/vite.config.ts
+          node web/visual/shoot.ts web "$RUNNER_TEMP/visual/head"
+      # 拍照用的是這個 commit 的腳本，伺服器與子頁清單讀上一個 commit 自己的。
+      - name: 上一個 commit 的畫面
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/prev" HEAD^
+          cd "$RUNNER_TEMP/prev"
+          pnpm install --frozen-lockfile
+          pnpm --filter @nexus/web --fail-if-no-match run build
+          pnpm --filter @nexus/web --fail-if-no-match exec vite build --config guard/vite.config.ts
+          node "$GITHUB_WORKSPACE/web/visual/shoot.ts" web "$RUNNER_TEMP/visual/base"
+      - name: 比對
+        env:
+          VISUAL_HEAD: ${{ github.sha }}
+        run: |
+          VISUAL_BASE=$(git rev-parse HEAD^) node web/visual/compare.ts \
+            "$RUNNER_TEMP/visual/base" "$RUNNER_TEMP/visual/head" "$RUNNER_TEMP/visual/diff" >> "$GITHUB_STEP_SUMMARY"
+      # `comment.md` 只在有差時才有（`compare.ts`）。PR 號從 squash 合併的標題結尾 `(#N)` 取，同 `report`。
+      - name: 有差時在 PR 留言
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # commit 訊息是外部輸入，經環境變數傳，不用 ${{ }} 內插進 run。
+          MESSAGE: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          comment="$RUNNER_TEMP/visual/diff/comment.md"
+          [ -f "$comment" ] || exit 0
+          pr=$(printf '%s\n' "$MESSAGE" | head -n 1 | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+          if [ -z "$pr" ]; then
+            echo "標題裡沒有 PR 號，不留言。"
+            exit 0
+          fi
+          printf '\n圖在[這一輪](%s)的 artifact `visual-diff`。\n' "$RUN_URL" >> "$comment"
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file "$comment"
+      - name: 上傳有差的畫面
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-diff
+          path: ${{ runner.temp }}/visual/diff
+          retention-days: 7
+          if-no-files-found: warn
 
   # needs.full.result 是被呼叫那一輪所有 job 的彙總（gate 也在其中），needs.native-loop.result 是四片 native 的彙總；兩邊都
   # success 才算綠。這裡只把結論對到 commit 與 PR。
@@ -158,6 +225,6 @@ jobs:
             echo "- PR：$pr_line"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RESULT" != "success" ] || [ "$NATIVE_RESULT" != "success" ]; then
-            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
+            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先試撤回：過得了 gate 就開撤回 PR，修好再重新開；要調高基準才過得了就不撤回，改開修復 PR 往前修（不調基準、不改 gate）。"
             exit 1
           fi

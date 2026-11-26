@@ -7,10 +7,9 @@ settings:
 overrides:
   mout@<1.2.4: ^1.2.4
 
-pnpmfileChecksum: sha256-UepMIjKj0TE/vnllUFBGsgNk5OxrYMsOOLna05f6H3o=
+pnpmfileChecksum: sha256-y/xl5iHU8Vq+ovXJmjzyKkXjWu5ZbV/y0yVkSxH0zYw=
 
 importers:
-
   .:
     devDependencies:
       '@eslint/js':
@@ -47,7 +46,7 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(typescript@5.9.3)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  apps/harness:
+  harness/apps/harness:
     dependencies:
       '@langchain/core':
         specifier: ^1.2.9
@@ -204,7 +203,7 @@ importers:
         version: link:../../packages/nexus-tools
       '@nexus/web':
         specifier: workspace:*
-        version: link:../web
+        version: link:../../../web
       '@nexus/wire':
         specifier: workspace:*
         version: link:../../packages/nexus-wire
@@ -226,6 +225,9 @@ importers:
       negotiator:
         specifier: ^1.1.0
         version: 1.1.0
+      openai:
+        specifier: 7.5.0
+        version: 7.5.0(ws@8.21.3)(zod@4.6.7)
       semver:
         specifier: ^7.8.5
         version: 7.8.5
@@ -282,7 +284,1611 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
-  apps/web:
+  harness/packages/nexus-agent-loop:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  harness/packages/nexus-approval-channel:
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-brand:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-commands:
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  harness/packages/nexus-core:
+    dependencies:
+      '@eslint-community/regexpp':
+        specifier: ^4.12.2
+        version: 4.12.2
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      '@nexus/brand':
+        specifier: workspace:*
+        version: link:../nexus-brand
+      '@nexus/timeout':
+        specifier: workspace:*
+        version: link:../nexus-timeout
+      deepagents:
+        specifier: ~1.13.1
+        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
+      gpt-tokenizer:
+        specifier: ^4.0.0
+        version: 4.0.0
+      langchain:
+        specifier: ^1.5.10
+        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
+      undici:
+        specifier: ^8.12.3
+        version: 8.12.3
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      js-tiktoken:
+        specifier: ^1.0.21
+        version: 1.0.21
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-deque:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-feedback:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-fs:
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-goal:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-host-bridge:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-permission-presets:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-agent-instructions:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      deepagents:
+        specifier: ~1.13.1
+        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/agent-loop':
+        specifier: workspace:*
+        version: link:../nexus-agent-loop
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-ask-user:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-commands:
+    dependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-echo:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-feedback:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/commands':
+        specifier: workspace:*
+        version: link:../nexus-commands
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/feedback':
+        specifier: workspace:*
+        version: link:../nexus-feedback
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-goal:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/commands':
+        specifier: workspace:*
+        version: link:../nexus-commands
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/goal':
+        specifier: workspace:*
+        version: link:../nexus-goal
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-mcp:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@modelcontextprotocol/client':
+        specifier: ^2.3.1
+        version: 2.3.1
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      langchain:
+        specifier: ^1.5.10
+        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@modelcontextprotocol/node':
+        specifier: ^2.1.1
+        version: 2.1.1(@modelcontextprotocol/server@2.3.1)
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.32.0
+        version: 1.32.0(@cfworker/json-schema@4.1.1)(zod@4.6.7)
+      '@modelcontextprotocol/server':
+        specifier: ^2.3.1
+        version: 2.3.1
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/subprocess':
+        specifier: workspace:*
+        version: link:../nexus-subprocess
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-memory:
+    dependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-permission-presets:
+    dependencies:
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/agent-loop':
+        specifier: workspace:*
+        version: link:../nexus-agent-loop
+      '@nexus/commands':
+        specifier: workspace:*
+        version: link:../nexus-commands
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/permission-presets':
+        specifier: workspace:*
+        version: link:../nexus-permission-presets
+      '@nexus/plugin-commands':
+        specifier: workspace:*
+        version: link:../nexus-plugin-commands
+      '@nexus/projections':
+        specifier: workspace:*
+        version: link:../nexus-projections
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-plan-mode:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/plugin-commands':
+        specifier: workspace:*
+        version: link:../nexus-plugin-commands
+      langchain:
+        specifier: ^1.5.10
+        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/commands':
+        specifier: workspace:*
+        version: link:../nexus-commands
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-present:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      deepagents:
+        specifier: ~1.13.1
+        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-quickjs:
+    dependencies:
+      quickjs-emscripten:
+        specifier: ^0.32.0
+        version: 0.32.0
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-sandbox-policy:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      langchain:
+        specifier: ^1.5.10
+        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/permission-presets':
+        specifier: workspace:*
+        version: link:../nexus-permission-presets
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-skills:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/agent-loop':
+        specifier: workspace:*
+        version: link:../nexus-agent-loop
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/skills':
+        specifier: workspace:*
+        version: link:../nexus-skills
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-submit-record:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      deepagents:
+        specifier: ~1.13.1
+        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-system-prompt:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-telemetry-otel:
+    dependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/timeout':
+        specifier: workspace:*
+        version: link:../nexus-timeout
+      '@opentelemetry/api-logs':
+        specifier: ^0.221.0
+        version: 0.221.0
+      '@opentelemetry/exporter-logs-otlp-http':
+        specifier: ^0.221.0
+        version: 0.221.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/otlp-exporter-base':
+        specifier: ^0.221.0
+        version: 0.221.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/resources':
+        specifier: ^2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-logs':
+        specifier: ^0.221.0
+        version: 0.221.0(@opentelemetry/api@1.9.1)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-time-context:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/agent-loop':
+        specifier: workspace:*
+        version: link:../nexus-agent-loop
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-todo:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-token-meter:
+    dependencies:
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/projections':
+        specifier: workspace:*
+        version: link:../nexus-projections
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-trajectory:
+    dependencies:
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/projections':
+        specifier: workspace:*
+        version: link:../nexus-projections
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-plugin-workspace-changes:
+    dependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/subprocess':
+        specifier: workspace:*
+        version: link:../nexus-subprocess
+      '@nexus/timeout':
+        specifier: workspace:*
+        version: link:../nexus-timeout
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-projections:
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  harness/packages/nexus-sdk:
+    dependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      semver:
+        specifier: ^7.8.5
+        version: 7.8.5
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      '@types/semver':
+        specifier: ^7.8.0
+        version: 7.8.0
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.46.0
+        version: 8.67.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-session:
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-skills:
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  harness/packages/nexus-subprocess:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-system-prompt:
+    devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-timeout:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-tool-adapter:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/plugin-echo':
+        specifier: workspace:*
+        version: link:../nexus-plugin-echo
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-tool-result:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/packages/nexus-tools:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  harness/packages/nexus-wire:
+    dependencies:
+      '@langchain/protocol':
+        specifier: ^0.0.18
+        version: 0.0.18
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/plugin-workspace-changes':
+        specifier: workspace:*
+        version: link:../nexus-plugin-workspace-changes
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/vendor/cordis:
+    dependencies:
+      '@standard-schema/spec':
+        specifier: ^1.1.0
+        version: 1.1.0
+      cosmokit:
+        specifier: ^1.8.1
+        version: 1.8.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/vendor/include:
+    dependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../loader
+      cosmokit:
+        specifier: ^1.8.1
+        version: 1.8.1
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  harness/vendor/loader:
+    dependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../cordis
+      cosmokit:
+        specifier: ^1.8.1
+        version: 1.8.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  harness/vendor/logger-console:
+    dependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../cordis
+      cosmokit:
+        specifier: ^1.8.1
+        version: 1.8.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  web:
     devDependencies:
       '@base-ui/react':
         specifier: 1.9.0
@@ -296,15 +1902,9 @@ importers:
       '@fontsource-variable/noto-sans-tc':
         specifier: 5.3.0
         version: 5.3.0
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../../packages/nexus-core
-      '@nexus/plugin-commands':
-        specifier: workspace:*
-        version: link:../../packages/nexus-plugin-commands
       '@nexus/wire':
         specifier: workspace:*
-        version: link:../../packages/nexus-wire
+        version: link:../harness/packages/nexus-wire
       '@shadcn/react':
         specifier: ^0.3.1
         version: 0.3.1(@types/react@19.2.18)(react@19.2.8)
@@ -437,1610 +2037,6 @@ importers:
       vue:
         specifier: 3.5.44
         version: 3.5.44(typescript@5.9.3)
-
-  packages/nexus-agent-loop:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-
-  packages/nexus-approval-channel:
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-brand:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-commands:
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-
-  packages/nexus-core:
-    dependencies:
-      '@eslint-community/regexpp':
-        specifier: ^4.12.2
-        version: 4.12.2
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      '@nexus/brand':
-        specifier: workspace:*
-        version: link:../nexus-brand
-      '@nexus/timeout':
-        specifier: workspace:*
-        version: link:../nexus-timeout
-      deepagents:
-        specifier: ~1.13.1
-        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
-      diff:
-        specifier: ^9.0.0
-        version: 9.0.0
-      gpt-tokenizer:
-        specifier: ^4.0.0
-        version: 4.0.0
-      langchain:
-        specifier: ^1.5.10
-        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
-      undici:
-        specifier: ^8.12.3
-        version: 8.12.3
-      yaml:
-        specifier: ^2.9.1
-        version: 2.9.1
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      js-tiktoken:
-        specifier: ^1.0.21
-        version: 1.0.21
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-deque:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-feedback:
-    devDependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-fs:
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-goal:
-    devDependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-host-bridge:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-permission-presets:
-    devDependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../nexus-wire
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-agent-instructions:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      deepagents:
-        specifier: ~1.13.1
-        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/agent-loop':
-        specifier: workspace:*
-        version: link:../nexus-agent-loop
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/fs':
-        specifier: workspace:*
-        version: link:../nexus-fs
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-ask-user:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/approval-channel':
-        specifier: workspace:*
-        version: link:../nexus-approval-channel
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-commands:
-    dependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-echo:
-    dependencies:
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-feedback:
-    dependencies:
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/commands':
-        specifier: workspace:*
-        version: link:../nexus-commands
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/feedback':
-        specifier: workspace:*
-        version: link:../nexus-feedback
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-goal:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/commands':
-        specifier: workspace:*
-        version: link:../nexus-commands
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/goal':
-        specifier: workspace:*
-        version: link:../nexus-goal
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-mcp:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@modelcontextprotocol/client':
-        specifier: ^2.3.1
-        version: 2.3.1
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      langchain:
-        specifier: ^1.5.10
-        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@modelcontextprotocol/node':
-        specifier: ^2.1.1
-        version: 2.1.1(@modelcontextprotocol/server@2.3.1)
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.32.0
-        version: 1.32.0(@cfworker/json-schema@4.1.1)(zod@4.6.7)
-      '@modelcontextprotocol/server':
-        specifier: ^2.3.1
-        version: 2.3.1
-      '@nexus/approval-channel':
-        specifier: workspace:*
-        version: link:../nexus-approval-channel
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/subprocess':
-        specifier: workspace:*
-        version: link:../nexus-subprocess
-      '@nexus/system-prompt':
-        specifier: workspace:*
-        version: link:../nexus-system-prompt
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-memory:
-    dependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-permission-presets:
-    dependencies:
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../nexus-wire
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/agent-loop':
-        specifier: workspace:*
-        version: link:../nexus-agent-loop
-      '@nexus/commands':
-        specifier: workspace:*
-        version: link:../nexus-commands
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/fs':
-        specifier: workspace:*
-        version: link:../nexus-fs
-      '@nexus/permission-presets':
-        specifier: workspace:*
-        version: link:../nexus-permission-presets
-      '@nexus/plugin-commands':
-        specifier: workspace:*
-        version: link:../nexus-plugin-commands
-      '@nexus/projections':
-        specifier: workspace:*
-        version: link:../nexus-projections
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-plan-mode:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/plugin-commands':
-        specifier: workspace:*
-        version: link:../nexus-plugin-commands
-      langchain:
-        specifier: ^1.5.10
-        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      '@nexus/approval-channel':
-        specifier: workspace:*
-        version: link:../nexus-approval-channel
-      '@nexus/commands':
-        specifier: workspace:*
-        version: link:../nexus-commands
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@nexus/system-prompt':
-        specifier: workspace:*
-        version: link:../nexus-system-prompt
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-present:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      deepagents:
-        specifier: ~1.13.1
-        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/fs':
-        specifier: workspace:*
-        version: link:../nexus-fs
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-quickjs:
-    dependencies:
-      quickjs-emscripten:
-        specifier: ^0.32.0
-        version: 0.32.0
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-sandbox-policy:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      langchain:
-        specifier: ^1.5.10
-        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/approval-channel':
-        specifier: workspace:*
-        version: link:../nexus-approval-channel
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/fs':
-        specifier: workspace:*
-        version: link:../nexus-fs
-      '@nexus/permission-presets':
-        specifier: workspace:*
-        version: link:../nexus-permission-presets
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@nexus/system-prompt':
-        specifier: workspace:*
-        version: link:../nexus-system-prompt
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../nexus-wire
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-skills:
-    dependencies:
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/agent-loop':
-        specifier: workspace:*
-        version: link:../nexus-agent-loop
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/fs':
-        specifier: workspace:*
-        version: link:../nexus-fs
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/skills':
-        specifier: workspace:*
-        version: link:../nexus-skills
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-submit-record:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      deepagents:
-        specifier: ~1.13.1
-        version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/fs':
-        specifier: workspace:*
-        version: link:../nexus-fs
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-system-prompt:
-    dependencies:
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/system-prompt':
-        specifier: workspace:*
-        version: link:../nexus-system-prompt
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-telemetry-otel:
-    dependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/timeout':
-        specifier: workspace:*
-        version: link:../nexus-timeout
-      '@opentelemetry/api-logs':
-        specifier: ^0.221.0
-        version: 0.221.0
-      '@opentelemetry/exporter-logs-otlp-http':
-        specifier: ^0.221.0
-        version: 0.221.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/otlp-exporter-base':
-        specifier: ^0.221.0
-        version: 0.221.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/resources':
-        specifier: ^2.10.0
-        version: 2.10.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-logs':
-        specifier: ^0.221.0
-        version: 0.221.0(@opentelemetry/api@1.9.1)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-time-context:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/agent-loop':
-        specifier: workspace:*
-        version: link:../nexus-agent-loop
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-todo:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@nexus/tool-adapter':
-        specifier: workspace:*
-        version: link:../nexus-tool-adapter
-      '@nexus/tool-result':
-        specifier: workspace:*
-        version: link:../nexus-tool-result
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-token-meter:
-    dependencies:
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../nexus-wire
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/projections':
-        specifier: workspace:*
-        version: link:../nexus-projections
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-trajectory:
-    dependencies:
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../nexus-wire
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/projections':
-        specifier: workspace:*
-        version: link:../nexus-projections
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/session':
-        specifier: workspace:*
-        version: link:../nexus-session
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-plugin-workspace-changes:
-    dependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/subprocess':
-        specifier: workspace:*
-        version: link:../nexus-subprocess
-      '@nexus/timeout':
-        specifier: workspace:*
-        version: link:../nexus-timeout
-      diff:
-        specifier: ^9.0.0
-        version: 9.0.0
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-projections:
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-
-  packages/nexus-sdk:
-    dependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      semver:
-        specifier: ^7.8.5
-        version: 7.8.5
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      '@types/semver':
-        specifier: ^7.8.0
-        version: 7.8.0
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      typescript-eslint:
-        specifier: ^8.46.0
-        version: 8.67.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-session:
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-skills:
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-
-  packages/nexus-subprocess:
-    devDependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-system-prompt:
-    devDependencies:
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-timeout:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-tool-adapter:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/plugin-echo':
-        specifier: workspace:*
-        version: link:../nexus-plugin-echo
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-tool-result:
-    devDependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  packages/nexus-tools:
-    dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-    devDependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../../vendor/cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-
-  packages/nexus-wire:
-    dependencies:
-      '@langchain/protocol':
-        specifier: ^0.0.18
-        version: 0.0.18
-    devDependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/plugin-workspace-changes':
-        specifier: workspace:*
-        version: link:../nexus-plugin-workspace-changes
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      eslint:
-        specifier: ^9.39.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  vendor/cordis:
-    dependencies:
-      '@standard-schema/spec':
-        specifier: ^1.1.0
-        version: 1.1.0
-      cosmokit:
-        specifier: ^1.8.1
-        version: 1.8.1
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  vendor/include:
-    dependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../cordis
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../loader
-      cosmokit:
-        specifier: ^1.8.1
-        version: 1.8.1
-      yaml:
-        specifier: ^2.9.1
-        version: 2.9.1
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
-
-  vendor/loader:
-    dependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../cordis
-      cosmokit:
-        specifier: ^1.8.1
-        version: 1.8.1
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  vendor/logger-console:
-    dependencies:
-      '@nexus/cordis':
-        specifier: workspace:*
-        version: link:../cordis
-      cosmokit:
-        specifier: ^1.8.1
-        version: 1.8.1
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.0
-        version: 24.13.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
 
 packages:
 

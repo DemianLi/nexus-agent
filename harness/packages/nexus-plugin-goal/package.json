@@ -1,0 +1,54 @@
+{
+  "name": "@nexus/plugin-goal",
+  "version": "0.6.3",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./invariant": "./lib/invariant.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/goal": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*",
+    "@types/node": "^24.10.0",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.9",
+    "@langchain/langgraph": "^1.4.13",
+    "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/goal": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*"
+  }
+}
