@@ -23,7 +23,7 @@
  * 所以這裡照 dsh 新做一顆，`@nexus/plugin-memory` 留著當選配。**兩顆同時掛時同一份 `AGENTS.md` 會在
  * prompt 裡出現兩次**（一次在 system prompt、一次在這則訊息），而且只有它會附那段寫入指示。
  *
- * ## 偏離登記（AGENTS.md 的偏離規則）
+ * ## 偏離登記（總表見 docs/plugin-contract.md 的偏離表）
  *
  * 1. **哪一條**：dsh 的使用者全域來源 `$DSH_HOME/AGENTS.md`，以及從工作目錄往上找 `.git` 專案根、
  *    專案根到 cwd 的整條來源鏈。
