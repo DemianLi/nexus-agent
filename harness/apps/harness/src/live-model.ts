@@ -973,6 +973,11 @@ const KNOWN_FINISH_REASONS: ReadonlySet<string> = new Set([
  * **不觸發的情況**：非 2xx、非 SSE、沒有 body；看過錯誤信封（中段的錯誤交給信封那一條，不改判）；下游已經取消（SDK 收手之後）；
  * 讀上游本身失敗（錯誤原樣交下去，由 {@link withStreamIdleTimeout} 標記）；單一事件超過 {@link INBAND_WATCH_MAX_CHARS}（放棄監看）。
  *
+ * ## 偏離登記
+ *
+ * 1. **在位元組層解 SSE，不是在轉接器解好的事件上**（理由 1，基座表達不出來）。
+ * 2. **不新增 `STREAM_CLOSED` 碼**：nexus 沒有轉接器那一層。
+ *
  * @param baseFetch - 底層的 fetch。產品路徑是 {@link withInbandStreamErrors}；測試換掉它。
  * @returns 一個 fetch：非 SSE、非 2xx、沒有 body 的回應原樣放行，其餘把 body 包上完成檢查。
  */
