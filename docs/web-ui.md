@@ -41,7 +41,7 @@
 
 **不做**（最容易誤做的）：
 
-- **需要先補 harness／wire 才能做的 P1 元件**：連線狀態、子代理血緣、附件。推理、todo、goal、plan mode、context 用量、佇列已有，見 §4.2。
+- **P1 元件**：都已有，見 §4.2（連線狀態在狀態列，附件在輸入框，子代理歸屬見列 15／22）。
 - **320px 與 1920px 以上的驗收**：只驗三個寬度（§9）。
 - **Libraries.dev 的視覺複刻**、暗色專用：走風格參考，保留亮暗兩套。
 - **nexus 沒有的產品面**：設定頁、工作區挑選、dock 分割版面、右側欄裡的檔案樹與終端、語音、生圖特效。右側欄本身（一格停靠＋分頁）有，見 §9。
@@ -185,7 +185,7 @@
 **互動狀態**
 - 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；vendor 元件的 `focus-visible:ring-*` 關掉。SG 用 `--focus-line`（灰）畫的焦點全部換回文字色：SG 把 ring 帶回來的選擇器照抄壓回透明，**文字欄位的聚焦是邊框換成文字色**（SG 原本是灰線，Q5 優先於 Q8）。
 - chip 階梯（rest／hover／pressed）、主按鈕 hover／active。
-- 停用（disabled）的透明度是 50（`disabled:opacity-50`，SG 元件的現值）。不靠透明度變淡的寫 `opacity-100`（例如送出鈕停用時改用字色）。護欄與例外見 §13.4。
+- 停用（disabled）的透明度是 50（`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`；SG 元件的現值）。不靠透明度變淡的寫 `opacity-100`（例如送出鈕停用時改用字色）。護欄與例外見 §13.4。
 
 **Tailwind layer 的坑**：body 的底色、字色、`color-scheme` **寫在 layer 外**（SG 寫在 base layer，所以在 `solid-glass.overrides.css` 重寫一次，Q8 保留的機制）。寫在 `@layer base` 時，頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字。
 
@@ -312,7 +312,7 @@
 - 觸控目標 44px。
 - `message-scroller` 的兩個坑：
   - `scroll-fade-b`、`scrollbar-none` 在建置出的 CSS 裡**沒有產出**，底部漸層與捲動時隱藏捲軸都沒作用。
-  - item 帶 `content-visibility:auto`（paint containment），會把卡片外陰影與面板光暈切成直角。實作要保住長列表的效能，同時不切陰影。
+  - item 帶 `content-visibility:auto`（paint containment），會把卡片外陰影與面板光暈切成直角；vendor 的 `message-scroller.tsx` 仍帶它，長列表的效能與陰影要一起顧。
 - `history.replaceState` 在沙盒 iframe 裡可能拋錯（原型包了 try/catch；產品頁面不在 iframe 裡，視情況處理）。側欄不寫 cookie。
 - **右側欄**（`app/right-sidebar/right-sidebar.tsx`）：
   - 一格停靠＋分頁，住著改動比對與交付預覽；不做分格、浮窗、拖放、復原。開關鈕在會話標頭那一列的右端。
@@ -352,7 +352,9 @@
 **還沒驗過的**：
 
 - 停在**提問**時按停止：`harness/apps/harness/src/turn-cancel.test.ts` 只測了停在核准；模型看到「before dispatch」後會不會重問同一組，要實跑（[#376](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
+- `cn` 套件（`web/package.json` 的 `"cn"`）與 clsx＋tailwind-merge 是否完全等價：只驗過 `button`（240 組，差異 0），其他基礎元件沒有比對（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
+- Artifact 沙盒裡的字型載入沒驗（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
 
 ## 12. 維護
 

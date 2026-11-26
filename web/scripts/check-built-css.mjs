@@ -8,7 +8,7 @@
  * - 第 4 條：`@keyframes` 名稱都在允許清單上。
  * - 第 5 條：每個 `infinite` 動畫在 reduced-motion 下都有一條蓋得過它的 `animation: none`。
  * 另外兩條同一類的無聲失效：
- * - 宣告裡引用的 `motion-*` keyframes 都真的存在（§10：`@theme` 的 collapsible 引用 `styles/motion.css` 的 keyframes）。
+ * - 宣告裡引用的 `motion-*` keyframes 都真的存在（keyframes 定義在 `styles/motion.css`）。
  * - 沒有外部網址（完全內網：字型等資源一律打包）。
  * - 產物裡沒有只來自測試檔或說明文件的 class：Tailwind 預設掃整個專案，測試裡的範例字串（`bg-red-500`、`container`…）
  *   與說明文件裡提到的類別名都會被編成真的規則，裸的 `.container`、`.shadow` 這類還會套用到不相干的元素。
