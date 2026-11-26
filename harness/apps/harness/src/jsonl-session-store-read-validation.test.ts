@@ -1,13 +1,12 @@
 /**
  * 讀盤時的驗證（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)），每一段對到卡上一項：
  *
- * - 信封：逐行驗，與 core 的 seed 共用 `assertSessionEventEnvelope`（dsh 讀檔器的 `decodeEvent`）；壞行照 recoverable：
+ * - 信封：逐行驗，與 core 的 seed 共用 `assertSessionEventEnvelope`；壞行照 recoverable：
  *   後面有收尾就整份拒，在尾巴就當撕裂的尾巴丟掉。離線掃描照 header 的版本分流：這一版的照驗，比這一版新的不驗。
  * - header：各格的形狀與鍵白名單，與 `create` 共用 `assertStoredHeaderFields`；排在版本判定之後；`acceptNewer`
  *   讀比這一版新的整支不跑。
- * - N0785：讀回來的每一筆跑 core 的單筆資料規則（dsh `validateStoredEvents`）。
- * - N0603：同一個子代理的 `subagent/catalog` 只能登記一次、`childId` 要是字串（dsh `assertReleasedV4Relationships`、
- *   `catalogFact`）。
+ * - N0785：讀回來的每一筆跑 core 的單筆資料規則。
+ * - N0603：同一個子代理的 `subagent/catalog` 只能登記一次、`childId` 要是字串。
  * - [#1597](https://github.com/DemianLi/nexus-agent/issues/1597)：事件之間的關係錯掉就拒開（core 的 `createSessionRelationshipChecker`），
  *   標題的來源由 harness 驗；為舊形狀留的分支照常讀回。
  *
@@ -244,7 +243,7 @@ describe('header', () => {
     });
     expect(() => parseHeader(current)).toThrow(SessionCorruptionError);
     expect(() => parseHeader(current, { acceptNewer: true })).toThrow(SessionCorruptionError);
-    // 新版的 header 不必過這一版的結構檢查（dsh `format.ts:333-337`）：多的鍵、形狀不同的 build 都照讀。
+    // 新版的 header 不必過這一版的結構檢查：多的鍵、形狀不同的 build 都照讀。
     const newer = JSON.stringify({
       version: SESSION_LOG_FORMAT_VERSION + 1,
       id: 'a',

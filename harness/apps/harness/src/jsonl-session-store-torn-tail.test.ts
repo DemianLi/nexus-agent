@@ -1,11 +1,11 @@
 /**
- * 日誌尾端的壞行照 dsh 可復原丟棄（[#1508](https://github.com/DemianLi/nexus-agent/issues/1508)）。
+ * 日誌尾端的壞行可復原丟棄（[#1508](https://github.com/DemianLi/nexus-agent/issues/1508)）。
  *
  * 斷電後尾端可能多出一行「有換行、但讀不懂」的完整行。壞行之後沒有收尾（`turn/end`／`turn/failed`）就是當機留下
  * 的尾巴：丟掉，由續接補「中斷」；壞行之後有收尾，那是壞檔，照樣拒絕。位元組偏移算在 Buffer 上，截斷之後 sync 再
  * 講一行；唯讀的讀方永遠不截、不講。
  *
- * 都用真的 `openJsonlSessionStore` 與臨時目錄。**截斷跟著第一次寫入走**（dsh 的 first new append 之前），所以
+ * 都用真的 `openJsonlSessionStore` 與臨時目錄。**截斷跟著第一次寫入走**，所以
  * 要看得到截斷的夾具，前綴裡必須有一顆沒收尾的 `turn/start`：補結才算得出來、才會寫。
  */
 
