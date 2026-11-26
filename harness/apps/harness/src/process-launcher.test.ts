@@ -1,12 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   childExecArgv,
+  findSupervisorBinary,
   HOST_PLUGINS_FILE,
   isPrintOnly,
   launchProcessModel,
@@ -572,5 +573,89 @@ describe('宿主', () => {
     }
     expect(thrown).toBeUndefined();
     expect(written.join('')).not.toContain('launch-env:');
+  });
+});
+
+describe('findSupervisorBinary', () => {
+  const BIN = 'native/nexus-supervisor';
+  const from = (root: string): string => join(root, 'harness/apps/harness/src/a.js');
+  const place = (root: string, ...segments: string[]): void => {
+    const file = join(root, ...segments);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, '');
+  };
+  const inTmp = (body: (root: string) => void): void => {
+    const root = mkdtempSync(join(tmpdir(), 'nexus-find-supervisor-'));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const inRepo = (body: (root: string) => void): void =>
+    inTmp((root) => {
+      place(root, 'pnpm-workspace.yaml');
+      body(root);
+    });
+
+  it('發版包：往上找到 native/，沒有就找不到', () => {
+    inTmp((root) => {
+      expect(findSupervisorBinary(join(root, 'harness/apps/harness/dist/a.js'))).toBeUndefined();
+      place(root, BIN);
+      expect(findSupervisorBinary(join(root, 'harness/apps/harness/dist/a.js'))).toBe(
+        join(root, BIN),
+      );
+    });
+  });
+
+  it('原始碼樹只在舊位置放一支：拋錯，指名舊路徑與新位置，不回傳它', () => {
+    inRepo((root) => {
+      place(root, BIN);
+      expect(() => findSupervisorBinary(from(root))).toThrow(join(root, BIN));
+      expect(() => findSupervisorBinary(from(root))).toThrow(join(root, 'harness', BIN));
+    });
+  });
+
+  it('新位置有就用新位置，舊位置還在也不報錯', () => {
+    inRepo((root) => {
+      place(root, BIN);
+      place(root, 'harness', BIN);
+      expect(findSupervisorBinary(from(root))).toBe(join(root, 'harness', BIN));
+    });
+  });
+
+  it('舊檔在 repo 根之上（本地 git 在外層）：拋錯，指名舊路徑與 repo 根底下的新位置', () => {
+    inTmp((outer) => {
+      const root = join(outer, 'nexus');
+      place(root, 'pnpm-workspace.yaml');
+      place(outer, BIN);
+      expect(() => findSupervisorBinary(from(root))).toThrow(join(outer, BIN));
+      expect(() => findSupervisorBinary(from(root))).toThrow(join(root, 'harness', BIN));
+    });
+  });
+
+  it('新位置有就用新位置，repo 根之上的舊檔也不報錯', () => {
+    inTmp((outer) => {
+      const root = join(outer, 'nexus');
+      place(root, 'pnpm-workspace.yaml');
+      place(root, 'harness', BIN);
+      place(outer, BIN);
+      expect(findSupervisorBinary(from(root))).toBe(join(root, 'harness', BIN));
+    });
+  });
+
+  it('舊檔在 repo 根的上兩層以上：超出找的範圍，找不到也不報錯', () => {
+    inTmp((top) => {
+      const root = join(top, 'a', 'nexus');
+      place(root, 'pnpm-workspace.yaml');
+      place(top, BIN);
+      expect(findSupervisorBinary(from(root))).toBeUndefined();
+    });
+  });
+
+  it('兩處都沒有：找不到', () => {
+    inRepo((root) => {
+      expect(findSupervisorBinary(from(root))).toBeUndefined();
+    });
   });
 });

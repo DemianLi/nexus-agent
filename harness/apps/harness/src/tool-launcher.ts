@@ -7,10 +7,9 @@
  * @module
  */
 
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { findNativeBinary } from './native-binary.js';
 import { SPAWNER_PATH } from './sandbox-protocol.js';
 import { SpawnerSupervisor } from './sandbox-spawner-client.js';
 import { directToolLauncher } from './tool-process.js';
@@ -31,29 +30,9 @@ export function reportSandbox(line: string): void {
   report(line);
 }
 
-/**
- * 從這個模組往上找產物裡的 spawner；找不到回 `undefined`。
- *
- * 發版包裡沒有 `pnpm-workspace.yaml`，一路往上找到檔案系統根。原始碼樹裡 spawner 放在 `harness/native/`，找的範圍到 repo 根再往上一層
- * 為止：repo 根與它的上一層（本地 git 在外層時 spawner 會放在那裡）的 `native/nexus-sandbox-spawner` 都是搬到 `harness/` 之前的舊位置，
- * 不拿來用，存在就拋錯講要搬去哪裡，免得既有的 checkout 悄悄跑著舊執行檔。
- */
+/** 從這個模組往上找產物裡的 spawner；找法與舊位置報錯見 {@link findNativeBinary}。 */
 export function findSpawnerBinary(from = fileURLToPath(import.meta.url)): string | undefined {
-  let repoRoot: string | undefined;
-  for (let dir = dirname(from); ; dir = dirname(dir)) {
-    const candidate = join(dir, SPAWNER_PATH);
-    if (existsSync(candidate)) {
-      if (repoRoot !== undefined || existsSync(join(dir, 'pnpm-workspace.yaml'))) {
-        throw new Error(
-          `${candidate} 是搬到 harness/ 之前的舊位置，已經不再使用：請把它搬到 ${join(repoRoot ?? dir, 'harness', SPAWNER_PATH)}。`,
-        );
-      }
-      return candidate;
-    }
-    if (repoRoot !== undefined) return undefined;
-    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) repoRoot = dir;
-    if (dirname(dir) === dir) return undefined;
-  }
+  return findNativeBinary(from, SPAWNER_PATH);
 }
 
 /** 依平台選。`binary` 找不到時每次都回 `sandbox-unavailable`，不退回直接 spawn。 */
