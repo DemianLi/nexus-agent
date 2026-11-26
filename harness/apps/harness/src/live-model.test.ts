@@ -290,8 +290,7 @@ describe('把導出來的負 max_tokens 認成上下文溢出', () => {
 /**
  * **升版絆索：上游哪天自己認得了，我們那一層就該刪。**
  *
- * `wrapOpenAIClientError`（`@langchain/openai`）是分類的正主——標準那側的規矩是
- * 「溢出分类由适配器维护」（dsh `compaction-basic/README.zh.md:241`），我們只是因為
+ * `wrapOpenAIClientError`（`@langchain/openai`）是分類的正主，我們只是因為
  * 動不了那支才在工廠裡補一塊。LangChain 補 DeepSeek（`1.3.1`）、LiteLLM 補 Gemini
  * 都是同一種缺口，補上是遲早的事。
  *
@@ -835,8 +834,7 @@ describe('串流內回報的錯誤（#516）', () => {
    * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
    * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
    * 所以 `TIMEOUT` 本來就在可重試碼裡）。**這個乘法在這一刀之前就存在**，不是
-   * 這一層帶來的。#521 查過之後照 dsh 保留（dsh 的 `TIMEOUT` 也在預設可重試碼裡），見
-   * {@link DEFAULT_LIVE_TIMEOUT_MS}。
+   * 這一層帶來的。
    *
    * 這條的價值就是把那件事釘住：哪天兩側分岔了，那才是這一層動到了掛住的連線。
    *
@@ -1275,10 +1273,6 @@ describe('空的助手內容的送法（#592）', () => {
     expect(dropped).toBe(isEmptyAssistant({ type: 'ai', data: { content: content as string } }));
   });
 
-  /**
-   * 撞到輸出上限的那一則清掉工具呼叫之後什麼都不剩（#433）：CLI 那條送 `""`、web 那條可能是 `null`，
-   * **不分形狀**整則不送，同 dsh 的 `surface.ts:142-147`。
-   */
   it.each([
     ['空字串', ''],
     ['只有空白的字串', ' \n'],
@@ -1574,8 +1568,6 @@ describe('助手訊息不送 name（#1392）', () => {
 });
 
 /**
- * **空的工具結果補上 `(no output)`**（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)，照 dsh `llm-pi-ai/src/context.ts:31-47`）。
- *
  * MCP 工具可以回空的 `content` 陣列，`@langchain/openai` 原樣送出（`""` 或 `[]`）。只換「沒有內容」的工具訊息，其餘一律不碰。
  * 接線（真的 `runServe --live`＋夾具的 `empty_result`）在 `live-model-attribution.test.ts`。
  */
@@ -1617,7 +1609,6 @@ describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）
     const messages = [
       { role: 'tool', content: '做完了', tool_call_id: 'call-1' },
       { role: 'tool', content: [{ type: 'text', text: '好' }], tool_call_id: 'call-2' },
-      // 只有空白的：dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送（跟助手訊息 #592 的判準不同）。
       { role: 'tool', content: '  ', tool_call_id: 'call-4' },
       { role: 'tool', content: ' \n\t ', tool_call_id: 'call-5' },
       { role: 'tool', content: [{ type: 'text', text: ' ' }], tool_call_id: 'call-6' },

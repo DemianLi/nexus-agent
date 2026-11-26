@@ -140,9 +140,7 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
  * 逾時同樣整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)），兩段共用同一份預算。
  *
  * **最壞情況是它乘上重試次數**：開了線卻不吐位元組，每一次都等滿，180 秒 × (6 + 1) = 1260 秒，再加上
- * 退避的約 25.5 秒（`settings/live-model.ts` 的偏離二）。**這是 dsh 的形狀，不是缺陷**：dsh 的
- * `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），5 次重試 × 300 秒閒置 ≈ 30 分鐘。
- * #521 查過之後照 dsh 保留逾時重試——一次偶發的慢本來就該重試。
+ * 退避的約 25.5 秒（`settings/live-model.ts` 的偏離二）。
  */
 export const DEFAULT_LIVE_TIMEOUT_MS = 180_000;
 
@@ -150,25 +148,15 @@ export const DEFAULT_LIVE_TIMEOUT_MS = 180_000;
  * 串流的閒置逾時：第一則事件之後，兩段位元組之間最多等多久（毫秒）。
  *
  * 值沿用原本單一旋鈕的 90 秒（demian 拍板，#521），所以沒碰過 `timeoutMs` 的設定在這一側行為不變。
- * dsh 的 `streamIdleTimeoutMs` 預設是 300 秒（`packages/llm/llm-pi-ai/src/config.ts:47`，`5badb15`）；
- * 我們維持 90 秒是因為這個端點掛住的樣子就是吐了內容之後不再有位元組，而每一次重打都重付整個回覆的費用，
- * 等 300 秒才發現太貴。要放寬改 `streamIdleTimeoutMs`，與 `timeoutMs` 互不牽動。
  */
 export const DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 /**
  * 端點限流（HTTP 429）的判定。
  *
- * **消費端只認碼，不解析訊息** —— dsh 的 `HarnessError.code` 註解寫得很直白：
- * 「route on this, never by parsing `message`」，那條規矩管的是**拿到碼的一方**。**產生碼的這一層**照 dsh 的 adapter：
- * 結構化欄位優先，額度與超窗再比措辭（`llm-deepseek/src/transport.ts:26-32`、`llm-pi-ai/src/stream.ts:44`、`:84`，見
- * {@link classifyTurnFailure}，#1557）。這支 `isRetryableRateLimit` 是消費端：協定上的
+ * **消費端只認碼，不解析訊息**。這支 `isRetryableRateLimit` 是消費端：協定上的
  * `status === 429`，以及 `@langchain/core` 正規化後掛上的 `name`。兩個都認，因為
  * 包裝層數是別人家的實作細節。現在只剩 eval（`eval/compare.ts`）在用，判定照舊。
- *
- * **`insufficient_quota` 不算。** dsh 把 `QUOTA`（配額耗盡）與 `RATE_LIMIT`（限流）
- * 分成兩個碼，而且只有後者在預設可重試集裡 —— 理由一樣：配額耗盡重試幾次都一樣，
- * 限流等一下就過。`@langchain/core` 也同樣把它歸成 `action: 'stop'`。
  */
 export function isRetryableRateLimit(error: unknown): boolean {
   let current: unknown = error;
@@ -201,8 +189,7 @@ export function isRetryableRateLimit(error: unknown): boolean {
 export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
 
 /**
- * 預設那顆模型在型錄裡的那一筆（[#729](https://github.com/DemianLi/nexus-agent/issues/729)）：出廠型錄只放這一筆，對應 dsh
- * 出廠預設模型那一筆。要加一筆先過入場量測：吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，窗口不小於量過最小那顆的
+ * 預設那顆模型在型錄裡的那一筆（[#729](https://github.com/DemianLi/nexus-agent/issues/729)）：出廠型錄只放這一筆。要加一筆先過入場量測：吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，窗口不小於量過最小那顆的
  * 131,007。
  *
  * - `contextWindow`：見 {@link DEFAULT_LIVE_MODEL_ID} 的「窗口是量到的」，記的是量過的**下限**。
@@ -295,15 +282,13 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * ## 偏離登記一：分類該歸 adapter，我們退到最靠近它的地方
  *
- * dsh 寫得很清楚：「溢出分类由适配器维护——提供方措辞可能改变」
- * （`compaction-basic/README.zh.md:241`），消費端只認規範碼；LangChain 與 LiteLLM 同形。
  * **錯誤包裝（`base-chat-openai.ts` 的 `wrapOpenAIClientError`）維持照搬**（見 `base-chat-openai.ts` 模組說明），所以放在建 client
  * 的這個工廠。**不碰恢復那一層**——那一層基座已經有而且是對的（`context-overflow.test.ts`
  * 量過：branded 的錯誤到得了 `isContextOverflow`，埋在 `cause` 底下也認得）。
  *
  * ## 偏離登記二：這裡**解析了訊息**，用來取一個數字
  *
- * 這個檔產生碼的那一層，結構化欄位優先、額度與超窗另比措辭（照 dsh adapter，見 {@link classifyTurnFailure}，#1557）。
+ * 這個檔產生碼的那一層，結構化欄位優先、額度與超窗另比措辭（見 {@link classifyTurnFailure}，#1557）。
  * 這裡讀訊息是另一回事：理由是**結構化欄位不夠分**：body 只給得出 `param: "max_tokens"`，那個導出來的數字**只
  * 存在於訊息裡**。而少了它，一顆「輸出上限比我們送的 16384 小」的模型會被誤判成上下文
  * 溢出——那是一次壓縮救不回來的東西，壓幾次都一樣。
@@ -384,7 +369,7 @@ function isAbortLike(error: unknown): boolean {
 const connectionFailures = new WeakSet<object>();
 
 /**
- * 供應商請求編號的標頭名，**順序照 dsh**（`packages/llm/llm-deepseek/src/transport.ts:38-41`，`687f282e`）：取第一個有的。
+ * 供應商請求編號的標頭名，依這個順序取第一個有的。
  * 第一則事件就是錯誤信封時，{@link withInbandStreamErrors} 合成的 Response 要把這幾個標頭（加 `retry-after`）搬過去，用的也是這一份名單，
  * 不另寫一份（#1536）。
  */
@@ -396,7 +381,7 @@ export const PROVIDER_REQUEST_ID_HEADERS = [
 
 /**
  * 從標頭取供應商請求編號（#1536）：依 {@link PROVIDER_REQUEST_ID_HEADERS} 的順序，**第一個有這個標頭的就是它**；
- * 空字串整格不帶，**不往下一個退**（照 dsh：`headers.get(a) ?? headers.get(b) ?? …` 之後再 `id ? … : {}`）。
+ * 空字串整格不帶，**不往下一個退**。
  * `Headers` 與純物件兩種形狀都認，同 {@link retryAfterMsOf}。
  */
 export function requestIdOfHeaders(headers: unknown): string | undefined {
@@ -422,8 +407,7 @@ const failureRequestIds = new WeakMap<object, string>();
 
 /**
  * HTTP 狀態 → 失敗碼。**整個專案唯一的一張表**（#1437）：分類器、第一則事件的錯誤信封、第一則事件之後的信封監看用同一張，
- * 所以同一個狀態不論從哪條路進來都是同一個碼。表的順序與詞彙照 dsh 的 `providerError`
- * （`packages/llm/llm-deepseek/src/transport.ts:22-35`）：
+ * 所以同一個狀態不論從哪條路進來都是同一個碼。表如下：
  *
  * | 狀態 | 碼 |
  * | --- | --- |
@@ -511,8 +495,7 @@ function unwrapMiddlewareError(error: unknown): { root: unknown; wrappedModelCal
 }
 
 /**
- * 一環的 `type`、字串 `code`、`message` 接成一句，給額度與超窗的字樣比對用——照 dsh 的 `providerError`
- * （`llm-deepseek/src/transport.ts:26-27`）：`${type} ${code（字串才算）} ${message}`。**逐環各比各的**，不跨環串接：
+ * **逐環各比各的**，不跨環串接：
  * 超窗那幾條正規式帶 `.{0,40}` 的間隔，串起來會跨環誤中。
  */
 function wordingDetailOf(link: object): string {
@@ -575,20 +558,7 @@ function firstEventError(buffered: string, ended: boolean): Record<string, unkno
 /**
  * 那個錯誤信封要當成哪個 HTTP 狀態碼。梯子本體在 `inband-error.ts` 的 {@link classifyInbandError}（#1805）。
  *
- * **照 dsh 的 `providerError` 分類，再翻回一個載體狀態。** dsh 的串流內信封不帶狀態
- * （`packages/llm/llm-deepseek/src/sse.ts:25`，`687f282e`：`providerError(event, undefined)`），只看 `error.type`、字串型的
- * `error.code` 與訊息字樣，依序 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`，
- * 都對不上就兜底 `SERVER`（`packages/llm/llm-deepseek/src/transport.ts:22-35`）。翻成我們的載體：`AUTH` 是 401（或信封自己的 403）、
- * `QUOTA` 402、`RATE_LIMIT` 429、`INVALID_REQUEST` 400（或信封自己的 413）、兜底 500，經 {@link failureCodeOfStatus} 回到同一個碼；
- * `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`），其餘不在。`CONTEXT_WINDOW_EXCEEDED` 沒有對應的狀態，載體是 400，
- * 串流中段那一格靠 `classifyTurnFailure` 的 `overflow` 旗標、監看那一格直接取梯子的碼，見 {@link classifyInbandError}。
- *
  * 只收 400–599 的數字碼：Response 的建構子不讓 204／304 帶 body，而一個「錯誤」本來也不該是 2xx。
- *
- * **與 dsh 的偏離（理由 1，#1778 補登記、#1805 縮小）**：信封裡**數字**的 `code`／`status` 我們當成 dsh 的 `status` 餵進同一條梯子，
- * dsh 沒有這一步。理由：基座（OpenAI SDK／LangChain 的重試與分類）整條路只看 `status`，第一則事件就是信封的那種端點（#516）
- * 必須翻成帶狀態的 HTTP 回應基座才認得出來。數字碼與 `type`／字樣同時出現時照梯子的順序（每階是「或」）：
- * `{ code: 503, type: 'authentication_error' }` 記 `AUTH`（#1805 之前記 `SERVER`）。
  *
  * **三處共用這一支**（#1437）：第一則事件是信封時，這裡決定翻出來的 HTTP 回應的狀態；第一則事件之後的信封
  * （{@link createInbandWatcher}）與 SDK 在串流中段拋的、沒有 `status` 的 `APIError`（{@link classifyTurnFailure}）讀同一支，
@@ -628,27 +598,8 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * 原話退到 `cause` 鏈第二層。回一個 Response 就沒有這個代價：訊息、`status`、`retry-after`
  * 全都留在原來的位置。
  *
- * ## 偏離登記：dsh 的射程比這裡大，差的是載體不是紀律
+ * ## 整次重打在哪一層
  *
- * dsh 對這件事有三層，我們表達得出前兩層：
- *
- * 1. **分類不分投遞方式。** `llm/src/error.ts:76`：adapter 把 provider 的 code／type／
- *    message 併成一串餵進同一支分類器，「so both thrown and in-band delivery styles share
- *    one classifier」。這裡同向：in-band 的錯誤被翻成跟 HTTP 錯誤同一個形狀。
- * 2. **adapter 負責翻譯投遞方式。** `llm-pi-ai/src/stream.ts:129-133`：「pi-ai never throws
- *    mid-stream —— failures arrive as `error` events, which become error/aborted `finish`
- *    chunks (the harness protocol's other error-delivery style)」。nexus 的轉接器不做這件事：
- *    `base-chat-openai.ts` 維持照搬（見 `base-chat-openai.ts` 模組說明），事件那一路的轉換又在 `@langchain/core` 的 `convertOpenAICompletionsStream`；
- *    所以放在建 client 的這個工廠（同 {@link isDerivedContextOverflow}）。
- * 3. **重試掛在迴圈的步級掛點**（`llm/src/retry-policy.ts:5`、`llm-retry/src/index.ts` 聽
- *    `agent/request-error`），所以它是在整條串流跑完之後才判 `finish.kind === 'error'`
- *    （`core/agent-loop/src/agent.ts:489-493`，`5badb15009a`）—— **中段才出錯的串流 dsh 照樣重試**。
- *
- * **第三層 #516 時退掉了，[#520](https://github.com/DemianLi/nexus-agent/issues/520) 補上了。** 退掉的理由不是「重試中段錯誤
- * 不值得」，而是 dsh 付得起那個代價是因為它有第一級的載體表示「那一次作廢、這是新的一次」：`assistant/attempt` 事件與
- * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:116`、`:426-429`，`5badb15009a`），我們當時沒有——已經送到畫面上的字沒有
- * 地方宣告作廢。#520 補的載體是日誌的 `assistant/attempt`（不進模型）加線上的 `message-discard` 自訂 frame，重打本身是
- * `@nexus/core` 的 `stream-retry.ts`（`wrapModelCall`，排在記錄器外面，每次嘗試各是一對 `model/start`／`model/end`）。
  * **#1427 之後重打只有 core 那一層**：這一層對第一則事件之前的失敗是翻成 HTTP 錯誤，經 `AsyncCaller` 的 `onFailedAttempt`
  * 分類並**回報**（SDK 層 `maxRetries` 為 0，不自己重打）；第一則事件之後的失敗由 {@link createInbandWatcher} 回報。兩種都由 core
  * 那一顆（`retryModelCall`）決定重不重打，**共用同一份預算**，不存在兩邊相乘的問題。
@@ -671,8 +622,6 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * `read()`，所以「開了線卻不吐位元組」看起來會從重試射程外被搬進射程內。實測兩側的請求數
  * 相同（`live-model.test.ts` 的「開了線卻不吐位元組」那條）：SDK 的計時器從請求開始一直計到
  * fetch 回來，嗅探在 fetch 裡面，所以兩側都被它蓋到；逾時的碼 `TIMEOUT` 本來就在可重試集裡。
- * 那個「逾時 × 重試次數」的乘法在這一刀之前就存在，#521 查過是 dsh 的形狀，見
- * {@link DEFAULT_LIVE_TIMEOUT_MS}。
  *
  * ## 這**不**保證 live 跑得完
  *
@@ -848,29 +797,25 @@ export class StreamIdleTimeoutError extends Error {
  * （CLI 的 `invoke`）303 毫秒就逾時，因為 SDK 讀整份 body 時計時器還在。所以 serve 上供應商吐一半
  * 停住，那一輪會一直等到有人按停止。
  *
- * ## 照 dsh：一個閒置逾時，每段重新計時
+ * ## 一個閒置逾時，每段重新計時
  *
- * dsh 的 adapter 用 `idleWatchdog`（`packages/util/timeout/src/index.ts:126`，`46a7f68`）：每次
- * `next()` 重新計時，時間到就是 `TIMEOUT`（`llm-pi-ai/src/adapter.ts:355`、`:414-415`），預設
- * `streamIdleTimeoutMs` 300 秒。這裡照做，值是 live-model 列自己的 `streamIdleTimeoutMs`
+ * 每次讀都重新計時，時間到就是 `TIMEOUT`。值是 live-model 列自己的 `streamIdleTimeoutMs`
  * （預設 {@link DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS} 90 秒，demian 拍板）；「到第一則事件」另有
- * `timeoutMs`（#1251 拆開，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs` 兩格，`llm-pi-ai/src/config.ts:160-166`）。
+ * `timeoutMs`（#1251 拆開）。
  *
- * **只在有人讀的時候計時**：`pull` 才計時，下游讀得慢不算上游閒置——同 dsh 只在 `next()` 裡計時。
+ * **只在有人讀的時候計時**：`pull` 才計時，下游讀得慢不算上游閒置。
  *
  * ## 偏離登記
  *
  * 1. **中段逾時由 core 的 `stream-retry.ts` 整次重打**（#520；#521 時是「不重試」，因為當時沒有載體宣告「已經送到畫面上的字
- *    作廢」）。dsh 的 `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），由步級掛點重試整條串流；這裡拋
+ *    作廢」）。這裡拋
  *    {@link StreamIdleTimeoutError} 的同時向重試那一顆回報 `TIMEOUT`，跟串流中途斷掉（`TRANSPORT`）走同一條路。重打的預算
- *    與第一則事件之前的失敗**共用同一份 `retryPolicy`**（#1427，出廠 6 次，比 dsh 的預設 5 次多，見 `settings/live-model.ts`
+ *    與第一則事件之前的失敗**共用同一份 `retryPolicy`**（#1427，出廠 6 次，見 `settings/live-model.ts`
  *    的偏離二）。**第一則事件之前的逾時由 SDK 的 `timeout` 計時器產生**，同樣經 `onFailedAttempt` 回報、進同一份預算。
- * 2. **事件級，不是 chunk 級**（#1538 起；之前是位元組級）。dsh 等的是轉接器解好的一個 chunk，SSE 解析器已經把 keep-alive 註解行吞掉，
- *    所以只送 keep-alive 的供應商會被擋下；這一層在 `fetch`（理由同 {@link withInbandStreamErrors}），
- *    沒有解好的 chunk 可等。這一層疊在 {@link withStreamCompletionCheck} **外面**，只看得到它放行的位元組，而它只交**完整的 SSE 事件**：
+ * 2. **事件級，不是 chunk 級**（#1538 起；之前是位元組級）。
+ *    這一層疊在 {@link withStreamCompletionCheck} **外面**，只看得到它放行的位元組，而它只交**完整的 SSE 事件**：
  *    - 寫到一半、一個位元組一個位元組滴的事件**不算進度**，閒置逾時照走（位元組級時這種滴灌會一直把計時器撥回去）；
- *    - 只有註解行的 keep-alive（`: ping`）是完整事件，照樣放行、照樣重新計時——供應商只送 keep-alive 不送內容時，這一層**還是擋不到**，
- *      這是與 dsh 剩下的那一格差距；
+ *    - 只有註解行的 keep-alive（`: ping`）是完整事件，照樣放行、照樣重新計時——供應商只送 keep-alive 不送內容時，這一層**還是擋不到**；
  *    - 完成檢查放棄監看（單一事件超過 {@link INBAND_WATCH_MAX_CHARS}）之後，或型錄條目把完成檢查關掉（`compat.supportsFinishReason: false`），位元組原樣交下來，那條連線退回位元組級。
  *    常駐測試在 `stream-completion-check.test.ts` 的「閒置逾時的粒度」。
  *
@@ -1030,9 +975,8 @@ const KNOWN_FINISH_REASONS: ReadonlySet<string> = new Set([
  *
  * ## 偏離登記
  *
- * 1. **在位元組層解 SSE，不是在轉接器解好的事件上**（理由 1，基座表達不出來）。dsh 在 pi-ai 轉接器那一層，串流在 `finish_reason` 之前
- *    結束就發 `Stream ended without finish_reason`，並歸 `TRANSPORT`（`llm-pi-ai/src/stream.ts:52-58`）。
- * 2. **不新增 `STREAM_CLOSED` 碼**：那是 dsh 轉接器對「pi-ai 事件流沒有 done／error 就結束」的不變量，nexus 沒有那一層。
+ * 1. **在位元組層解 SSE，不是在轉接器解好的事件上**（理由 1，基座表達不出來）。
+ * 2. **不新增 `STREAM_CLOSED` 碼**：nexus 沒有轉接器那一層。
  *
  * @param baseFetch - 底層的 fetch。產品路徑是 {@link withInbandStreamErrors}；測試換掉它。
  * @returns 一個 fetch：非 SSE、非 2xx、沒有 body 的回應原樣放行，其餘把 body 包上完成檢查。
@@ -1208,13 +1152,12 @@ interface WireAssistant {
 }
 
 /**
- * 把請求裡**沒有內容**的助手訊息換成 dsh 的送法
+ * 把請求裡**沒有內容**的助手訊息換掉
  * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫、內容是空陣列的送
  * `content: null`；沒有工具呼叫、內容是空的（任何形狀）整則不送。
  *
  * 後者的第二個來源是撞到輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：那一則的工具
- * 呼叫被清掉，只剩推理或什麼都沒有。CLI 那條送的是 `""`、web 那條是空陣列或 `null`，所以這一種不分形狀——
- * 同 dsh 的 `surface.ts:142-147`（`477b4f4`）與 pi-ai 的「沒有 content 也沒有工具呼叫的整則略過」。
+ * 呼叫被清掉，只剩推理或什麼都沒有。CLI 那條送的是 `""`、web 那條是空陣列或 `null`，所以這一種不分形狀。
  *
  * 兩種各用 `@nexus/core` 的一支判準：有工具呼叫的只認陣列（{@link isBlankContentArray}；字串 `""` 與 `null` 配工具呼叫 #592 量過的模型都收，
  * 不動），沒有的不分形狀（{@link isBlankContent}，從日誌推歷史時丟掉空助手訊息也用這一支）。空白都算空。
@@ -1246,7 +1189,7 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
 
 /**
  * 送出前把**沒有內容**的助手訊息換掉——gpt-oss-20b 收到 `content: []`＋`tool_calls` 會回 400
- * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）；沒有工具呼叫、什麼都沒有的那則照 dsh
+ * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）；沒有工具呼叫、什麼都沒有的那則
  * 整則不送（[#433](https://github.com/DemianLi/nexus-agent/issues/433) 放寬到每一種形狀）。
  *
  * ## 誰會送出 `[]`
@@ -1257,14 +1200,13 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  *
  * 1. deepagents 的 `truncateArgs`（`deepagents@1.13.1`）重建舊訊息時丟了 `response_metadata`，
  *    推理＋工具呼叫的那則送成 `[]`＋`tool_calls`。**這個會壞。**
- * 2. 按停止時只收到推理的那則（#561），送成 `[]`、沒有工具呼叫。**今天不會壞**，照 dsh 一起收掉。
+ * 2. 按停止時只收到推理的那則（#561），送成 `[]`、沒有工具呼叫。
  *
  * ## 誰會送出空字串或 `null`、又沒有工具呼叫
  *
  * 撞到輸出上限的那則（#433）：`@nexus/core` 的 `max-tokens.ts` 清掉它的呼叫之後，只寫了參數、沒吐字的
  * 那種什麼都不剩——CLI 那條送 `""`，web 那條送空陣列或 `null`。**不分形狀整則不送**。這也收掉了別的
- * 來源的同一種形狀（例如只有推理的最終回覆），同 dsh 不分來源：沒有內容也沒有呼叫的就不是一則。
- * 這一種兩個模型都沒有量過（上表只量了 `[]`），照 dsh 做。
+ * 來源的同一種形狀（例如只有推理的最終回覆），不分來源：沒有內容也沒有呼叫的就不是一則。
  *
  * ## 真端點量到的（2026-09-25，NVIDIA 閘道，非串流，各 1 次）
  *
@@ -1283,13 +1225,6 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  * 所以壞的只有第一格。gpt-oss 那幾格常常 60 秒等不到標頭，等到 240 秒才拿到上表的結果——是閘道慢，
  * 不是拒收（連「整則不送」這種完全合法的請求也一樣慢）。
  *
- * ## 照 dsh
- *
- * dsh 的 chat-completions 由 pi-ai 組請求（`@earendil-works/pi-ai@0.85.1`，dsh `477b4f4` 的
- * `packages/llm/llm-pi-ai/package.json`），`dist/api/openai-completions.js` 的 `convertMessages`：
- * 助手文字為空時 content 是 `null`（`:959-961`，NVIDIA 端點偵測出的 `requiresAssistantAfterToolResult`
- * 是 `false`，`:1285`）；沒有 content 也沒有工具呼叫的整則略過（`:1050-1060`）。這裡照做。
- *
  * ## 偏離登記
  *
  * 1. **改在 `fetch` 這一層，不在組請求那一步**：`toCompletionsMessages` 維持照搬
@@ -1305,11 +1240,6 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
   return rewriteChatMessages(baseFetch, normalizeEmptyAssistantContent);
 }
 
-/**
- * 這則工具訊息的 content 是不是「沒有內容」，照 dsh：`flattenText` 把文字區塊串起來，串起來是 `''` 才算空
- * （`llm-pi-ai/src/context.ts:22-27`、`:42`）。`null`／缺席與 `''` 算空；陣列要**每一段都是文字區塊**、`text` 串起來是 `''`
- * （空陣列也是）；陣列裡有任何一段不是文字（帶圖等）就算有內容。**只有空白的不算空**，dsh 照原樣送。
- */
 function isEmptyToolContent(content: unknown): boolean {
   if (content === null || content === undefined) return true;
   if (typeof content === 'string') return content === '';
@@ -1321,14 +1251,13 @@ function isEmptyToolContent(content: unknown): boolean {
   });
 }
 
-/** 工具結果是空的時候，送給模型的那一個字。照 dsh `llm-pi-ai/src/context.ts:42`，逐字不改。 */
 export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
 
 /**
  * 把請求裡**沒有內容**的工具訊息的 `content` 換成 {@link EMPTY_TOOL_RESULT_TEXT}（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)）。
  *
- * 空的意思同 dsh（{@link isEmptyToolContent}）：`null`／缺席、`''`，或陣列全是文字區塊而串起來是 `''`。**只換「沒有內容」的那種**：
- * 有字的結果、**只有空白的**（`'  '`、`[{ type: 'text', text: ' ' }]`；dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送）、
+ * 空的意思見 {@link isEmptyToolContent}：`null`／缺席、`''`，或陣列全是文字區塊而串起來是 `''`。**只換「沒有內容」的那種**：
+ * 有字的結果、**只有空白的**（`'  '`、`[{ type: 'text', text: ' ' }]`；空白字串不算空，照原樣送）、
  * 陣列裡有任何一段不是文字（帶圖等）、其他角色的訊息一律不碰。`tool_call_id` 與其他欄位原樣。**不沿用 {@link isBlankContent}**：
  * 那是助手訊息 #592 量過的判準（空白算空），工具訊息另寫一支。
  *
@@ -1336,12 +1265,6 @@ export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
  *
  * MCP 工具可以回空的 `content` 陣列：`projectNonText`（`harness/packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列時
  * `blocks.every(isText)` 為真、不換，ToolMessage 的 content 留著 `[]`，`toCompletionsMessages` 再原樣送出（`""` 或 `[]`）。
- * 今天有沒有端點會拒收這種訊息沒有量過（助手訊息的空內容 #592 量過、真的會壞，工具訊息沒有）；dsh 一律補這個字，這裡照做。
- *
- * ## 照 dsh
- *
- * `packages/llm/llm-pi-ai/src/context.ts:31-47` 的 `toolResultOf`：空的工具輸出補 `(no output)`（`:42`，`content || '(no output)'`）；
- * 純文字那條路先用 `flattenText`（`:22-27`，把文字區塊的 `text` 串起來）再進 `toolResultOf`（`:251`）。
  *
  * ## 偏離登記
  *
@@ -1415,14 +1338,13 @@ function rewriteChatMessages(
  *
  * 欄位的來源不是我們的碼：LangChain 的 `AgentNode`（`langchain@1.5.10` 的 `dist/agents/nodes/AgentNode.js:97-98`）
  * 把回來的 `AIMessage` 的 `name` 設成 `options.name ?? "model"`。非串流回的是完整訊息所以帶，串流路徑不帶
- * （同一份日誌，兩條路徑送出的訊息不同，#1159 量過 80 次）。日誌不記它、`replayConversation` 不產生它、dsh 的
- * `AssistantMessage` 沒有這個欄位，所以它是「到了模型請求、不在日誌裡」的東西；兩條路徑統一成都不送。
+ * （同一份日誌，兩條路徑送出的訊息不同，#1159 量過 80 次）。日誌不記它、`replayConversation` 不產生它，所以它是「到了模型請求、不在日誌裡」的東西；兩條路徑統一成都不送。
  *
  * 只動 `role: "assistant"` 的 `name`：工具訊息等其他角色的 `name` 不是這張卡的事。
  *
  * ## 偏離登記
  *
- * **改在 `fetch` 這一層。** dsh 在序列化裡就不送；`AgentNode` 的 `name` 是 `??` 後面接預設值，傳什麼都拿不掉，
+ * **改在 `fetch` 這一層。** `AgentNode` 的 `name` 是 `??` 後面接預設值，傳什麼都拿不掉，
  * `toCompletionsMessages` 又維持照搬（見 `base-chat-openai.ts` 模組說明），所以放在送出前的 body（同
  * {@link withEmptyAssistantContent} 與 {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
  *
@@ -1473,11 +1395,8 @@ export function withShippedRequestBody(baseFetch: typeof fetch = fetch): typeof 
  * `nexus-agent/<版號> (+https://github.com/DemianLi/nexus-agent)`。閘道那一側的管理者看得出流量來自哪個產品、哪一版。
  * 不換的話是 `openai` SDK 自己的 `OpenAI/JS <版號>`。
  *
- * **覆寫、不是補上**：請求已經帶了的 `User-Agent`（不分大小寫）一律換掉，照 dsh pi-ai 那條路把部署標頭裡同名的 UA 濾掉再蓋上
- * 歸屬標頭（`llm-pi-ai/src/adapter.ts:216-224`）。`init.headers` 收 `Headers`、陣列或物件，輸入是 `Request` 而 `init` 沒給標頭時
+ * **覆寫、不是補上**：請求已經帶了的 `User-Agent`（不分大小寫）一律換掉。`init.headers` 收 `Headers`、陣列或物件，輸入是 `Request` 而 `init` 沒給標頭時
  * 沿用 `Request` 自己的標頭——一律先轉成 `Headers` 再設，其他標頭原樣。
- *
- * `X-Stainless-*` 那一組（openai SDK 帶的平台標頭）不動：dsh 的 pi-ai 也是透過 openai SDK 送 completions，同樣會帶；這裡只管 dsh 有規定的 UA。
  *
  * ## 偏離登記
  *
@@ -1613,14 +1532,9 @@ export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof f
 }
 
 /**
- * 一次模型呼叫的用途。照 dsh `GenerateOptions.purpose`（`packages/llm/llm/src/types.ts:547-552`，`477b4f4`）：
- * 「adapters may map the purpose to … purpose-specific generation policy」，一般的對話請求不帶。
+ * 一次模型呼叫的用途；一般的對話請求不帶。
  *
- * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），結果等價於 dsh 標題程式選最低一級（`off`）推理強度（僅限條目宣告了 `off` 的，見 `settings/live-model.ts` 偏離四）
- *   （`session-title-first-prompt-llm/src/index.ts:74-76` 的 `selectReasoningEffort`，經 `session-title-llm/src/index.ts:252-258` 帶進 `prepareCall`；
- *   1517a4db 起機制在 provider 端，`llm-deepseek/src/serialize.ts:147` 讀 `options.reasoningEffort`，不再依 `purpose` 關思考，#1573）。
- *
- * dsh 另有 `compaction`，我們的摘要走另一條路，沒有這一格的消費者。
+ * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），僅限條目宣告了 `off` 的，見 `settings/live-model.ts` 偏離四。
  */
 export type LiveModelPurpose = 'session-title';
 
@@ -1704,9 +1618,6 @@ export function createLiveModel(
 ): GuardedChatOpenAI {
   // 型錄沒有這個 id 就拋，訊息指名 id：設定的 schema 已經擋過一次，這裡是手搭設定的呼叫端（測試、eval）的最後一道。
   const entry = requireModelEntry(config.models, config.modelId);
-  // **建構時先問一次**：缺 key 在組裝當下就失敗，不等到第一個請求。這是跟 dsh 的時刻差異——dsh 只在請求當下才拋
-  // （`llm-deepseek-api-key`），我們兩個時刻都拋：組裝時的那一次讓 `--live` 起不來的原因在起動時就講，
-  // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
   resolveUsableKey(credentials, config.apiKeyEnv);
 
   const fields: GuardedChatOpenAIFields = {
@@ -1744,7 +1655,7 @@ export function createLiveModel(
     // 這顆的輸出上限跟著型錄條目走；覆寫是明著傳的（標題那一顆用它自己那一列的上限）。
     maxTokens: overrides.maxOutputTokens ?? entry.maxTokens,
     timeout: config.timeoutMs,
-    // **SDK 層不重試**（#1427，照 dsh `llm-pi-ai/src/adapter.ts:141`：「The agent recovery layer owns visible attempts」）。
+    // **SDK 層不重試**（#1427）。
     // 重試只有 `@nexus/core` 的 `stream-retry.ts` 那一層，首事件之前與之後共用一份預算；留著 SDK 的 6 次就是兩層相乘
     // （#1341 的 G4：打到端點 9 次、日誌只有 2 顆）。`onFailedAttempt` 仍然會在每次失敗時被叫（含沒有重試的這一次）——
     // 分類（下架、溢出、不可重試）與把「這一次值得重打」報給重試那一層，都靠它。
@@ -1859,8 +1770,7 @@ export function classifyFailedAttempt(error: unknown): void {
   if (isDerivedContextOverflow(error)) throw ContextOverflowError.fromError(error as Error);
   if (isAbortLike(error)) throw error;
   // 供應商用基座認不得的說法回「超出上下文」（#1557，`Input is too long for this model` 之類）：分類器依字樣記成
-  // `CONTEXT_WINDOW_EXCEEDED`，這裡也拋 branded 的錯誤，基座的摘要恢復才認得。碼先於字樣（`AUTH`、`QUOTA`、`RATE_LIMIT` 排在超窗前面，
-  // 同 dsh），而且鏈上本來就有 `ContextOverflowError` 的不重包。
+  // `CONTEXT_WINDOW_EXCEEDED`，這裡也拋 branded 的錯誤，基座的摘要恢復才認得。碼先於字樣（`AUTH`、`QUOTA`、`RATE_LIMIT` 排在超窗前面），而且鏈上本來就有 `ContextOverflowError` 的不重包。
   if (hasContextOverflowWording(error)) throw ContextOverflowError.fromError(error as Error);
   if (DEFAULT_STREAM_RETRYABLE_CODES.includes(classifyTurnFailure(error).code)) return;
   throw error;
@@ -1904,9 +1814,7 @@ function isInbandApiError(link: object): boolean {
 }
 
 /**
- * 連線層錯誤碼（Node／undici 的）→ `TRANSPORT`。**逐碼列舉，每個碼說得出它對到 dsh 哪一類**
- * （pi-ai 的 `classifyPiAiError`，`llm-pi-ai/src/stream.ts:56-65`；那一支只認訊息字面，它自己的 `XXX` 註解說「拿得到
- * `code`／`cause` 就該改認碼」，所以這裡認碼、不認字面，但類別要對得上）：
+ * 連線層錯誤碼（Node／undici 的）→ `TRANSPORT`。**逐碼列舉**，認碼、不認訊息字面：
  *
  * | 碼 | pi-ai 的字面類別 |
  * | --- | --- |
@@ -2006,8 +1914,7 @@ export function failureOriginalText(
  * #1437 之前有兩支：`classifyLlmFailure`（`llm/retry` 用，只有 `RATE_LIMIT`／`SERVER`／`TIMEOUT`／`TRANSPORT` 四個碼，
  * 任何狀態都記 `SERVER`）與這一支。**同一顆錯在兩處的碼不同**（串流中段的信封、斷流：`llm/retry` 記 `SERVER`／
  * `TRANSPORT`，`turn/failed` 記 `UNKNOWN`），而且 408／422／425 這類被當成 `SERVER` 重打。現在只有這一支：
- * 分類、`llm/retry` 的回報、串流內信封的監看、`turn/failed` 全走它，重打與否由重試那一層**只看碼**。照 dsh 的
- * `providerError`（`packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
+ * 分類、`llm/retry` 的回報、串流內信封的監看、`turn/failed` 全走它，重打與否由重試那一層**只看碼**。順序如下：
  *
  * | 條件（結構化欄位優先；額度與超窗再比措辭，只在模型呼叫的錯誤鏈上，見表後） | `code` | 預設重打 |
  * | --- | --- | --- |
@@ -2018,7 +1925,7 @@ export function failureOriginalText(
  * | 400、413 | `INVALID_REQUEST` | 否 |
  * | ≥ 500 | `SERVER` | 是 |
  * | 其他有狀態的（404、408、410、418、422、425…） | `HTTP_<狀態>` | 否 |
- * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：照 dsh 的梯子（`inband-error.ts`，#1805）——信封的數字碼（400–599）、`error.type`、字串 `error.code` 與訊息字樣，依 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER` 的順序，每階是「或」；全對不上又沒有數字碼 | 照梯子的碼；全對不上 `SERVER` | 照該碼（`SERVER` 是） |
+ * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：照梯子（`inband-error.ts`，#1805）——信封的數字碼（400–599）、`error.type`、字串 `error.code` 與訊息字樣，依 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER` 的順序，每階是「或」；全對不上又沒有數字碼 | 照梯子的碼；全對不上 `SERVER` | 照該碼（`SERVER` 是） |
  * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
  * | 本機排隊等不到名額（`request-gate.ts` 拋的 `LocalCapacityError`，沒有送請求，#1505） | `LOCAL_CAPACITY` | 否 |
  * | 巢狀太深：任何一環的 `code` 是日誌那一關的 `session_event_depth_exceeded`（`@nexus/core` 的 `SessionEventDepthError`）或存檔點的 `checkpoint_depth_exceeded`（`checkpoint-serde.ts` 的 `CheckpointDepthError`）（#1668） | {@link NESTING_TOO_DEEP_CODE} | 否 |
@@ -2029,11 +1936,9 @@ export function failureOriginalText(
  *
  * 狀態那幾列就是 {@link failureCodeOfStatus}；它與這張表只有一處寫。
  *
- * `UNKNOWN` 是 dsh 的規矩（`packages/core/session/src/types.ts:206-210`：解不成 `LlmFailure` 的錯一律壓成
- * `{ message, code: 'UNKNOWN' }`）。我們的 `turn/failed` 還有不是模型的來源——工具 middleware 拋的、遞迴上限、
+ * 我們的 `turn/failed` 還有不是模型的來源——工具 middleware 拋的、遞迴上限、
  * `#withdraw` 的狀態查詢——它們沒有供應商的任何痕跡，就是 `UNKNOWN`。**不要把它們套進 `TRANSPORT`**：「沒有狀態」
- * 不等於「網路問題」，這是 #1437 之前那支把整類程式錯誤標成網路問題的原因（Q2 (a)：解不開的回應也是 `UNKNOWN`，dsh 記成
- * `PI_AI_ERROR`、同樣不重試）。
+ * 不等於「網路問題」，這是 #1437 之前那支把整類程式錯誤標成網路問題的原因（Q2 (a)：解不開的回應也是 `UNKNOWN`）。
  *
  * ## 巢狀太深（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）
  *
@@ -2041,8 +1946,7 @@ export function failureOriginalText(
  * 是不是深度造成的，誤分比留 `UNKNOWN` 糟。深的東西在走到會遞迴的那一段之前就被量過、拋帶碼的錯（`@nexus/core` 的
  * `toLoggedMessage`、`SessionLog.append`，存檔點的 `DepthCheckedSerializer`），所以這一類一律有碼可認；`RangeError` 照舊是 `UNKNOWN`。
  *
- * **與 dsh 的偏離（理由 1）**：dsh 沒有這一類（`packages/core/agent-loop/src/agent.ts:379-381`，`687f282e`：不是 `LlmError` 的
- * 一律 `UNKNOWN`），因為它整條路都是迭代的、沒有深度上限。我們的上限是基座帶來的（LangGraph 的存檔點、LangChain 遞迴的
+ * **理由 1（基座）**：我們的上限是基座帶來的（LangGraph 的存檔點、LangChain 遞迴的
  * `toDict()`、OTLP 匯出），撞上限的那一輪要讓人認得出原因，就補這一個碼。
  *
  * ## 為什麼要先拆 `MiddlewareError`
@@ -2054,8 +1958,7 @@ export function failureOriginalText(
  * **拆的時候要留住模型呼叫的記號**（#1763）：「模型呼叫的失敗」的記號（`model-call-failure.ts`）是標在 `wrapModelCall` 的 catch 拿到的
  * 那一個錯上，而那一個錯常常就是基座包的某一層 `MiddlewareError`，不是底下的供應商錯。拆掉就丟，串流中段才送錯誤信封的那一輪在
  * `llm/retry` 是 `SERVER`／503（那條走 `onFailedAttempt`，錯誤沒被包），在 `turn/failed` 卻是 `UNKNOWN`。拆的過程中任何一層有記號，
- * 就視為模型呼叫的錯。dsh 沒有這一格（它的 `LlmError` 沒有被中介層包過），這是基座（LangChain 把 middleware 內的錯包成
- * `MiddlewareError`）帶來的，偏離理由 1。
+ * 就視為模型呼叫的錯。
  *
  * **記號只標在最靠近模型的那一層**（#1778，`turn-cancel.ts` 的 `createTurnCancelModelSignal`，我們這串中介層最內側的一格），
  * 不標在 `emptyResponse` 那一層：`emptyResponse` 在所有插件的 `wrapModelCall` 外面，插件自己拋的錯（沒有任何模型呼叫的痕跡）會
@@ -2095,7 +1998,6 @@ export function classifyTurnFailure(error: unknown, fromModelCall = false): LlmF
     wrappedModelCall ||
     links.some((link) => isModelCallFailure(link) || link instanceof CredentialRejectedError);
   for (const link of links) {
-    // 狀態要是 100–599 的整數（#1557，dsh `LlmError` 的欄位規則）：`NaN`、`99`、`429.5` 不是狀態，當作沒有這一格。
     const found = readField(link, 'status');
     if (
       status === undefined &&
@@ -2123,8 +2025,7 @@ export function classifyTurnFailure(error: unknown, fromModelCall = false): LlmF
     if (code === 'insufficient_quota' || type === 'insufficient_quota') quota = true;
     if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') quota = true;
     if (guarded(() => ContextOverflowError.isInstance(link), false)) overflow = true;
-    // 額度與超窗的字樣（#1557）：**只套在模型呼叫的錯誤鏈上**——dsh 的措辭比對只在 provider adapter 裡
-    // （`llm-deepseek/src/transport.ts:26-32`、`llm-pi-ai/src/stream.ts:44`、`:84`），工具 middleware 拋的錯誤文字裡出現
+    // 額度與超窗的字樣（#1557）：**只套在模型呼叫的錯誤鏈上**——工具 middleware 拋的錯誤文字裡出現
     // 「out of credits」不是模型供應商說的話。結構化欄位優先（上面幾行與下面的狀態），字樣補結構化認不出來的說法。
     if (modelCall) {
       const detail = wordingDetailOf(link);
@@ -2145,12 +2046,11 @@ export function classifyTurnFailure(error: unknown, fromModelCall = false): LlmF
       const body = readField(link, 'error');
       const envelope =
         typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined;
-      // 信封上的欄位也是別人的物件（SDK 從伺服器的 body 組出來），讀到拋錯的存取子就當作沒有信封（照 dsh 的預設：`SERVER`）。
+      // 信封上的欄位也是別人的物件（SDK 從伺服器的 body 組出來），讀到拋錯的存取子就當作沒有信封（預設 `SERVER`）。
       inband = guarded(() => classifyInbandError(envelope), classifyInbandError(undefined));
       if (inband.overflow) overflow = true;
     }
   }
-  // 串流中段的信封沒有 HTTP 狀態：用 dsh 梯子翻出來的載體狀態（#1805），與第一則事件那條翻成 HTTP 回應時同一支（`inbandStatus`）。
   if (status === undefined) status = inband?.status;
 
   const code =
@@ -2196,8 +2096,7 @@ const UNRENDERABLE_VALUE = '<unrenderable value>';
  * `status` 是 `NaN`）而讓記失敗那一步自己拋錯。
  *
  * 碼不是 `UNKNOWN`、`STORAGE_FULL`、`AUTH` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話。
- * **碼是 `UNKNOWN` 的（多半是工具 middleware 的 bug、狀態錯誤）換成 {@link errorChain}**，照 dsh `agent-loop/src/agent.ts:375-381`
- * 對非 `LlmError` 的失敗寫 `{ message: errorChain(error), code: 'UNKNOWN' }`——重新整理後的歷史看得到整條原因鏈
+ * **碼是 `UNKNOWN` 的（多半是工具 middleware 的 bug、狀態錯誤）換成 {@link errorChain}**——重新整理後的歷史看得到整條原因鏈
  * （例如「寫入失敗: EACCES: permission denied」）。渲染的是**拆掉 `MiddlewareError` 之後**那一顆：基座每一層都抄底下那一層的
  * `message`，直接渲染最外層會讓同一句重複十幾次。
  *
@@ -2275,7 +2174,7 @@ function classifyAndReportFailedAttempt(error: unknown): void {
 
 /**
  * 解析並收下這一把金鑰：沒有就拋缺 key，有但不合格（空白、標頭放不下的字元）就拋 {@link InvalidCredentialError}，合格的回修過頭尾的值
- * （#1541，照 dsh 在轉接器取金鑰的那一刻判）。建構時與每次請求前各走一次：建構時讓 `--live` 起不來的原因在起動當場就講，
+ * （#1541）。建構時與每次請求前各走一次：建構時讓 `--live` 起不來的原因在起動當場就講，
  * 請求時負責受管檔在兩個請求之間被改壞的情況。**只有空白的值不往下一層退**：資訊來自最高優先的那一層，退下去會讓人以為
  * 受管檔生效了，其實用的是別處的金鑰（`resolve` 回第一個有值的層，空白字串算有值）。
  *
@@ -2296,7 +2195,6 @@ function resolveUsableKey(credentials: CredentialService, name: string): string 
  * 所以這裡把我們的錯（缺 key 的 `Error`、{@link InvalidCredentialError}）放進一個 `OpenAIError`，**訊息逐字用我們的**、`cause` 仍是原錯：
  * 送到線上的紅字是我們那句中文，`classifyTurnFailure` 沿 `cause` 鏈認出的碼也不變。
  *
- * **偏離 dsh（理由 1：基座表達不出來）。** dsh 在轉接器自己先取金鑰、拿到值才發請求（`llm-pi-ai/src/adapter.ts:384`），取金鑰的錯不經 SDK。
  * `openai` SDK 的 `apiKey` 只收靜態字串或函式：先取再給字串，就失去 #1541 要的「每次請求前才解析」（`model` 建好就固定了）；
  * 在每個請求前另外預取一次再讓函式取第二次，兩次之間檔案又被改，錯還是會被包上前綴。所以取金鑰仍在函式裡，但錯的形狀由我們定。
  * `OpenAIError` 跟 `BaseChatOpenAI` 用的是同一個 `openai`（harness 直接依賴、釘 7.5.0），`instanceof` 對得上。
@@ -2354,10 +2252,10 @@ export interface LiveLaunch {
  * **這不是 fallback。** 每一層都是明說過的來源（順序見 `credentials.ts`）；缺的變數留給
  * {@link createLiveModel} 當場失敗並指名缺哪一個。
  *
- * @param options - `store` **必填**（#1540，照 dsh 分兩邊）：serve 傳 `true`，受管檔最優先；CLI、eval、spike 傳 `false`，
+ * @param options - `store` **必填**（#1540，分兩邊）：serve 傳 `true`，受管檔最優先；CLI、eval、spike 傳 `false`，
  *   完全不碰受管檔（不 `stat`、不讀、不檢查，壞檔也不擋），順序是啟動環境 > 目前資料夾 `.env` > harness home `.env`。
  *   `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；`env` 只用來解 harness home（省略即 `process.env`）。
- *   兩層 `.env` 的值仍寫進 `process.env`（同 dsh）；受管檔的值不會。
+ *   兩層 `.env` 的值仍寫進 `process.env`；受管檔的值不會。
  * @throws 壞的 `.env`、`store` 時壞的受管檔。
  */
 export function loadLiveLaunchEnv(options: {
