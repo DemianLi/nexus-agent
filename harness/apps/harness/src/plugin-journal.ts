@@ -332,7 +332,7 @@ function nameAssertionMatches(patch: Record<string, unknown>, name: string): boo
  * - 開關：改**最後一條**相符的覆蓋項的 `disabled`，沒有就追加（相符＝同 id、
  *   不是 `insert`、`name` 沒寫或等於這一列的；{@link nameAssertionMatches}）。
  * - 設定：改同一條的 `config`，沒有就追加 `{ id, name, config }`。
- * - 恢復成繼承值：拿掉**那一列所有**覆蓋項的 `config`，只剩 `id`／`name` 的整條拿掉（`:120-129`）。**不是把出貨值抄一份。**
+ * - 恢復成繼承值：拿掉**那一列所有**覆蓋項的 `config`，只剩 `id`／`name` 的整條拿掉。**不是把出貨值抄一份。**
  * - 遷移來的 `patch` 原樣接上，保留它在清單裡的位置（`insert` 之後的 patch 才指得到插進來的列）。
  *
  * 同一列後來的操作蓋掉前面的，所以結果的長度不隨紀錄筆數長。純函式，不改輸入。
@@ -741,7 +741,7 @@ export interface AppendJournalOptions {
  * 追加路徑上 fsync 目錄，**錯誤吞掉**。全倉只有這一處吞（#1527）：建檔走 {@link createJournalFile}，錯照拋。
  *
  * 走到這裡時這一筆已經寫進檔、fsync 過了。這時拋錯，呼叫端會以為沒寫成而重試，紀錄上就多一筆同樣的變更；
- * 「已寫入但回報失敗」怎麼處置不在 #1527。這一處的理由登記在檔頭偏離第 1 條。
+ * 「已寫入但回報失敗」怎麼處置不在 #1527。
  */
 async function syncDirectoryBestEffort(directory: string): Promise<void> {
   try {

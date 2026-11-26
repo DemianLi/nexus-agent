@@ -15,7 +15,7 @@
  * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，#1474），契約服務，一列；插件登記 listener，**宿主**把登記者是某一列的那幾位建成 middleware 折進每條 thread（`pre-step-middleware.ts`） |
  * | `session-durability` | 行程級的落盤確認（`@nexus/session/provider`，#1606），契約服務，一列；**只在清單掛著落盤時才有**（{@link TreeInput.durable}），做法由宿主給（這棵樹的註冊表登記＋{@link PluginTree.bindDurableStore} 交進來的 store） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 |
- * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） | 各插件 |
+ * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） |
  *
  * ## 清單怎麼進樹
  *

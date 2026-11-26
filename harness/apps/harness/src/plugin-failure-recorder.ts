@@ -55,7 +55,6 @@ import {
 } from './plugin-journal.js';
 import type { FailureContext, FailureDiscovery, JournalBody } from './plugin-journal.js';
 
-/** 等鎖的上限：2 秒。 */
 export const FAILURE_RECORD_WAIT_MS = 2000;
 
 /** 交進來的一列：同 `StartupDrop` 的那幾格，不帶 `entry`。 */
