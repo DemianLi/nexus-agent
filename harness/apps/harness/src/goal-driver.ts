@@ -1,7 +1,7 @@
 /**
  * 續行排程器的**決策那一半**：一輪收工之後，要不要再排一輪。
  *
- * 輪迴圈歸入口點所有，見下面那條載體偏離。人插話走 `@nexus/core` 的 `step-inbox.ts`（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），
+ * 時刻：`agent/turn-stopping`。輪迴圈歸入口點所有，見下面那條載體偏離。人插話走 `@nexus/core` 的 `step-inbox.ts`（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），
  * 由 pump 送進圖，這裡碰不到。索引見 `harness/apps/harness/src/interception-index.test.ts`。
  *
  * ## 為什麼它落在 `harness/apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
@@ -52,7 +52,7 @@
  * 模型在 `create_goal` 裡自己填的那個數字**贏過**組裝點給的預設，而且還能用 `update_goal` 中途調高。
  * 「唯一的硬上限是 `maxGoalRounds`」在真 key 上等於「唯一的硬上限由模型自己挑」，那不是一條停損。
  *
- * **為什麼要有這一條**：我們的 serve 是多人共用的內網主機、
+ * **偏離登記（產品需求）**：我們的 serve 是多人共用的內網主機、
  * 出廠就開著續行，一個失控的目標會一直花錢、佔 thread 名額，部署的人要能從外面夾住它。CLI 那一半同理：旗標後面直接是一支
  * 燒 API key 的迴圈（`cli.ts` 的 `driveGoalRounds`）。補的是一條模型改不動的上限；目標域的 `??` 不動。
  *
