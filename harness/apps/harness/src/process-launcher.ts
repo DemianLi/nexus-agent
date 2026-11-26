@@ -26,6 +26,7 @@ import { parseArgs } from 'node:util';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { hostPluginRows, writeHostPluginsFile } from './host-plugins-file.js';
+import { findNativeBinary } from './native-binary.js';
 import { loadLaunchEnv, processLaunchEnv, type LaunchEnvironment } from './launch-env.js';
 import { composeDefaultEntries } from './plugin-config.js';
 import { threadCapacityConfigSchema } from './settings/thread-capacity.js';
@@ -202,13 +203,9 @@ export function idleEvictAfterMs(entries: readonly ConfigEntry[]): number {
 const THREAD_CAPACITY_ENTRY_NAME = '#settings/thread-capacity';
 const SESSION_PERSISTENCE_ENTRY_NAME = '@nexus/core/session-persistence';
 
-/** 從這個模組往上找產物裡的監督行程；找不到回 `undefined`。 */
+/** 從這個模組往上找產物裡的監督行程；找法與舊位置報錯見 {@link findNativeBinary}。 */
 export function findSupervisorBinary(from = fileURLToPath(import.meta.url)): string | undefined {
-  for (let dir = dirname(from); ; dir = dirname(dir)) {
-    const candidate = join(dir, SUPERVISOR_PATH);
-    if (existsSync(candidate)) return candidate;
-    if (dirname(dir) === dir) return undefined;
-  }
+  return findNativeBinary(from, SUPERVISOR_PATH);
 }
 
 /** 啟動器讀外界的縫，只給測試用。 */
