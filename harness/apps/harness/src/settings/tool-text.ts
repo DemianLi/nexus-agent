@@ -12,7 +12,7 @@
  *   截到 `maxBytes`，超過取頭尾、中間一句說明。
  *
  * **工具結果文字不再歸它管。** 這一格原本是結果文字放上線的上限，那是「沒有外溢、日誌保全文」時登記的偏離；外溢層
- * （[#719](https://github.com/DemianLi/nexus-agent/issues/719)）落地後日誌記的就是換過的預覽，#736 照 dsh 拿掉了傳輸上的截斷。
+ * （[#719](https://github.com/DemianLi/nexus-agent/issues/719)）落地後日誌記的就是換過的預覽，#736 拿掉了傳輸上的截斷。
  * 文字的上限現在在模型面，由 `spill-policy` 那一列與讀檔自己的上限決定，見 `tool-result-text.ts` 的檔頭。
  *
  * **名字沒跟著改**：`tool-text` 與 `maxBytes` 已經寫在部署自己的 `cordis.patch.yml` 裡，改名會讓那些 patch 在載入期失敗；
@@ -29,16 +29,6 @@
  * **散文上要小心一件事**：這不是「起動期的值」，是**起動期解出來、穿進一個 per-thread 物件**
  * 的值。`ThreadPump` 一條 thread 一顆，拿到的是同一份設定。
  *
- * ## 與 dsh 的關係
- *
- * 50000 當初抄的是 dsh base bundle `spill-policy` 的 `maxInlineBytes: 50000`（`ddefc45`）。dsh 在 `477b4f4` 已改成
- * `maxInlineTokens: 12500`（`packages/bundle/base/cordis.patch.yml:407-410`，對 `c1b47e4`），而那一格對應的是我們
- * `spill-policy` 那一列，不是這一列。
- *
- * 這一列今天管的兩件事，dsh 都**不在傳輸上截**：搜尋的 `meta` 由搜尋工具在生產端自己限（`dsh-tool-fs-search` 的
- * `searchMetaMaxBytes`，預設 65536，`packages/fs/tool-fs-search/src/search-core.ts:65`），讀檔與 diff 的 `meta` 沒有上限。
- * 我們截在放上線那一刻，那條偏離登記在 `tool-result-text.ts` 的 `capToolResultMeta` 上，#736 不動它。
- *
  * ## 這一列關不掉
  *
  * `disabled: true` 在載入期當場拋。理由同起動期那幾列：關掉它不會讓 meta 與摘要不再被截，
@@ -54,11 +44,7 @@
  * {@link DEFAULT_TOOL_TEXT_MAX_BYTES} 之後，一頁能裝幾張卡跟著變，而且沒有任何東西會紅。
  *
  * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的：另外兩條分別要把協定
- * 常數變成設定、或讓 wire 反過來收 harness 注入的值，兩條都在動協定層的形狀。dsh 那側沒有
- * 先例可抄——它的歷史分頁按**則數**算（`packages/api/session-controller/src/history.ts:38` 的
- * `DEFAULT_MAX_MESSAGES = 50`），組頁路徑上一個位元組預算都沒有，所以那兩個值在 dsh 沒有
- * 共同單位可以做比例。唯一偏向性的證據是 dsh 的 house style：**每個 cap 對自己負責**，沒有
- * 任何一處參照另一個 cap。
+ * 常數變成設定、或讓 wire 反過來收 harness 注入的值，兩條都在動協定層的形狀。
  *
  * **可設定之後仍然守得住的**（#538 的驗收下限）：`serve-history.test.ts` 那條產品路徑的
  * warn——「超標的一頁走過 route 會 warn」——照樣證明得了。它的 seed 造 170 則各 50000 位元組的結果，文字自 #736
@@ -78,7 +64,7 @@ export const TOOL_TEXT_PLUGIN_NAME = 'tool-text';
 /**
  * 這一列 `maxBytes` 的預設（UTF-8 位元組）：搜尋與改檔 `meta` 的上限、讀檔 `meta` 上限的一半、壓縮摘要全文的上限。
  *
- * 數字是當初照 dsh `spill-policy` 的 `maxInlineBytes: 50000` 抄的（見檔頭「與 dsh 的關係」）。摘要超過時取頭尾各半，
+ * 摘要超過時取頭尾各半，
  * 中間換成一行通知，**含通知在內**不超過這個數。
  */
 export const DEFAULT_TOOL_TEXT_MAX_BYTES = 50_000;

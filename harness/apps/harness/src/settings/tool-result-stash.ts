@@ -1,7 +1,6 @@
 /**
  * 過大的工具結果暫存到主機的**設定條目**（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）：暫存的根目錄與
- * 保留天數，兩格名字照 dsh `spill-local` 的 `root`、`cleanupPeriodDays`（`packages/spill/spill-local/src/index.ts:66-69`，
- * `477b4f4`）。
+ * 保留天數。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `tool-text`／`deliverable-files` 那幾列。消費點在起動期：
  * `runCli`／`runServe` 解一次，往下傳給組裝點（`agent-factory.ts` 的 `toolResultStash`），並在啟動時於背景清一次保留期
@@ -27,7 +26,7 @@ import { resolveHarnessHome } from '../harness-home.js';
 /** 這一列在訊息裡叫什麼。 */
 export const TOOL_RESULT_STASH_PLUGIN_NAME = 'tool-result-stash';
 
-/** 沒設保留天數時的預設，照 dsh `spill-local` 的 `cleanupPeriodDays`。 */
+/** 沒設保留天數時的預設。 */
 export const DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS = 30;
 
 /** 預設根在 harness home 底下的名字。 */
@@ -40,8 +39,8 @@ export const toolResultStashConfigSchema = z.strictObject({
   /**
    * 暫存的根目錄；絕對路徑或 `~` 開頭。缺席就是 harness home 底下的 `tool-results`。
    *
-   * **偏離 dsh 的「沒設就用每行程一個的私有暫存目錄」**：基座的路徑是虛擬的，續接時要照同一個路徑讀回同一個檔，所以根要
-   * 跨行程重開保持固定；預設放 harness home 而不是系統暫存區，因為那裡會被定期清掉。登記在 `tool-result-stash.ts` 的檔頭。
+   * **預設不是每行程一個的私有暫存目錄**：基座的路徑是虛擬的，續接時要照同一個路徑讀回同一個檔，所以根要
+   * 跨行程重開保持固定；預設放 harness home 而不是系統暫存區，因為那裡會被定期清掉。
    */
   root: z.string().min(1).optional(),
   /** 保留天數；`0` 表示不清。啟動時在背景清一次，別人改得動的根不清。 */
