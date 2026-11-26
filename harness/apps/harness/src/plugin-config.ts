@@ -6,11 +6,10 @@
  * {@link loadDefaultPlugins}，接線的實測在
  * [`plugin-config-wire.test.ts`](./plugin-config-wire.test.ts)。
  *
- * ## 兩種方言，照 dsh
+ * ## 兩種方言
  *
  * 出貨檔（`cordis.yml`）是**條目清單**，使用者的檔（`cordis.patch.yml`、`--patch`）是
- * **patch 清單**。dsh 的 `renderConfigDump(binName, absoluteConfigPath, layers, warn)` 就是
- * 這個形狀：一個 base 設定檔加上若干層 patch（`packages/boot/app-boot/src/index.ts:403`）。
+ * **patch 清單**。
  *
  * ## 疊加順序
  *
@@ -18,9 +17,7 @@
  * `--patch`，照命令列順序。**不從目前目錄讀**——那一份會跟著 clone 一起到來，而它能停用核准。
  *
  * **home 的 `cordis.patch.yml` 不再是一層**（#1412，demian 2026-10-13 Q2）：第一次啟動時遷進變更紀錄（{@link prepareJournal}），
- * 之後出現這個檔只警告、不讀。`--patch` 是部署端在命令列給的，照 dsh 的覆蓋層留著。照 dsh 的層序
- * （`packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
- * 後台只寫 profile 那一層，我們把它與 home 那層併成一份稽核過的紀錄。
+ * 之後出現這個檔只警告、不讀。`--patch` 是部署端在命令列給的，留著。
  *
  * ## 權限檢查只管使用者那兩層
  *
@@ -117,8 +114,8 @@ export const SHIPPED_CONFIG_FILENAME = 'cordis.yml';
  * serve 專屬的出貨層（[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 4 步）。疊在 {@link SHIPPED_CONFIG_FILENAME}
  * 之後、使用者的 patch 之前，**只有 serve 載**（`DefaultConfigOptions.serve`）；CLI 不載，`--dump-config` 也跟著入口走。
  *
- * 照 dsh：web-app bundle 疊在 base 上（`packages/bundle/web-app/cordis.patch.yml`，`477b4f4`）。**登記：我們沒有 profile／組合包
- * （#46 Out of scope），所以退到最接近的一個檔**——出貨層有兩個檔而不是 dsh 的 preset 機制；層與層之間不能互相覆寫或刪列，
+ * **登記：我們沒有 profile／組合包
+ * （#46 Out of scope），所以退到最接近的一個檔**——出貨層有兩個檔而不是 preset 機制；層與層之間不能互相覆寫或刪列，
  * 只能追加列（patch 才能改列），所以它不是 profile 層，不會長成 #46 排除的東西。
  */
 export const SERVE_SHIPPED_CONFIG_FILENAME = 'cordis.serve.yml';
@@ -156,8 +153,8 @@ export class PluginModuleAccessError extends PluginConfigError {
  * 一列條目。
  *
  * `name` 是模組 specifier（套件名或子路徑），`config` 原封不動交給 `resolveEntries` 去驗。
- * **`strictObject`**：多寫一個欄位是打錯字，不是擴充點——dsh 的條目還有 `inject`／
- * `intercept`／`isolate`，我們一個都沒有，安靜吃掉會讓人以為設定生效了。
+ * **`strictObject`**：多寫一個欄位是打錯字，不是擴充點——條目沒有 `inject`／
+ * `intercept`／`isolate` 這幾個欄位，安靜吃掉會讓人以為設定生效了。
  */
 export const entrySchema = z.strictObject({
   id: z.string().min(1, 'id 不能是空字串').optional(),
@@ -191,8 +188,8 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)），那個誤會的代價由別人付。
  *
  * **名單裡只有核准閘門，而「圍堵不進來」是量過的結論不是疏漏。** 圍堵
- * （`@nexus/core` 的 `containment.ts`）**連 id 都不該有**：它是註冊表管線自己的 `catch`
- * （dsh `packages/core/tools/src/index.ts:1494`，`4e84901`），不是一顆掛不掛隨人的
+ * （`@nexus/core` 的 `containment.ts`）**連 id 都不該有**：它是註冊表管線自己的 `catch`，
+ * 不是一顆掛不掛隨人的
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
@@ -202,8 +199,7 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  *
  * **`@nexus/core/session-persistence` 曾經在名單上，現在不在，這是刻意的**
  * （[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。它從前只講批次窗口，關掉只會
- * 回到預設；#444 讓落盤預設開著之後，它改成**代表落盤本身**，照 dsh 的
- * `session-persistence-jsonl` 那一列：關掉就是兩個入口都只在記憶體裡，一個位元組都不寫。
+ * 回到預設；#444 讓落盤預設開著之後，它改成**代表落盤本身**：關掉就是兩個入口都只在記憶體裡，一個位元組都不寫。
  *
  * **理由跟名字綁在同一張表上，不共用一段文字。** 從前這裡是一個 `Set`、訊息只有一段，而那段
  * 逐字在講核准閘門——名單長出第二種列之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准
@@ -325,10 +321,8 @@ export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(PROTECTED_ENTR
 /**
  * 一列 patch。
  *
- * 形狀照 dsh 的 `PatchOptions`（`vendor/include/src/index.ts:130`）砍掉我們沒有的欄位。
- *
  * **`looseObject` 而不是 `object`，這一格是實測改出來的。** patch 的語意是「其餘欄位淺層
- * 覆寫上去」（dsh 的 `for (const [key, value] of Object.entries(overrides)) target[key] = value`），
+ * 覆寫上去」，
  * 所以未知欄位必須**活著走到疊完**，再由 {@link entrySchema} 的 `strictObject` 去擋——那時候
  * 才知道它蓋到了哪一列。zod 的 `z.object()` 會把未知鍵**安靜剝掉**，配上去的結果是一條
  * 寫錯欄位的 patch 完全沒有作用也完全沒有訊息。這個缺陷是「整條路上也是疊完才驗」那條測試
@@ -356,8 +350,7 @@ const warnToStderr: PluginConfigWarn = (message) => {
  * 把一份 YAML 讀成「頂層是一個陣列，每個元素是一張表」。
  *
  * 兩種方言共用這一段，因為它們的檔案層級規則一樣：**不是頂層陣列就是設定錯了，一律拋**。
- * 空檔與只有註解的檔會 parse 成 `null`，落在同一條——要停用某一層請寫 `[]`，照 dsh
- * （`packages/boot/app-boot/README.zh.md` 的「本机偏好」一節）。
+ * 空檔與只有註解的檔會 parse 成 `null`，落在同一條——要停用某一層請寫 `[]`。
  *
  * @param source - 檔案全文。
  * @param label - 錯誤訊息裡怎麼稱呼這個檔（路徑）。
@@ -422,7 +415,7 @@ export function parsePatchList(source: string, label: string): ConfigPatch[] {
  * `Cannot find module '…/harness/apps/harness/src/probe.ts'`，而那底下剛好有同名檔的時候，它會
  * **安靜地載錯一顆**。
  *
- * 照 dsh 的 `anchorInsertedPluginNames`（`packages/boot/app-boot/src/index.ts:319`）：
+ * 做法：
  *
  * - 絕對路徑、以及相對 patch 檔的 `./` 與 `../`，轉成 file URL；
  * - **其餘原樣**——裸的套件名（`@nexus/plugin-echo`）要留給 Node 的解析器，轉成 URL 會讓
@@ -468,19 +461,18 @@ export const REMOVED_ENTRY_IDS: ReadonlyMap<string, string> = new Map([
 /**
  * 把 patch 疊到條目清單上。
  *
- * **逐條照 dsh 的 `applyEntryPatches`**（`vendor/include/src/index.ts:57`）：
+ * 規則：
  *
  * - 輸入不被改（深拷貝），所以同一份清單可以重放——重載時舊 patch 的值不會被烤進去。
  * - `insert` 不帶 `id` 就接在尾巴；**插進去的列當場進索引**，所以同一串裡後面的 patch
- *   指得到前面插的列。dsh 是 `buildMap(insert)`，理由在它的註解裡：一層要能設定或停用
+ *   指得到前面插的列：一層要能設定或停用
  *   前一層插進來的列，否則插進來的東西悄悄變成不可 patch 的。
  * - 非 `insert` 的 patch 沒有 `id` → 警告跳過。
  * - `id` 找不到 → 警告跳過，**不是失敗**：一份 overlay 給多個 surface 共用時不必每棵樹都命中。
  * - **`name` 是斷言不是選擇器**：給了而且對不上就警告跳過，原列一個字都不動。
- * - 其餘欄位**淺層覆寫**，所以 `config` 是整份替換不是深層合併。dsh 的 README 把這一條
- *   列在「已知限制」裡：profile 覆寫必須重述要保留的欄位。
+ * - 其餘欄位**淺層覆寫**，所以 `config` 是整份替換不是深層合併：覆寫必須重述要保留的欄位。
  *
- * 我們沒有 dsh 的 `group`，所以索引不用遞迴——扁平一層。
+ * 條目沒有 `group`，所以索引不用遞迴——扁平一層。
  *
  * @param entries - 疊之前的清單（不會被改）。
  * @param patches - 全部層攤平成一串，照套用順序。
@@ -687,20 +679,18 @@ export const PLUGIN_MODULE_ROLE: PrivateFileRole = {
 /**
  * 這個檔案只有目前使用者動得了。
  *
- * **判準照 dsh 的 `hasProtectedAncestors`**（`packages/spill/spill-local/src/cleanup.ts:86`）：
+ * **判準**：
  * 一路走到根，任何祖先對群組或其他人可寫（`mode & 0o022`）就拒絕，**除非它帶 sticky 位**
  * （`/tmp` 底下的 per-process 目錄靠這一條才合法）；sticky 但下一層不是自己的，照樣拒絕。
  *
- * **這是比 dsh 嚴的一條，要登記**：dsh 把這個判準用在 spill root 上，**沒有**用在
- * `cordis.patch.yml` 上。我們用在 patch 檔上，因為這個部署是完全內網、多人共用主機
+ * **這一條要登記**：我們把它用在 patch 檔上，因為這個部署是完全內網、多人共用主機
  * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)），而一份 patch 檔**決定
  * 這個行程載入哪些模組**：`insert` 進來的列，它的 `name` 會被 `resolveEntryModule`
  * 直接 import，相對路徑還錨在 patch 檔自己旁邊。別人寫得動那個檔，就是別人替你決定跑
- * 什麼程式碼。偏離的是「用在哪」，不是判準本身。
+ * 什麼程式碼。
  *
  * **同一條理由也蓋住被 import 的那個模組檔**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)），
- * 所以 {@link resolveEntryModule} 對指到檔案的條目也跑這一條——射程往前推一跳，登記不變。dsh 在這條路上
- * 什麼都不檢查（`packages/boot/app-boot/src/index.ts:519` 的 `Include.import` 只做 specifier 解析）。
+ * 所以 {@link resolveEntryModule} 對指到檔案的條目也跑這一條——射程往前推一跳，登記不變。
  *
  * **這句理由改過一次，而改的是理由不是結論**（#456 第四刀）：原本寫的是「patch 檔停得掉
  * 核准」。那件事現在擋住了——`approval-gate` 那一列在 {@link PROTECTED_ENTRY_NAMES} 上，
@@ -708,7 +698,7 @@ export const PLUGIN_MODULE_ROLE: PrivateFileRole = {
  * 每一列的 `config`、關得掉名單外的條目，還能插新模組進來。
  *
  * **先 `realpath` 再檢查**：符號連結會讓「被檢查的路徑」與「真的被讀的檔」變成兩個，而
- * `readFileSync` 跟的是後者。dsh 的 `resolveRoot` 同樣解析成 canonical 路徑才信任它。
+ * `readFileSync` 跟的是後者。
  *
  * 沒有 `geteuid` 的平台（Windows）直接放行——POSIX 的模式位在那邊沒有對應物，硬檢會變成
  * 一條看起來有在擋、其實在亂擋的規則。我們的部署是 Linux 與 macOS。
@@ -766,7 +756,7 @@ export function assertPrivateFile(path: string, role: PrivateFileRole = PATCH_FI
 /**
  * 讀使用者那一層，**檔案不在就是沒有這一層**。
  *
- * 照 dsh 的 `loadOptionalPatches`（`packages/boot/app-boot/src/index.ts:289`）：`ENOENT` 回
+ * `ENOENT` 回
  * `undefined`，其餘讀取失敗與解析失敗一律拋——一份在那裡卻套不上去的 patch 是設定錯了，
  * 不是「沒有這一層」。
  *
@@ -789,7 +779,7 @@ export function loadOptionalPatches(path: string): ConfigPatch[] | undefined {
 /**
  * 讀一個被指名的 overlay，**檔案不在就是設定錯了**。
  *
- * 照 dsh 的 `loadOverlayPatches`（`:309`）：是呼叫方指名這個檔的，它不在代表路徑寫錯或檔案
+ * 是呼叫方指名這個檔的，它不在代表路徑寫錯或檔案
  * 沒放上去，安靜跳過會讓人以為 patch 生效了。
  *
  * @param path - `--patch` 給的路徑。
@@ -826,9 +816,8 @@ export function serveShippedConfigPath(): string {
 /**
  * 把一列條目變成一個可以載入的 `PluginEntry`。
  *
- * **`module.default ?? module` 照 dsh 的 `unwrapExports`**（`vendor/loader/src/index.ts:189`）：
- * 先看 default，沒有才退回 namespace。dsh 的配套入口把 `name`／`apply` 散在頂層，namespace
- * 自己就是 plugin；我們的是巢狀常數，所以實際上走的是 default 那一條
+ * **`module.default ?? module`**：
+ * 先看 default，沒有才退回 namespace。配套入口的 plugin 是巢狀常數，所以實際上走的是 default 那一條
  * （[#493](https://github.com/DemianLi/nexus-agent/pull/493) 讓當時的二十個配套入口都有了 default
  * export；#974 之後剩八個）。兩種形狀都接得住，是因為退路本來就是標準的一部分。
  *
@@ -1051,7 +1040,7 @@ function registerFolded(
   for (const unit of contributions.projections) registry.projections.register(unit);
   // 會話參與者（#1491）：**走 `registry.sessions.join`，位置就是這一列在清單上的位置**——日誌上 `approval/policy` → `sandbox/mode` →
   // `permission/preset` 的相對順序靠它（今天靠各列的 `apply` 依清單順序登記 join，遷移之後仍是同一個順序）。參與者安裝失敗只記 warn、
-  // 已寫的收不回，是相容層參與者本來的語意（偏離 dsh，見 `@nexus/session` 的 `join`）。
+  // 已寫的收不回，是相容層參與者本來的語意（見 `@nexus/session` 的 `join`）。
   for (const participant of contributions.participants) registry.sessions.join(participant);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
@@ -1186,10 +1175,9 @@ export interface PluginConfigSources {
  * 疊完三層，但**還沒 import 任何模組**。
  *
  * 分出這一層是為了 `--dump-config`（下一刀）：它要印的是疊完的設定，而印設定不該需要
- * 把每一顆 plugin 都載起來。dsh 的 dump 同樣走純函式那條路，理由一樣
- * （`.agents/notes/archived/feature/2026-07-30-dsh-dump-config.md`）。
+ * 把每一顆 plugin 都載起來。
  *
- * **所有層攤平成一次 {@link applyEntryPatches} 呼叫**，不是每層各呼叫一次——dsh 明寫分層
+ * **所有層攤平成一次 {@link applyEntryPatches} 呼叫**，不是每層各呼叫一次——分層
  * 各呼叫一次會在層與層之間重建索引，印出一棵啟動從來不會掛的樹。
  *
  * @param sources - 三層的來源。
@@ -1315,9 +1303,7 @@ function journalDisabledIds(layers: readonly ConfigLayer[]): Map<string, string>
  * 把三層讀進來，**還沒疊**。
  *
  * `composeEntries` 與 {@link renderConfigDump} 共用這一段，所以 dump 印出來的層與啟動真的
- * 疊的層是同一組——照 dsh，它的 dump 與 `boot()` 共用 `applyEntryPatches`，理由是
- * 「dump 不可能與實際啟動漂移，因為它復用掛載程式碼」
- * （`.agents/notes/archived/feature/2026-07-30-dsh-dump-config.zh.md`）。
+ * 疊的層是同一組：dump 不可能與實際啟動漂移，因為它復用掛載程式碼。
  *
  * @param sources - 三層的來源。
  * @returns 出貨檔的路徑、它的每一列，以及帶標籤的各層。
@@ -1492,7 +1478,7 @@ function readJournalLayer(
 /**
  * 把疊完的設定印成一份**讀得回來的** YAML。
  *
- * 逐條照 dsh 的 `renderConfigDump`（`packages/boot/app-boot/src/index.ts:403`）：
+ * 規則：
  *
  * - **所有層攤平成一次 {@link applyEntryPatches} 呼叫**，跟啟動的呼叫形狀完全一樣。分層各
  *   呼叫一次會在層與層之間重建 id 索引，印出一棵啟動從來不會掛的樹。
@@ -1505,9 +1491,7 @@ function readJournalLayer(
  *   有它們的快照裡看到的前置狀態都一樣，所以每份快照的警告清單是前一份的延長，新增的尾巴
  *   屬於剛加進來的那一層。
  *
- * **不做黃金檔比對。** dsh 自己的開發備註寫著這份輸出「不承諾跨包版本的位元組穩定性；在
- * 程式化消費它之前，請先決定 dump 要不要成為序列化約定」——照抄一個它自己說不穩定的東西
- * 當測試判準，是把別人的免責聲明變成我們的絆索。測試驗的是結構性質。
+ * **不做黃金檔比對。** 測試驗的是結構性質。
  *
  * @param sources - 三層的來源。
  * @returns 一份 YAML 文件，帶來源註解。
@@ -1518,7 +1502,7 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
   const warn = sources.warn ?? warnToStderr;
 
   // **每份快照都自己 clone 一份 patch**：`applyEntryPatches` 會把 `insert` 的列放進結果，
-  // 共用同一批 patch 物件會讓後一份快照的改動漏進前一份的結果裡。dsh 同一條理由。
+  // 共用同一批 patch 物件會讓後一份快照的改動漏進前一份的結果裡。
   const snapshot = (count: number, warnings: string[]): Record<string, unknown>[] =>
     applyEntryPatches(
       rows,
@@ -1619,7 +1603,7 @@ export interface IgnoredConfig {
 /** {@link loadPluginConfig} 的結果。 */
 export interface LoadedPluginConfig {
   /**
-   * 可以交給 `loadPlugins` 的清單。**設定驗不過的那一列還在，改成 `disabled: true`**：掉了的列照 dsh 算沒掛，
+   * 可以交給 `loadPlugins` 的清單。**設定驗不過的那一列還在，改成 `disabled: true`**：掉了的列算沒掛，
    * 標成停用，載入器才會記進 `disabledEntries`，折疊那側與 `startupSetting`／`startupEntryMounted` 都把它當沒掛。
    */
   readonly plugins: readonly PluginEntry[];
@@ -1665,20 +1649,19 @@ export interface LoadedPluginConfig {
 /**
  * 組裝：疊完、驗完，再把每一列的模組 import 進來，逐列驗一次設定。
  *
- * **一列自己的失敗只讓那一列掉**，照 dsh 的失敗表（`packages/boot/app-boot/README.zh.md:97-99`，`477b4f4`），
+ * **一列自己的失敗只讓那一列掉**，
  * 掉了哪幾列交出去，哪幾列掉了要整個失敗由呼叫端拿必掛名單判
  * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)，`startup-audit.ts`）：
  *
  * - **模組載不進來、或匯出的不是一顆 plugin**：那一列不在回傳的清單上——手上沒有那顆 plugin，連名字都取不到，
  *   所以載入器標不到它，折疊那側會把它讀成「清單上沒有」而不是「關掉」。射程：出貨的列是 `@nexus/*`／`#settings/*`
  *   的裸 specifier，patch 又改不動既有列的 `name`（{@link applyEntryPatches} 的解構），所以只有 `insert` 進來的列
- *   或安裝壞掉才走得到這一格。停用的列模組載不起來時不算掉：dsh 對停用的列根本不載入（`Entry.refresh` 開頭就
- *   `if (this.disabled) return`），失敗表那一列是「忽略」（`README.zh.md:106`）。
+ *   或安裝壞掉才走得到這一格。停用的列模組載不起來時不算掉。
  * - **設定驗不過**：那一列留在清單上、改成 `disabled: true`（見 {@link LoadedPluginConfig.plugins}）。
- * - **沒有設定格式卻寫了 `config`**：不算掉，照 dsh 原樣交下去（`vendor/cordis/src/fiber.ts:51`），記進
+ * - **沒有設定格式卻寫了 `config`**：不算掉，原樣交下去，記進
  *   {@link LoadedPluginConfig.ignoredConfig} 讓呼叫端印警告。
  *
- * 整份的錯照舊整個拋，對到 dsh 失敗表第一列（`README.zh.md:96`）：讀檔、疊層、條目形狀、重複 id、關不掉的列被關掉；
+ * 整份的錯照舊整個拋：讀檔、疊層、條目形狀、重複 id、關不掉的列被關掉；
  * 權限被拒也照舊整個拋（{@link PluginModuleAccessError}）。
  *
  * @param sources - 三層的來源。
@@ -1978,12 +1961,12 @@ export function renderLayeredConfigDump(options: DefaultConfigOptions = {}): str
 /**
  * 只印出貨那一層的設定（[#740](https://github.com/DemianLi/nexus-agent/issues/740)）——`--dump-default-config`。
  *
- * 照 dsh 的 `--dump-default-config`（`apps/cli/src/dump-config.ts:47`）：**真的不讀**home 覆寫檔與 `--patch`，不是讀了再丟。
+ * **真的不讀**home 覆寫檔與 `--patch`，不是讀了再丟。
  * 它就是設計來救「`cordis.patch.yml` 壞掉」的：壞掉的檔（權限錯、YAML 寫壞）不會被解析，所以 {@link renderLayeredConfigDump}
  * 印不出來的時候，這一份還印得出來，拿來跟壞掉的那份對照。
  *
  * **刻意不經過 `defaultSources`**：那條路一定帶 `userPatch`，也要解析 home 路徑；這裡直接給一份空來源，
- * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope），dsh 的「出貨」在這裡就是一個檔。
+ * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope），「出貨」在這裡就是一個檔。
  *
  * @param options - `serve`：serve 入口，出貨層多一個 serve 專屬檔（同 {@link DefaultConfigOptions.serve}）。
  * @returns 一份帶來源註解的 YAML 文件。

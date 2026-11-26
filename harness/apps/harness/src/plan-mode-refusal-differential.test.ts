@@ -3,7 +3,7 @@
  * plan-mode 的 `exit_plan_mode` 模式外拒絕，在不同組裝形狀下模型看到的字。
  *
  * #1272 把「排在核准閘門之前的那一層拒絕」從 middleware 的 `wrapToolCall` 搬到 `tools/pre-execute`，這個檔當時是
- * 「逐字等價」的證據，先在 develop 上跑綠、搬完一字不改仍綠。#1276 照 dsh 把那一層拿掉（dsh 只在工具本體裡檢查），
+ * 「逐字等價」的證據，先在 develop 上跑綠、搬完一字不改仍綠。#1276 把那一層拿掉，
  * **行為有意改變的只有兩格**，下面用 `CHANGED` 標出並寫明新舊值；其餘五格斷言與 #1272 時逐字相同，仍綠，
  * 證明拿掉那一層沒有碰到本體本來就回的字。期望值是寫死的字面值，不從實作裡算。
  *
@@ -137,8 +137,8 @@ describe('plan-mode 模式外拒絕：本體回的字，兩格有意改變（#12
   });
 
   /**
-   * CHANGED（#1276）。#1272 時是 `[REFUSED]`、判定不帶碼：那一層排在核准閘門之前的拒絕先擋。拿掉之後核准 listener 先於本體
-   * （同 dsh），headless 底下拿到核准的措辭，判定帶 `APPROVAL_POLICY_NEVER`。
+   * CHANGED（#1276）。#1272 時是 `[REFUSED]`、判定不帶碼：那一層排在核准閘門之前的拒絕先擋。拿掉之後核准 listener 先於本體，
+   * headless 底下拿到核准的措辭，判定帶 `APPROVAL_POLICY_NEVER`。
    */
   it('掛一顆什麼都要問的閘門、模式關著 → 先看到核准的措辭（CHANGED）', async () => {
     const seen = await run({ startActive: false, attached: 1, gate: true });

@@ -167,11 +167,10 @@ describe('出貨的 cordis.yml', () => {
     const byId = new Map(composeEntries().map((entry) => [entry.id, entry.config]));
 
     // 這棵樹的 subagent 是真的併發跑的（`tool-session-log.test.ts` 那條同一個 subagent
-    // 併發兩次的驗收），而 dsh 對這種部署開的就是 true。這個開關沒有預設值。
+    // 併發兩次的驗收）。這個開關沒有預設值。
     expect(byId.get('todo')).toEqual({ allowParallelInProgress: true });
 
-    // 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
-    // （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
+    // 一則評分備註最多幾個 UTF-8 位元組。plugin 自己不給預設值，
     // 所以出貨檔那一行是整棵樹上唯一講這個數字的地方。
     expect(byId.get('feedback')).toEqual({ maxNoteBytes: 8192 });
 
@@ -189,7 +188,7 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
 
     // **其餘每一列都不帶 config**，這半句同樣承重：八個配套入口一個 `Config` schema 都
-    // 沒有，給它們設定沒有作用——照 dsh 原樣交下去、不驗，啟動時印警告（#751）。
+    // 沒有，給它們設定沒有作用——原樣交下去、不驗，啟動時印警告（#751）。
     //
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
     // 也沒有 Config schema，替它加一行 `config:` 沒有作用、啟動時印警告。它進到這棵樹裡的唯一
@@ -204,11 +203,10 @@ describe('出貨的 cordis.yml', () => {
     });
     // **LLM 標題那五格**（#650）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
     expect(byId.get('thread-title-llm')).toEqual(threadTitleLlmConfigSchema.parse({}));
-    // **內容搜尋出廠不開**（#631），這一列是**唯一不等於 schema 預設的**：預設是 `startup`（同 dsh），出廠寫 `never`（同
-    // dsh `base` 與 `web-app` 兩個 bundle，dsh 也用測試釘這一列）。改成開著是部署的選擇，不該是有人順手改了出貨檔。
+    // **內容搜尋出廠不開**（#631），這一列是**唯一不等於 schema 預設的**：預設是 `startup`，出廠寫 `never`。改成開著是部署的選擇，不該是有人順手改了出貨檔。
     expect(byId.get('thread-search')).toEqual({ openAt: 'never' });
     expect(threadSearchConfigSchema.parse({})).toEqual({ openAt: 'startup' });
-    // **跨會話引用的出廠比例是 0.1，不等於 schema 預設的 0.2（dsh 的值）**（#1573 N0862，Q4 (b)，偏離理由 2）：中文三條 0.2 的來源逼近摘要門檻，
+    // **跨會話引用的出廠比例是 0.1，不等於 schema 預設的 0.2**（#1573 N0862，Q4 (b)，偏離理由 2）：中文三條 0.2 的來源逼近摘要門檻，
     // 量法與數字在 `cordis.yml` 那一列與 `session-reference-budget.test.ts` 的 H。改回 0.2 是行為變了，不該是順手改了出貨檔。
     expect(byId.get('session-reference')).toEqual({
       maxReferences: 3,
@@ -233,7 +231,7 @@ describe('出貨的 cordis.yml', () => {
     // **插件投影 frame 的合併視窗**（#1071）。出貨那一行的值必須就是 schema 的預設（合併器的 100），同上面幾列。
     expect(byId.get('projection-flush')).toEqual({ flushMs: PROJECTION_FLUSH_MS });
     expect(projectionFlushConfigSchema.parse({})).toEqual({ flushMs: PROJECTION_FLUSH_MS });
-    // **下行串流的心跳間隔與位元組上限**（#1504）。出貨那一行的值必須就是 schema 的預設，同上面幾列；預設又照 dsh（2000 毫秒、2 MiB）。
+    // **下行串流的心跳間隔與位元組上限**（#1504）。出貨那一行的值必須就是 schema 的預設，同上面幾列；預設是 2000 毫秒、2 MiB。
     expect(byId.get('downlink')).toEqual({
       heartbeatIntervalMs: DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
       maxQueuedBytes: DEFAULT_DOWNLINK_MAX_BYTES,
@@ -243,7 +241,7 @@ describe('出貨的 cordis.yml', () => {
       maxQueuedBytes: 2 * 1024 * 1024,
     });
     // **thread 數上限與閒置逐出**（#1619，出廠打開）。出貨那一行的值必須就是 schema 的預設，同上面幾列：兩邊各寫一份數字，
-    // 改了一邊忘了另一邊，`--dump-config` 印的跟沒寫 `config:` 的部署實際拿到的就會不一樣。預設是 500 條（理由 2）與 2 小時（照 dsh）。
+    // 改了一邊忘了另一邊，`--dump-config` 印的跟沒寫 `config:` 的部署實際拿到的就會不一樣。預設是 500 條（理由 2）與 2 小時。
     expect(byId.get('thread-capacity')).toEqual(threadCapacityConfigSchema.parse({}));
     expect(threadCapacityConfigSchema.parse({})).toEqual({
       maxThreads: 500,
@@ -309,21 +307,21 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('tool-result-stash')).toEqual({
       cleanupPeriodDays: DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS,
     });
-    // **工具結果外溢層**（#719）。出貨值是 dsh base 的 12500；這一格**沒有 schema 預設**（省略就是停用，照 dsh），
+    // **工具結果外溢層**（#719）。出貨值是 12500；這一格**沒有 schema 預設**（省略就是停用），
     // 所以出貨那一行必須把它寫出來——刪掉它，外溢層就靜靜停用，回到基座 80,000 字元那條線。
     expect(byId.get('spill-policy')).toEqual({ maxInlineTokens: 12_500 });
-    // **搜尋結果的筆數上限**（#735）。出貨那一行的值必須就是 schema 的預設（dsh 的 250／100），同上面幾列。
+    // **搜尋結果的筆數上限**（#735）。出貨那一行的值必須就是 schema 的預設（250／100），同上面幾列。
     expect(byId.get('tool-fs-search')).toEqual(toolFsSearchConfigSchema.parse({}));
     // **檔案工具組態**（#1605）。出貨值全是 schema 的預設（全開、讀檔上限回到常數）：改掉出貨那一行的任何一格，
-    // 預設就靜靜偏離 dsh `tool-fs` 的 2000／2000／51200／10 MiB。
+    // 預設就靜靜變了。
     expect(byId.get('tool-fs')).toEqual(toolFsConfigSchema.parse({}));
-    // **背景續行**（#841）。出貨值是 dsh base 打開的 `continuable`，**不是 schema 的預設**（schema 預設 `one-shot`，照 dsh）：
+    // **背景續行**（#841）。出貨值是 `continuable`，**不是 schema 的預設**（schema 預設 `one-shot`）：
     // 刪掉出貨那一行的 `backgroundMode`，預設就靜靜翻回一次性，模型看不到 `subagent`。
     expect(byId.get('background-subagents')).toEqual({
       backgroundMode: 'continuable',
       maxActiveSubagents: 8,
     });
-    // **子代理選模型**（#875）。出廠關著、清單空，同 dsh：打開得是使用者自己寫的決定，不是出貨值替他選。
+    // **子代理選模型**（#875）。出廠關著、清單空：打開得是使用者自己寫的決定，不是出貨值替他選。
     expect(byId.get('subagent-model-selection')).toEqual({ enabled: false, allowedModels: [] });
     // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值就是 schema 的預設——**除了型錄多一筆**：出貨清單的第二、三顆是
     // 看圖模型（#731 判定，每會話選擇 #723 才有東西可選），schema 的預設型錄仍只有預設那一顆。
@@ -363,7 +361,7 @@ describe('出貨的 cordis.yml', () => {
     // **一輪的時鐘上限**（#1624）同形：出貨那一行的值就是 schema 的預設；30 分鐘的來歷（暫定、沒有量）在 `settings/turn-timeout.ts` 檔頭。
     expect(byId.get('turn-timeout')).toEqual(turnTimeoutConfigSchema.parse({}));
     expect(turnTimeoutConfigSchema.parse({})).toEqual({ timeoutMs: DEFAULT_TURN_TIMEOUT_MS });
-    // **每步平行工具呼叫上限**（#711）同形：走服務、出貨值就是 dsh 的 10。
+    // **每步平行工具呼叫上限**（#711）同形：走服務、出貨值就是 10。
     expect(byId.get('agent-loop')).toEqual({
       maxParallelToolCalls: DEFAULT_MAX_PARALLEL_TOOL_CALLS,
     });
@@ -382,7 +380,7 @@ describe('出貨的 cordis.yml', () => {
 
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
-      // **`guidance` 必填、套件沒有預設值**（#1607，照 dsh），所以出貨那一列帶 config；內容的字面值在上面釘住。
+      // **`guidance` 必填、套件沒有預設值**（#1607），所以出貨那一列帶 config；內容的字面值在上面釘住。
       'plan-mode',
       'todo',
       'feedback',
@@ -850,7 +848,7 @@ describe('insert 進來的模組檔也要只有自己動得了（#542）', () =>
 });
 
 /**
- * 讀清單那一次的逐列掉（#751），照 dsh 的失敗表（`packages/boot/app-boot/README.zh.md:96-106`，`477b4f4`）：一列自己的
+ * 讀清單那一次的逐列掉（#751）：一列自己的
  * 失敗只讓那一列掉，整份的錯照舊整個拋。哪幾列掉了要整個起不來不在這一層判，見 `startup-audit.test.ts`。
  */
 describe('讀清單時一列自己的失敗只讓那一列掉（#751）', () => {
@@ -959,9 +957,7 @@ describe('模組解析', () => {
 
 describe('--dump-config', () => {
   /**
-   * **不做黃金檔比對。** dsh 自己的開發備註寫著這份輸出不承諾跨包版本的位元組穩定性
-   * （`packages/boot/app-boot/README.zh.md` 的「待定：配置 dump 稳定性」）。照抄一個它自己
-   * 說不穩定的東西當判準，是把別人的免責聲明變成我們的絆索。所以驗的是結構性質。
+   * **不做黃金檔比對。** 驗的是結構性質。
    */
   it('印出來的東西讀得回來，而且就是啟動真的會掛的那一份', () => {
     const dumped = renderConfigDump();
@@ -1152,8 +1148,7 @@ describe('保護名單', () => {
 
   /**
    * **落盤那一列關得掉**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。它曾經在
-   * 名單上（只講批次窗口時，關掉只會回到預設）；#444 讓落盤預設開著之後，它代表落盤本身，照 dsh
-   * 的 `session-persistence-jsonl`：`disabled: true` 就是不落盤。上面那條寫死的清單已經不含它，
+   * 名單上（只講批次窗口時，關掉只會回到預設）；#444 讓落盤預設開著之後，它代表落盤本身：`disabled: true` 就是不落盤。上面那條寫死的清單已經不含它，
    * 這一條是翻面後的正面斷言——哪天有人把它加回名單，這裡紅。
    */
   it('`@nexus/core/session-persistence` 寫 `disabled: true` 放行', () => {

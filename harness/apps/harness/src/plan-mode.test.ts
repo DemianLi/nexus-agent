@@ -25,7 +25,7 @@
  * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。跨重啟那一條在
  *    `session-resume.test.ts`。
  * 4. **拒絕在核准之前的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭（第 2 組最後一條）。
- *    現在翻面了（#1276）：拒絕只在 `exit_plan_mode` 的工具本體裡，同 dsh，所以掛全攔核准閘門時模型先看到核准的措辭。
+ *    現在翻面了（#1276）：拒絕只在 `exit_plan_mode` 的工具本體裡，所以掛全攔核准閘門時模型先看到核准的措辭。
  *    曾經有一層排在閘門之前的拒絕（#1272 搬上事件匯流排、#1276 拿掉）；兩段行為的差分在
  *    `plan-mode-refusal-differential.test.ts`。
  * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
@@ -94,7 +94,7 @@ import type { PumpAgent } from './thread-pump.js';
 const shipped = withoutTimeContext(await shippedPlugins());
 
 /**
- * 出貨清單 `plan-mode` 那一列的 `guidance`，讀 `cordis.yml`。**套件沒有預設值了**（#1607，照 dsh：部署必給），所以出貨那一句
+ * 出貨清單 `plan-mode` 那一列的 `guidance`，讀 `cordis.yml`。**套件沒有預設值了**（#1607：部署必給），所以出貨那一句
  * 住在 yml 裡；這一檔「指引進不進 system prompt」的案例量的就是它，不是測試自己寫的一句。
  */
 const SHIPPED_GUIDANCE = (
@@ -223,8 +223,7 @@ describe('計劃指引進不進 system prompt', () => {
   });
 
   /**
-   * **這一條是「未激活不增加 token」那句話的執行版**（dsh
-   * `packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
+   * **這一條是「未激活不增加 token」那句話的執行版**。middleware 掛著、工具註冊著、
    * 但 prompt 裡一個字都沒有多——不然「掛了這個 plugin」就變成一筆每輪都在付的稅。
    *
    * 這一條走**出貨的 `plan-mode` 那一列、不加任何 config**：出貨預設是關的才算數。
@@ -408,11 +407,10 @@ function exitVerdicts(events: readonly SessionEvent[]): unknown[] {
 }
 
 /**
- * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），照 dsh
- * `packages/plan/plan-mode/src/index.ts:278-350`。
+ * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
  *
  * **以前這一組叫「三條路」**，走的是核准：plan-mode 掛一位閘門對 `exit_plan_mode` 回 `ask`，計劃變成
- * 核准卡上的工具參數。dsh 明文否決那條路（核准的詞彙封閉，拒絕帶不回意見）。現在的結局有五種：
+ * 核准卡上的工具參數。那條路被否決了：核准的詞彙封閉，拒絕帶不回意見。現在的結局有五種：
  * 同意、繼續規劃（帶意見）、關掉這一題、沒有人可以回答、不在模式裡。停止這一輪那條在
  * `plan-review-wire.test.ts`，要真的 pump。
  */
@@ -452,7 +450,7 @@ describe('exit_plan_mode 的結局', () => {
   });
 
   /**
-   * **同意 → 工具成功，模式在下一個模型步驟之前才關**（照 dsh 的 `pendingIntents`）。
+   * **同意 → 工具成功，模式在下一個模型步驟之前才關**。
    *
    * 日誌上的順序就是證據：那顆 `plan/mode { active: false }` 落在 `exit_plan_mode` 的 `tool/result`
    * **之後**、下一次模型呼叫的 `model/end` 之前。當場寫的實作會把它排在 `tool/result` 前面。
@@ -476,7 +474,7 @@ describe('exit_plan_mode 的結局', () => {
   });
 
   /**
-   * **繼續規劃 → 意見帶回給模型，模式留著。** 同 dsh：只要不是「剛好選了同意、沒有自由作答」都算繼續規劃，
+   * **繼續規劃 → 意見帶回給模型，模式留著。** 只要不是「剛好選了同意、沒有自由作答」都算繼續規劃，
    * 所以選了同意又寫了字的那一種也是。
    */
   it.each([
@@ -500,7 +498,7 @@ describe('exit_plan_mode 的結局', () => {
   });
 
   /**
-   * **關掉這一題 → 成功結果，這一輪在這一批工具之後收**（#1607，照 dsh `:331-341` 的 `concludeTurn()`）。
+   * **關掉這一題 → 成功結果，這一輪在這一批工具之後收**（#1607）。
    *
    * 不是 `ask_user_question` 的 {@link CANCELLED_MESSAGE}（它叫模型別重問同一組），也不是失敗：工具卡 `done`、字不帶
    * `Error:`。**只有一次模型呼叫**——以前這裡還有第二次，模型讀到「停在這裡」才停。
@@ -525,8 +523,8 @@ describe('exit_plan_mode 的結局', () => {
   });
 
   /**
-   * **取消後、下一步之前 `next-step` 有一件輸入：這一輪繼續**（驗收 5，dsh `agent.ts:361-365`：整批工具跑完才判，
-   * `nextStep` 還有插話就不收）。這是唯一分得出「無條件直達 END」與 dsh 的一條。
+   * **取消後、下一步之前 `next-step` 有一件輸入：這一輪繼續**（驗收 5：整批工具跑完才判，
+   * `nextStep` 還有插話就不收）。這是唯一分得出「無條件直達 END」的一條。
    *
    * 人送的話走不到這裡（停在提問上時進送出佇列，`wire-handler.ts`），所以直接操作 `StepInbox` 的 handle：`finish()` 領走一件，
    * 同機器輸入在跑著的一輪裡進 `next-step`。第二次模型呼叫要讀到那件輸入。
@@ -641,7 +639,7 @@ describe('exit_plan_mode 的結局', () => {
   );
 
   /**
-   * **同一批還有別的工具呼叫時，關掉這一題不收這一輪**（#1607 登記的偏離，理由 1）：dsh 是批內任何一個 `concludeTurn()` 就收，
+   * **同一批還有別的工具呼叫時，關掉這一題不收這一輪**（#1607 登記的偏離，理由 1）：
    * 基座的路由每個呼叫各判，混批會讓 exitNode 與 beforeModel 在同一個 super-step 都寫 `jumpTo` 而整輪擲 `InvalidUpdateError`
    * （`returndirect-route.test.ts` 釘住基座形狀）。這裡用真工具＋step-inbox（產品組裝永遠有 `beforeModel`）驗：不擲、照常繼續、
    * 兩種批內順序都一樣、模式還開著、結果仍是成功那一句。
@@ -684,7 +682,7 @@ describe('exit_plan_mode 的結局', () => {
   /**
    * **沒有人可以回答 → 確定性拒絕，請使用者自己切模式，而且模式還開著。**
    *
-   * 照 dsh「沒有提問通道就拋錯」。`channel` 由產品組裝點自己算（`createCliAgent` 收 `approvals: HEADLESS_APPROVALS`，同
+   * `channel` 由產品組裝點自己算（`createCliAgent` 收 `approvals: HEADLESS_APPROVALS`，同
    * `cli.ts`）；少了這一格的話 plugin 退到「有人在」，這一輪會停下來問一個不會來的答案。以前這裡手交一顆
    * `createHostServicesPlugin({ channel })`，現在是產品算出來的那一顆。
    */
@@ -715,8 +713,8 @@ describe('exit_plan_mode 的結局', () => {
    * **不在模式裡、又掛著全攔的核准閘門：模型先看到核准的措辭**（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276) 翻面）。
    *
    * 以前這一條釘的是相反的事：「說的是不在計劃模式，不是核准的措辭」，靠一層排在核准閘門之前的拒絕（先是 middleware 的
-   * `prepend`，#1272 之後是 `tools/pre-execute` 的監聽者）。dsh 沒有那一層——它只在 `exit_plan_mode` 的工具本體裡檢查，
-   * 而核准 listener 先於本體——demian 2026-10-09 決定照 dsh 拿掉。所以這裡掛一位**什麼工具都要核准**的探針
+   * `prepend`，#1272 之後是 `tools/pre-execute` 的監聽者）。現在拒絕只在 `exit_plan_mode` 的工具本體裡檢查，
+   * 核准 listener 先於本體——demian 2026-10-09 決定拿掉那一層。所以這裡掛一位**什麼工具都要核准**的探針
    * （`approval.patch.yml` 那一類組裝會長這樣），headless 底下呼叫先撞上探針，拿到「沒有人被問到」；本體的
    * 「不在計劃模式」要等核准放行才會走到。**絆索翻面不是刪**：以後有人再把拒絕排回閘門之前，這一條會紅。
    */
@@ -836,8 +834,8 @@ describe('模式狀態活得過什麼', () => {
 
 describe('工具目錄不隨模式變動', () => {
   /**
-   * 照 dsh：模式沒啟用時 `exit_plan_mode` 仍然留在面向模型的 schema 裡，
-   * 「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。
+   * 模式沒啟用時 `exit_plan_mode` 仍然留在面向模型的 schema 裡，
+   * 這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動。
    * 代價是模式關著的組裝裡它是活的 schema、死的執行路徑——上面那條
    * 「模式外呼叫」測的就是那條死路徑說了什麼。
    */
@@ -1008,7 +1006,7 @@ describe('/plan 這條路', () => {
   });
 
   /**
-   * **`off` 以外都是訊息，同 dsh。** `/plan of` 是打錯的 `/plan off`，現在進計劃模式並把 `of` 送給模型
+   * **`off` 以外都是訊息。** `/plan of` 是打錯的 `/plan off`，現在進計劃模式並把 `of` 送給模型
    * ——以前它回 error。翻面登記在 `index.ts` 的偏離說明，這條是它的絆索。
    */
   it('/plan of 是進入並把 of 送給模型，不是離開也不是錯誤', async () => {
