@@ -23,8 +23,7 @@
  *
  * ## 上限是計時器上限
  *
- * `setTimeout` 的延遲超過 2³¹−1 毫秒會被 Node 當成 1，所以 schema 擋在 {@link MAX_TURN_TIMEOUT_MS}。#1569 的 `@nexus/timeout` 還沒合，先用最小的 `setTimeout`，合了再換（同 `live-model.ts`、`memory-gauge.ts`
- * 各自定義同一個數字的做法）。
+ * `setTimeout` 的延遲超過 2³¹−1 毫秒會被 Node 當成 1，所以 schema 擋在 {@link MAX_TURN_TIMEOUT_MS}。
  *
  * ## 關得掉
  *

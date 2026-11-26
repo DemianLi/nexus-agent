@@ -62,7 +62,6 @@ export const threadTitleConfigSchema = z
     /** 見 {@link DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES}。 */
     maxTitleBytes: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES),
   })
-  // `maxBytes` 不得超過 `maxTitleBytes`。
   .refine((config) => config.maxBytes <= config.maxTitleBytes, {
     message: 'maxBytes 不能大於 maxTitleBytes',
     path: ['maxBytes'],

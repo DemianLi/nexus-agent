@@ -15,8 +15,7 @@
  *   `backend.mount()` 掛上的磁碟路由）。落盤關掉、但給了 `--workspace` 的新 thread 有共用區，不在路由底下的來源（例如出廠的
  *   `/skills/`）先接到 `/shared` 底下（見下），不落在墊底那一格。判準看結構，不看拋錯：來源落在組裝點包上去的路由底下（`FsService.offWorkspacePrefixes()`，含 `/shared`）
  *   就交給那條路由；不在任何路由底下就落在墊底那一格，墊底只有在這條 thread 有可寫根（`FsService.workspaceRoot()`）時才在磁碟上。
- * - **掃描不完整，一份都不列**：整組來源是一次掃描，讀失敗就回空陣列、記一行 warn。同刀 2 的叫用
- *   （PM 裁決 issuecomment-6358917124 第 1 題）。
+ * - **掃描不完整，一份都不列**：整組來源是一次掃描，讀失敗就回空陣列、記一行 warn。
  *
  * 來源讀這條 thread 的 fs 把手（`FsService.skillSources()`，[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）：fold 折進這條 thread、
  * 模型清單用的那一份，有共用區的 thread（#1775 的新 thread）已換成共用區底下的來源（#1928）。`/名字` 讀的也是這一份，所以模型看得到的、
@@ -27,8 +26,8 @@
  * 1. **`path` 是 backend 命名空間的路徑，不是磁碟路徑**。我們的主機多人共用、
  *    完全內網，把主機上的磁碟路徑交給瀏覽器沒有用處，只多洩漏一份目錄結構。模型讀技能用的也是 backend 命名空間的路徑（基座的 skills
  *    中介層印進 prompt 的那一個），兩邊一致。
- * 2. **錯誤碼：沒有清單回 `not_supported`、清單讀不出來回 `unknown_error`**。依據是卡面做法第 5 步與 PM 派工
- *    指定 `not_supported`，並沿用這條 wire「組裝沒有這項功能就回 `not_supported`」的既有慣例（`subagent.list`、`permission.catalog`、
+ * 2. **錯誤碼：沒有清單回 `not_supported`、清單讀不出來回 `unknown_error`**。依據是
+ *    這條 wire「組裝沒有這項功能就回 `not_supported`」的既有慣例（`subagent.list`、`permission.catalog`、
  *    `model.catalog` 等，見 `wire-handler.ts`）——web 據這個碼把入口藏起來。
  *
  * ## 已知缺口

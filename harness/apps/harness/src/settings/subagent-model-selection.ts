@@ -2,7 +2,7 @@
  * 子代理逐次選模型的**設定條目**（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡
  * [#709](https://github.com/DemianLi/nexus-agent/issues/709)）：開不開，以及模型可以從哪些裡面挑。
  *
- * `enabled` 預設 `false`、`allowedModels` 預設空；零設定時行為與今天相同。
+ * `enabled` 預設 `false`、`allowedModels` 預設空。
  *
  * **`allowedModels` 是型錄 id 的清單，不是 `{provider, model}`。** 我們只有一個 OpenAI 相容端點與一把 key，
  * 型錄條目（`model-catalog.ts`）也沒有 provider 欄位，所以路由就是型錄 id。
