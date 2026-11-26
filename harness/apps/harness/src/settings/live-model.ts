@@ -53,10 +53,10 @@
  * **退避的幾條規則**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到
  * `maxDelayMs`；**沒帶 header 的 429 照樣重試**（基座的預設 handler 會把它當容量不足放棄）。
  *
- * **#1427 登記的三處暫時分類已在 #1437 撤除**：失敗分類不再沿用「除了明確無望的以外都重打」的舊判準，狀態碼、斷線、空回覆
- * 都有各自的分類碼（408／410／422／425 等不重打；這是判準，不是量到的救回率；量測見 #1437 卡上）。
+ * **失敗分類**：狀態碼、斷線、空回覆
+ * 各有分類碼（408／410／422／425 等不重打；這是判準，不是量到的救回率；量測見 #1437 卡上）。
  *
- * **偏離：`mode` 只收 `normal`，`always` 拒收。** 我們是企業內部聊天機器人，一輪沒有
+ * **偏離：`mode` 只收 `normal`，`always`（對每一次失敗無限重試）拒收。** 我們是企業內部聊天機器人，一輪沒有
  * 盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。**撤除條件**：demian 提出需要無限
  * 重試的情境。也登記在 `docs/plugin-contract.md` 的偏離表。
  *
@@ -66,9 +66,8 @@
  *
  * ## 偏離三：逾時拆兩格
  *
- * 我們原本只有一個 `timeoutMs` 同一個值管
- * 兩段（[#521](https://github.com/DemianLi/nexus-agent/issues/521)），[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)
- * 拆成 `timeoutMs`（SDK 請求逾時）與 `streamIdleTimeoutMs`（串流閒置）兩格：
+ * 逾時分兩格（[#521](https://github.com/DemianLi/nexus-agent/issues/521)、[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)）：
+ * `timeoutMs`（SDK 請求逾時）與 `streamIdleTimeoutMs`（串流閒置）：
  *
  * - **`timeoutMs`（預設 180 秒）= 連線到第一則事件**：`ChatOpenAI` 的 `timeout`，交給 openai SDK 的
  *   `setTimeout(abort, ms)`（`openai@7.5.0` 的 `client.js`，`fetchWithTimeout`）。計時器在 fetch 回來時清掉，
@@ -135,7 +134,7 @@
  * - **「標題要關推理」依用途在程式裡決定**：僅限條目宣告了 `off` 的，沒宣告的什麼都不加（見
  *   `model-catalog.ts` 的 `off` 那一級）。標題程式只表明用途，由 `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
  *
- * **今天的送法**：非 `off` 的等級，主請求不送 `chat_template_kwargs`（不送 `thinking.enabled: true`）。沒有量過送與不送是否等價——這台機器沒有 key，量不了——所以保留今天的送法，見
+ * **主請求的送法**：非 `off` 的等級，主請求不送 `chat_template_kwargs`（不送 `thinking.enabled: true`）。沒有量過送與不送是否等價——這台機器沒有 key，量不了——所以維持不送，見
  * `model-catalog.ts` 檔頭。量測與寫法在 `live-model.ts` 的 `DEFAULT_LIVE_MODEL_ENTRY`。
  *
  * ## 偏離五：串流中段的失敗整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）
