@@ -363,8 +363,7 @@ describe('subagent 那側', () => {
 });
 
 /**
- * **摘要記不進去，這次摘要不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：照 dsh 自動壓縮的 pressure 路徑
- * （`compaction-basic/src/index.ts:163-173`），記 warn、這一輪照原樣繼續。真的跑一整場：只讓 `compaction/summary` 寫不進去，
+ * **摘要記不進去，這次摘要不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：記 warn、這一輪照原樣繼續。真的跑一整場：只讓 `compaction/summary` 寫不進去，
  * 其餘照真的寫——門檻每次都到、每次都摘不成，整場照樣跑完，模型一次都沒收到摘要。
  *
  * 記不進去卻讓摘要照樣生效的話，日誌與模型看到的就分家了。
@@ -411,8 +410,7 @@ describe('日誌寫不進去的時候', () => {
 });
 
 /**
- * **摘要事件排在用到它的 `model/start` 之前**（#1301，format 45，照 dsh 的 `compaction-basic`：壓縮在
- * `agent/pre-step`，事件在請求之前就是耐久的）。基座的摘要器只在模型呼叫**回來之後**才交出事件，所以這裡是在呼叫之前
+ * **摘要事件排在用到它的 `model/start` 之前**（#1301，format 45）。基座的摘要器只在模型呼叫**回來之後**才交出事件，所以這裡是在呼叫之前
  * 從它交給下一層的請求推出來的——下面兩條拿真的摘要器核對，推出來的和它事後交出的是同一份。
  */
 describe('摘要事件的位置與內容（#1301）', () => {

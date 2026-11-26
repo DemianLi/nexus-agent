@@ -1,5 +1,5 @@
 /**
- * 瀏覽器會話密鑰檔（#424）：隨 dsh credentials 載體來的規則，一條一條釘住。
+ * 瀏覽器會話密鑰檔（#424）：一條一條釘住。
  */
 
 import { chmod, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';

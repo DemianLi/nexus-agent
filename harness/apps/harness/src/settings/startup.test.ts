@@ -328,7 +328,7 @@ describe('startupSetting', () => {
 
   it('CLI 那條也解出那一列，而且真的傳給落盤——結構性的，因為沒有行為觀察點', async () => {
     // **這一條是退路，不是首選。** CLI 那一跳量不到行為：`runCli` 回來之前一定會
-    // `persistence.dispose()`（`cli.ts:1455`、`:1468`），而 dispose 排空——跑完再看檔案，
+    // `persistence.dispose()`（`cli.ts:1442`、`:1455`），而 dispose 排空——跑完再看檔案，
     // 不管窗口是 10 還是 3000，兩臂都是滿的。同 #536 `serve-run.ts → handler` 那一跳的處境。
     //
     // 所以這裡釘的是原始碼：那兩行在不在。突變驗過——任一行拿掉這條就紅。
