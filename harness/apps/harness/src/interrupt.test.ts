@@ -247,7 +247,7 @@ describe('一批裡混著核准與拒絕', () => {
     const config = { configurable: { thread_id: 'two-gated' } };
 
     // **一次一顆**（#711 第 2 步）：這兩個工具沒宣告可重疊，是獨佔，排在後面的 `bad_tool` 等前面的收尾，前面的在核准點中斷時它
-    // 一起退出、什麼都不做。以前（沒有屏障）是同一步兩顆中斷同時掛出來；現在同 dsh，逐顆問。裸 resume 值照舊：退出的那顆
+    // 一起退出、什麼都不做。以前（沒有屏障）是同一步兩顆中斷同時掛出來；現在逐顆問。裸 resume 值照舊：退出的那顆
     // resume 時重跑，讀到的還是同一個物件，所以一個決定仍蓋住兩顆。
     const paused = await agent.invoke(toAgentInvocation('動手'), config);
     expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(1);
@@ -418,8 +418,7 @@ function subagentRefusal(model: ScriptedChatModel): BaseMessage | undefined {
 }
 
 /**
- * **這幾條在 [#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**（[#324](https://github.com/DemianLi/nexus-agent/issues/324)
- * 曾翻成「照 dsh 不停下來」）。前景子代理叫到要核准的工具會把中斷冒到 root 等人按：核准之後工具真的跑、拒絕只拒那一次呼叫（子代理收到
+ * **這幾條在 [#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**。前景子代理叫到要核准的工具會把中斷冒到 root 等人按：核准之後工具真的跑、拒絕只拒那一次呼叫（子代理收到
  * 拒絕的訊息、照常收尾），root 的 `task` 都照常完成。背景子代理維持一律回絕，見 `subagent-background-probe.test.ts` 與
  * `background-delegation.test.ts`。
  *
