@@ -5,9 +5,9 @@
  * `@nexus/plugin-todo` 自己的測試走 registry 那一層，證得了工具說了什麼、寫進哪一格；
  * 證不了的是**LangGraph 真的把身分帶到它面前**。這一檔補那一半，而它問三件事：
  *
- * 1. root 與 subagent 各寫各的清單——dsh 的單一所有者規則，落在真的委派上。
+ * 1. root 與 subagent 各寫各的清單，落在真的委派上。
  * 2. **十三個真的配套入口一句話都不說**，包括 subagent 那份沒有輪的日誌。那是這張卡
- *    最容易踩到的靜默失敗的反面：`@nexus/plugin-todo` 的歸屬規則要是照抄 dsh 的無條件
+ *    最容易踩到的靜默失敗的反面：`@nexus/plugin-todo` 的歸屬規則要是寫成無條件
  *    版本，每一次委派都會往使用者的終端機噴一行違規。
  * 3. 落在輪之外的那一顆**照樣報**——上一條不是「把檢查關掉」。
  *
@@ -123,8 +123,8 @@ describe('todo_write 在真的圖上', () => {
    * **這一條是這張卡最重要的絆索。**
    *
    * subagent 的日誌上永遠沒有 `turn/start`（[#137](https://github.com/DemianLi/nexus-agent/issues/137)
-   * 釘下來的約定：發 turn 事件的是進入點，subagent 不經過進入點）。dsh 的 todo 不變量
-   * 寫的是「不在開著的輪裡就報」，**無條件**——照抄過來的話，這裡會出現一行
+   * 釘下來的約定：發 turn 事件的是進入點，subagent 不經過進入點）。todo 不變量
+   * 要是寫成「不在開著的輪裡就報」，**無條件**——這裡會出現一行
    * `todo/write（seq 0）落在任何開著的輪之外`，而它的去處是使用者的終端機。
    *
    * 規則因此改寫成看**這份日誌自己有沒有輪**，理由與另一條路的比較見
@@ -172,8 +172,8 @@ describe('todo_write 在真的圖上', () => {
   /**
    * **模型送壞清單時，那句話要回得到模型手上。**
    *
-   * dsh 的 README 把那幾句列成**穩定的失敗文本**——它們是給模型看的、看完再送一次的。
-   * 我們的 `toTodoList` 是**拋**的，所以這一條真正在問的是：LangGraph 的 ToolNode 把拋
+   * 那幾句是**穩定的失敗文本**——它們是給模型看的、看完再送一次的。
+   * `toTodoList` 是**拋**的，所以這一條真正在問的是：LangGraph 的 ToolNode 把拋
    * 出來的錯收成一則 `ToolMessage` 交回去，還是讓它往上炸掉整輪？
    *
    * 兩者的差別是「模型打錯字之後改一次」與「模型打錯字之後這一輪死掉」。
@@ -237,7 +237,7 @@ describe('todo_write 在真的圖上', () => {
       'context/measure',
     ]);
     // **模型拿到的是一句錯誤，日誌也記成錯誤**（#273）：工具回一則 `status: 'error'` 的
-    // ToolMessage，文字就是上面那一句。**不帶碼**——dsh 對這一類拋的是一般 `Error`，所以
+    // ToolMessage，文字就是上面那一句。**不帶碼**——這一類拋的是一般 `Error`，所以
     // 用 `toEqual`，多出一個 `error` 會紅。`message`（#305）是內容，另外比。
     const settled = sessions.root.events[7];
     expect(settled?.type).toBe('tool/result');

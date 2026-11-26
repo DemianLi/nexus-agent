@@ -374,7 +374,6 @@ describe('ThreadSearch', () => {
     const result = await engine.search('同一句');
     expect(result.items).toHaveLength(THREAD_SEARCH_RESULT_LIMIT);
     expect(result.hasMore).toBe(true);
-    // 什麼都一樣時照 id，同 dsh 的 `session_id ASC`。
     expect(result.items[0]?.threadId).toBe('t00');
     await engine.close();
   });
@@ -779,7 +778,6 @@ describe('隊伍、收尾與失敗的種類（#1552）', () => {
       kind: 'index-failed',
       message: expect.stringContaining('fts5'),
     });
-    // 開到一半失敗的那個 db 當下就關掉，同 dsh `schema.ts:74-76`。
     expect(closed).toBe(1);
     await engine.close();
     expect(closed).toBe(1);
@@ -1099,7 +1097,7 @@ describe('活的 thread 讀記憶體（#1599）', () => {
           lists += 1;
           const page = await inner.list(options);
           // 每一輪提交之前那一次（第 2、4 次）換一個建立時間，revision 照真的。每一輪讀之前那一次不換：換了的話冷讀先撞上
-          // source-conflict（同 dsh 讀完先比 header）。
+          // source-conflict。
           if (lists % 2 === 1) return page;
           return {
             ...page,

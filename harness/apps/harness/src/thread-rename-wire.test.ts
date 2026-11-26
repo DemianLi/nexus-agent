@@ -1,7 +1,7 @@
 /**
  * `thread.rename`（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 第二張）：wire 這一層。
  *
- * 照 dsh `SessionController.rename`：標題正規化、追加成這條會話日誌上的一顆 `session/title`（`source: user`，釘住），
+ * 標題正規化、追加成這條會話日誌上的一顆 `session/title`（`source: user`，釘住），
  * 回受理後的標題與事件的 `seq`；正規化完是空的 → `title_invalid`；不存在 → `thread_not_found`。
  * 打進線上的字、列表上的字、重啟之後還在的部分在 `serve-thread-rename.test.ts`（真 `runServe`、真落盤）。
  *

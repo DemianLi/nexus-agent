@@ -2,43 +2,37 @@
  * 按內容搜尋以前的 thread（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）。線上的契約見 `@nexus/wire` 的
  * `THREAD_SEARCH_PATH`，設定見 `settings/thread-search.ts`。
  *
- * 照 dsh 的兩層（`477b4f4`）：host 的 `ApiSessionList.search`（`packages/api/session-controller/src/list.ts:163-266`）與
- * `session-query-sqlite` 的提供方（`packages/session-query/session-query-sqlite/src/index.ts`）。我們沒有「提供方」這一層
- * 服務，兩層併在這一個類別裡，順序照 host 那一支。
- *
  * ## 搜得到的一定列得出來；活的讀記憶體
  *
  * 一條 thread 都不為它啟動。可見的集合就是列表的（`session-list.ts` 的 `listVisibleThreads`：root、`cwd` 對得上、
- * header 讀得懂），同 dsh 先拿列表過濾。列與讀都經過 `SessionStore`（`list` 與 `open(id, 'read')`，
- * [#665](https://github.com/DemianLi/nexus-agent/issues/665)），同 dsh 的查詢層不碰檔名與目錄。**多人共用主機時各搜各的**：
+ * header 讀得懂）。列與讀都經過 `SessionStore`（`list` 與 `open(id, 'read')`，
+ * [#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**多人共用主機時各搜各的**：
  * 存放處是這個 home 底下的，別人的日誌不在裡面。
  *
- * **列表上正活著的那一條讀記憶體**（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)），同 dsh `_reconcile` 的 live 那一組
- * （`session-query-sqlite/src/index.ts:407-493`，`687f282e`）：批次窗口還沒寫出去的那一句也搜得到，不活的照舊冷讀。活的集合是 wire handler
+ * **列表上正活著的那一條讀記憶體**（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）：批次窗口還沒寫出去的那一句也搜得到，不活的照舊冷讀。活的集合是 wire handler
  * 已經建好的那幾條（`liveThreads()`，同步、只讀不寫），還在建的不等它。活的那一條：
  *
- * - **stamp 是指紋**：header、切點與整份事件的 SHA-256（dsh `observeSession`，`:876-891`），內容一變就重讀。
- * - **header 跟盤上那份比**，欄位同冷讀那一道（dsh `:552`）；記憶體那份是落盤接線真的寫進檔的那一份（core `attachSessionPersistence` 的
+ * - **stamp 是指紋**：header、切點與整份事件的 SHA-256，內容一變就重讀。
+ * - **header 跟盤上那份比**，欄位同冷讀那一道；記憶體那份是落盤接線真的寫進檔的那一份（core `attachSessionPersistence` 的
  *   `rootHeader()`）。
- * - **穩定觀察**（dsh `_observeStable`，`:495-562`）：讀完、提交之前再列一次持久層，逐條比 revision 與 header（`:527-531`）；一次對帳開頭
- *   與提交之前各看一次活的 id 集合（`:555`）。任一不同就整段退回、重新列一次再來，最多 2 次，仍不穩是 `persistence-failed`。不活的那幾條
+ * - **穩定觀察**：讀完、提交之前再列一次持久層，逐條比 revision 與 header；一次對帳開頭
+ *   與提交之前各看一次活的 id 集合。任一不同就整段退回、重新列一次再來，最多 2 次，仍不穩是 `persistence-failed`。不活的那幾條
  *   也受這一道管：讀到一半檔被寫了（例如閒置撤出先離開 `ready`、最後的排空在後面），同一次搜尋裡就重讀，不等下一次。
  *
  * **per-thread 的前台手上沒有活的 thread**（`liveThreads()` 恆為空，日誌在各對話行程裡）：列之前先叫 `beforeList`，請每條活著的對話行程
  * 把批次窗口寫出去，之後全部冷讀（#2689）。沒有記憶體那份 header 可比，對不上的 header 只剩冷讀那一道。
  *
- * **盤上還沒有檔的活 thread 不進索引**（範圍取捨，#1599）：dsh 的 live 那一組不看持久層有沒有它。我們的可見集合是列表，列表本身也不列
+ * **盤上還沒有檔的活 thread 不進索引**（範圍取捨，#1599）：可見集合是列表，列表本身也不列
  * 它（web 把不在清單上的內容命中丟掉，`web/src/lib/thread-search.ts` 的檔頭），收進來也看不到。
  *
  * ## 索引：`node:sqlite` 的 FTS5，只放在記憶體裡
  *
- * 同 dsh 的載體（`schema.ts:52` 用 `await import('node:sqlite')`）。**每次搜尋前先對帳**（dsh `index.ts:268-293`）：列出可見的
- * 那幾條，`list` 給的 `revision` 跟上次不同的整條重讀（同 dsh `index.ts:510-514`），不見了的拿掉。對帳與查詢排成一條隊，同 dsh 的 `_serialized`
- * （`index.ts:383-405`，`687f282e`）：**排隊中的那一次可以中止**（客戶端斷線就立刻離隊，不等前面跑完），輪到時已經收掉就不進對帳。
- * 讀到的那一份 header 要跟列表給的同一條會話對得上（dsh `sources.ts:11-25` 的 `assertSessionHeadersCompatible`），對不上整次搜尋失敗。
- * 寫進索引的文字先把 NUL 換成 U+FFFD（dsh `query.ts:232-237` 的 `sanitizeFtsText`）：不換的話 FTS5 只收到 NUL 前面那一截。
- * **收掉時等靜止**（dsh `index.ts:327-358`）：已經排進來的每一次跑完、開到一半的索引開完，才關 db。
- * 索引檔 dsh 可以落盤（`path`），我們只放記憶體，同 dsh 出廠的 `path: ':memory:'`：serve 重開之後第一次搜尋重建。
+ * **每次搜尋前先對帳**：列出可見的
+ * 那幾條，`list` 給的 `revision` 跟上次不同的整條重讀，不見了的拿掉。對帳與查詢排成一條隊：**排隊中的那一次可以中止**（客戶端斷線就立刻離隊，不等前面跑完），輪到時已經收掉就不進對帳。
+ * 讀到的那一份 header 要跟列表給的同一條會話對得上（`assertSameSource`），對不上整次搜尋失敗。
+ * 寫進索引的文字先把 NUL 換成 U+FFFD：不換的話 FTS5 只收到 NUL 前面那一截。
+ * **收掉時等靜止**：已經排進來的每一次跑完、開到一半的索引開完，才關 db。
+ * 索引檔只放記憶體：serve 重開之後第一次搜尋重建。
  *
  * **`node:sqlite` 在 `openAt: never` 時一次都不載入**：Node 22 載入它會在 stderr 印一行實驗功能的警告。載不起來
  * （Node 22.13 以前要加旗標）時，搜尋回失敗、說明要哪一版，其他功能照常——當時 `package.json` 的 `engines` 因此沒有收緊。
@@ -46,24 +40,23 @@
  *
  * ## 搜什麼：只搜模型現在看得到的那一串
  *
- * dsh 把日誌摺成 `current`／`shadowed`（`session-query/src/documents.ts:57-74` 的 `foldSurface`），host 只查 `current` 上的
- * `user/message` 與 `assistant/message`（`list.ts:203-206`）。**我們沒有 surface 那一軸**，拿推模型歷史那一支
+ * **沒有 surface 那一軸**，拿推模型歷史那一支
  * （`@nexus/core` 的 `replayConversation`）代替：推出來的那一串就是模型現在看得到的，`origin` 交出每一則出自哪一顆事件。
- * 被壓縮換掉的那幾則不在串上，換上去的摘要在（demian 2026-09-27 拍板照 dsh）。
+ * 被壓縮換掉的那幾則不在串上，換上去的摘要在（demian 2026-09-27 拍板）。
  *
- * 對到 dsh 的哪一種：
+ * 收的事件：
  *
- * | 我們的事件 | dsh | 收什麼 |
- * | --- | --- | --- |
- * | `turn/start`（人打的字，與目標排的那一輪，與背景子代理的結算通知） | `user/message`（dsh 不按來源過濾） | 那段字 |
- * | `user/message`（外掛塞的；人在輪中插的話；引用別的會話的快照，#713） | `user/message`（同樣不按來源過濾） | 文字區塊 |
- * | `compaction/summary` 的 `summary` | 緊接著的 `user/message {surfaceOp: replace}` | 文字區塊 |
- * | `assistant/message` | `assistant/message` | 文字區塊；要叫的工具的名字與參數（`extraction.ts:70-83`） |
+ * | 我們的事件 | 收什麼 |
+ * | --- | --- |
+ * | `turn/start`（人打的字，與目標排的那一輪，與背景子代理的結算通知） | 那段字 |
+ * | `user/message`（外掛塞的；人在輪中插的話；引用別的會話的快照，#713） | 文字區塊 |
+ * | `compaction/summary` 的 `summary` | 文字區塊 |
+ * | `assistant/message` | 文字區塊；要叫的工具的名字與參數 |
  *
- * 推理不收（`extraction.ts` 的 `reasoning` 回 `[]`；`.text` 只取文字區塊）；工具結果、標題不收。
+ * 推理不收；工具結果、標題不收。
  *
  * **推不出來的日誌**（格式 9 以前、壓縮對不上）：沒辦法分哪幾則被換掉，**整份都算看得到**，上面那幾種事件全收。
- * dsh 摺不出 surface 時拋 `SESSION_QUERY_INVALID_SURFACE`，整次搜尋失敗；我們不讓一份舊日誌拖垮整次搜尋。日誌中間壞掉的
+ * 不讓一份舊日誌拖垮整次搜尋。日誌中間壞掉的
  * 略過壞的那幾行（讀的時候開 `salvage`，撿回的規則在後端），同列表不擋它。
  *
  * **整份解析、重播，不先篩行**：只解析帶訊息字樣的那幾行、沒壓縮過就不重播，量過只快 6%（合成的 1000 條、343 MB，
@@ -71,19 +64,18 @@
  *
  * ## 怎麼比：偏離
  *
- * dsh 用 unicode61 斷詞、把整段查詢當一個片語（`schema.ts:127-136`、`query.ts:223-225`）。**連續的中文在 unicode61
+ * **連續的中文在 unicode61
  * 裡是一整個詞**，句子中間的「搜尋」「會話」都搜不到（2026-09-27 實測，`node:sqlite`）。demian 2026-09-27 拍板偏離：
  *
- * - 斷詞換成 **trigram**（每三個字切一段）。dsh 否決它的理由是索引約大 2.1 倍（`session-query-sqlite/README.zh.md`）。
+ * - 斷詞換成 **trigram**（每三個字切一段）。
  * - 比對是**子字串**：一律 `LIKE`。三個字以上的 `LIKE` 走 trigram 的索引；不到三個字（兩個字的中文詞、`AI`）整表掃。
  *   查詢含 `%`、`_`、`\` 時要 `ESCAPE`，那時也整表掃（SQLite 的 trigram 不拿 `ESCAPE` 的 `LIKE` 走索引，實測）。
  * - 英文不分大小寫（SQLite 的 `LIKE` 只折 ASCII），連續的空白算一個：寫進索引的文字與查詢都先把空白壓成一格。
  *
- * ## 排序與片段，同 dsh
+ * ## 排序與片段
  *
- * 一條 thread 取最相關的一則，再在 thread 之間排（`index.ts:670-680`）：命中次數多的在前、那一則短的在前、新的在前。
- * 命中次數 dsh 數 `highlight()` 的標記；我們數子字串出現幾次（不重疊，同樣只折 ASCII）。片段照 dsh 的 `makeSnippet`
- * （`query.ts:269-316`）逐行照抄。
+ * 一條 thread 取最相關的一則，再在 thread 之間排：命中次數多的在前、那一則短的在前、新的在前。
+ * 命中次數數子字串出現幾次（不重疊，只折 ASCII）。片段由 `makeSnippet` 截出命中附近的一段。
  *
  * @module
  */
@@ -122,15 +114,14 @@ import { listVisibleThreads } from './session-list.js';
 import type { ThreadSearchConfig } from './settings/thread-search.js';
 
 /**
- * 搜尋失敗的種類，對到 dsh `SessionQueryErrorCode`（`session-query/src/config.ts:29-47`）裡我們有對應介面的那幾種。
- * 線上怎麼講見 `wire-handler.ts`（新的四種一律 `unknown_error`，同 dsh host 一律交 `gateway/internal`）。
+ * 搜尋失敗的種類。
  *
- * - `invalid`：查詢空白、太長、含 NUL（dsh `INVALID_QUERY`）。
- * - `disabled`：那一列設成 `openAt: never`，而且有東西可搜（`SEARCH_DISABLED`）。
- * - `aborted`：`signal` 中止了；`cause` 是它的 `reason`（`ABORTED`）。
- * - `index-failed`：`node:sqlite` 載不起來、寫索引或查詢出錯、已經收掉了（`INDEX_FAILED`）。
- * - `persistence-failed`：列不出以前的 thread、或讀不到某一條的日誌（`PERSISTENCE_FAILED`）。
- * - `source-conflict`：列表給的 header 與讀到的 header 不是同一條會話（`SOURCE_CONFLICT`）。
+ * - `invalid`：查詢空白、太長、含 NUL。
+ * - `disabled`：那一列設成 `openAt: never`，而且有東西可搜。
+ * - `aborted`：`signal` 中止了；`cause` 是它的 `reason`。
+ * - `index-failed`：`node:sqlite` 載不起來、寫索引或查詢出錯、已經收掉了。
+ * - `persistence-failed`：列不出以前的 thread、或讀不到某一條的日誌。
+ * - `source-conflict`：列表給的 header 與讀到的 header 不是同一條會話。
  */
 export type ThreadSearchErrorKind =
   'invalid' | 'disabled' | 'aborted' | 'index-failed' | 'persistence-failed' | 'source-conflict';
@@ -146,7 +137,6 @@ export class ThreadSearchError extends Error {
   }
 }
 
-/** 中止，照 dsh 的 `SESSION_QUERY_ABORTED`；`cause` 帶訊號的 `reason`。 */
 function abortedError(signal: AbortSignal): ThreadSearchError {
   return new ThreadSearchError('aborted', '搜尋被中止了', { cause: signal.reason });
 }
@@ -155,12 +145,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw abortedError(signal);
 }
 
-/** 已經收掉，照 dsh 的 `indexClosed()`（`index.ts:1082-1084`）。 */
 function closedError(): ThreadSearchError {
   return new ThreadSearchError('index-failed', '搜尋已經收掉了');
 }
 
-/** 等一個 promise，`signal` 中止就先走（那個 promise 照跑），同 dsh 的 `waitWithAbort`（`index.ts:1092-1111`）。 */
 function waitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return promise;
   if (signal.aborted) return Promise.reject(abortedError(signal));
@@ -182,12 +170,11 @@ function waitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined):
   });
 }
 
-/** `openAt: never` 時的失敗，照 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`（`index.ts:338-344`）。 */
 export const THREAD_SEARCH_DISABLED_MESSAGE =
   '這個部署沒開會話內容搜尋（清單上 thread-search 那一列是 openAt: never），只能比標題';
 
 /**
- * 去掉頭尾空白，檢查長度與 NUL。同 dsh host 的 `normalizeSearchQuery`（`list.ts:311-325`）：**在問任何會話之前**，
+ * 去掉頭尾空白，檢查長度與 NUL：**在問任何會話之前**，
  * 所以一個不合法的查詢在沒有東西可搜時照樣是錯。
  *
  * @throws {@link ThreadSearchError} `invalid`。
@@ -206,14 +193,12 @@ export function normalizeThreadSearchQuery(query: unknown): string {
   return trimmed;
 }
 
-/** 連續的空白壓成一格、去頭尾，同 dsh `makeSnippet` 的 `normalizeMarkedText`（`query.ts:295-316`）用的 `\s`。 */
 export function collapseWhitespace(text: string): string {
   return text.replace(/\s+/gu, ' ').trim();
 }
 
 /**
- * 截出命中附近的一段，逐行照抄 dsh 的 `makeSnippet`（`query.ts:269-293`）。dsh 從 `highlight()` 的標記找命中；
- * 我們給的是已經壓過空白的全文與命中的位置（code point）。
+ * 截出命中附近的一段。給的是已經壓過空白的全文與命中的位置（code point）。
  *
  * @param text - 壓過空白的那一則。
  * @param matchStart - 第一個命中在第幾個 code point。
@@ -283,7 +268,6 @@ function isModelOnlyBlock(block: unknown): boolean {
   return isMentionHintBlock(block) || isPageContextBlock(block);
 }
 
-/** 一則訊息裡搜得到的字：文字區塊，回覆再加上要叫的工具。各段去頭尾、空的丟掉，同 dsh `extraction.ts:85-87`。 */
 function messageText(message: BaseMessage): string {
   const parts = [textWithoutModelOnlyBlocks(message)];
   if (AIMessage.isInstance(message)) {
@@ -336,7 +320,6 @@ export function searchDocuments(events: readonly SessionEvent[]): SearchDocument
   const documents: SearchDocument[] = [];
   for (const [message, event] of current) {
     if (ToolMessage.isInstance(message)) continue;
-    // NUL 換成 U+FFFD，同 dsh `sanitizeFtsText` 的第一個 `replaceAll`（`query.ts:232-237`）；另外兩個是 `highlight()` 的標記，我們不用。
     const text = messageText(message).replaceAll('\0', '\uFFFD');
     if (text !== '') documents.push({ seq: event.seq, time: event.time, text });
   }
@@ -347,7 +330,6 @@ type Sqlite = typeof import('node:sqlite');
 
 /**
  * 一條活的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）：wire handler 的 `liveThreads()` 交出來的，
- * 對到 dsh 對帳時拿的 `ctx.sessions.list()`（`session-query-sqlite/src/index.ts:503,549`，`687f282e`）。
  */
 export interface LiveThread {
   readonly threadId: string;
@@ -357,7 +339,6 @@ export interface LiveThread {
   readonly header: StoredSessionHeader | undefined;
 }
 
-/** 穩定觀察最多幾次，同 dsh `STABLE_OBSERVATION_ATTEMPTS`（`session-query-sqlite/src/index.ts:86`，`687f282e`）：一次改變給一次重來。 */
 const STABLE_OBSERVATION_ATTEMPTS = 2;
 
 export interface ThreadSearchOptions {
@@ -390,7 +371,7 @@ const EMPTY: ThreadSearchResult = { items: [], hasMore: false };
 type Stamp = string;
 
 /**
- * 活的那一條的指紋，照 dsh `observeSession`（`session-query-sqlite/src/index.ts:876-891`，`687f282e`）：header、切點與整份事件的
+ * 活的那一條的指紋：header、切點與整份事件的
  * JSON 取 SHA-256。
  */
 function liveStamp(thread: LiveThread): Stamp {
@@ -420,7 +401,7 @@ export class ThreadSearch {
   readonly #stamps = new Map<string, Stamp>();
   /** 每條 thread 佔了哪幾列，刪的時候用。跟 `#stamps` 同進同出。 */
   readonly #rows = new Map<string, readonly (number | bigint)[]>();
-  /** 隊伍的尾巴，同 dsh 的 `_tail`：每一次接一道閘門在後面，跑完（或排隊中被中止）才放。永遠不 reject。 */
+  /** 隊伍的尾巴：每一次接一道閘門在後面，跑完（或排隊中被中止）才放。永遠不 reject。 */
   #queue: Promise<void> = Promise.resolve();
   #closed = false;
   #closing: Promise<void> | undefined;
@@ -437,7 +418,7 @@ export class ThreadSearch {
   /**
    * 搜一次。順序見 `@nexus/wire` 的 `THREAD_SEARCH_PATH`。
    *
-   * @throws {@link ThreadSearchError}；`signal` 中止時是 `aborted`（**不論中止發生在哪一步**，同 dsh 先看中止再分種類）。
+   * @throws {@link ThreadSearchError}；`signal` 中止時是 `aborted`（**不論中止發生在哪一步**）。
    */
   async search(query: unknown, signal?: AbortSignal): Promise<ThreadSearchResult> {
     const normalized = collapseWhitespace(normalizeThreadSearchQuery(query));
@@ -455,8 +436,6 @@ export class ThreadSearch {
     }
     return this.#serialized(signal, async () => {
       try {
-        // 開索引也在隊伍裡、可中止，同 dsh `searchSessions` 在隊伍裡 `_ensureReady`（`index.ts:275-277`、`:369-381`）；
-        // 開不起來是 `index-failed`，同它把非中止的錯包成 `INDEX_FAILED`。
         const prepared = await this.#ready(signal);
         await this.#reconcile(prepared, store, visible, signal);
         throwIfAborted(signal);
@@ -470,7 +449,7 @@ export class ThreadSearch {
   }
 
   /**
-   * 收掉索引，**等已經排進來的每一次跑完**才關 db，同 dsh 的 `close`（`index.ts:327-358`）。冪等：再叫拿到同一個 promise。
+   * 收掉索引，**等已經排進來的每一次跑完**才關 db。冪等：再叫拿到同一個 promise。
    * 開始收的那一刻起，新的搜尋回 `index-failed`。不 reject。
    */
   close(): Promise<void> {
@@ -491,7 +470,7 @@ export class ThreadSearch {
   }
 
   /**
-   * 排進隊伍，同 dsh 的 `_serialized`（`index.ts:383-405`）：每一次接一道閘門在尾巴，等前一個時可以中止——中止就放掉自己的閘門、
+   * 排進隊伍：每一次接一道閘門在尾巴，等前一個時可以中止——中止就放掉自己的閘門、
    * 立刻離隊，後面的不受影響。
    */
   async #serialized<T>(signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
@@ -508,7 +487,6 @@ export class ThreadSearch {
       release();
       throw error;
     }
-    // 等的時候收掉了：先講收掉，再看中止，同 dsh `:395-401` 的順序。
     if (this.#closed) {
       release();
       throw closedError();
@@ -550,7 +528,6 @@ export class ThreadSearch {
         remove: db.prepare('DELETE FROM docs WHERE rowid = ?'),
       };
     } catch (error: unknown) {
-      // 開到一半失敗：關掉自己開的 db 再拋，同 dsh `schema.ts:74-76`。
       db.close();
       throw error;
     }
@@ -586,8 +563,7 @@ export class ThreadSearch {
   }
 
   /**
-   * 見檔頭的「每次搜尋前先對帳」與「活的讀記憶體」。**穩定觀察**照 dsh `_observeStable`（`session-query-sqlite/src/index.ts:495-562`，
-   * `687f282e`）：提交之前再列一次持久層、逐條比 revision 與 header，並在一次對帳開頭與提交之前各看一次活的集合；任一不同就整段不算、
+   * 見檔頭的「每次搜尋前先對帳」與「活的讀記憶體」。**穩定觀察**：提交之前再列一次持久層、逐條比 revision 與 header，並在一次對帳開頭與提交之前各看一次活的集合；任一不同就整段不算、
    * 重新列一次再來，{@link STABLE_OBSERVATION_ATTEMPTS} 次都不穩就 `persistence-failed`。第一次用 {@link search} 列好的那一份，
    * `THREAD_SEARCH_PATH` 的順序不動。
    */
@@ -621,7 +597,7 @@ export class ThreadSearch {
     /** 這一次寫進去的。交易成功之後才併進 `#stamps`／`#rows`。 */
     const written = new Map<string, { stamp: Stamp; rows: (number | bigint)[] }>();
     // **邊讀邊寫**：讀一條、寫一條，不把全部的內容先收在手上。一條一條讀進來的本文用完就丟，第一次建索引時的記憶體
-    // 高點只多一條的份。整段包在一個交易裡，同 dsh 的 `BEGIN IMMEDIATE`：中途失敗或中止就整段不算。
+    // 高點只多一條的份。整段包在一個交易裡：中途失敗或中止就整段不算。
     let open = false;
     const begin = (): void => {
       if (open) return;
@@ -636,8 +612,6 @@ export class ThreadSearch {
       for (const { header, revision } of visible) {
         throwIfAborted(signal);
         const threadId = header.id;
-        // **活的讀記憶體**（#1599）：批次窗口還沒寫出去的那一句也在。header 每次都跟盤上那份比，同 dsh 每次觀察都拿每一條活會話
-        // 跟持久層那份比（`index.ts:549-553`）；比的欄位同冷讀那一道。
         const live = initiallyLive.get(threadId);
         if (live !== undefined) {
           if (live.header !== undefined) assertSameSource(header, live.header);
@@ -662,7 +636,6 @@ export class ThreadSearch {
             { cause: error },
           );
         }
-        // 讀的時候中止了：不寫、不 COMMIT，同 dsh `index.ts:523` 讀完先 `assertNotAborted` 再比 header。
         throwIfAborted(signal);
         // 列與讀之間變了：這一次不動它，下一次對帳再看（被刪掉的那時就在「不見了的」那一邊）。
         if (loaded === undefined) continue;
@@ -673,9 +646,9 @@ export class ThreadSearch {
           rows: this.#replace(prepared, threadId, loaded.events),
         });
       }
-      // 提交之前再列一次持久層（dsh `index.ts:527-531` 的 `samePersistenceSnapshots`）：讀到一半有一條被寫了（例如閒置撤出先離開
+      // 提交之前再列一次持久層：讀到一半有一條被寫了（例如閒置撤出先離開
       // `ready`、最後的排空在後面，這段期間冷讀會缺批次窗口那一截），或換了 header，這一次讀到的就不是列表那一刻的樣子。
-      // 再看一次活的集合（`:555` 的 `sameSessionIds`）：途中有一條變活或被收掉，這一次讀到的可能半新半舊。任一不同就整段重來。
+      // 再看一次活的集合：途中有一條變活或被收掉，這一次讀到的可能半新半舊。任一不同就整段重來。
       const relisted = await this.#list(store, signal);
       if (!sameSnapshots(visible, relisted) || !sameIds(initiallyLive, this.#live())) {
         if (open) db.exec('ROLLBACK');
@@ -691,7 +664,6 @@ export class ThreadSearch {
         cause: error,
       });
     }
-    // 交易成功之後才記，失敗的那幾條下一次搜尋再讀一次，同 dsh 失敗時 ROLLBACK、下一次再試。
     for (const threadId of gone) {
       this.#stamps.delete(threadId);
       this.#rows.delete(threadId);
@@ -768,8 +740,7 @@ function sameIds(
 
 /**
  * 讀一條的 header 與整份本文。**中間壞掉的撿回讀得懂的**（`salvage`），同列表不擋它。header 交回去給 {@link assertSameSource} 比。
- * 經 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)），同 dsh 冷讀一律經 `readColdSessionLog`
- * （`session-query-sqlite/src/index.ts:522`）：死在一輪中間的那一份在記憶體補平，推得出歷史，不退回整份都收。
+ * 經 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)）：死在一輪中間的那一份在記憶體補平，推得出歷史，不退回整份都收。
  *
  * 列與讀之間那一份變了——被刪掉、或 header 讀不懂了（別的行程以更新的版本續接過）——是 `undefined`：
  * 不讓一條拖垮整次搜尋。
@@ -795,11 +766,6 @@ async function readForSearch(
   }
 }
 
-/**
- * {@link assertSameSource} 比的那幾格；兩次列表之間比 header 也用它（dsh `sameHeader`，`index.ts:938-946`）。
- * dsh 的 `sameHeader` 另外比 `delegationDepth ?? 0` 與 `agentPreset`；nexus 的 header 兩格都沒有
- * （#1567 N0788 重核判不成立，見 `session-log-validation.ts:65`）。
- */
 function sameSource(a: StoredSessionHeader, b: StoredSessionHeader): boolean {
   return (
     a.id === b.id &&
@@ -811,7 +777,7 @@ function sameSource(a: StoredSessionHeader, b: StoredSessionHeader): boolean {
 }
 
 /**
- * 兩次列出來的是不是同一組，照 dsh `samePersistenceSnapshots`（`session-query-sqlite/src/index.ts:911-924`，`687f282e`）：
+ * 兩次列出來的是不是同一組：
  * 條數相同，每一條的 revision 與 header 都沒變。
  */
 function sameSnapshots(
@@ -831,12 +797,9 @@ function sameSnapshots(
 }
 
 /**
- * 列表給的那一份與讀到的那一份是不是同一條會話，照 dsh 的 `assertSessionHeadersCompatible`（`session-query/src/sources.ts:11-25`，
- * `687f282e`）：id、建立時間、工作目錄、血緣、是不是分叉，任一不同就拋 `source-conflict`，整次搜尋失敗。
+ * 列表給的那一份與讀到的那一份是不是同一條會話：id、建立時間、工作目錄、血緣、是不是分叉，任一不同就拋 `source-conflict`，整次搜尋失敗。
  * 在 nexus 上兩份會不同只有一種可能：列與讀之間檔被換成了別的會話。續接只改 `version`，不在比的欄位裡。
- * `isSeeded` 照 dsh 嚴格比：列與讀走同一個後端、同一支 header 解析，表示法相同（沒分叉都是缺席，分叉都是 `true`）。
- *
- * dsh 還比 `delegationDepth ?? 0`；nexus 的 header 沒有這一格（#1567 N0788 重核判不成立，見 `session-log-validation.ts:65`）。
+ * `isSeeded` 嚴格比：列與讀走同一個後端、同一支 header 解析，表示法相同（沒分叉都是缺席，分叉都是 `true`）。
  */
 function assertSameSource(listed: StoredSessionHeader, loaded: StoredSessionHeader): void {
   if (!sameSource(listed, loaded)) {

@@ -3,8 +3,8 @@
  *
  * 模型分辨一次呼叫成沒成功，在我們唯一的 live 供應商（Chat Completions）上只看得到文字：轉換器不送
  * `status`（`@langchain/openai@1.5.10` `converters/completions.js:475-479`）。所以「這次沒生效」的
- * 文字要照 dsh 的 `toolErrorResult` 帶 `Error: `，而加它的只有 `@nexus/core` 的 `toolRefusal`。
- * 作者自己寫好的回饋（dsh 的第二條政策）走 `toolFeedback`，原樣。
+ * 文字要帶 `Error: `，而加它的只有 `@nexus/core` 的 `toolRefusal`。
+ * 作者自己寫好的回饋走 `toolFeedback`，原樣。
  *
  * 單一出口的文字各在自己的測試；這一份擋的是**下一個新出口**：它若自己 `new ToolMessage({ status:
  * 'error' })`，前綴就不會有；它若自己拼 `'Error: '`，遲早有一句帶兩次。兩件都從原始碼上數。
@@ -85,8 +85,8 @@ describe('Error: 前綴只有一個主人', () => {
   });
 
   /**
-   * 不帶前綴的那條路（dsh 的第二條政策）只有一個生產者：推模型歷史時補的那兩句（`conversation-replay.ts` 的 `closer`），
-   * 逐字抄 dsh `repair.ts`，直接拿建構點的欄位；請求端的 `toolFeedback` 留給作者自己寫好的回饋，今天沒有呼叫者。
+   * 不帶前綴的那條路只有一個生產者：推模型歷史時補的那兩句（`conversation-replay.ts` 的 `closer`），
+   * 直接拿建構點的欄位；請求端的 `toolFeedback` 留給作者自己寫好的回饋，今天沒有呼叫者。
    * **多一個呼叫者是一個決定，不是預設**——拒絕走這條，前綴就悄悄不見了，而上面兩條都數不到。
    * 其餘幾行是定義與 `errorResult`（`toolRefusal`／`toolFeedback` 共用）那一處。
    */
