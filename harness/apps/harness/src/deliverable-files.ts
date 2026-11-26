@@ -27,7 +27,7 @@
  * 從前這裡登記過一條偏離：「整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了」。那條
  * 偏離的理由是實作選擇，不是基礎建設表達不出來，#544 把它收掉了。
  *
- * ## 這條路刻意不做的
+ * ## 偏離
  *
  * 1. **不回 `absolutePath`**，理由見 `@nexus/wire` 的 `DeliverableFileStat`。
  * 2. **`/conversation_history` 那層 overlay 不在這條路上**（`agent-factory.ts` 的 `foldRegistry`）：
