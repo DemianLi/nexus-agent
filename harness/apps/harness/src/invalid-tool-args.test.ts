@@ -457,7 +457,7 @@ describe.each([
 });
 
 /**
- * 照 dsh 先問人：核准在驗參數之前。**核准卡上是原字串**（中斷酬載的 `args`），listener 看到的是
+ * 核准在驗參數之前。**核准卡上是原字串**（中斷酬載的 `args`），listener 看到的是
  * 歷史裡的 `{}`。
  */
 describe('要核准的工具', () => {
@@ -499,7 +499,7 @@ describe('要核准的工具', () => {
         });
         expect(textOf(replay.next?.content)).toBe(INVALID_ARGUMENTS_REFUSAL);
       } else {
-        // 被人拒：文字是閘門自己的那句，碼是 #1029 多給的（dsh 的核准拒絕不帶碼，理由見 `tool-events.ts`）。
+        // 被人拒：文字是閘門自己的那句，碼是 #1029 多給的。
         expect(result?.data).toEqual({
           callId: 'call_bad',
           isError: true,
