@@ -26,7 +26,6 @@
  * 於是客戶端只看到串流斷了、重連，而這一輪其實已經以 `NESTING_TOO_DEEP` 失敗（日誌那一關正確擋下）。{@link boundFrame} 在序列化之前
  * 把超過 {@link DOWNLINK_MAX_DEPTH} 層的子樹換成 {@link DEPTH_TRUNCATED}，下行不斷，之後 root 的 `lifecycle failed` 照常到。
  *
- * - **門檻只截「連日誌都收不下」的那一類**，不截合法的深值。我們的 `messages` 事件帶 parse 後的物件。
  * - **為什麼是 1200**：日誌的上限是 {@link SESSION_EVENT_MAX_DEPTH}（600）；`toLoggedMessage` 的預檢門檻是它的兩倍（
  *   `nexus-core/src/logged-message.ts` 的 `PRECHECK_DEPTH`，理由：超過兩倍的訊息包進事件後一定也超過上限）。這裡取同一個數，所以被截的
  *   一定是日誌也收不下、那一輪必以 `NESTING_TOO_DEEP` 失敗的訊息，**截斷不改變哪些訊息記得進去**。同時 1200 在實測可行的 2000 層之下。

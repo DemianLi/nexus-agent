@@ -448,7 +448,6 @@ describe('載體本身（假 agent）', () => {
     await host.close();
   });
 
-  /** #1023：目錄只記成功的事實：先准入、再寫目錄、最後回 id。 */
   it('start 帶 callId：接受之後在 root 記一顆目錄；被拒（名額滿、編不出圖、已關閉）與沒帶 callId 都不記', async () => {
     const hold = gate();
     const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));

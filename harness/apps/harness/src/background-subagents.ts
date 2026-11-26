@@ -159,8 +159,6 @@ export interface BackgroundSettlement {
 /**
  * 在背景子代理的第一句任務後面接上回報指引（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）。
  *
- * 任務是單一字串，指引用空行接在後面。parent id 用 `JSON.stringify` 帶引號。
- *
  * @param prompt - 第一輪的人話。
  * @param parentId - 直接 parent（主對話）的會話 id。
  */
@@ -263,8 +261,7 @@ export function maxTurnsSettlementSummary(runId: string): string {
 }
 
 /**
- * 結算通知的整段字。`turn/start.text` 與
- * `HumanMessage` 是一個字串，摘要、`Its closing message:`、子代理的文字之間空一行。
+ * 結算通知的整段字。
  *
  * `omitClosing`：子代理收尾前剛用 `send_message` 把結果傳上來（{@link sentJustBeforeFinishing}），結尾文字換成省略的那一句，
  * 同一段結果不進主對話兩次（[#2032](https://github.com/DemianLi/nexus-agent/issues/2032)）。
@@ -324,8 +321,6 @@ function isClosingCandidate(message: BaseMessage): boolean {
  *
  * 範圍是「上一次結算之後」：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
  * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochs}），不是最近一顆。
- * 串流文字的退路不做：`langgraph` 下子代理的日誌沒有素材（`assistant/attempt` 只由 pump 為 root 寫）；native 下子代理
- * 自己的日誌也有 `assistant/attempt`（模型呼叫的起訖紀錄器寫的），這裡不讀。
  */
 function closingTextOf(log: SessionLog, fromSeq: number): string {
   const events = log.events;
@@ -428,9 +423,6 @@ export class BackgroundSubagentError extends Error {
 
 /**
  * {@link BackgroundSubagentHost.start} 被 host 拒絕時，`subagent` 那一顆 `tool/result` 記的碼（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
- *
- * 名額滿了（`at-capacity`）記 `SubagentError` 的 `ACTIVATION_LIMIT_REACHED`，host 已關（`closed`）記 `DRAINING`，
- * 寫進 `tool/result` 的 `error`。名字與碼同 `INVALID_ARGS`、`UNKNOWN_TOOL` 的先例。
  *
  * **`closed` 在 `subagent` 工具這條路上今天沒有生產者**：收線先同步把 delegation 的 host 清掉、才關 host
  * （`background-delegation.ts` 的 `attach`），而 `wrapToolCall` 從讀 host 到 `start` 之間沒有 await，所以關了之後模型收到的是
@@ -548,7 +540,7 @@ function turnOf(body: {
 
 /**
  * 一個背景子代理被指定的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)、
- * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：型錄 id，加選填的推理等級。我們沒有 provider 這一層。
+ * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：型錄 id，加選填的推理等級。
  */
 export interface ModelChoice {
   /** 型錄 id。 */
@@ -964,7 +956,6 @@ export class BackgroundSubagentHost {
       try {
         appendSubagentCatalog(this.#sessions.root, { childId, callId, mode: 'continuable' });
       } catch (error) {
-        // 目錄寫不進去就派出失敗（#1702）：撤回剛准入的那一輪再重拋。錯經工具本體回到父代理成錯誤結果。
         this.#retract(runId);
         throw error;
       }
@@ -1470,7 +1461,6 @@ export class BackgroundSubagentHost {
               ? { reason: { kind: 'max-turns' } }
               : {},
       );
-      // 中止先判，蓋過輸出上限。
       stop = controller.signal.aborted
         ? 'aborted'
         : blocked

@@ -11,8 +11,7 @@
  * `--workspace` 時墊底的 {@link TextOnlyStateBackend}。回 `{ error }` 就走基座既有的錯誤路：`read_file` 回
  * `Error: …`。子代理拿的是同一個 backend，一併涵蓋。
  *
- * **偏離已撤銷（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）**：本來副檔名被基座判成非文字、內容卻是合法文字的檔
- * （例如一份叫 `.png` 的純文字），我們一律拒成 `binary file`。`ContainedFilesystemBackend.read` 現在自己讀檔、
+ * **偏離已撤銷（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）**：`ContainedFilesystemBackend.read` 現在自己讀檔、
  * 自己建頁，**看內容、不看副檔名**；這份檔留下的只有 {@link notTextReason}／{@link BINARY_SAMPLE_BYTES}
  * 與沒給 `--workspace` 時墊底的 {@link TextOnlyStateBackend}（state 裡的位元組內容沒有「看內容」的餘地，仍照舊拒絕）。
  *
@@ -24,7 +23,6 @@ import { FS_NOT_TEXT, noteFsError } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import type { ReadResult, WriteResult } from 'deepagents';
 
-/** 判二進位時取樣的位元組數。 */
 export const BINARY_SAMPLE_BYTES = 8192;
 
 /**

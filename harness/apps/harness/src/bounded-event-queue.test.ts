@@ -166,7 +166,6 @@ describe('boundFrame（偏離 D：下行副本的巢狀深度截斷，#1560 N138
     expect(() => boundFrame(loop)).toThrow(/circular/iu);
   });
 
-  // `{}` 上設自有的 `__proto__` 會改到原型、鍵就被吃掉；副本用空原型，鍵照原樣帶過去。
   it('截斷的副本留得住 `__proto__` 這種鍵（資料，不是原型）', () => {
     const frame = JSON.parse('{"__proto__":{"x":1},"inner":{"__proto__":"p"}}') as Record<
       string,

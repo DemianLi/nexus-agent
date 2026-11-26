@@ -26,8 +26,7 @@
  *
  * - ~~**有效期寫死 30 天，不能設定。**~~ **這一條沒了**
  *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：有效期現在由
- *   `#settings/browser-session` 那一列講，預設是 30。擁有者是 package-internal specifier，理由逐條在
- *   [`./settings/thread-title.ts`](./settings/thread-title.ts) 的檔頭。
+ *   `#settings/browser-session` 那一列講，預設是 30。
  * - **不自動開瀏覽器。** 在多人主機上，負責開瀏覽器的子行程會把網址放在命令列參數裡，別的
  *   使用者用 `ps` 就看得到 token。
  * - **token 跟著這個物件，不跟著「根 context」。** 沒有熱重載，一次 `runServe` 建一個，行程內重啟 serve（測試）等於換一個 token。

@@ -394,8 +394,7 @@ async function twoTurns(
 describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
   // 墊底那一格與兩個路由格都是 `TextOnlyStateBackend`。
   //
-  // #1813 之前這裡是「模型把一張 base64 的 PNG 寫進 .png 再讀，讀到 binary file 那句」：基座的 `write` 對非文字副檔名
-  // 把內容 base64 解成位元組存起來。現在 `write` 一律存文字（沒有依副檔名的分支），模型這條路寫不出位元組，
+  // 現在 `write` 一律存文字（沒有依副檔名的分支），模型這條路寫不出位元組，
   // 寫進去的 base64 字串就是文字，讀回來是同一段字——一樣不會中毒（讀到的是字串、不是圖片塊）。
   // 「state 裡真的有位元組時 `read` 拒絕」由下面「沒掛工作區的虛擬 FS 一樣拒絕」直接餵 state 驗。
   it.each([
