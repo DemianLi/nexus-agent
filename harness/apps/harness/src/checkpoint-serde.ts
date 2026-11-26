@@ -43,11 +43,9 @@
  * 不受日誌那一關限制。太深的拋 {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes；
  * 中斷或出錯那一輪已完成任務的 `messages` 寫入屬於 pending writes，照樣走這顆。
  *
- * ## 與 dsh 的偏離（理由 1）
+ * ## 偏離（理由 1）
  *
- * dsh 沒有存檔點這一層（一輪到下一輪的狀態是會話日誌加記憶體，見 `pruned-memory-saver.ts`），這一份是 LangGraph 基座才有的。
- * 預檢（#1761）同理：dsh 在 `packages/bundle/headless/src/json-stream.ts` 對病態的深參數也是「遞迴之前先卡深度」（`MAX_DEPTH`，
- * 註解寫的就是不卡會遞迴到爆堆疊），原則相同；差別是我們要擋的遞迴在 `@langchain/core` 的 `toJSON` 裡，改不了，只能在呼叫它之前先量。
+ * 存檔點這一層是 LangGraph 基座才有的。預檢（#1761）要擋的遞迴在 `@langchain/core` 的 `toJSON` 裡，改不了，只能在呼叫它之前先量。
  * 基座的序列化會吞錯、`load` 的上限從 serializer 調不到，退到最接近的做法：自己包一層 serializer，複製的部分取最小、標明出處，
  * 並用 `checkpoint-serde.test.ts` 釘住 `@langchain/langgraph-checkpoint` 的版本，升版時那一格會紅，逼人重新核對這段複製。
  *

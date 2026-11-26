@@ -213,19 +213,18 @@ describe('一次性模式', () => {
     // 一個字都看不到（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。它不多一顆面向
     // 模型的工具，多的是每個 agent 開頭的一則訊息，而且**沒有工作區時它什麼都不加**。
     //
-    // **`present` 進來的理由是 dsh 的 standard preset 掛它**（`agent.cordis.yml:261`），而交付卡片讀的
-    // 事件只有它寫得出來（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。它多一顆面向模型的
-    // 工具；沒有工作區時工具照樣在、叫了回 `present requires a workspace`，同 dsh。
+    // **`present` 進來的理由是交付卡片讀的事件只有它寫得出來**（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。
+    // 它多一顆面向模型的工具；沒有工作區時工具照樣在、叫了回 `present requires a workspace`。
     const names = shipped.map((entry) => entry.plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
       // **`skill-invocation` 進來的理由是人要叫得出只給人叫的技能**（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）：
-      // 同一個 `agent/pre-step` 接縫，root 的人話裡有 `/名字` 才注入那份技能的正文；不多工具、不多命令。排在 `time-context` 前面，同 dsh。
+      // 同一個 `agent/pre-step` 接縫，root 的人話裡有 `/名字` 才注入那份技能的正文；不多工具、不多命令。排在 `time-context` 前面。
       'skill-invocation',
       // **`time-context` 進來的理由是模型沒有時鐘**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）：
       // 與 `agent-instructions` 同一個 `agent/pre-step` 接縫，每次 agent 呼叫開頭（同一條 thread 10 分鐘內不重複）追加一則
-      // 持久的使用者訊息；不多工具、不多命令、不進系統提示詞。CLI 也掛（偏離 dsh，登記在套件檔頭）。
+      // 持久的使用者訊息；不多工具、不多命令、不進系統提示詞。CLI 也掛。
       'time-context',
       // **`skills` 進來的理由是它本來就在，只是沒有人掛**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
       // 工作區的 `skills/<name>/SKILL.md` 不進清單就永遠看不到。沒有 skill 的時候一個字都不加（組裝點包了一層，
@@ -259,8 +258,7 @@ describe('一次性模式', () => {
       // fold 建、fold 排位，條目只負責「關得掉」。
       //
       // `observation-policy`、`model-usage` 與 `session-checkpoint-policy` 還少一格：它們連設定都沒有，`apply` 是空的，
-      // 所以在這裡的作用**只剩**那一件——照 dsh 的 `fs-observation-policy`
-      // （it registers no service）。
+      // 所以在這裡的作用**只剩**那一件。
       //
       // **`approval-gate` 是相反的那一顆**：它在這份清單上的作用是讓 `disabled: true`
       // 指得著**然後當場拋**（`PROTECTED_ENTRY_NAMES`），外加讓核准在 `--dump-config`
@@ -295,7 +293,7 @@ describe('一次性模式', () => {
       //
       // **哪幾列在 `PROTECTED_ENTRY_NAMES` 上以那張表為準**（`thread-capacity` 自 #1619 出廠開著起也在上面），這裡不寫顆數；理由分兩種，而且現在是逐列
       // 寫在 `PROTECTED_ENTRY_REASONS` 這張表上的（訊息不再共用一段講核准閘門的文字）。
-      // `thread-title-llm` 關得掉：關掉就真的沒有模型產生的標題，同 dsh 的 acp-app 與 sdk-app。`thread-search` 同理（#631）。
+      // `thread-title-llm` 關得掉：關掉就真的沒有模型產生的標題。`thread-search` 同理（#631）。
       'thread-title',
       'thread-title-llm',
       'thread-search',
@@ -341,7 +339,7 @@ describe('一次性模式', () => {
       'permission-presets',
     ]);
     // 八個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
-    // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
+    // 只由 serve 經 `createCliAgent` 掛（#443）。
     expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(8);
   });
 
@@ -959,8 +957,7 @@ describe('REPL', () => {
  * 驗的是錯誤傳播路徑不被吞掉：衝突規則本身是 `harness/packages/nexus-core` 的單測在管，而從
  * registry 到行程退出碼的路只有一條，所以這裡只需要一個案例。
  *
- * **偏離 dsh 一處**：它的 `built-bin.e2e.ts` 跑的是建構後的 `lib/bin.js` 加原生 `node`，
- * 為的是抓 tsx 會掩蓋的失敗。這個 repo 沒有建構產物（`build` 就是 `tsc --noEmit`、
+ * 這個 repo 沒有建構產物（`build` 就是 `tsc --noEmit`、
  * package 的 `main` 直接指向 `src`），所以退到最接近的做法：用 tsx 跑原始碼入口，
  * 但仍然是**另起一個行程**跑真的 argv——這條測試要驗的退出碼與 stderr 只有在那裡才存在。
  */
@@ -992,7 +989,7 @@ describe('CLI 行程', () => {
   }
 
   /**
-   * 撞上去的那一列是 `insert` 進來的可少掛列（#751）：照 dsh，它 `apply` 拋錯只讓它自己掉，行程照樣跑完。錯誤沒有被
+   * 撞上去的那一列是 `insert` 進來的可少掛列（#751）：它 `apply` 拋錯只讓它自己掉，行程照樣跑完。錯誤沒有被
    * 吞掉——它從 registry 一路傳到行程的 stderr，那段警告指名撞的是哪兩個 plugin。
    */
   it('兩個 plugin 撞同一個工具名：後來的那一列掉了、退出碼是 0，stderr 的警告指名是誰撞了什麼', async () => {

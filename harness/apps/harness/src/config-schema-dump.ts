@@ -1,30 +1,29 @@
 /**
  * `--dump-config-schema`：把疊完的 plugin 清單攤成一份 JSON Schema 2020-12 文件（[#741](https://github.com/DemianLi/nexus-agent/issues/741)）。
  *
- * 照 dsh 的 `--dump-config-schema`（`apps/cli/src/dump-config-schema.ts`、`packages/boot/app-boot/src/config-schema/document.ts`，
- * `477b4f4`）：用跟 `--dump-config` 同樣的幾層與 `--patch`，根描述疊完之後的條目清單，`$defs.patchList` 另外描述覆寫檔的格式；
+ * 用跟 `--dump-config` 同樣的幾層與 `--patch`，根描述疊完之後的條目清單，`$defs.patchList` 另外描述覆寫檔的格式；
  * 每顆 plugin 的欄位、預設值、說明從它自己的 `Config` 轉出來（{@link configToJsonSchema}）。
  *
- * ## 逐條對照 dsh
+ * ## 逐條說明
  *
  * - **每一列都 import**，**包括停用的**：停用的列正是使用者可能重新打開的那一列，編輯的人正需要它的規格。
- *   停用的列可以省略必填的 `config`，但**有寫的值仍然要驗**（dsh `README.zh.md:62`）。這比載入器嚴
- *   （載入器對停用的列完全不驗設定，`harness/packages/nexus-core/src/plugin.ts` 的 `resolveEntries`），是 dsh 自己就有的落差。
+ *   停用的列可以省略必填的 `config`，但**有寫的值仍然要驗**。這比載入器嚴
+ *   （載入器對停用的列完全不驗設定，`harness/packages/nexus-core/src/plugin.ts` 的 `resolveEntries`）。
  * - **轉不出來的標成不完整，不靜靜丟掉**；只要有一列不完整、或有一列載不起來，結束碼就是 1，即使輸出的文件照樣可用。
  *   退出碼回答的是「這份文件能不能取代原本的驗證」。
  * - **沒有 `Config` 的列是「欄位未知」**（`absent`），不是「禁止設定」，不算不完整、不影響結束碼。
- * - **import 期間模組寫進 `process.stdout.write` 的東西轉到標準錯誤**，標準輸出只有那一份 JSON。直接寫檔案描述子的攔不到（同 dsh）。
+ * - **import 期間模組寫進 `process.stdout.write` 的東西轉到標準錯誤**，標準輸出只有那一份 JSON。直接寫檔案描述子的攔不到。
  * - **指到檔案的列（`file:`）先過私有檔檢查**（{@link resolveEntryModule}）：別人寫得動的模組不 import，這一列標成錯誤。
  *
- * ## 與 dsh 的差異（都是我們的載入器本來的形狀）
+ * ## 我們的載入器本來的形狀
  *
  * 1. **`disabled` 只收字面布林**，沒有 `!!js` 運算式（#104 的偏離標註），所以沒有 `loaderExpression`。
  * 2. **條目沒有 `group`／`inject`／`intercept`／`isolate`**，`strictObject` 擋掉，規格表也一樣不收。
  * 3. **沒有 include／group 這種載體列**，沒有 `includeConfig`。
- * 4. **根上的註記叫 `x-nexus`**，不沿用 `x-cordis`：這份文件描述的是我們的清單，不是 cordis 的 loader；欄位照 dsh 的
+ * 4. **根上的註記叫 `x-nexus`**，不沿用 `x-cordis`：這份文件描述的是我們的清單，不是 cordis 的 loader；欄位是
  *    `complete`、`entries`、`diagnostics`、`patchSchema`，`profile` 不存在（我們沒有 profile）。
  *
- * 輸出是隨版本重新產生的參考，不是穩定的格式（dsh `README.zh.md:70`）。
+ * 輸出是隨版本重新產生的參考，不是穩定的格式。
  *
  * @module
  */
