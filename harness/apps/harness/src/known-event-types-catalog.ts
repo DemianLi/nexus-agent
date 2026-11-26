@@ -2,11 +2,10 @@
  * 從原始碼掃出「這個 repo 寫得出來的每一種會話事件」，生成 `@nexus/core` 的 `known-event-types.ts`
  * （[#679](https://github.com/DemianLi/nexus-agent/issues/679) 第 4 步、[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。
  *
- * 照 dsh 的 `scripts/gen-persistence-catalog.ts` 與 `scripts/persistence-catalog-source.ts`（`5badb15`）：掃過每一處
+ * 掃過每一處
  * `SessionEventMap` 的宣告（核心那一份本體，加上各套件的 `declare module '@nexus/core'` 區塊），用 TypeScript 的
  * 語法樹讀，不用正則；生成的集合是日誌讀方判斷「不認得又沒標 `ignorable` 就拒絕」的唯一依據。**不讓各 plugin 在執行期
- * 登記**：登記只說「有這個名字」，說不出略過它安不安全，而且會讓同一份日誌在不同組裝下讀出不同結果（dsh 的
- * `2026-08-10-session-log-version-mechanism.md`，Alternatives considered）。
+ * 登記**：登記只說「有這個名字」，說不出略過它安不安全，而且會讓同一份日誌在不同組裝下讀出不同結果。
  *
  * ## 掃什麼、不掃什麼
  *
