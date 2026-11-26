@@ -209,8 +209,7 @@ export async function shippedModelRow(): Promise<PluginEntry> {
 
 /**
  * 在出貨清單上**換一顆腳本模型**：插一列腳本提供者（`#settings/scripted-model`，腳本當 config）、把
- * `agent-default-model` 指過去——同 dsh 的 headless e2e（`source-tool.built.e2e.ts:36-42`）與
- * `serve-scripted-provider.test.ts` 那份 patch 的形狀，只是這裡直接改條目、不經檔案。
+ * `agent-default-model` 指過去——跟 `serve-scripted-provider.test.ts` 那份 patch 的形狀一樣，只是這裡直接改條目、不經檔案。
  *
  * **給「要在產品組裝（`createCliAgent`）上跑一條自訂工具回合」的測試**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)）：
  * 組裝是真的，只換模型。要讀模型實例（`boundToolNames`、`prompts`）就用 `createCliAgent` 回傳的 `model`。
@@ -557,7 +556,7 @@ export function levelsOf(raw: readonly string[], prefix: string): (string | unde
 }
 
 /**
- * 測試用的計劃指引。**plan-mode 套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `cordis.yml` 的 `plan-mode` 那一列；
+ * 測試用的計劃指引。**plan-mode 套件沒有預設值**（#1607：部署必給），出貨的那一句寫在 `cordis.yml` 的 `plan-mode` 那一列；
  * 手搭組裝的測試不依賴那一句，只要有一句可以認得。要驗出貨那一句的測試改讀出貨清單（`plan-mode.test.ts` 的 `SHIPPED_GUIDANCE`）。
  */
 export const TEST_PLAN_GUIDANCE =

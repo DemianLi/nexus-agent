@@ -1,9 +1,9 @@
 /**
- * 子代理照 dsh 不停下來問人，也知道自己是被委派的——[#324](https://github.com/DemianLi/nexus-agent/issues/324)
+ * 子代理不停下來問人，也知道自己是被委派的——[#324](https://github.com/DemianLi/nexus-agent/issues/324)
  * 驗收的第 2、3 條。第 1 條（核准）翻面寫在 `interrupt.test.ts`、`waiting-cards.test.ts`、`tool-card-from-log.test.ts`。
  *
  * 產品路徑：真的組裝、真的 pump，同 `tool-card-from-log.test.ts`。碼從子代理自己的會話日誌讀（`tool/result` 的
- * `error`）——dsh 釘的是同一個形狀（`tool-ask-user.spec.ts:270-299`），web 與離線掃描也讀那裡。
+ * `error`）——web 與離線掃描也讀那裡。
  *
  * 子代理的訊息不在 root 的結果裡，模型看到什麼只從 `ScriptedChatModel.prompts` 看得到（`lastPrompt` 永遠是 root
  * 最後那輪）。
@@ -181,7 +181,7 @@ describe('子代理叫 `ask_user_question`：拒絕、帶 `DELEGATED_CALLER`、�
           const result = subagents[0]?.log.events.find((event) => event.type === 'tool/result');
           expect(result?.data).toMatchObject({ isError: true, error: DELEGATED_CALLER_ERROR });
 
-          // 模型看到的那一句：前綴由 `toolRefusal` 加，後面是 dsh 那句的中文。
+          // 模型看到的那一句：前綴由 `toolRefusal` 加。
           const refusal = run.model.prompts
             .filter(isSubagentPrompt)
             .flat()
@@ -246,7 +246,7 @@ describe('委派聲明：子代理每次模型請求都有，root 的沒有', ()
 /**
  * **真的會停下來問人的工具**，不只是測試用的 `danger`：閘門不看名字，產品裡掛 `ask`、在閘門之前沒被別層擋下的每一顆，
  * 前景子代理叫到時都停在核准點等人（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，翻了 #324 的「`policy-never`」）；
- * 中斷帶子代理的 namespace，人拒絕之後子代理收到拒絕的訊息、照常收尾。`exit_plan_mode` 以前也掛 `ask`，#652 照 dsh 改走提問通道、
+ * 中斷帶子代理的 namespace，人拒絕之後子代理收到拒絕的訊息、照常收尾。`exit_plan_mode` 以前也掛 `ask`，#652 改走提問通道、
  * 不再過閘門；它在子代理裡照樣先被計劃模式那層擋下，見下一組。
  */
 describe('產品裡掛 `ask` 的工具在前景子代理裡停下來等人', () => {
@@ -304,11 +304,10 @@ describe('產品裡掛 `ask` 的工具在前景子代理裡停下來等人', () 
 });
 
 /**
- * **計劃模式照 dsh 讀呼叫者自己的 session**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）：計劃模式那層
+ * **計劃模式讀呼叫者自己的 session**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）：計劃模式那層
  * middleware 也掛到子代理上，而子代理的 session 從沒進過計劃模式。所以 root 開著計劃模式時，子代理拿不到指引；叫
  * `exit_plan_mode` 在工具本體的第一道檢查（`forCall` 認得出是子代理、不是 root）就被擋、回「不在計劃模式」——
- * 走不到那一題計劃審核，同 dsh 的先後
- * （`packages/plan/plan-mode/src/index.ts:292-294` 在問人之前）。
+ * 走不到那一題計劃審核。
  *
  * **翻面寫的**：#324 時這一格釘的是「閘門先拒、沒有人被問到」，那時這層到不了子代理。
  *
