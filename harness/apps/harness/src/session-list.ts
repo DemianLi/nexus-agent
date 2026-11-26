@@ -1,15 +1,13 @@
 /**
  * 列出這台 serve 以前的 thread——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。
  *
- * 照 dsh 的 `ApiSessionList.list()`（`packages/api/session-controller/src/list.ts`，SHA `c291e79`）：
  * **不啟動任何 agent**，讀持久化的會話，跳過 `header.cwd` 沒記的，照 `updatedAt` 由新到舊排。
  * `updatedAt = max(header.createdAt, 最後一則人類提示的時間)`，`blank` 是「還沒有任何 `turn/start`」
  * （`applySessionListMetadata`）。`running` 不在這裡：它來自活著的 agent，歸 `wire-handler.ts`。
  *
  * ## 唯讀，經過 `SessionStore`
  *
- * 列走 `list`、讀本文走 `open(id, 'read')`，同 dsh 的列表走 `persistence.list`、冷讀走 `open(sessionId, 'read')`
- * （[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**不拿寫租約、不截撕裂的尾巴、不動 header**：別的行程
+ * 列走 `list`、讀本文走 `open(id, 'read')`（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**不拿寫租約、不截撕裂的尾巴、不動 header**：別的行程
  * 握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。檔名與 header 的規則只在後端
  * （`jsonl-session-store.ts`），這裡一個都不認。
  *
@@ -19,10 +17,7 @@
  *
  * ## 分段讓出不採用，中止採用（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）
  *
- * dsh 在 `4402fa47e4c`／`ecc01b54a4d`（2026-09-29，對讀 `5badb15009a`）讓 `ApiSessionList.list()` 照 `listWorkSliceMs`
- * （預設 16 ms）分段 `scheduler.yield`，並在每圈 `signal?.throwIfAborted()`。
- *
- * - **分段讓出不採用。** dsh 的 `summarizeCold` 是同步的（讀投影快取），所以工作要自己切段；我們每一份都先
+ * - **分段讓出不採用。** 我們每一份都先
  *   `await readFile`，事件圈每讀完一份就回得去，本來就沒有「整次列表佔住事件圈」這件事。2026-10-04 實測
  *   （`measure/thread-list-cli.ts`，M3 Pro、Node 25）：1000 份 × 1 MB 一次列表約 2.6 秒，事件圈延遲最大 9–16 ms、
  *   p99 約 2.6 ms；停頓的上限是**單一份**的解析，約 1.7 ms／MB（50、200 份 × 10 MB 最大 17–33 ms，一份 100 MB 的最大
@@ -43,11 +38,10 @@
  *
  * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列（{@link isListedThread}）：
  *
- * - **子代理的不列**（{@link isSubagentSessionHeader}）：subagent 的 id 是 `<thread>/<task>`，不是一條 thread。dsh 會列、
- *   標 `origin: 'subagent'`；我們切不進去（#302 拍板的第 3 件）。分叉帶 `parentSession` 但不是子代理，照列（#1579）。
+ * - **子代理的不列**（{@link isSubagentSessionHeader}）：subagent 的 id 是 `<thread>/<task>`，不是一條 thread，我們切不進去（#302 拍板的第 3 件）。分叉帶 `parentSession` 但不是子代理，照列（#1579）。
  * - **`header.cwd` 不等於這一次的 `cwd` 就不列**，沒記的也不列。**不是按目錄判**：`projectKey` 是有損的，
  *   兩個目錄可能落在同一格，header 的 `cwd` 才是唯一分得開的東西（`resume-guards.ts` 的 `assertSameCwd`，
- *   續接時一樣比它）。dsh 只擋沒記的，因為它的列表跨專案。
+ *   續接時一樣比它）。
  * - **header 讀不懂、版本比這一版新的不列，但數出來**（`unreadable`，後端的 `list` 數的）。續接會拒絕這兩種；
  *   不數的話，畫面上「少了一條」跟「本來就沒有」分不出來。
  *
@@ -56,8 +50,7 @@
  *
  * ## 標題
  *
- * {@link threadTitleOf}：最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），同 dsh 列表讀的
- * `title` 投影（latest-wins）；一顆都沒有才照規則推。規則與偏離見 `session-title.ts`。
+ * {@link threadTitleOf}：最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)，latest-wins）；一顆都沒有才照規則推。規則與偏離見 `session-title.ts`。
  *
  * @module
  */
@@ -100,8 +93,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 判準與偏離寫在那裡（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
  * **列表（{@link isListedThread}）和 serve 的續接閘（`serve-run.ts` 的 `createAgent`）共用這一支**，判準只有一份。
- * #1544 時對到 dsh 的 headless 與 ACP（`origin === 'subagent' || parentSession !== undefined`），那兩支連分叉也擋，因為它們本來
- * 就不驅動分叉；web 這條路照 dsh session-controller（`api/session-controller/src/agent.ts:115`）只認 `origin`，分叉是一條可以驅動的主對話。
+ * web 這條路只認 `origin`，分叉是一條可以驅動的主對話。
  */
 export { isSubagentSessionHeader };
 
@@ -109,7 +101,7 @@ export { isSubagentSessionHeader };
  * 一份列得出來嗎：root、`cwd` 對得上。判準見檔頭的「列出來的每一列都要切得過去」。
  *
  * 列表與內容搜尋（`thread-search.ts`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)）共用這一支：
- * **搜得到的一定列得出來**，同 dsh 的搜尋先拿列表的可見集合過濾（`packages/api/session-controller/src/list.ts:179-183`）。
+ * **搜得到的一定列得出來**。
  */
 export function isListedThread(header: StoredSessionHeader, cwd: string): boolean {
   return !isSubagentSessionHeader(header) && header.cwd === cwd;

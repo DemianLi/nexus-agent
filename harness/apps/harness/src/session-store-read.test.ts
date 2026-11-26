@@ -263,7 +263,7 @@ describe("open(id, 'read')", () => {
       ].join('\n'),
     );
     const reader = await openJsonlSessionStore({ directory: dir }).open('torn', 'read');
-    // #1508：壞行與它之後沒收尾的行是當機留下的尾巴，recoverable 丟掉（照 dsh）；撕裂的 turn/end 沒有換行，不算收尾。
+    // #1508：壞行與它之後沒收尾的行是當機留下的尾巴，recoverable 丟掉；撕裂的 turn/end 沒有換行，不算收尾。
     expect((await reader.read()).map((e) => e.seq)).toEqual([0]);
     expect((await reader.read({ salvage: true })).map((e) => e.seq)).toEqual([0, 3]);
   });

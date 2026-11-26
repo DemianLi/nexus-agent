@@ -23,7 +23,7 @@
  * （`plugin-todo/src/index.ts`），plan-mode 走 graph state 是登記過的偏離。只開一扇門，
  * 回來的會話會是半個，而**哪一半是真相，是開門之前就要決定的事**。#251 決定了：只開門 A，
  * 回來的是日誌那一半；它的第二刀把計劃模式搬進日誌、收回了那條偏離。
- * [#306](https://github.com/DemianLi/nexus-agent/issues/306) 讓對話也走門 A：照 dsh，日誌是對話的真相，
+ * [#306](https://github.com/DemianLi/nexus-agent/issues/306) 讓對話也走門 A：日誌是對話的真相，
  * 模型歷史由它推出來、灌回 graph state（`conversation-restore.ts`），**不是開門 B**。今天從頭開始的只剩門 B
  * 那兩樣。todo 的事件在日誌上，但沒有讀方重建它；模型從推回來的對話裡記得它。
  *

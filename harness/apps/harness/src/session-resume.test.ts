@@ -470,7 +470,6 @@ describe('尾巴', () => {
       'model/end',
       'turn/end',
     ]);
-    // 照回覆要的順序（dsh 的 `pendingCalls`）。
     expect(once[next + 4]).toMatchObject({
       data: { callId: 'dead-1', error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
     });
@@ -494,7 +493,7 @@ describe('尾巴', () => {
 
   /**
    * 舊檔的形狀：補寫還不存在的版本留下「開著的輪＋`session/end-seed`」，之後沒有新輪就停了。
-   * 新程式碼續接它：補結接在 end-seed **後面**（dsh 的掃描不在 end-seed 重設），不變量不報，再接不重補。
+   * 新程式碼續接它：補結接在 end-seed **後面**，不變量不報，再接不重補。
    */
   it('舊檔「開著的輪＋end-seed」：補結接在 end-seed 後面，不報違規，再接不重補', async () => {
     const runDir = await firstRun();
@@ -531,7 +530,7 @@ describe('尾巴', () => {
 /**
  * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）。
  *
- * 讀回時照 dsh 不擋——jsonl store 不看酬載，`recordedSandboxMode` 原樣交出去——所以接得回來；
+ * 讀回時不擋——jsonl store 不看酬載，`recordedSandboxMode` 原樣交出去——所以接得回來；
  * 對它的回應是 sandbox-policy 的配套入口在重播時報違規，CLI 印成 `[不變量]` 走 stderr。
  */
 describe('認不得的沙箱模式', () => {
@@ -654,7 +653,7 @@ describe('寫租約', () => {
 });
 
 /**
- * 組合一致：照 dsh 的 `ApiSessionCwdConflict`，**只抄得到 cwd 這一格**（理由在
+ * 組合一致：**只抄得到 cwd 這一格**（理由在
  * `ResumeCwdConflictError` 的註解）。
  *
  * 擋下的兩條都要斷言**檔案一個位元組都沒動**——擋在讀回之後、第一次寫之前，才是「什麼都

@@ -1,7 +1,6 @@
 /**
  * `@` 引用別的會話時的候選清單（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。
  *
- * 照 dsh 的 `SessionReferenceResolver.listCandidates`（`packages/context/session-reference/src/index.ts`，`477b4f4`）：
  * **列全部會話**（含別的專案與子代理），排除自己，同工作區的排前面、沒記目錄的次之、其餘最後，最多 50 筆，
  * 對 id／目錄／標題做不分大小寫的子字串比對，**不搜內文**。
  *
@@ -10,16 +9,16 @@
  * 列走 `list`、標題走 `open(id, 'read')`（[#665](https://github.com/DemianLi/nexus-agent/issues/665)），**不為它建起任何 thread**，
  * 不拿寫租約。跨專案的部分列的是會話根底下每一格專案目錄（{@link listSessionStoreDirectories}），每一格各開一個唯讀把手。
  *
- * ## 偏離 dsh（登記）
+ * ## 偏離（登記）
  *
  * 0. **子代理的標題是 id**（實測，`delegated-subagent.test.ts` 那組組裝）：子代理的日誌只有 `model/*`、`assistant/message`、`tool/*`，沒有任何人話，
  *    所以 `threadTitleOf` 回 `undefined`，標題退回 `<thread>/tools:<uuid>`。任務描述在父那邊的 `task` 呼叫裡，兩者之間沒有記下來的對應。
  *    候選帶 `parentSessionId`／`parentLabel`，menu 上子代理那一列靠它講「屬於哪條會話」（Q4）。
- * 1. **標題的來源**：dsh 的候選只讀投影快取，「不讀日誌」，沒有快取的會話就用 id 當標題（`projectedLabels` 的註解）。我們沒有那一層
+ * 1. **標題的來源**：我們沒有投影快取那一層
  *    （[#725](https://github.com/DemianLi/nexus-agent/issues/725)），標題得從日誌本文折出來，而這條路在每打一個字的下面。退到最接近的實作：
  *    **行程內的快取，以 `revision` 為鍵**——`revision` 沒變就不重讀，正是 #665 加它的用途。第一次冷讀整個會話根，之後只有變動過的
- *    （多半是正在跑的那幾條）重讀。dsh 的做法「表達不出來」是因為我們今天沒有投影快取這一層。
- * 2. **排序**：dsh 同一等級內照 `list` 的順序，那個順序沒有約定。我們同一等級內照 `updatedAt` 由新到舊、再照 id，讓同一份資料每次排得一樣。
+ *    （多半是正在跑的那幾條）重讀。
+ * 2. **排序**：`list` 的順序沒有約定，我們同一等級內照 `updatedAt` 由新到舊、再照 id，讓同一份資料每次排得一樣。
  * 3. **CLI 的 run 目錄不列**：CLI 的 root id 一律叫 `cli`，引用只編 id，指不到唯一的一份（見 `session-references.ts` 的偏離第 5 條）。
  *
  * @module

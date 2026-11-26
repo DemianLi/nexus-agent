@@ -1,12 +1,11 @@
 /**
  * 引用別的會話時，每條來源最多留幾個位元組（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862）。
  *
- * 照 dsh `SessionReferenceResolver.referenceBudget`（`packages/context/session-reference/src/index.ts`，`1517a4db`／`687f282e`
- * `:378-394`、`22ddee37` `:372-387`；README `:53`，`687f282e`）：
+ * 預算怎麼算：
  *
  * 1. 設了 `maxReferenceBytes` 就用它，**原樣蓋過**自動預算。
  * 2. 否則 `max(65536, floor(contextWindow × 4 × referenceContextFraction))`。窗口以 token 計，「每 token 4 位元組」是估算的大小，
- *    不是換算（dsh 原註解）。
+ *    不是換算。
  * 3. 取不到窗口，用 64 KiB。
  *
  * 這是純函式：**窗口由呼叫端取**（`wire-handler.ts` 組在 `new ThreadPump` 那一處，問這條 thread 的選擇控制器下一步走哪一顆，
@@ -14,18 +13,16 @@
  *
  * ## 取不到窗口的兩種情形
  *
- * - **沒有選擇控制器**（腳本模型、沒帶 `--live`）：沒有型錄可查。對到 dsh 沒有 LLM 服務／沒有 adapter 的那一格（README `:53`：
- *   「A missing route, LLM service, adapter, or capacity uses 64 KiB」），不是偏離。
+ * - **沒有選擇控制器**（腳本模型、沒帶 `--live`）：沒有型錄可查，用 64 KiB。
  * - **路由的模型不在型錄裡**：走不到。控制器的下一步路由跳過型錄沒有的模型，退回部署預設，窗口是部署預設那顆的。
- * - dsh README 同一句還寫「其他 model metadata 查詢錯誤與取消會讓準備失敗」。我們的型錄是同步的純查表（`findModelEntry`），
- *   沒有錯誤路徑，所以這一格不適用；取消照舊走 `prepareSessionReferences` 的 `signal`。
+ * - 型錄是同步的純查表（`findModelEntry`），沒有錯誤路徑；取消走 `prepareSessionReferences` 的 `signal`。
  *
  * @module
  */
 
 import { DEFAULT_MAX_REFERENCE_BYTES } from './session-reference.js';
 
-/** dsh 的「每 token 約幾個位元組」（`index.ts:393`：`contextWindow * 4 * fraction`）。 */
+/** 「每 token 約幾個位元組」（`contextWindow * 4 * fraction` 的那個 4）。 */
 export const REFERENCE_BYTES_PER_TOKEN = 4;
 
 /**
