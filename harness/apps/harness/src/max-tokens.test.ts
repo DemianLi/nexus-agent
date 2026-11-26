@@ -231,7 +231,7 @@ async function assembleCli(replies: readonly Reply[], plugins: readonly PluginEn
 
 describe('CLI（非串流）', () => {
   /**
-   * 同一則裡**已經完整的那顆也不派發**：dsh 的 assembler 丟掉這一則的每一個呼叫。模型被切在第二顆
+   * 同一則裡**已經完整的那顆也不派發**。模型被切在第二顆
    * 的參數中間，第一顆看起來好好的——正是最容易被「只丟壞的那顆」誤修的形狀。
    */
   it('這一步的呼叫全丟、本體零次、這一輪不再叫模型；turn/end 帶 max-tokens；下一輪歷史沒有呼叫', async () => {
@@ -279,7 +279,6 @@ describe('CLI（非串流）', () => {
     }
   });
 
-  /** 撞到上限時只在寫參數、一個字都沒吐：清掉呼叫之後什麼都不剩，下一輪整則不送（同 dsh）。 */
   it('清完一個字都不剩的那一則，下一輪整則不送', async () => {
     const run = await assembleCli(
       [
@@ -446,10 +445,6 @@ describe('web（pump、v3 串流）', () => {
 });
 
 describe('子代理撞到上限', () => {
-  /**
-   * 修之前：基座的 `task` 把寫到一半的那段當成功結果交回去，父代理看不出來沒做完。dsh 回一則錯誤、
-   * 後面接那一段。root 自己沒撞到，它那一輪照常收尾。
-   */
   it('父代理拿到一則錯誤加上寫出的那段；root 那一輪照常收尾', async () => {
     const run = await assembleCli(
       [

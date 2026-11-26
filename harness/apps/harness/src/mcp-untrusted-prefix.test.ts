@@ -4,7 +4,7 @@
  *
  * 起一台真的 MCP server（stdio），走完整條線——agent、真的 `McpConnectionPool`、會話日誌——量三件事：
  *
- * - 前綴進了日誌的 `tool/result`（dsh 也是 render 之後才記錄）：單塊文字、多塊、資源讀取各一個；
+ * - 前綴進了日誌的 `tool/result`：單塊文字、多塊、資源讀取各一個；
  * - `isError` 的錯誤文字不帶；
  * - 系統提示詞：有 MCP 才有那一句，沒掛 MCP 的 agent 沒有。
  *

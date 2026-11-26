@@ -36,8 +36,7 @@ export function createEntry(loader: Loader, options: EntryOptions, parent: strin
 }
 
 /**
- * 那一列真正的 Fiber。上游 `Entry.fiber` 存的是 `registry.plugin()` 回的 PromiseLike 包裝，不是 Fiber 本身
- * （dsh 本地修改第 20 條修的就是這個）；要比身分得取 `.ctx.fiber`。
+ * 那一列真正的 Fiber。上游 `Entry.fiber` 存的是 `registry.plugin()` 回的 PromiseLike 包裝，不是 Fiber 本身；要比身分得取 `.ctx.fiber`。
  */
 export function fiberOf(loader: Loader, id: string): Fiber | undefined {
   return loader.resolve(id).fiber?.ctx.fiber;
