@@ -2,7 +2,7 @@
  * **目標目前的樣子，即時看得到，重新整理之後也一樣**——[#897](https://github.com/DemianLi/nexus-agent/issues/897)
  * 的 harness 那一半。
  *
- * 真的圖、真的 goal 域、真的 pump，模型是腳本。規則照 dsh 的 `goal` 投影，只送持久的那一半（activation 不在，理由見
+ * 真的圖、真的 goal 域、真的 pump，模型是腳本。只送持久的那一半（activation 不在，理由見
  * `@nexus/wire` 的 `goal.ts`）：
  *
  * 1. root 日誌的 `goal/change` 與 `turn/start{kind:'goal'}` 每讓值變一次就送一顆，沒變不送。

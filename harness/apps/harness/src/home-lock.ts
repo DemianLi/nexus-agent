@@ -15,21 +15,18 @@
  * `close()` 撐不過 2 秒上限，行程一結束 kernel 就放。致命退出後**立刻重啟**的新行程，在舊行程還沒結束的那一小段時間
  * 會撞上這把鎖（舊行程確實還握著、還在寫）；舊行程一結束就拿得到。
  *
- * **鎖檔是空的，不寫 PID**（Q2 (a)，同 dsh 的鎖檔不帶內容）：PID 只是拿到鎖那一刻的事實，`lsof <鎖檔>` 查的是
+ * **鎖檔是空的，不寫 PID**（Q2 (a)）：PID 只是拿到鎖那一刻的事實，`lsof <鎖檔>` 查的是
  * kernel 現在的答案，不會被 PID 回收誤導。也因此開檔方式能和會話租約共用（`'w'` 會把內容截掉）。
  *
  * ## 偏離（照 docs/plugin-contract.md〈偏離〉登記）
  *
- * - **偏離 1（基座表達不出來）**：dsh 的行程級獨佔是 Desktop 的 Electron `requestSingleInstanceLock()`
- *   （`apps/desktop/src/single-instance.ts:16-26`，在碰 profile 之前拿、握一整個行程、拿不到就 `quit()`；
- *   `apps/desktop/README.md:118` 寫明 "before any profile access"）。serve 是純 Node 行程，沒有這個 API。退到最接近的
+ * - **偏離 1（基座表達不出來）**：serve 是純 Node 行程，沒有 Electron 的 `requestSingleInstanceLock()`。退到最接近的
  *   實作：跟會話租約同一顆 `flock`（`kernel-file-lock.ts`）對 home 底下一個鎖檔取排他鎖。語意對齊
  *   Electron 那把：碰 home 之前拿、整個行程握著、拿不到就不啟動。**不抄**「把後來的啟動轉給持有者」：serve 沒有視窗可以
  *   拉，持有者的網址帶 token，不能印給另一個行程。
- * - **偏離 2（產品需求超出 dsh 的射程）**：dsh 的 CLI／web 對同一個 `$DSH_HOME` 不擋第二個行程，只在文件上定拓撲
- *   （「只有一個活動寫入方」）。nexus 是一台主機多人共用、由管理者用系統帳號起 serve，誤用同一個 home 的機會比個人桌面
- *   高，而且蓋掉的是封存這種會影響模型請求的狀態。所以把 dsh 只寫在文件上的拓撲，在 serve 這個入口變成硬檢查。
- *   **只擋 serve 對 serve**：一次性 CLI 與 `plugin-change` 照 dsh 共用 home（#1412 寫入口的前提）。
+ * - **偏離 2（產品需求）**：nexus 是一台主機多人共用、由管理者用系統帳號起 serve，誤用同一個 home 的機會比個人桌面
+ *   高，而且蓋掉的是封存這種會影響模型請求的狀態。所以在 serve 這個入口做硬檢查。
+ *   **只擋 serve 對 serve**：一次性 CLI 與 `plugin-change` 共用 home（#1412 寫入口的前提）。
  * - **平台拿不到 flock 時照常起來**（Q1 (a)）：同會話寫租約（`session-lease.ts`），兩道鎖退化的條件一致。呼叫端講一聲。
  *   `EACCES` 這類其餘錯誤原樣往外拋，不吞成「退到不鎖」。
  *

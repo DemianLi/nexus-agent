@@ -13,8 +13,6 @@
  * - **H MCP 收尾有期限**（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：MCP 重連卡在握手時，逐出不被它拖住。
  *
  * 從 serve 組裝起的接線、以及「撤掉之後重開等價於重啟」的對照（驗收 B），在 `serve-idle-eviction.test.ts`。
- *
- * 偏離登記：dsh 頂層沒有閒置逐出，見 `wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
  */
 
 import { execFileSync } from 'node:child_process';

@@ -342,7 +342,6 @@ describe('人下的暫停當場中止在跑的那一輪（#1516）', () => {
   });
 
   it('停在核准點：人暫停 ＝ 收回那一輪（withdrawn），不再有續行', async () => {
-    // dsh 的 agent 停在核准點時 `status` 是 running，所以 `goal/changed{pause}` 一樣走 `agent.cancel`；我們的對應是停止鈕的「收回」那一支。
     const note = tool(({ text }: { text: string }) => `已記下：${text}`, {
       name: 'take_note',
       description: '把一段文字記下來。',
@@ -419,7 +418,6 @@ describe('中止之後 resume 要自己續上（#1516 帶出來的主流程）',
    * 以前暫停只落在兩輪之間，日誌上不會留下 aborted 的一輪；現在人下的暫停一定中止在跑的那一輪，
    * 「暫停 → 恢復」每次都會經過「最後一顆 `turn/end` 是 aborted」。`turnClosed` 只看最後一顆，
    * resume 剛武裝就被 driver 看到 `turn-aborted` 又收回，續行輪不會自己開跑。
-   * dsh 的收回發生在 `turn/end` 當下（`goal-round-driver/src/index.ts:353-357`），之後的 resume 不受影響。
    */
   it('G 續行輪跑著被暫停（aborted）→ /goal resume：自己排出下一個續行輪', async () => {
     const rig = await build({ turns: [SLOW, { content: '續上了。' }], threadId: 'resume-g' });

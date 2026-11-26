@@ -1,5 +1,5 @@
 /**
- * 串流內錯誤信封的分類梯子（#1805）。梯子照 dsh `providerError`（`transport.ts:22-35`，`687f282e`）：每一階是「狀態條件或
+ * 串流內錯誤信封的分類梯子（#1805）。每一階是「狀態條件或
  * `type`／字樣條件」，順序 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`。
  */
 

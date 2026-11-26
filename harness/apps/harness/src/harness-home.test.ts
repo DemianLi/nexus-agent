@@ -1,5 +1,5 @@
 /**
- * harness home 的解析（#424），規則照 dsh `resolveDshHome`。
+ * harness home 的解析（#424）。
  */
 
 import { homedir } from 'node:os';
