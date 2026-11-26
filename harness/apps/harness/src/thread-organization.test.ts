@@ -1,7 +1,3 @@
-/**
- * 側欄的釘選與封存集合（#633）：規則逐條照 `thread-organization.ts` 檔頭〈規則〉，載體規矩照瀏覽器密鑰檔，一條一條釘住。
- */
-
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

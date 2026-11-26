@@ -2,27 +2,17 @@
  * 側欄的釘選與封存：存在 harness home 底下的一個專用檔
  * （[#633](https://github.com/DemianLi/nexus-agent/issues/633)，第一張：釘選＋封存）。
  *
- * **兩個全域集合，不是會話身上的旗標**；每次變更回完整的集合；釘選**最近釘的在前**、封存**依封存順序**；
- * 每一步都在序列佇列裡跑，所以「先檢查、再寫」不會被別的變更插進中間；取消是冪等的、不檢查會話存不存在。
- *
  * ## 規則
  *
- * - **釘選**：已經釘了 → 什麼都不做（不重排、不寫）；否則已封存 → {@link ThreadArchivedPinError}；否則會話不存在 →
- *   {@link ThreadUnknownError}；通過才寫，插在最前面。**已釘的即使會話已不存在也回成功**。
  * - **封存**：已經封存 → 什麼都不做（不問、不停）；否則會話不存在 → {@link ThreadUnknownError}；沒帶 `stopActivity` 時，
  *   問 `activity`，有任何一項就 {@link ThreadActiveError}、**一個位元組都不寫**；通過才寫——**同一次寫入把它的釘選一併拿掉**
  *   （釘選與封存互斥）。帶了 `stopActivity`：先寫、**再**請 `stop` 去停，不等停穩；`stop` 拋了只講一聲、不撤銷封存。
- * - **取消釘選／取消封存**：不在集合裡就什麼都不做；**不檢查會話存不存在**（拿掉一個 id 不會引進不認得的 id）。
  *
  * ## 載體：home 底下一個檔，規矩同 `browser-session-secret.ts`
- *
- * PM 在卡上拍板（2026-10-08）：放在 `NEXUS_AGENT_HOME` 底下一個檔、按 home 分，目錄 `0700`、檔案 `0600`。我們沒有 workspace registry（卡上「動工前要查的」），這兩個集合放在 home 底下一個檔，規矩照抄：
  *
  * - 記錄帶版本（`{ version: 1, pinnedThreadIds, archivedThreadIds }`）；**認不得的記錄明確失敗、不覆寫**（版本不對、JSON 壞、
  *   欄位型別不對、兩個集合有重複或互相重疊）——交給人決定，跟瀏覽器密鑰那一把、受管憑證檔同一個處置。
  * - 讀之前先確認只有擁有者讀得到（`owner-only.ts`）。
- * - 寫是**先寫暫存檔、`fsync`、再 `rename` 蓋過去，然後 fsync 目錄**（`atomic-file.ts` 的 `writeAtomic`，#1527）：讀的一方永遠讀不到寫一半的檔，行程死在中間也只會留一個暫存檔，
- *   斷電後也不會退回上一版。
  * - **開檔在啟動時**（`serve-run.ts`），壞檔就讓 serve 起不來，而不是第一個釘選請求才失敗——跟瀏覽器密鑰那一把一樣。
  *
  * **不建通用 storage domain**：這是 demian 在 [#1576](https://github.com/DemianLi/nexus-agent/issues/1576) 的拍板（2026-10-17），
@@ -53,7 +43,6 @@ export const THREAD_ORGANIZATION_FILE = 'thread-organization.json';
 
 const RECORD_VERSION = 1;
 
-/** 釘選／封存的會話不存在。 */
 export class ThreadUnknownError extends Error {
   override readonly name = 'ThreadUnknownError';
 
@@ -65,7 +54,6 @@ export class ThreadUnknownError extends Error {
   }
 }
 
-/** 釘選一條已封存的會話：釘選與封存互斥。 */
 export class ThreadArchivedPinError extends Error {
   override readonly name = 'ThreadArchivedPinError';
 
@@ -74,7 +62,6 @@ export class ThreadArchivedPinError extends Error {
   }
 }
 
-/** 封存一條還有工作在跑、又沒帶 `stopActivity` 的會話。 */
 export class ThreadActiveError extends Error {
   override readonly name = 'ThreadActiveError';
 
@@ -329,11 +316,6 @@ export class ThreadOrganization {
     return result;
   }
 
-  /**
-   * 先寫檔、成功了才換記憶體裡的：寫不進去時記憶體不動，閘門與下一個請求看到的仍是檔案上的那一份。
-   * 寫法是 {@link writeAtomic}：`rename` 之後連 home 目錄一起 fsync，
-   * 斷電重開不會回到上一版——封存過的會話不會變回沒封存、又開始跑模型。
-   */
   async #commit(next: OrganizationState): Promise<void> {
     await mkdir(this.#home, { recursive: true, mode: PRIVATE_DIR_MODE });
     await writeAtomic(this.#file, `${JSON.stringify({ version: RECORD_VERSION, ...next })}\n`);

@@ -612,7 +612,6 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       .map((message) => message.text)
       .join('\n');
     expect(lastPrompt).toContain('恢復之後的話');
-    // 封存期間那句話被擋下、沒進對話：模型看不到它。
     expect(lastPrompt).not.toContain('封存之後的話');
   }, 20000);
 
