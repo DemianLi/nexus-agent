@@ -6,12 +6,10 @@
  * thread 的 pump，CLI 交給它的續行迴圈。**改了要重啟**（分類 `startup-read`，`plugin-row-classes.ts`）。消費者是 harness 的排程器
  * 不是 goal 插件（排程器在 harness，見 `goal-driver.ts` 檔頭的載體偏離），設定跟著消費者放（#1614 Q-A1 (a)）。
  *
- * ## 偏離 dsh：產品需求超出 dsh（理由 2）
+ * ## 產品需求：模型改不動的上限
  *
- * dsh 的續行只有目標自己那條上限（`packages/goal/goal-round-driver/src/index.ts:182-188`，`687f282e`），而那個數是模型在
- * `create_goal` 填的、還能用 `update_goal` 調高；部署設定 `defaultMaxGoalRounds` 只是預設（`goal/src/index.ts:218`、`:243-245`）。
  * 多人共用一台內網主機時，一個失控的目標會一直花錢、佔 thread 名額，部署的人要能從外面夾住它。補的是一條模型改不動的上限，
- * 載體沿用 CLI 早就有的 `roundCap`；目標域的 `??` 不動，同 dsh。逐點見 `../goal-driver.ts` 檔頭那一筆登記。
+ * 載體沿用 CLI 早就有的 `roundCap`。逐點見 `../goal-driver.ts` 檔頭那一筆登記。
  *
  * ## 出廠 20
  *
