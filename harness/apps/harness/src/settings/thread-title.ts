@@ -74,9 +74,7 @@ export type ThreadTitleConfig = z.infer<typeof threadTitleConfigSchema>;
 export const threadTitlePlugin: NexusPlugin<ThreadTitleConfig> = {
   name: THREAD_TITLE_PLUGIN_NAME,
   Config: threadTitleConfigSchema,
-  apply: (_registry: PluginRegistry, _config: ThreadTitleConfig): void => {
-    // 空的，見檔頭「擁有者與 apply」第 2 項：組裝期沒有消費者。
-  },
+  apply: (_registry: PluginRegistry, _config: ThreadTitleConfig): void => {},
 };
 
 export default threadTitlePlugin;
