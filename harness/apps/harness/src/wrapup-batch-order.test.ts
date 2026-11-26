@@ -203,7 +203,7 @@ const ORDER_CHANGED_GUIDANCE =
   '**先確認這是不是你打算改的**——這一行釘的是現況（見檔頭），不是理想形狀。\n' +
   '(a) 你把 `wrapupCommand` 那兩則訊息對調了：那是這條絆索的預檢突變，' +
   '它該紅，把期望值改回來或說明為什麼要改。\n' +
-  '(b) 你在改成 dsh 那種批次結算後 FIFO：那就把期望值換成' +
+  '(b) 你在改成批次結算後 FIFO：那就把期望值換成' +
   '`ai → tool:update_goal → tool:ls → human:goal-wrapup(complete)`，' +
   '並把檔頭那筆「我們在靠端點寬容」的賭注一起刪掉——它那天就還完了。\n' +
   '(c) 都不是：那是有人動了 tool node 或 middleware，' +

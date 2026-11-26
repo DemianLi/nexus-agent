@@ -153,7 +153,7 @@ describe('讀檔結果最後補上讀到哪', () => {
     expect(second).toMatch(/\t100:x+\n\n\(End of file - total 100 lines\)$/);
   }, 20000);
 
-  it('limit 超過 2000：dsh 的原句，是工具錯誤', async () => {
+  it('limit 超過 2000：回固定的那句原文，是工具錯誤', async () => {
     await writeFile(join(root, 'small.txt'), numbered(3));
     const { messages, logged } = await run([
       { name: 'read_file', args: { file_path: '/small.txt', limit: 2001 } },

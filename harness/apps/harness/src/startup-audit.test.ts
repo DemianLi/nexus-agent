@@ -549,7 +549,7 @@ describe('session-reference 寫壞：兩個入口都起不來；關不掉', () =
     },
   );
 
-  it('disabled: true：起動當場拋，指名這一列（關掉只會回到 dsh 的 0.2，讀起來卻像關掉引用）', async () => {
+  it('disabled: true：起動當場拋，指名這一列（關掉只會回到預設的 0.2，讀起來卻像關掉引用）', async () => {
     const env = homeWith('- id: session-reference\n  disabled: true\n');
     const fromCli = await cli(env);
     expect(fromCli.error).toBeInstanceOf(Error);

@@ -97,7 +97,7 @@ describe('scanWindow＋pageOf 對舊算法：隨機文字、隨機切片', () =>
   });
 });
 
-describe('scanWindow：行長與位元組上限（dsh buildWindow）', () => {
+describe('scanWindow：行長與位元組上限', () => {
   const params = (overrides: Partial<WindowParams> = {}): WindowParams => ({
     offset: 0,
     limit: 2000,

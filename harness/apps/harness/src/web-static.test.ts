@@ -113,7 +113,7 @@ describe('createWebStaticHandler', () => {
     expect(await headIndex.text()).toBe('');
   });
 
-  it('百分比編碼解不開、讀檔失敗（找不到以外）：照 dsh 往外拋，交給 wire-server 回 400', async () => {
+  it('百分比編碼解不開、讀檔失敗（找不到以外）：往外拋，交給 wire-server 回 400', async () => {
     await expect(handle(get('/%E0%A4%A'))).rejects.toThrow(URIError);
     if (process.platform !== 'win32') {
       const locked = join(dist, 'assets', 'locked.js');

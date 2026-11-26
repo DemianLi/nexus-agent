@@ -137,7 +137,7 @@ describe('出廠的清單', () => {
     });
   });
 
-  it('`disabled: true`：沒掛，沒有會話也回失敗（同 dsh 沒掛 sessionQuery）', async () => {
+  it('`disabled: true`：沒掛，沒有會話也回失敗（沒掛 sessionQuery）', async () => {
     const root = await tmp();
     const client = await serveClient(
       await start(root, await patch('- id: thread-search\n  disabled: true\n')),

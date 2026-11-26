@@ -213,7 +213,7 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
     });
   });
 
-  describe('ls（dsh 沒有這顆，退到 glob 的形狀與上限）', () => {
+  describe('ls（退到 glob 的形狀與上限）', () => {
     it('101 項：行內前 100 項加定位，照定位讀得到第 101 項；剛好 100 項原樣', async () => {
       const { backend } = await workspace(1, 101);
       const stash = await stashOptions();
@@ -260,7 +260,7 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
     });
   });
 
-  it('搜尋卡記的是行內那一頁，truncated 為真、total 是截之前的數（同 dsh）', async () => {
+  it('搜尋卡記的是行內那一頁，truncated 為真、total 是截之前的數', async () => {
     const { backend } = await workspace(51, 101);
     const { metas } = await run([GREP, GLOB, LS], { backend, stash: await stashOptions() });
     const grep = metas[0] as Extract<SearchResultMeta, { shape: 'matches' }>;

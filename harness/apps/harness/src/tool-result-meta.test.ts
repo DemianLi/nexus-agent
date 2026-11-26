@@ -219,7 +219,7 @@ describe('工具結果帶結構化 meta', () => {
     });
   }, 20000);
 
-  it('grep 撞到 max_count：files 是模型看到的那幾筆、truncated，total 是截之前的數（同 dsh）；模型那一份不變', async () => {
+  it('grep 撞到 max_count：files 是模型看到的那幾筆、truncated，total 是截之前的數；模型那一份不變', async () => {
     await writeFile(join(root, 'many.txt'), 'needle\n'.repeat(5));
     const { messages, logged } = await run([
       { name: 'grep', args: { pattern: 'needle', path: '/', max_count: 2 } },
@@ -244,7 +244,7 @@ describe('工具結果帶結構化 meta', () => {
     expect(text).toContain('the search stopped early because it hit the maximum match count');
   }, 20000);
 
-  it('grep 沒命中也帶，同 dsh：files 是空的、total 是 0', async () => {
+  it('grep 沒命中也帶：files 是空的、total 是 0', async () => {
     await writeFile(join(root, 'a.txt'), 'hay\n');
     const { logged } = await run([{ name: 'grep', args: { pattern: 'needle', path: '/' } }]);
     expect(logged[0]?.meta).toEqual({ shape: 'matches', files: [], truncated: false, total: 0 });

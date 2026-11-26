@@ -711,7 +711,7 @@ describe('工作區外', () => {
     }
   });
 
-  it('danger-full-access：照 dsh 列出來，`path` 是主機絕對路徑，diff 帶內容', async () => {
+  it('danger-full-access：列出來，`path` 是主機絕對路徑，diff 帶內容', async () => {
     // dsh README 的已知限制：比較會把工作區外的檔的全文送到 client；必須把這類內容留在 Host 上的部署要把
     // 這個 plugin 組合出去。瀏覽器那端是通過會話認證（#424）的同一個人，讀得到的也是 harness 行程本來就讀得到的。
     const outside = await outsideDirectory();

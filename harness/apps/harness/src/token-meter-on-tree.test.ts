@@ -310,7 +310,7 @@ async function openWith(root: CordisRoot, dir: string, overlay: string) {
   return assemble(loaded);
 }
 
-describe('E：同一個 key 由兩列登記（provider 這一層照 dsh 共用）', () => {
+describe('E：同一個 key 由兩列登記（provider 這一層共用）', () => {
   const VERSION = tokenMeterUnit.stateVersion;
 
   it('同 key 同 stateVersion：兩列都 ACTIVE，這條 thread 只拿到一份，是先登記的那一列的定義', async () => {

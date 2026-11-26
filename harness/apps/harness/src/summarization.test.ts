@@ -905,7 +905,7 @@ describe('正式路徑上的門檻是我們選的', () => {
     });
 
     it.each([
-      ['比例要小於窗口門檻的比例 0.8（dsh 同一條）', { retainRatio: 0.8 }],
+      ['比例要小於窗口門檻的比例 0.8', { retainRatio: 0.8 }],
       ['比例要是正的', { retainRatio: 0 }],
       ['retainTokens 要是非負整數', { retainTokens: -1 }],
       ['retainTokens 要是整數', { retainTokens: 1.5 }],

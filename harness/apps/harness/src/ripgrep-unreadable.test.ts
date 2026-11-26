@@ -121,7 +121,7 @@ describe('runner：判準的每個條件各有一條反例', () => {
     expect(await run(executable)).toMatchObject({ kind: 'ok', unreadable: 1 });
   });
 
-  it('搜尋起點本身讀不到（`.`）：照舊 SEARCH_FAILED，整個起點都沒搜到不能當成沒有命中（B3，dsh search.ts:211-217）', async () => {
+  it('搜尋起點本身讀不到（`.`）：照舊 SEARCH_FAILED，整個起點都沒搜到不能當成沒有命中（B3）', async () => {
     const executable = await script(
       'root.sh',
       `echo '{"type":"summary"}'\necho '${denied('.')}' >&2\nexit 2`,
@@ -238,7 +238,7 @@ describe('runner：判準的每個條件各有一條反例', () => {
     expect(await run(sub)).toMatchObject({ kind: 'ok', unreadable: 1 });
   });
 
-  it('預設不放行（dsh 的做法）：沒開 tolerateUnreadable 時，同一份「全是讀不到」的 stderr 照舊 SEARCH_FAILED', async () => {
+  it('預設不放行：沒開 tolerateUnreadable 時，同一份「全是讀不到」的 stderr 照舊 SEARCH_FAILED', async () => {
     const executable = await script(
       'default.sh',
       `echo '{"type":"summary"}'\necho '${denied('./b.txt')}' >&2\nexit 2`,
@@ -377,7 +377,7 @@ describe('backend：預設與搜尋起點', () => {
     executable: await rgThatCannotRead(extra),
   });
 
-  it('預設不放行（dsh 的做法）：沒明確打開 tolerateUnreadable 的 backend，同一份 stderr 照舊 SEARCH_FAILED', async () => {
+  it('預設不放行：沒明確打開 tolerateUnreadable 的 backend，同一份 stderr 照舊 SEARCH_FAILED', async () => {
     // 暫存目錄（HostStashBackend）與附件路由都走這條：理由 2（多人共用主機）套不上 serve 自己的目錄。
     const { executable } = await tolerant();
     const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable } });

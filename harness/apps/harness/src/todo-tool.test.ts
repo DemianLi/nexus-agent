@@ -93,7 +93,7 @@ function todosIn(events: readonly SessionEvent[]): readonly (readonly TodoItem[]
 }
 
 describe('todo_write 在真的圖上', () => {
-  it('root 與 subagent 各自一份清單——照 dsh 的單一所有者規則', async () => {
+  it('root 與 subagent 各自一份清單——單一所有者', async () => {
     const model = new ScriptedChatModel({
       turns: [
         { content: '先規劃。', toolCalls: [writeCall('根的計畫')] },

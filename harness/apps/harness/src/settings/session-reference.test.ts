@@ -12,8 +12,8 @@ import {
   sessionReferencePlugin,
 } from './session-reference.js';
 
-describe('schema 的預設與範圍，同 dsh', () => {
-  it('省略的格補 dsh 的預設：3 條、候選 50、比例 0.2，maxReferenceBytes 沒有（照模型窗口算）', () => {
+describe('schema 的預設與範圍', () => {
+  it('省略的格補預設：3 條、候選 50、比例 0.2，maxReferenceBytes 沒有（照模型窗口算）', () => {
     const parsed = sessionReferenceConfigSchema.parse({});
     expect(parsed).toEqual({
       maxReferences: 3,
