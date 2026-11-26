@@ -28,7 +28,7 @@ describe('遙測披露', () => {
     const text = formatTelemetryDisclosure('full').join('\n');
     expect(text).toContain('開啟');
     expect(text).toContain('脫敏規則');
-    // 只陳述策略、不承諾投遞——dsh 的共享披露同一條。
+    // 只陳述策略、不承諾投遞。
     expect(text).toContain('不保證送得到');
   });
 

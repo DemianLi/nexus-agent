@@ -286,8 +286,7 @@ describe('子代理的沙箱模式', () => {
 
   /**
    * **子代理的模型請求也帶沙箱政策句，講的是委派那一格**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
-   * 照 dsh：子代理併入父代理的組合，`sandbox:policy` 段落讀子代理自己 session 上委派時寫下的模式
-   * （`packages/sandbox/sandbox-policy/src/index.ts:141-151`）。
+   * 子代理併入父代理的組合，`sandbox:policy` 段落讀子代理自己 session 上委派時寫下的模式。
    *
    * 子代理第二次請求在 `flip` 之後：root 那一格已經換了，句子仍是委派那一格——驗的是「每次」而且是「委派那格」，
    * 不是組裝當下那格。root 收尾那次拿的是新那一格，對照組。
@@ -385,7 +384,7 @@ describe('子代理的沙箱模式', () => {
   }, 20000);
 
   /**
-   * **權限組合名只在父代理是全開時帶給子代理**（#437，dsh `child-agent.ts:252`、`:277`）：其餘的組合子代理靠兩顆旋鈕各自的
+   * **權限組合名只在父代理是全開時帶給子代理**（#437）：其餘的組合子代理靠兩顆旋鈕各自的
    * 委派快照就夠了，名字不另外帶；全開那一組要帶，是因為 web 的「全開」確認認的是組合名。
    */
   it('權限組合名：父代理全開，子代理日誌帶 danger-full-access；父代理 workspace-write，子代理沒有', async () => {
@@ -419,9 +418,7 @@ describe('子代理的沙箱模式', () => {
 
   /**
    * **子日誌的順序：委派策略事件在前，子代理收到的那句話在後**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）。
-   * 照 dsh：子會話的 setup 先寫 `subagent/descriptor` 與委派那一刻的政策（`manager.ts:880-891` 的
-   * `appendDelegatedPolicyOverrides`），第一句話等子代理迴圈的第一步才寫（`agent.ts:426-436`）。我們這邊參與者在
-   * `open()` 裡寫，輸入在 `open()` 回來之後由那一次查找寫（`registry.ts` 的 `writePendingSpawnInput`）。
+   * 參與者在 `open()` 裡寫，輸入在 `open()` 回來之後由那一次查找寫（`registry.ts` 的 `writePendingSpawnInput`）。
    * 兩顆參與者都是真的：沙箱政策（`sandbox/mode {source:'delegation'}`）與權限組合（父代理全開才帶 `permission/preset`）。
    */
   it('委派策略事件排在子代理那句 user/message 前面', async () => {

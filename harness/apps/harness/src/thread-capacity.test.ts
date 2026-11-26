@@ -6,7 +6,7 @@
  * 問的是計數的語意（驗收 A–E）：數 `threads.size` 含建構中、建失敗釋放、同 id 並行只佔一個、拒收不呼叫 `createAgent`。
  * 從 serve 組裝起的接線在 `serve-thread-capacity.test.ts`（驗收 F）。
  *
- * 偏離登記：thread 數上限是「產品需求超出 dsh」，見 `settings/thread-capacity.ts` 的檔頭。
+ * thread 數上限的來由見 `settings/thread-capacity.ts` 的檔頭。
  */
 
 import { createWireClient, historyPath, THREAD_AT_CAPACITY, THREADS_PATH } from '@nexus/wire';

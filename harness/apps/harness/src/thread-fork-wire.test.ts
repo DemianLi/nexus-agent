@@ -1,7 +1,7 @@
 /**
  * `thread.fork`（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580) 刀 2）：wire 這一層。
  *
- * 照 dsh `session.fork`：讀來源（活的讀記憶體、不在就冷讀）、換算切點、帶 seed 建子 thread、回新 id。這一檔問的是 handler 的判斷順序、
+ * 流程：讀來源（活的讀記憶體、不在就冷讀）、換算切點、帶 seed 建子 thread、回新 id。這一檔問的是 handler 的判斷順序、
  * 名額、讀活的、清佇列；真落盤、列表、重啟在 `serve-thread-fork.test.ts`（真 `runServe`）。
  *
  * **零憑證、零外部連線**：agent 是空殼，冷讀由測試給。

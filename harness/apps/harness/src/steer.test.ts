@@ -1,7 +1,7 @@
 /**
  * **插話**——[#710](https://github.com/DemianLi/nexus-agent/issues/710) 的驗收。
  *
- * 照 dsh（`packages/core/agent-loop/src/agent.ts`、`inbox.ts`，`477b4f4`）：一輪跑著時人插的話進 `next-step`，這一輪不停，
+ * 一輪跑著時人插的話進 `next-step`，這一輪不停，
  * 下一次叫模型之前整條領走送進模型；模型說完了但還有插話時同一輪再叫一次模型。中止之後的插話進 `next-turn`；按停止時
  * 排著的插話留著，下一輪開頭領走。
  *
@@ -447,7 +447,6 @@ describe('真的組裝：跑著的這一輪收插話', () => {
         void run.pump.submit(steer('算了', 's2'));
         expect(run.pump.updateQueue('s1', { kind: 'edit', text: '改用 Y' })).toBe('updated');
         expect(run.pump.updateQueue('s2', { kind: 'remove' })).toBe('updated');
-        // 已經是插話了：再改成插話不收，同 dsh。
         expect(run.pump.updateQueue('s1', { kind: 'steer' })).toBe('steer-unavailable');
       },
     });
@@ -882,7 +881,6 @@ describe('wire', () => {
     expect(
       await raw(thread, 'queue.update', { item_id: queuedId, action: { kind: 'steer' } }),
     ).toMatchObject({ type: 'success', result: { accepted: true } });
-    // 已經在插話那一條：同 dsh 不收。
     expect(
       await raw(thread, 'queue.update', { item_id: queuedId, action: { kind: 'steer' } }),
     ).toMatchObject({ type: 'error', error: 'steer_unavailable' });

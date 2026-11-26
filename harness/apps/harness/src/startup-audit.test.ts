@@ -92,8 +92,7 @@ describe('必掛的列掉了：兩個入口都起不來', () => {
   });
 
   /**
-   * 卡上的驗收：`browser-session` 寫壞，兩個入口都起不來、訊息指名它；同時再弄壞 `todo`，訊息把 `todo` 也一起列
-   * （照 dsh 的 `StartupError`）。serve 那一次還沒建瀏覽器會話密鑰。
+   * 卡上的驗收：`browser-session` 寫壞，兩個入口都起不來、訊息指名它；同時再弄壞 `todo`，訊息把 `todo` 也一起列。serve 那一次還沒建瀏覽器會話密鑰。
    */
   it('browser-session 寫壞、todo 也壞：CLI 與 serve 都拋同一則，兩列都列、必掛的標出來，密鑰檔沒建', async () => {
     const env = homeWith(BAD_BROWSER_SESSION + BAD_TODO);
@@ -518,9 +517,8 @@ describe('formatActivationError（#1560 N0053）', () => {
 });
 
 /**
- * 跨會話引用的四個上限寫壞（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 D）：dsh 在建構子裡越界就拋
- * `SESSION_REFERENCE_INVALID_CONFIG`（`session-reference/src/index.ts:100-128`）。寫壞的列會掉，掉了之後值回到 schema 的預設，
- * 其中比例是 dsh 的 0.2，靜靜拿掉出廠調低的 0.1（fail-open），所以這一列在必掛名單上，同 `goal-round-cap`、`turn-timeout`。
+ * 跨會話引用的四個上限寫壞（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 D）：寫壞的列會掉，掉了之後值回到 schema 的預設，
+ * 其中比例是 0.2，靜靜拿掉出廠調低的 0.1（fail-open），所以這一列在必掛名單上，同 `goal-round-cap`、`turn-timeout`。
  * **這一列也關不掉**（`PROTECTED_ENTRY_NAMES`）：`disabled: true` 只會回到同一個預設。
  */
 describe('session-reference 寫壞：兩個入口都起不來；關不掉', () => {

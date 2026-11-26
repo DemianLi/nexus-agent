@@ -135,7 +135,7 @@ describe('resolveModelSelection', () => {
 
 /**
  * 委派基線（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：定義釘的、父代理此刻的選擇，與模型這次的要求怎麼疊。
- * 合併順序照 dsh `requestedAgentOptions`（`tool-subagent/src/model-selection.ts:99-128`）；政策查的是疊完的有效路由（`:139-152`）。
+ * 政策查的是疊完的有效路由。
  */
 describe('有效路由：要求 > 定義釘的 > 父代理當下的', () => {
   const baseline = (
@@ -681,8 +681,7 @@ describe('產品路徑：subagent 工具帶 model／reasoning_effort', () => {
   /**
    * **日誌上記的碼**（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）。`subagent` 是 `wrapModelCall`
    * 加給模型的，ToolNode 的工具表裡沒有它；修之前它在外層回的每一則拒絕都被圍堵記成 `UNKNOWN_TOOL`，離線掃描因此
-   * 說模型叫了不存在的工具。照 dsh：參數不合 schema 是 `INVALID_ARGS`（`ToolArgsError`），其餘拒絕沒有碼
-   * （dsh 那側是工具本體拋一般的 `Error`）。拒絕的路逐條各叫一次，`list_subagent_models` 的拒絕也算進來。
+   * 說模型叫了不存在的工具。參數不合 schema 是 `INVALID_ARGS`（`ToolArgsError`），其餘拒絕沒有碼。拒絕的路逐條各叫一次，`list_subagent_models` 的拒絕也算進來。
    */
   describe('每一條拒絕在日誌上記的碼', () => {
     /** root 那份日誌裡，每一顆 `tool/result` 的 `error`（沒有就是 `undefined`），照呼叫順序。 */

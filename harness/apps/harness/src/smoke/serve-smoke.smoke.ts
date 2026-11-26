@@ -1,8 +1,8 @@
 /**
  * 每晚真模型冒煙回歸（[#436](https://github.com/DemianLi/nexus-agent/issues/436)）：真 `runServe --live`、真 NVIDIA 端點。
  *
- * 照 dsh `docs/testing.md:25` 的四樣——寫檔、多輪、工具呼叫、串流中途取消——加上 serve 的串流（卡上的第五樣）。
- * 驗證**從外面重讀檔案**（dsh `docs/testing.md:35`），不看 agent 自己怎麼說；哨兵檔逐位元組比對。
+ * 涵蓋四樣——寫檔、多輪、工具呼叫、串流中途取消——加上 serve 的串流（卡上的第五樣）。
+ * 驗證**從外面重讀檔案**，不看 agent 自己怎麼說；哨兵檔逐位元組比對。
  *
  * 不進一般測試：檔名是 `.smoke.ts`，一般的 `vitest.config.ts` 只收 `.test.ts`；用 `pnpm --filter @nexus/harness smoke` 跑，
  * 設定在 `vitest.smoke.config.ts`。**缺金鑰直接拋，不跳過**——跳過的真模型測試在金鑰沒設好時會以全綠過關。

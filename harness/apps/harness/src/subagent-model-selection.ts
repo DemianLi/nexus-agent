@@ -2,20 +2,19 @@
  * 模型逐次替子代理挑模型的**解析與探索**（[#877](https://github.com/DemianLi/nexus-agent/issues/877)，卡
  * [#709](https://github.com/DemianLi/nexus-agent/issues/709)）：純函式，不碰工具、不碰 host。
  *
- * 照 dsh `tool-subagent/src/model-selection.ts` 與 `list-models.ts`（`477b4f4`）：
+ * 規則：
  *
- * - **都沒給＝走基線**（定義釘的，沒釘就是主對話此刻的選擇，見 {@link DelegationBaseline}），不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
- * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是基線的模型：定義釘的，沒釘就是主對話此刻那顆）：dsh 的
- *   `assertAllowedModelSelection` 用的是「有效路由」，不是「有沒有給 model」。
+ * - **都沒給＝走基線**（定義釘的，沒釘就是主對話此刻的選擇，見 {@link DelegationBaseline}），不查政策。
+ * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是基線的模型：定義釘的，沒釘就是主對話此刻那顆），政策查的是「有效路由」，不是「有沒有給 model」。
  * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字。
  *
- * ## 與 dsh 的偏離（照 docs/plugin-contract.md〈偏離〉 登記）
+ * ## 範圍（照 docs/plugin-contract.md〈偏離〉 登記）
  *
  * - **沒有 `provider`**：我們只有一個端點，路由就是型錄 id。
- * - **推理等級只實作 `off` 與 `default`**：dsh 的等級由 adapter 驗證、請求怎麼帶也是 adapter 的事；我們的 adapter 只有型錄宣告，
+ * - **推理等級只實作 `off` 與 `default`**：我們的 adapter 只有型錄宣告，
  *   而且只有 `off` 有量過的線上寫法（`thinkingOffBody`）。型錄就算宣告了別的名字，也先拒絕，不猜。`default` 不加任何東西，
  *   所以等於沒給（解析時就丟掉，讓圖快取鍵不因為「寫了 default」多出一張一樣的圖）；模型宣告了任何等級就收，不必宣告 `default` 本身。
- * - **`list_subagent_models` 兩層**：無參數列授權清單；帶 `model` 看那顆的推理等級（dsh 是 provider／model 三層）。
+ * - **`list_subagent_models` 兩層**：無參數列授權清單；帶 `model` 看那顆的推理等級。
  *
  * @module
  */
@@ -43,8 +42,8 @@ export interface ModelSelectionRequest {
 /**
  * 一次委派的**基線**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：沒有模型自己的要求時這個子代理會走哪條路由。
  *
- * 照 dsh `requestedAgentOptions`（`tool-subagent/src/model-selection.ts:99-128`，`5badb15`）的合併，**越後面越近**：
- * 父代理當下的選擇 → 定義釘的（`pin`，dsh 的 `agentOptions`）→ 模型這次要求的（`request`）。
+ * 合併**越後面越近**：
+ * 父代理當下的選擇 → 定義釘的（`pin`）→ 模型這次要求的（`request`）。
  */
 export interface DelegationBaseline {
   /** 父代理**此刻**的路由（#723 的選擇，沒選過是最近一次請求走的，再沒有是部署預設）。 */
@@ -56,11 +55,11 @@ export interface DelegationBaseline {
 }
 
 /**
- * 沒有模型要求時的有效路由；有要求時疊上去。**純函式，合併順序就是 dsh 的**：
+ * 沒有模型要求時的有效路由；有要求時疊上去。**純函式**：
  *
  * - 基線模型＝定義釘的 ?? 父代理當下的。
- * - 基線強度＝定義釘的；沒釘強度、而基線模型就是父代理的那顆，沿用父代理的強度（dsh：子代理沿用父代理「相容的」欄位）；其餘用新模型的預設。
- * - 要求給了模型且**換了路由**、又沒給強度：定義釘的強度丟掉（dsh 的 `routeChanged && 沒給強度`），用新模型的預設。
+ * - 基線強度＝定義釘的；沒釘強度、而基線模型就是父代理的那顆，沿用父代理的強度；其餘用新模型的預設。
+ * - 要求給了模型且**換了路由**、又沒給強度：定義釘的強度丟掉，用新模型的預設。
  * - 要求給了強度：蓋過一切。`default` 是明著要預設，不是沒給。
  */
 export function effectiveRoute(
@@ -93,7 +92,7 @@ function isDefaultRoute(
 
 /**
  * 模型沒有要求（沒開選模型、或這次沒給）時，這個子代理要用的選擇：定義釘的，沒釘就是父代理**此刻**的。
- * 背景子代理在委派那一刻取這一次、之後固定（照 dsh：子代理建立時取父代理當下的選擇）。
+ * 背景子代理在委派那一刻取這一次、之後固定。
  *
  * @returns `undefined`＝沿用預設實例。
  */
@@ -138,14 +137,14 @@ export function resolveModelSelection(
   },
 ): ModelSelectionOutcome {
   const { model, reasoning_effort: effort } = request;
-  // 都沒給＝不查政策（dsh `hasDelegationModelRequest` 先擋掉）：走基線，定義釘的與父代理當下的都不受清單管。
+  // 都沒給＝不查政策：走基線，定義釘的與父代理當下的都不受清單管。
   if (model === undefined && effort === undefined) {
     return { ok: true, choice: baselineChoice(baseline) };
   }
   if (model === '') return { ok: false, error: '`model` 不能是空字串' };
   if (effort === '') return { ok: false, error: '`reasoning_effort` 不能是空字串' };
 
-  // 有效路由：定義釘的 ?? 父代理當下的，疊上模型這次要的。**政策查的是它**（dsh `assertAllowedModelSelection`：只給強度時，
+  // 有效路由：定義釘的 ?? 父代理當下的，疊上模型這次要的。**政策查的是它**（只給強度時，
   // 有效模型是定義釘的或父代理的那顆，也要在清單裡）。
   const route = effectiveRoute(baseline, request);
   const effective = route.model;
@@ -201,7 +200,7 @@ export function resolveModelSelection(
 
 /**
  * `list_subagent_models` 的輸出：無參數列授權清單；帶 `model` 看那顆能指定的推理等級：宣告過又今天支援的，模型宣告了任何等級時另加 `default`；沒宣告等級就沒有。
- * 授權在前：不在清單裡的 id 一律拒絕，不透露型錄裡有沒有它（dsh 的 “authorizes the exact route before resolving”）。
+ * 授權在前：不在清單裡的 id 一律拒絕，不透露型錄裡有沒有它。
  *
  * @throws 帶的 `model` 不在授權清單裡（訊息講給模型聽）。
  */

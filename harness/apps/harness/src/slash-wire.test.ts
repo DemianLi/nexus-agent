@@ -251,8 +251,7 @@ describe('清單', () => {
   });
 
   it('同一條 thread 上兩次拿到的清單一模一樣', async () => {
-    // **這是「不需要 `commands/change`」那個宣稱的主詞。** dsh 有 `ScopedLayers` 與執行期
-    // 的 effect disposer，清單真的會變；我們的註冊全發生在組裝期。沒有這條，那個宣稱
+    // **這是「不需要 `commands/change`」那個宣稱的主詞。** 清單不會變：我們的註冊全發生在組裝期。沒有這條，那個宣稱
     // 就沒有東西在守（[#108](https://github.com/DemianLi/nexus-agent/issues/108)）。
     const { client } = await wire();
     await client.openEvents('t');

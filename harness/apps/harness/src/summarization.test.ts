@@ -612,8 +612,8 @@ describe('read-only 的逃生口：摘要器的 backend 是獨立的一格', () 
  * - `determineCutoffIndex`：`keep.type === "fraction" && maxInputTokens ? floor(max * value)
  *   : keep.value` —— 把 `0.1` 當成「保留 0.1 個 token」。**fail-open，一則逐字訊息都不留。**
  *
- * 兩個都不警告、不拋。**這是這幾條要存在的理由**：dsh 那側的預設答案（`thresholdRatio`
- * 0.8 / `retainRatio` 0.16）正是比例形式，照抄過來會踩中其中一個，而踩中的當下沒有徵兆。
+ * 兩個都不警告、不拋。**這是這幾條要存在的理由**：比例形式的預設答案（`thresholdRatio`
+ * 0.8 / `retainRatio` 0.16）會踩中其中一個，而踩中的當下沒有徵兆。
  *
  * 絆索的方向：**基座哪天讓這個模型解得出 `maxInputTokens`，這三條會紅** —— 那正是比例形式
  * 開始可用、而我們寫死的絕對值開始說謊的那一刻。
@@ -828,7 +828,7 @@ describe('正式路徑上的門檻是我們選的', () => {
   it('預設那組四格都在，而且一個 fraction 都沒有', () => {
     const settings = resolveSummarizationSettings();
     expect(settings).toEqual(DEFAULT_SUMMARIZATION);
-    // 保留量只有比例那一個在場（dsh 的 `retainRatio` 預設 0.16），`retainTokens` 沒有——兩個互斥。
+    // 保留量只有比例那一個在場（`retainRatio` 預設 0.16），`retainTokens` 沒有——兩個互斥。
     expect(settings.retainRatio).toBe(0.16);
     expect(settings.retainTokens).toBeUndefined();
 
@@ -1380,7 +1380,7 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
  * （`retainTokensFor`），摘要之後至少還有八成的餘裕。
  *
  * 那為什麼不用基座的 `{type:'tokens'}`？它的 token 分支從最新往前累加、**超過就切**，最新一則自己就超過時
- * **一則都不留**（fail-open），而且量具是 `countTokensApproximately`。我們用的選法是 dsh 的：累加到 **≥** 為止、
+ * **一則都不留**（fail-open），而且量具是 `countTokensApproximately`。我們用的選法是：累加到 **≥** 為止、
  * 跨過的那則也留（`retainedTailCount`），所以至少留一則。
  *
  * **門檻要比固定開銷大。** 這個組裝沒有任何 plugin，但基座的系統提示與工具定義就占約 2,300 token；`3_000` 的門檻
@@ -1458,7 +1458,7 @@ describe('一般長對話不會退化成逐輪重摘', () => {
  * 被排除在外）。它掛在**工具那一格**，比摘要器早得多，所以：
  *
  * > **這把剪刀的射程是「8,192 到 80,000 字元」這一段。** 上面那截被基座搬去檔案系統了
- * > ——而那件事其實是 dsh `spill/` 的形狀（[#151](https://github.com/DemianLi/nexus-agent/issues/151)），
+ * > ——而那件事其實是 spill 的形狀（[#151](https://github.com/DemianLi/nexus-agent/issues/151)），
  * > 不是 pruner 的。下面那截本來就在預算內。
  *
  * 這一段是量出來的、也是這組測試最容易被寫錯的地方：第一版 fixture 用 50 萬字元，結果
@@ -1583,7 +1583,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   });
 
   /**
-   * **壓力沒到就一個字都不准碰**——dsh 那句「低于压力的对话绝不被碰」。
+   * **壓力沒到就一個字都不准碰。**
    *
    * 這一條是 `aboutToCompact` 那道閘門唯一的承重測試。少了它，「剪得對」那幾條在一個
    * 「每次超預算就剪」的版本上照樣全綠——而那正是卡上點名的那筆偏離。
@@ -1694,8 +1694,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   /**
    * **`summarization: false` 就不剪新的。**
    *
-   * 照 dsh，剪刀只在摘要開著時作用：那邊的 pruner 唯一的消費者是 compaction，
-   * `ctx.get('toolResultPruner')` 選擇性地讀，摘要不掛就沒人叫它。剪刀有自己的開關
+   * 剪刀只在摘要開著時作用：摘要不掛就沒人叫它。剪刀有自己的開關
    * （`toolResultPruning`，#446），但那是「摘要照跑、只是不先剪」；反過來沒有「只剪不摘要」。
    * 這條釘住那個方向，免得下一個人以為關掉摘要還會剩下剪刀。日誌上記過的剪法照樣換上去（#1567），
    * 那一半在 `recorded-projection-on-resume.test.ts`。
