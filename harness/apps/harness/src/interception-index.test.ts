@@ -1,5 +1,5 @@
 /**
- * 攔截時刻的索引：**dsh 的九個時刻裡，我們佔住的那四格分別是誰佔的、又比標準少了什麼。**
+ * 攔截時刻的索引：**九個時刻裡，我們佔住的那四格分別是誰佔的、又比標準少了什麼。**
  *
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它的候選 3
  * （[#193](https://github.com/DemianLi/nexus-agent/issues/193)）。九格逐格的核對過程在
@@ -50,19 +50,17 @@
  *    仍然只有 `prepend` 一根槓桿，但這一格已經沒有 plugin 要搶最內。
  * 2. **第 2 格終止原因記不下來**——`turn/*` 由入口點在**圖外**附加（`thread-pump.ts` 的
  *    `#runOnce`、`cli.ts` 的 `runTurn`），所以 `jumpTo: 'end'` 跳掉的輪次在日誌上與正常
- *    跑完的長得一模一樣，dsh 的「blocked 輪次」表達不出來。
+ *    跑完的長得一模一樣。
  * 3. ~~**第 9 格工具事件缺席**~~——**2026-09-12 由
  *    [#264](https://github.com/DemianLi/nexus-agent/issues/264) 補上**：`tool/call`／`tool/result`
  *    進了日誌，生產者是第 6 列的圍堵（圖裡的 middleware，不是入口點）。**第 9 格照舊沒有列**：
- *    dsh 那格是只觀察的 `mode: 'emit'` 通知，佔住它的是**聽者**，而我們這側讀 `tool/result`
- *    的只有遙測協調器——它照單全收每一顆事件，不是為這一格掛的。`goal-driver.ts` 檔頭那條
+ *    我們這側讀 `tool/result` 的只有遙測協調器——它照單全收每一顆事件，不是為這一格掛的。`goal-driver.ts` 檔頭那條
  *    婉拒 #180 停損的理由跟著改寫了：量得到了，結論沒變。**（2026-10-09 補，#1248）** 匯流排上的 `tools/result`
- *    有了生產者（圍堵，在記日誌之前派發）。**（2026-10-09 補，#1286）** 它有了第一位監聽者：`@nexus/plugin-present` 的交付寫入
- *    （dsh 的 `tool-present` 也聽這一顆）。遙測協調器讀的仍是日誌事件，不是為這一格掛的；present 是這個事件上的**消費者**，
- *    不是我們在這一格有沒有 dsh 那個時刻的缺口帳要記的東西，所以第 9 格仍不補列——要不要改成逐格填 `eventOccupant`
+ *    有了生產者（圍堵，在記日誌之前派發）。**（2026-10-09 補，#1286）** 它有了第一位監聽者：`@nexus/plugin-present` 的交付寫入。遙測協調器讀的仍是日誌事件，不是為這一格掛的；present 是這個事件上的**消費者**，
+ *    不是缺口帳要記的東西，所以第 9 格仍不補列——要不要改成逐格填 `eventOccupant`
  *    留給事件契約草稿的後續。
- * 4. **第 4 格核准的審計事件**——dsh 每次 request 一對 `approval/asked` ＋
- *    `approval/decided`；我們 #1029 起也有（人那條由 pump 寫、不必問人的由閘門寫），逐條在第 4 列的紀錄差。
+ * 4. **第 4 格核准的審計事件**——每次 request 一對 `approval/asked` ＋
+ *    `approval/decided`，#1029 起有（人那條由 pump 寫、不必問人的由閘門寫），逐條在第 4 列的紀錄差。
  *    這一條原本是「認帳不做」（[#220](https://github.com/DemianLi/nexus-agent/issues/220)），#1018 Q2 翻案。
  *
  * **第 2 與第 3 筆原本是同一個缺件**（圖裡發生的事沒有一條進日誌的路）。第 3 筆補上的方式是
@@ -77,8 +75,7 @@
  * 空格沒有東西可指**。第 5 與第 8 格是 #190 的候選 4，第 9 格見上面的缺口帳。
  *
  * **第 2 格空過一段，2026-09-18 又有佔用者了。** 它原本的佔用者是 plan-mode 的
- * `beforeAgent`——「`/plan` 選好的模式在下一次 agent 呼叫開頭交成 state update」，自己登記為
- * dsh `agent/pre-step` **邊界提交**的對應物。[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * `beforeAgent`——「`/plan` 選好的模式在下一次 agent 呼叫開頭交成 state update」。[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的第二刀把計劃模式搬進會話日誌、`/plan` 當場寫進去，那一格 pending intent 跟著收掉，
  * `beforeAgent` 就沒了；[#388](https://github.com/DemianLi/nexus-agent/issues/388) 的工作區指令
  * 基線又長出一個，**所以第 2 列是重建的，不是搬回來的**——三件事逐件重判：
@@ -93,21 +90,7 @@
  *   （`agent-instructions.test.ts` 的兩輪那條、`probe` 的三組 super-step 對照）。`beforeModel` 仍然是
  *   圖裡每步一格的節點（`repeat-reminder.ts` 掛在上面），但它不是 pre-step 注入。
  *
- * **plan-mode 在 [#652](https://github.com/DemianLi/nexus-agent/issues/652) 又回到這一格，佔的是邊界提交那半**：
- * `exit_plan_mode` 改走提問通道之後，同意不當場寫 `plan/mode`，排一格待關到下一步之前才交，同 dsh 的
- * `pendingIntents`。這一次載體是它本來就有的 `wrapModelCall`，不是當年的 `beforeAgent`——所以節奏是每一步，
- * 不是每次 agent 呼叫；下面那條 `beforeAgent:` 掃描把它列成明寫的例外。
- *
- * **九格之外的縫也沒有列。** dsh 的 `approval/request`（應答者 waterfall）不是那九個時刻名
- * 之一，落不進這個軸；它記在第 4 列的權限差裡，因為第 4 格是我們這側唯一的提問者。規矩往
- * 前推是一句話：**軸就是那九格，九格之外的東西只能掛在有關係的那一列上，不另開列。**
- *
- * ## dsh 那側的字串
- *
- * 九個時刻名逐字對過 `references/deepseek-harness`，SHA
- * `d347e703908d0406b7a7ef80e3a0e594d86b2215`（2026-09-04）。**那份 clone 不進版控**，所以
- * 下面的斷言只驗我們這側；dsh 那側要重對時自己 `git -C references/deepseek-harness fetch`
- * 再對 SHA，clone 會凍在 clone 當下。
+ * **九格之外的縫也沒有列。** 規矩是一句話：**軸就是那九格，九格之外的東西只能掛在有關係的那一列上，不另開列。**
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -150,9 +133,9 @@ interface InterceptionRow {
    * 一格可以同時有 middleware 佔用者與事件：遷移途中兩者並存（草稿 §五的絞殺式），事件那一側才是終點。
    */
   readonly eventOccupant: string;
-  /** dsh 的時刻名，**逐字**。這是 grep 的入口，也是下面斷言要在佔用者身上找的字串。 */
+  /** 時刻名，**逐字**。這是 grep 的入口，也是下面斷言要在佔用者身上找的字串。 */
   readonly moment: string;
-  /** dsh 給這個時刻的權限。 */
+  /** 這個時刻的權限。 */
   readonly permission: string;
   /**
    * 佔住它的檔案，repo 相對路徑。
@@ -160,12 +143,12 @@ interface InterceptionRow {
    * **每一個都必須提到 {@link moment}。** 那不是形式——那就是這一份的判準本身。
    */
   readonly occupants: readonly string[];
-  /** 權限那一軸比 dsh 少了什麼。`undefined` ＝ 三欄逐欄對得上。 */
+  /** 權限那一軸少了什麼。`undefined` ＝ 三欄逐欄對得上。 */
   readonly permissionDelta: string | undefined;
-  /** 紀錄那一軸比 dsh 少了什麼。`undefined` ＝ 沒有紀錄面的缺口。 */
+  /** 紀錄那一軸少了什麼。`undefined` ＝ 沒有紀錄面的缺口。 */
   readonly recordDelta: string | undefined;
   /**
-   * 頻率那一軸比 dsh 少了什麼。**{@link UNMEASURED} ＝ 沒量過**，不是「對得上」。
+   * 頻率那一軸少了什麼。**{@link UNMEASURED} ＝ 沒量過**，不是「對得上」。
    *
    * **這一欄刻意必填**，不跟上面兩欄一樣用缺席表達。那兩欄的 `undefined` ＝ 量過、沒有缺口；
    * 頻率這一軸量過的只有第 2 格。做成選填的話，新增一列時省略它是無聲的，而讀者會照隔壁
@@ -193,7 +176,7 @@ const INDEX: readonly InterceptionRow[] = [
       'harness/packages/nexus-plugin-time-context/src/index.ts',
       // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
       'harness/apps/harness/src/pre-step-middleware.ts',
-      // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。plan-mode 經 `thread.on('agent/pre-step')`
+      // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去。plan-mode 經 `thread.on('agent/pre-step')`
       // 自己聽那一步（#2358），不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
       'harness/packages/nexus-plugin-plan-mode/src/index.ts',
       // 那一步在 `langgraph` 下的載體：core 在 `wrapModelCall` 頭上派 `agent/pre-step` 的轉接格（native 由迴圈自己派）。
@@ -278,13 +261,13 @@ const INDEX: readonly InterceptionRow[] = [
       'harness/packages/nexus-core/src/invalid-tool-args.ts',
       'harness/packages/nexus-core/src/turn-cancel.ts',
       'harness/packages/nexus-core/src/output-schema.ts',
-      // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們在 `tools/execute` 內層換狀態。
+      // 檔案工具的失敗標成錯誤（#293）：我們在 `tools/execute` 內層換狀態。
       'harness/packages/nexus-core/src/fs-tool-errors.ts',
-      // 耐久檢查點（#599）：dsh 的 `session-checkpoint-policy` 本來就掛在這一格，呼叫動手之前排空（root 與子代理）。
+      // 耐久檢查點（#599）：`session-checkpoint-policy` 掛在這一格，呼叫動手之前排空（root 與子代理）。
       'harness/packages/nexus-core/src/session-checkpoint-policy.ts',
-      // 讀檔結果最後補上讀到哪（#594）：dsh 在 `read` 本體裡寫，我們在 `tools/execute` 外側補。
+      // 讀檔結果最後補上讀到哪（#594）：我們在 `tools/execute` 外側補。
       'harness/packages/nexus-core/src/read-continuation.ts',
-      // 子代理撞到輸出上限（#433）：dsh 在前景 `task` 本體裡拋，我們貼著本體換掉結果。
+      // 子代理撞到輸出上限（#433）：我們貼著本體換掉結果。
       'harness/packages/nexus-core/src/max-tokens.ts',
     ],
     permissionDelta:
@@ -335,7 +318,7 @@ const PRE_STEP_ROOTS = ['harness/apps/harness/src', 'harness/packages'] as const
 /**
  * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。
  *
- * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一步之前交出去，它經 `thread.on('agent/pre-step')` 聽那一步（#2358）；
+ * plan-mode 佔的是 pre-step 的**邊界提交**那半（#652）：待關在下一步之前交出去，它經 `thread.on('agent/pre-step')` 聽那一步（#2358）；
  * `langgraph` 下派那一步的是 core 的轉接格，載體是 `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是
  * 讓掃描放寬，是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
  *
@@ -354,11 +337,8 @@ const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
 /**
  * 掃描會找到、但**不是**第 2 列佔用者的 `beforeAgent:` 實作。
  *
- * `patch-tool-calls.ts`（補懸空的工具呼叫，接縫 6）：載體是 `beforeAgent`，卻不是 dsh `agent/pre-step`
- * 的佔用者——它**修復歷史**（整串訊息換掉），不注入內容、不提交待辦。dsh 對同一件事的位置**不在 pre-step**：
- * `agent-loop/src/index.ts` 的續行準備（open session 之後、`prepare` 之前）呼叫 `interruptedTurnClosers`，
- * 把「缺的工具結果、step/end、turn/end」**寫進日誌**（2026-10-07 對過 dsh `5badb150`）。我們的版本只在
- * 每次 invoke 開頭改圖裡的狀態、不寫日誌，這個差距與接縫 6 同批登記在 PR 內文，不在這份索引的軸上。
+ * `patch-tool-calls.ts`（補懸空的工具呼叫，接縫 6）：載體是 `beforeAgent`，卻不是 `agent/pre-step`
+ * 的佔用者——它**修復歷史**（整串訊息換掉），不注入內容、不提交待辦。
  *
  * 它從基座時代就是 `beforeAgent` 載體，只是住在 `node_modules`，這一條掃描看不到；搬進我們的樹才現形。
  *
@@ -397,11 +377,11 @@ function productSources(dir: string): string[] {
  *
  * 1. **有**：`approval/asked`、`approval/decided` 兩顆事件種類都宣告了（#1029）。這是翻面後的樣子——原本寫的是
  *    「完全沒有任何 `approval/` 開頭的名字」，它在那兩顆落地的那天紅了，紅的地方正是要重寫的那一欄。
- * 2. **有**：`approval/policy`（#437，dsh 用它記政策切換）。翻面後的樣子——原本這一條寫「還沒有」，它在這顆落地的那天紅了，
+ * 2. **有**：`approval/policy`（#437）。翻面後的樣子——原本這一條寫「還沒有」，它在這顆落地的那天紅了，
  *    紅的地方正是要重寫的那一句。
  *
  * 掃的是種類的**寫法**（聯集的 `| 'approval/…'`，或映射／宣告合併裡的 `'approval/…':` 鍵）而不是整個檔案，
- * 所以散文裡提到事件名不會誤觸。**掃的範圍不只 `session-log.ts`**（#679）：照 dsh，擁有者套件可以用
+ * 所以散文裡提到事件名不會誤觸。**掃的範圍不只 `session-log.ts`**（#679）：擁有者套件可以用
  * `declare module '@nexus/core'` 把自己的事件種類補進 `SessionEventMap`（見 {@link declaredEventKeyBlocks}）。
  *
  * **它釘不住那一欄的其餘部分**：生產者在不在圖外、人那條路由誰寫，都要自己讀。這是這份索引每一條斷言共同的限制，見檔頭。

@@ -493,8 +493,7 @@ describe('G2 close 的兩個錯都留', () => {
 });
 
 describe('H 第一批就寫不進去：撤掉這次實體化（#1580 刀 2a 審查 B1）', () => {
-  // 對照 dsh `materializePosix`（`session-persistence-jsonl/src/index.ts:1282-1321`）：第一批與發佈是同一次 `link`，
-  // 寫失敗時正式路徑上什麼都沒有。改動之前這裡會留下 header＋0 位元組的日誌＋鎖檔。
+  // 第一批與發佈是同一次 `link`，寫失敗時正式路徑上什麼都沒有。改動之前這裡會留下 header＋0 位元組的日誌＋鎖檔。
 
   it('寫一半拋 ENOSPC：header、日誌、鎖檔都不在；列表看不到；關掉之後同一個 id 建得回來', async () => {
     const fault = newFault();
