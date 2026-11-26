@@ -46,6 +46,8 @@ eval-results/
 
 # 從原始碼在 Linux 上起 serve 時放編好的 spawner 的位置（#1946）
 /harness/native/nexus-sandbox-spawner
+/native/nexus-supervisor
+/harness/native/nexus-supervisor
 
 # 搬到 harness/ 與 web/ 之前的產物位置（#3149）：既有 checkout 留下的建置輸出不該變成可 commit。只列產物，不忽略整個舊目錄，漏搬的原始碼才看得見。
 /apps/harness/lib/
