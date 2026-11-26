@@ -1,15 +1,6 @@
 /**
  * **thread 身分拿得到嗎**（[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) Q3 的前提證明，PR 的第一個 commit）。
  *
- * #1418 要讓「插件只套一次、也分得清這次呼叫是哪一條 thread」。Q3 拍板的來源是 LangGraph 的呼叫設定
- * （`configurable.thread_id`），對應 dsh 的 `exec.agent`：**身分隨呼叫明確傳進來**。卡上寫明這個前提「還沒實測」：
- * 只核過 `thread-pump.ts` 把 `thread_id` 交給圖、以及認會話的 `checkpoint_ns` 來自同一份設定。這一檔就是那個實測，
- * 量三種情況下**工具 handler 的第二個參數**與 **middleware 的 `request.runtime.configurable`** 各看到什麼：
- *
- * 1. 根 agent；
- * 2. 同步子代理（`task` 派出去、在父圖裡跑）；
- * 3. 背景子代理（`BackgroundSubagentHost` 在 `task` 之外用自己的 `thread_id` 拉起）。
- *
  * 這一檔只量、不改產品程式碼。證明不了就停下來回報到卡上，不換別的來源（PM 派工第 1 點）。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
