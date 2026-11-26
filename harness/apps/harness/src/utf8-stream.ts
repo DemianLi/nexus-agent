@@ -1,6 +1,5 @@
 /**
- * 把位元組串流解碼成 UTF-8 文字，**碰到不是 UTF-8 的位元組就停**，照 dsh 的 `streamText`（「decodes and rejects non-UTF-8 as
- * it goes」，`packages/fs/fs-local/src/fsio.ts` 的 `streamWholeText`）。
+ * 把位元組串流解碼成 UTF-8 文字，**碰到不是 UTF-8 的位元組就停**。
  *
  * 兩個呼叫端共用這一份（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：網頁預覽的 `deliverable-files.ts`，
  * 與讀檔工具走的 `contained-backend.ts`。差別只有 `ignoreBOM`——預覽沿用 `TextDecoder` 預設（吃掉開頭的 BOM），讀檔保留它

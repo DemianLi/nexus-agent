@@ -7,8 +7,7 @@
  * 我們一行程式碼都不寫，agent 跑起來就已經在往外送——送的是 inputs / outputs 原文，
  * 工具參數與檔案內容都在裡面（`tracing.test.ts` 有實測）。
  *
- * 這個模組做的是**披露**，形狀照 dsh 的共享披露
- * （`docs/subsystems/session-telemetry.zh.md`）：後端必須說出當前的共享策略，而且
+ * 這個模組做的是**披露**：後端必須說出當前的共享策略，而且
  * **只陳述策略、不承諾投遞**。所以下面這幾行只講「這個 process 現在的設定是什麼」，
  * 不講「東西會不會真的到」——那歸 langsmith 的 SDK，不歸我們。
  *
@@ -84,8 +83,8 @@ export function readTracingDisclosure(env: NodeJS.ProcessEnv): TracingDisclosure
 /**
  * 把設定寫成要印出來的幾行。
  *
- * 關著的時候只有一行，而且那一行是**肯定句**：沒掛東西就明說沒掛，不留白。dsh 的
- * 共享披露規定「沒掛任何遙測服務時才渲染未配置」——留白與「關著」在畫面上分不出來，
+ * 關著的時候只有一行，而且那一行是**肯定句**：沒掛東西就明說沒掛，不留白。
+ * 留白與「關著」在畫面上分不出來，
  * 那正是 #71 的 CLI 對中斷一個字都不印的同一個毛病。
  *
  * @param disclosure - {@link readTracingDisclosure} 的結果。
@@ -95,7 +94,7 @@ export function formatTracingDisclosure(disclosure: TracingDisclosure): readonly
   if (!disclosure.enabled) {
     // **只講 trace，不講「沒有東西離開這台機器」。** 後者是假的：`--live` 會把 prompt、
     // 工具結果與讀到的檔案內容送去模型閘道，MCP plugin 是第二條同樣的路。披露的射程
-    // 就是它自己那道 seam——dsh 的共享披露也是這樣寫的，只陳述當前策略，不替別人擔保。
+    // 就是它自己那道 seam，只陳述當前策略，不替別人擔保。
     return ['追蹤：關閉——不會有 trace 送出去。'];
   }
 

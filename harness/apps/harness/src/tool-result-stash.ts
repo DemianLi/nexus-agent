@@ -6,28 +6,27 @@
  * 這裡（{@link createToolResultStash}）：**主機上按會話分的私有目錄**，所以 CLI `--resume` 或 serve 重開之後，預覽指著的
  * 路徑還讀得到同一個檔。以前它在 graph state 的記憶體裡，重開就沒了。
  *
- * ## 照 dsh 的部分（`packages/spill/spill-local`，`477b4f4`）
+ * ## 做法
  *
- * - 外溢全文存在宿主上，按會話分目錄 `session-<雜湊>`（`store.ts:78-81`）；目錄 0700、檔案 0600（`store.ts:110-115`）。
- * - 保留期預設 30 天、`0` 表示不清，**啟動時清一次**（`index.ts:66-69`）；刻意保留，讓續接或 fork 的會話還讀得到舊定位
- *   （`index.ts:38-48`），**以單一檔為準**：一個檔寫入滿保留期就過期，同一個會話還在寫新檔也一樣（`index.ts:40-42`）。
- *   別人改得動的根不清，判準沿用 `plugin-config.ts` 已照 dsh 抄的 `assertPrivateFile`（dsh `cleanup.ts:86` 的
- *   `hasProtectedAncestors`）；別人改得動的會話目錄也不進去（`cleanup.ts:322-326`）。
- * - 存不下時保留原結果，不把成功變成錯誤（`spill-policy/src/index.ts:127-129`）：寫不進主機目錄就退回記憶體
+ * - 外溢全文存在宿主上，按會話分目錄 `session-<雜湊>`；目錄 0700、檔案 0600。
+ * - 保留期預設 30 天、`0` 表示不清，**啟動時清一次**；刻意保留，讓續接或 fork 的會話還讀得到舊定位，
+ *   **以單一檔為準**：一個檔寫入滿保留期就過期，同一個會話還在寫新檔也一樣。
+ *   別人改得動的根不清，判準沿用 `plugin-config.ts` 的 `assertPrivateFile`；別人改得動的會話目錄也不進去。
+ * - 存不下時保留原結果，不把成功變成錯誤：寫不進主機目錄就退回記憶體
  *   （{@link StashRoute}），不讓 #170 的「存不下就連原文一起丟」復發。
  *
  * ## 偏離（依 docs/plugin-contract.md〈偏離〉 登記：哪一條、為什麼、退到什麼）
  *
- * 1. **根目錄固定，不是「每個行程一個私有暫存目錄」。** dsh 沒設根目錄時用每行程一個的暫存目錄。基座的路徑是虛擬的
+ * 1. **根目錄固定，不是「每個行程一個私有暫存目錄」。** 基座的路徑是虛擬的
  *    （`/large_tool_results/…`），續接時推回的預覽照同一個虛擬路徑指過來，帶不出行程各自的絕對路徑；所以根要跨行程重開
  *    保持固定。預設放在 harness home 底下（`<home>/tool-results`），不放系統暫存區——那裡會被定期清掉，「續接讀得回」
  *    就保證不了多久。基礎建設表達不出來的是**路徑的形狀**：虛擬路徑不含行程資訊，所以退到「固定根＋按會話分目錄」。
  * 2. **檔名不隨機，由工具呼叫編號推出。** 基座把路徑寫死，續接時 `conversation-restore.ts` 也照同一條規則重算路徑，
- *    檔名換不掉。dsh 用 `open(path, 'wx', 0o600)` 開隨機檔名，重複會寫不進；這裡同一個編號會**覆寫**（基座的行為），
+ *    檔名換不掉。同一個編號會**覆寫**（基座的行為），
  *    因為編號重複代表同一則結果被重送。檔案權限仍是 0600。
  * 3. **會話目錄的鑰匙由呼叫端給**（CLI 是會話日誌的 run 目錄、serve 是專案目錄加 thread id）：兩者都是「續接時會回到
  *    同一個會話」的既有身分，這裡只取雜湊。沒給鑰匙的組裝（eval、spike、沒有會話日誌）維持今天的記憶體暫存。
- *    所以外溢存檔的請求**不帶 dsh `SaveTextSpill.owner`**（`spill/src/types.ts:61-72`）：分區在建實例時就由這把鑰匙定了，
+ *    所以外溢存檔的請求不帶 owner：分區在建實例時就由這把鑰匙定了，
  *    一個實例只服務一個會話，基座的 backend 路由又是組裝時固定的一條前綴，請求帶 owner 也沒有第二個去處（理由 1）。
  *
  * ## 分叉的子 thread
@@ -39,8 +38,7 @@
  * ## 模型也寫得進這個前綴
  *
  * 路由在圍欄外面，所以模型用 `write_file` 寫到 `/large_tool_results/…` 會落到這個會話的目錄。**不擋**：它只寫得進自己
- * 會話那個目錄（backend 的根就是它，圍堵仍在），寫的還是文字；擋它要另加一層判斷，而 dsh 的 spill 目錄同樣不擋模型
- * 讀取。二進位內容照 #642 拒讀（{@link HostStashBackend.read}）。
+ * 會話那個目錄（backend 的根就是它，圍堵仍在），寫的還是文字；擋它要另加一層判斷。二進位內容照 #642 拒讀（{@link HostStashBackend.read}）。
  *
  * @module
  */
@@ -81,10 +79,10 @@ const STASH_ROOT_ROLE: PrivateFileRole = {
 };
 
 /**
- * 會話目錄的名字：`session-` 加鑰匙雜湊的前十六個十六進位字。照 dsh 的 `session-<雜湊>`（`store.ts:78-81`）；
+ * 會話目錄的名字：`session-` 加鑰匙雜湊的前十六個十六進位字。
  * 鑰匙本身（路徑、thread id）不進檔名，所以檔名不洩漏別的會話的資訊，也不會有奇怪字元。
  *
- * **偏離（理由 2）：取十六位，dsh 取十二位。** 既有部署的會話目錄已經是十六位；改成十二位的話，舊目錄續接時找不到、
+ * **偏離（理由 2）：取十六位。** 既有部署的會話目錄已經是十六位；改成十二位的話，舊目錄續接時找不到、
  * 清掃時也認不出來（{@link STASH_SESSION_DIR_RE}）。所以維持十六位，清掃的比對式跟著用十六位。
  *
  * @param key - 呼叫端給的會話鑰匙。
@@ -95,7 +93,7 @@ export function stashSessionDirName(key: string): string {
 }
 
 /**
- * {@link stashSessionDirName} 產生的名字，**整個名字精確比對**。照 dsh `cleanup.ts:17-23` 的 `SESSION_DIR_RE`：
+ * {@link stashSessionDirName} 產生的名字，**整個名字精確比對**。
  * 共用的根底下有一個無關的 `session-backup`、`session-notes`，清掃也不碰。位數照上面那條偏離用十六位。
  */
 const STASH_SESSION_DIR_RE = /^session-[0-9a-f]{16}$/;
@@ -179,7 +177,7 @@ export class HostStashBackend extends ContainedFilesystemBackend {
   }
 
   /**
-   * 寫進會話目錄。**目錄在寫入途中被清掃 `rmdir` 掉就重建再寫**，照 dsh `store.ts:112-124`（ENOENT 就再 `mkdir` 一次，
+   * 寫進會話目錄。**目錄在寫入途中被清掃 `rmdir` 掉就重建再寫**（ENOENT 就再 `mkdir` 一次，
    * 直到寫進去或撞上別的錯）：清掃會把掃空的會話目錄刪掉，而它跟續接中的寫入可能同時發生。目錄消失時 `super.write`
    * 回的是錯誤結果不是 errno（可寫根不存在，或建暫存檔時 ENOENT），所以判準是「寫失敗之後目錄不在了」。
    */
@@ -260,11 +258,10 @@ export class StashRoute implements BackendProtocolV2 {
   /**
    * 外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）的存檔服務：**只寫主機，不退回記憶體**。
    *
-   * 跟 {@link write} 相反，這裡寫不進去要拋：外溢層把拋錯當成「保留原結果」（dsh `spill-policy` 的 `keeping the inline
-   * content`），8 萬字元以下的結果於是原樣交給模型。退回記憶體的話這裡會回報成功，模型拿到的是預覽加一個只在這個行程
+   * 跟 {@link write} 相反，這裡寫不進去要拋：外溢層把拋錯當成「保留原結果」（保留原結果），8 萬字元以下的結果於是原樣交給模型。退回記憶體的話這裡會回報成功，模型拿到的是預覽加一個只在這個行程
    * 讀得回的路徑，而原文本來完全放得下。
    *
-   * 檔名是隨機的（`<十二個十六進位字>-<建議檔名>`，照 dsh `store.ts:110`；工具結果是 `<工具名>.txt`、跨會話引用是
+   * 檔名是隨機的（`<十二個十六進位字>-<建議檔名>`；工具結果是 `<工具名>.txt`、跨會話引用是
    * `session-reference-<N>.txt`），不會跟基座按工具呼叫編號取的名字撞在一起；定位是虛擬前綴下的路徑，
    * 讀取走路由，圍欄看不到的主機絕對路徑不會出現在模型面前。
    *
@@ -277,7 +274,6 @@ export class StashRoute implements BackendProtocolV2 {
         const name = `${randomBytes(6).toString('hex')}-${request.suggestedName.replace(/[^A-Za-z0-9._-]/gu, '_')}`;
         const result = await this.#host.write(`/${name}`, request.content);
         if (failed(result)) throw new Error(result.error);
-        // 位元組數照 dsh `store.ts:130`：寫進去的內容的 UTF-8 長度。
         return {
           locator: `${prefix}/${name}`,
           bytes: Buffer.byteLength(request.content, 'utf8'),
@@ -387,7 +383,7 @@ function isErrno(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === code;
 }
 
-/** 講一聲，但收警告的那一方拋了也不讓清掃失敗（dsh `cleanup.ts:36-44` 的 `warnSafely`）。 */
+/** 講一聲，但收警告的那一方拋了也不讓清掃失敗。 */
 function warnSafely(warn: ((message: string) => void) | undefined, message: string): void {
   try {
     warn?.(message);
@@ -397,8 +393,7 @@ function warnSafely(warn: ((message: string) => void) | undefined, message: stri
 }
 
 /**
- * 別的本機使用者換不掉這個目錄底下的東西：是真的目錄、屬於目前使用者、群組與其他人不可寫。照 dsh `cleanup.ts:47-55` 的
- * `isTrustedDirectory`，判準同 {@link assertPrivateFile} 的前兩條；用剛 `lstat` 到的那一份判，不再走一次路徑。
+ * 別的本機使用者換不掉這個目錄底下的東西：是真的目錄、屬於目前使用者、群組與其他人不可寫。判準同 {@link assertPrivateFile} 的前兩條；用剛 `lstat` 到的那一份判，不再走一次路徑。
  */
 function isTrustedDirectory(stats: Stats): boolean {
   if (!stats.isDirectory()) return false;
@@ -408,7 +403,7 @@ function isTrustedDirectory(stats: Stats): boolean {
 }
 
 /**
- * 掃一個會話目錄：刪掉過期的一般檔，其餘不動，照 dsh `cleanup.ts:225-261` 的 `sweepSessionDir`。裡面的符號連結、子目錄、
+ * 掃一個會話目錄：刪掉過期的一般檔，其餘不動。裡面的符號連結、子目錄、
  * 特殊檔都不刪也不跟（`lstat` 不跟連結，所以連結改不了年齡判斷，也刪不到別處）。每一項的失敗各自收住，不擋同目錄其餘的檔。
  *
  * @returns 刪掉的檔數，與掃完之後目錄是不是空的（空的才交給呼叫端 `rmdir`）。
@@ -447,7 +442,7 @@ async function sweepSessionDir(
       removed += 1;
       remaining -= 1;
     } catch (error: unknown) {
-      // 同時有別的清掃先刪了：目的已經達成，不算失敗（dsh `cleanup.ts:196-208`）。
+      // 同時有別的清掃先刪了：目的已經達成，不算失敗。
       if (isErrno(error, 'ENOENT')) remaining -= 1;
       else warnSafely(warn, `[暫存] 刪不掉 ${path}：${(error as Error).message}`);
     }
@@ -456,18 +451,17 @@ async function sweepSessionDir(
 }
 
 /**
- * 清掉超過保留期的暫存檔，照 dsh `spill-local` 的 `cleanup.ts`（`sweepSpillRoots`）。兩個入口啟動時在背景叫它一次、
+ * 清掉超過保留期的暫存檔。兩個入口啟動時在背景叫它一次、
  * 卸載根時等它收斂（`tool-result-stash-sweep.ts`，#1553 N0952）：
  *
  * - `cleanupPeriodDays` 為 `0` 表示不清。
- * - **別人改得動的根不清**（dsh `index.ts:43-44`）：根或它的祖先群組／其他人可寫，就一個檔都不碰——那個目錄裡的東西
+ * - **別人改得動的根不清**：根或它的祖先群組／其他人可寫，就一個檔都不碰——那個目錄裡的東西
  *   可能是別人放的，刪它等於替別人選了要刪什麼。
  * - 只碰名字是 `session-<十六位雜湊>` 的直接子目錄（{@link STASH_SESSION_DIR_RE}）；其他名字（使用者放的東西，
  *   包括 `session-notes` 這種剛好以 `session-` 開頭的）不動。
- * - 那一項先 `lstat`，必須是真的目錄、屬於目前使用者、群組與其他人不可寫，否則講一聲跳過（dsh `cleanup.ts:309-326`）：
+ * - 那一項先 `lstat`，必須是真的目錄、屬於目前使用者、群組與其他人不可寫，否則講一聲跳過：
  *   名字對的**符號連結**不跟，否則會刪到連結指向的別處；別人改得動的會話目錄裡的檔可能是別人放的。
- * - **以單一檔為準**：會話目錄裡只刪修改時間早於保留期的一般檔，不往子目錄走；一個會話還在寫新檔，它的舊檔照樣過期
- *   （dsh `index.ts:40-42`）。掃完目錄是空的就 `rmdir`；同時有寫入（`ENOTEMPTY`）或已經不在（`ENOENT`）都不算錯，
+ * - **以單一檔為準**：會話目錄裡只刪修改時間早於保留期的一般檔，不往子目錄走；一個會話還在寫新檔，它的舊檔照樣過期。掃完目錄是空的就 `rmdir`；同時有寫入（`ENOTEMPTY`）或已經不在（`ENOENT`）都不算錯，
  *   寫入那一側會重建目錄（{@link HostStashBackend.write}）。
  * - 每一項獨立：一個刪不掉（權限、競爭）只記一筆，不擋其餘。根不存在就是沒東西可清。
  *

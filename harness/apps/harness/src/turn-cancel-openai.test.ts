@@ -153,7 +153,7 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
         type: 'turn/end',
         data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
       });
-      // 被切斷的那次照樣是一步：起訖一對，同 dsh 被取消的步照樣算。
+      // 被切斷的那次照樣是一步：起訖一對。
       const types = events.map((event) => event.type);
       expect(types.filter((type) => type === 'model/start')).toHaveLength(1);
       expect(types.filter((type) => type === 'model/end')).toHaveLength(1);
@@ -226,7 +226,7 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
 
   /**
    * #1665：那半段記不進日誌就連對話也不寫，兩邊一起少這一則、不分岔；這一輪照樣收成中止（人按了停止是事實），`warn` 大聲講。
-   * 同 dsh：被中止那一支的收尾寫入被拒，那一輪仍記 aborted（`agent.ts:462-500`）。半段是字串，日誌那一關拒不了，用 spy 造拒收。
+   * 被中止那一支的收尾寫入被拒，那一輪仍記 aborted。半段是字串，日誌那一關拒不了，用 spy 造拒收。
    */
   it('那半段記不進日誌：這一輪照樣收成中止，對話也不留，下一輪的請求沒有它', async () => {
     const upstream = await slowOpenAi();

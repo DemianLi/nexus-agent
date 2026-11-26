@@ -1,5 +1,5 @@
 /**
- * 由 serve 服務 `dist`（#424）：分面照 dsh `frontend-static` 的 `serveStatic`。
+ * 由 serve 服務 `dist`（#424）。
  */
 
 import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
