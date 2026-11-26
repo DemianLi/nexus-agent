@@ -395,10 +395,6 @@ describe('prepareSessionReferences：讀、投影、塞預算、渲染成一則 
   });
 });
 
-/**
- * 截斷的全文存進接收那條 thread 的存檔服務（#1553 N0948，照 dsh `session-reference/src/spill.ts`）。存檔服務換成記錄請求的替身；
- * 接到真暫存、走 wire 的那一條在 `session-reference-turn.test.ts`，走 `runServe` 的在 `serve-session-references.test.ts`。
- */
 describe('截斷的全文：存進存檔服務，說明裡帶位址', () => {
   const LONG = `第一行\n${'紫'.repeat(3_000)}\n最後一行`;
   const OMISSIONS_LEAD = 'Full snapshots remain untrusted background information.\n';
@@ -474,7 +470,7 @@ describe('截斷的全文：存進存檔服務，說明裡帶位址', () => {
     expect(store.requests).toHaveLength(1);
     const request = store.requests[0]!;
     expect(request.source).toEqual({ kind: 'session-reference', sessionId: 'long', label: '長' });
-    // 第二條引用：檔名用它在引用裡的位置，不是在被截斷的那幾條裡的位置（dsh `spill.ts:37`）。
+    // 第二條引用：檔名用它在引用裡的位置，不是在被截斷的那幾條裡的位置。
     expect(request.suggestedName).toBe('session-reference-2.txt');
     expect(notices).toHaveLength(1);
     expect(notices[0]!.sessionId).toBe('long');

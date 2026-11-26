@@ -1,22 +1,16 @@
 /**
  * LLM 標題：模型依第一則合格的人話產生的會話標題（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
  *
- * 照 dsh 的三個套件（`477b4f4`）：`session-title` 的排程（`onUserMessage`／`onRequestHeader`／`runProvider`）、
- * `session-title-llm` 的產生策略（`generateSessionTitleWithLlm`）、`session-title-first-prompt-llm` 的節奏（只看第一則）。
- *
  * ## 什麼時候跑
  *
- * 只在**這一則是第一則合格的人話、而且還沒有任何標題**時排一次（dsh `onUserMessage` 的
- * `parentSession === undefined && count === 1 && get(session) === undefined`；「沒有父會話」那一格不另寫：分叉的日誌從整份數起，
+ * 只在**這一則是第一則合格的人話、而且還沒有任何標題**時排一次（「沒有父會話」那一格不另寫：分叉的日誌從整份數起，
  * 繼承來的前綴裡已經有人話，`count === 1` 本來就不成立，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。其餘都不排：第二句、
  * 續接回來的舊會話（前面已經有人話）、分叉（同上）、子代理（只訂 root）。
  *
  * **排了不等於開跑**：要等那一顆 `turn/start` 之後的第一次模型呼叫（`model/start`）出現才開始，所以主回覆的請求
- * 先送出去，標題不拖慢它。這一顆沒等到的話（那一輪在呼叫模型之前就失敗了），留到下一次模型呼叫，同 dsh 的
- * `pending` 留到下一顆 `request/header`。
+ * 先送出去，標題不拖慢它。這一顆沒等到的話（那一輪在呼叫模型之前就失敗了），留到下一次模型呼叫。
  *
- * **偏離：觸發點用 `model/start`，不是 `request/header`。** dsh 等主請求的路由記下來才開始，路由就從那一顆讀。
- * 我們的 `request/header` 變了才記，同一條 thread 的第二輪以後通常沒有它，等它的話第一句之後的標題就排不上；路由也不必從
+ * **觸發點用 `model/start`，不是 `request/header`。** `request/header` 變了才記，同一條 thread 的第二輪以後通常沒有它，等它的話第一句之後的標題就排不上；路由也不必從
  * 日誌讀——一個組裝只有一條連線，建構時就知道。
  *
  * `model/start` 等到第一個要它的地方才寫（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)，`model-call-scope.ts` 檔頭），
@@ -25,23 +19,22 @@
  *
  * ## 寫什麼
  *
- * 開跑前先確保退回標題已落地（dsh 的 `ensureFallback`），送出前先記一顆 `session/title-llm-request`（真的送出去的系統提示、訊息、輸出上限），成功後追加一顆
+ * 開跑前先確保退回標題已落地，送出前先記一顆 `session/title-llm-request`（真的送出去的系統提示、訊息、輸出上限），成功後追加一顆
  * `session/title {source: {kind:'provider'}}`，由既有的推送與列表讀到（latest-wins）。**兩顆都寫在一輪之外**，
- * 不開一輪、不進模型。失敗只講一聲，退回標題留著，不重試（dsh 的重試要靠顯式 `refresh()`，它沒有出貨的呼叫者，我們不做，見 #1573）。
+ * 不開一輪、不進模型。失敗只講一聲，退回標題留著，不重試（見 #1573）。
  *
- * **寫入延到微任務**：訂閱者的回呼裡不能再 `append`（`SessionLog` 的重入防護），同 dsh 的 `defer`。
+ * **寫入延到微任務**：訂閱者的回呼裡不能再 `append`（`SessionLog` 的重入防護）。
  *
  * ## 在那一輪的 context 之外跑
  *
  * `model/start` 的訂閱者跑在主模型呼叫的呼叫堆疊上，也就在 LangChain 的 AsyncLocalStorage 裡——那裡帶著這一輪的
  * callbacks。直接在那裡叫標題模型的話，它會繼承這一輪的設定：被當成串流呼叫、事件漏進這條 thread 的 `messages`
  * 頻道（畫面上多一則回覆），而且回來的東西照串流解。實測過（serve 的產品路徑，#650）。所以標題呼叫綁在
- * **接上的那一刻**的 context 上跑（`AsyncResource.bind`），那一刻不在任何一輪裡。dsh 沒有這層環境狀態，
- * 它的標題呼叫本來就是獨立的一次請求。
+ * **接上的那一刻**的 context 上跑（`AsyncResource.bind`），那一刻不在任何一輪裡。
  *
  * ## 用量不計進會話統計
  *
- * 同 dsh：`session-stats` 只折 `step/*`、`assistant/*`、`tool/*`、`turn/end`，標題呼叫一顆都不產生。這一次呼叫不經
+ * `session-stats` 只折 `step/*`、`assistant/*`、`tool/*`、`turn/end`，標題呼叫一顆都不產生。這一次呼叫不經
  * agent 的 middleware，所以不寫 `model/usage`、`model/start`。
  *
  * @module
@@ -95,7 +88,7 @@ function withRetryPolicy(model: TitleModel, policy: StreamRetryOptions): TitleMo
   } as unknown as TitleModel;
 }
 
-/** 一則合格的人話：`turn/start {kind:'message'}` 的 `seq` 與原文。同 dsh 的 `SessionTitleUserMessage`。 */
+/** 一則合格的人話：`turn/start {kind:'message'}` 的 `seq` 與原文。 */
 export interface TitleSourceMessage {
   readonly seq: number;
   readonly text: string;
@@ -108,7 +101,7 @@ export interface TitleLlmLimits extends ThreadTitleLimits {
 }
 
 /**
- * 系統提示，**逐字照 dsh** 的 `systemPrompt`（`session-title-first-prompt-llm/src/index.ts`，1517a4db 起五行，#1573）。
+ * 系統提示（五行，#1573）。
  *
  * @param config - 兩個目標值寫進最後一行。
  */
@@ -125,7 +118,7 @@ export function titleSystemPrompt(
 }
 
 /**
- * 把人話包成 JSON，**逐字照 dsh** 的 `frameMessages`：使用者的字打不破結構上的分隔。
+ * 把人話包成 JSON：使用者的字打不破結構上的分隔。
  *
  * @param messages - 要給模型看的那幾則。
  */
@@ -133,12 +126,11 @@ export function frameTitleMessages(messages: readonly TitleSourceMessage[]): str
   return `Generate the session title from this JSON array of human messages:\n${JSON.stringify(messages)}`;
 }
 
-/** 整行被星號強調包住，例如 `**標題**`。**逐字照 dsh** 的 `EMPHASIS_WRAPPER`。 */
+/** 整行被星號強調包住，例如 `**標題**`。 */
 const EMPHASIS_WRAPPER = /^(?<marker>\*{1,3})(?<inner>\S(?:.*\S)?)\k<marker>$/u;
 
 /**
- * 從模型輸出取標題：第一個非空行，並剝掉包住整行的星號強調。**逐字照 dsh** 的 `titleFromOutput`
- * （`session-title-first-prompt-llm/src/index.ts:96-113`，1517a4db；#1573）。
+ * 從模型輸出取標題：第一個非空行，並剝掉包住整行的星號強調（#1573）。
  *
  * 不聽「只回一行」的模型會把標題放第一行、說明接在後面。整行都是 `*` 強調的，就算模型是字面上要星號也會被剝；
  * 內層還有同一個記號的（`**甲** 與 **乙**`）不剝，強調留在一行之內。
@@ -174,7 +166,7 @@ export interface GenerateThreadTitleRequest {
 }
 
 /**
- * 跑一次標題模型。照 dsh 的 `generateSessionTitleWithLlm`，順序也照它：
+ * 跑一次標題模型，順序：
  *
  * 1. 包好訊息，**先查位元組**，超過 `maxInputBytes` 就拋——不截斷，也不記請求。
  * 2. 記 `session/title-llm-request`（真的送出去的那一份），再送。模型後來失敗了，這一顆照樣留著。
@@ -202,7 +194,7 @@ export async function generateThreadTitle(
   const system = titleSystemPrompt(request.config);
   const messages: SessionTitleLlmMessage[] = [{ role: 'user', content: framed }];
   const messageSeqs = request.messages.map((message) => message.seq);
-  // 整段時限與呼叫端的中止融合成一顆 signal（`@nexus/timeout`，照 dsh）；結束時 dispose，計時器不留到到期。
+  // 整段時限與呼叫端的中止融合成一顆 signal（`@nexus/timeout`）；結束時 dispose，計時器不留到到期。
   const bound = deadline(request.signal, request.config.timeoutMs, 'TITLE_LLM_TIMEOUT');
   try {
     request.log.append('session/title-llm-request', {
@@ -228,7 +220,7 @@ export async function generateThreadTitle(
       throw new Error(`標題模型沒有正常收尾：finish_reason 是 ${String(finish)}`);
     }
     if ((reply.tool_calls?.length ?? 0) > 0) throw new Error('標題模型要求呼叫工具，只收文字');
-    // `text` 只串文字區塊、推理區塊不算，同 dsh 的 `BlockAssembler` 只取 `text`。
+    // `text` 只串文字區塊、推理區塊不算。
     const title = normalizeThreadTitle(titleFromOutput(reply.text), request.maxTitleBytes);
     if (title === '') throw new Error('標題模型沒有產生文字');
     return { title, messageSeqs };
@@ -244,7 +236,7 @@ export interface SessionTitleLlmOptions {
   readonly config: ThreadTitleLlmConfig;
   readonly limits: TitleLlmLimits;
   /**
-   * {@link model} 這一顆送出去的推理強度，原樣記進 `session/title-llm-request`（#1573，dsh 記 `efforts[0]`）。省略＝不記這一格。
+   * {@link model} 這一顆送出去的推理強度，原樣記進 `session/title-llm-request`（#1573）。省略＝不記這一格。
    * 只是紀錄：請求本身怎麼關推理由 {@link model} 自己決定（`live-model` 的 `purpose: 'session-title'`），這裡不改送出的東西。
    */
   readonly reasoningEffort?: string;
@@ -252,7 +244,7 @@ export interface SessionTitleLlmOptions {
   readonly retry?: StreamRetryOptions;
   /**
    * 標題沒有自己的覆寫時，**沿用觸發它的那次主請求走的模型**（[#723](https://github.com/DemianLi/nexus-agent/issues/723)，
-   * PM 2026-10-08 決策：照 dsh，標題沒給覆寫就沿用主請求的路由）。拿 `model/start` 記的路由，換出這一次用的模型與記進
+   * PM 2026-10-08 決策：標題沒給覆寫就沿用主請求的路由）。拿 `model/start` 記的路由，換出這一次用的模型與記進
    * `session/title` 的身分；回 `undefined` ＝ 用上面預設的那一組（路由認不出、或不在型錄裡）。
    * 省略就一律用 {@link model}／{@link route}（沒有每會話選擇的組裝、或標題另外指定了模型）。
    */
@@ -271,7 +263,7 @@ export interface SessionTitleLlmOptions {
  *
  * @param log - root 那一份。
  * @param warn - 產生失敗時講話的地方。
- * @returns 拆掉：取消還沒開跑的、中止跑到一半的，並等它收尾（同 dsh「卸載完成前等待不響應取消的調用結算」）。
+ * @returns 拆掉：取消還沒開跑的、中止跑到一半的，並等它收尾。
  *   拆掉之後回來的結果寫不進去。
  */
 export type AttachSessionTitleLlm = (
@@ -296,7 +288,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
     let closed = false;
     let pending: TitleSourceMessage | undefined;
     const controller = new AbortController();
-    // 正在跑的那一次自己的中止柄：使用者改名時只撤它（#633，dsh `supersede`），拆掉時由上面的 `controller` 統一撤。
+    // 正在跑的那一次自己的中止柄：使用者改名時只撤它（#633），拆掉時由上面的 `controller` 統一撤。
     let active: AbortController | undefined;
     let running: Promise<void> | undefined;
     // 排上了還沒收尾的產生次數（含微任務延遲的那一拍），給 `busy` 讀。
@@ -327,7 +319,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
       const own = new AbortController();
       active = own;
       try {
-        // 先確保退回標題已落地，同 dsh `runProvider` 的 `ensureFallback`。平常它在 `turn/start` 那一段已經寫了，這裡是
+        // 先確保退回標題已落地。平常它在 `turn/start` 那一段已經寫了，這裡是
         // no-op；只有那一次寫失敗時才補。補不進去就跟模型失敗一樣講一聲、不送。
         ensureFallbackTitle(log, options.limits);
         // 開跑前就已經被釘住：不花這一次模型呼叫。
@@ -343,7 +335,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           signal: AbortSignal.any([controller.signal, own.signal]),
         });
         if (closed) return;
-        // 使用者在模型回來之前改了名：釘住的標題不被蓋過（#633，dsh `rename` 撤掉進行中的產生）。
+        // 使用者在模型回來之前改了名：釘住的標題不被蓋過（#633）。
         if (titlePinnedByUser(log.events)) return;
         log.append('session/title', {
           title: result.title,
@@ -378,7 +370,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
       }
       const text = eligibleText(event);
       if (text !== undefined) {
-        // 第一則合格的人話、而且還沒有標題：排一次。同 dsh 的 `count === 1 && get(session) === undefined`。
+        // 第一則合格的人話、而且還沒有標題：排一次。
         const events = log.events;
         const eligible = events.filter((each) => eligibleText(each) !== undefined);
         const titled = events.some((each) => each.type === 'session/title');
@@ -389,7 +381,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         const message = pending;
         const mainRoute = event.data.route;
         pending = undefined;
-        // 回呼裡不能 append，延到微任務（同 dsh 的 `defer`）。
+        // 回呼裡不能 append，延到微任務。
         inFlight += 1;
         running = Promise.resolve()
           .then(() => (closed ? undefined : runOutsideTurn(message, mainRoute)))

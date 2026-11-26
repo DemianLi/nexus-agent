@@ -457,7 +457,6 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       // 上一個行程的那顆不是這一次按的——重播到它就等於接上的當下把整份歷史送出去。
       expect(sink.records).toHaveLength(0);
 
-      // 這一次按的那顆才放行，而前綴包括帶進來的歷史（照 dsh 的 `includeHistory: true`）。
       sessions.root.append('feedback/record', { text: '這一次' });
       expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
         'turn/start',

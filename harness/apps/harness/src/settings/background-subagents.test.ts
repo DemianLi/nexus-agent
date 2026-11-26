@@ -1,5 +1,5 @@
 /**
- * 背景續行的設定列（[#841](https://github.com/DemianLi/nexus-agent/issues/841)）：schema 預設是 `one-shot`（照 dsh），
+ * 背景續行的設定列（[#841](https://github.com/DemianLi/nexus-agent/issues/841)）：schema 預設是 `one-shot`，
  * **出貨的 `cordis.yml` 那一列才把它打開**——所以「沒有那一列／標成 disabled」回到今天的一次性。
  */
 
