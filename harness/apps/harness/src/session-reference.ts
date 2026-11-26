@@ -2,50 +2,38 @@
  * 引用別的會話的準備那一半（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：把人在句子裡 `@` 的會話，
  * 凍成一則附在那句話後面的 user-role 快照。候選那一半在 `session-reference-candidates.ts`。
  *
- * 照 dsh 的 `SessionReferenceResolver`（`packages/context/session-reference/src/{index,projection,spill,serialization}.ts`，
- * `477b4f4`）：
- *
  * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 `maxReferences` 條不同的會話（預設 3，
  *    `session-reference` 那一列，#1573）、不能引用自己。
- * 2. **精確讀**（{@link SessionReferenceReader}）：冷讀的整份日誌壞了就拋，不撿回（dsh 的 `readSurface`）。
+ * 2. **精確讀**（{@link SessionReferenceReader}）：冷讀的整份日誌壞了就拋，不撿回。
  * 3. **投影**（{@link projectSessionConversation}）：只留**那條會話現在看得到的**人話與助手文字，工具、推理、外掛塞的、快照本身都不留
  *    ——所以快照不會一層包一層。
- * 4. **預算**（{@link retainReferencedSession}）：每條來源序列化後最多多少位元組照 dsh **跟著模型窗口走**（`session-reference-budget.ts`：
+ * 4. **預算**（{@link retainReferencedSession}）：每條來源序列化後最多多少位元組**跟著模型窗口走**（`session-reference-budget.ts`：
  *    `max(64 KiB, floor(窗口 × 4 × 比例))`，`maxReferenceBytes` 給了就原樣蓋過，#1573）；沒有模型容量資訊時 64 KiB。先丟中間的訊息
  *    （留最新的與摘要），再對最長的一則頭尾各留一半、中間換成 `[… omitted N UTF-8 bytes …]`。
  * 5. **提示詞**（{@link renderReferencePrompt}）：不可信、唯讀的 JSON，包在 `<referenced-sessions>` 裡；截斷了就多一段說明全文在哪。
- * 6. **截斷的全文**（`prepareReferenceOmission`，dsh `spill.ts`）：存進接收那條 thread 的存檔服務，說明裡帶回位址。
+ * 6. **截斷的全文**（`prepareReferenceOmission`）：存進接收那條 thread 的存檔服務，說明裡帶回位址。
  *
- * 給模型看的字（提示詞、警告、截斷標記）**逐字照抄 dsh**，同 `conversation-replay.ts` 抄 dsh 修補句的做法。
+ * ## 偏離（登記）
  *
- * ## 偏離 dsh（登記）
- *
- * 1. **驗證在收下那句話的時候，不在迴圈裡**：dsh 在 `agent/pre-step` 才解析，壞了讓整輪失敗。我們的人話在 `turn/start.text`，
+ * 1. **驗證在收下那句話的時候，不在迴圈裡**：我們的人話在 `turn/start.text`，
  *    寫進日誌的時候就要已經是換過的 `@標題`，而那時迴圈還沒開始，所以解析與驗證（自己、太多條、網址壞）提前到 `run.start`／
  *    `queue.update` 收下的那一刻，回 `invalid_argument`，那句話不進佇列、什麼都不丟。**讀被引用的會話仍在迴圈裡**（領走之後、叫模型之前），
- *    失敗讓這一輪失敗，同 dsh。
- * 2. （已撤：截斷的全文照 dsh 存進接收那條 thread 的工具結果暫存並回位址，#1553 N0948；沒有暫存時回 `storage-not-configured`。
- *    編號保留，別處引用的「偏離 3、4」不跟著動。）
- * 3. （已撤：模型容量。以前寫「我們的模型解不出 `maxInputTokens`，所以固定 64 KiB」，前提今天不成立：型錄每一筆必填 `contextWindow`，
- *    組裝端有 `limitsOf`，#1573 N0862 起預算照 dsh 跟著模型窗口走，見偏離 5、6。編號保留，別處引用的「偏離 3、4」不跟著動。）
- * 4. **投影靠 `replayConversation`**：dsh 走「目前那一面」（surface）的事件，我們沒有那一軸，「現在看得到的」就是把日誌推回模型歷史
+ *    失敗讓這一輪失敗。
+ * 4. **投影靠 `replayConversation`**：「現在看得到的」就是把日誌推回模型歷史
  *    （壓縮會換掉舊的），同 `thread-search.ts` 的做法。**推不出來就拋**（`SESSION_REFERENCE_READ_FAILED`），不像搜尋那樣退回「整份都算」
  *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。投影時在副本後面接上補結（{@link closedForProjection}）：活會話還沒回覆也投影得出人打的字。
  *    `capturedThroughSeq` 取傳入 `events` 的最後一顆：活的是記憶體最後一顆，冷讀的是補結那一顆。
- * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（理由 1，基座表達不出來；#1573 N0862）：dsh 取的是這一步
- *    組裝完的路由（`22ddee37` 是 `agent/pre-step` 帶的 `modelSelection`，`index.ts:133`、`:321`；`1517a4db`／`687f282e` 是
- *    `system-prompt/assemble` 記下的 `assembledRoutes`，`index.ts:97`、`:122-128`）。
+ * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（#1573 N0862）：
  *    我們領走發生在 step-inbox 的 `beforeModel`，它在 middleware 順序裡是**第一顆**（`harness/packages/nexus-core/src/fold.ts:671` 的註解），而這一步的路由由後面的
- *    重複提醒／換模型通知那顆 `beforeModel` 的 `assembleStep()` 才定，所以領走的當下**這一步的路由還沒定**。表達不出來的是「領走晚於
- *    定路由」。退到最接近的：領走時問選擇控制器的 `next()`（使用者最後選的 → 最近一次請求走的 → 部署預設，純讀日誌），整批共用
+ *    重複提醒／換模型通知那顆 `beforeModel` 的 `assembleStep()` 才定，所以領走的當下**這一步的路由還沒定**。
+ *    領走時問選擇控制器的 `next()`（使用者最後選的 → 最近一次請求走的 → 部署預設，純讀日誌），整批共用
  *    一次。**不叫 `assembleStep()`／`takeStepRoute()`**：前者會寫快照，`beforeModel` 被跳過的下一步會吃到舊路由。差別只在「領走之後、
- *    這一步請求之前」又有 `model/selection` 落進日誌的那個窗口：預算用的是舊那顆的窗口，請求走的是新那顆。dsh 本身不重算這一步，
- *    補上等於加了 dsh 沒有的語意，所以不補。這個窗口在同一批領走裡不存在：開場那句與插話都從 `#deliverSteps`（`thread-pump.ts`）一處進來、
+ *    這一步請求之前」又有 `model/selection` 落進日誌的那個窗口：預算用的是舊那顆的窗口，請求走的是新那顆，不補。這個窗口在同一批領走裡不存在：開場那句與插話都從 `#deliverSteps`（`thread-pump.ts`）一處進來、
  *    一次領走，共用同一個預算。
- * 6. **出廠的 `referenceContextFraction` 是 0.1，不是 dsh 的 0.2**（理由 2，產品需求超出 dsh 的射程；demian 2026-10-17 拍板 Q4 (b)）：
- *    dsh 的「每 token 4 位元組」是照英文調的，本產品以中文為主，nexus 自己的估算器量中文約 0.31 token／位元組，0.2 時三條來源占摘要門檻的
+ * 6. **出廠的 `referenceContextFraction` 是 0.1，不是 0.2**（demian 2026-10-17 拍板 Q4 (b)）：
+ *    「每 token 4 位元組」是照英文調的，本產品以中文為主，nexus 自己的估算器量中文約 0.31 token／位元組，0.2 時三條來源占摘要門檻的
  *    94%–95%，乘上實測的真實÷o200k 1.10 就超過。量法、數字與突變見 `cordis.yml` 的 `session-reference` 那一列與 `session-reference-budget.test.ts`；
- *    schema 的預設仍是 dsh 的 0.2（`settings/session-reference.ts`）。
+ *    schema 的預設仍是 0.2（`settings/session-reference.ts`）。
  *
  * @module
  */
@@ -72,7 +60,7 @@ import {
   SessionReferenceError,
 } from '@nexus/wire';
 
-/** 一條來源序列化後最多幾個位元組（沒有模型容量資訊時 dsh 的預設）。 */
+/** 一條來源序列化後最多幾個位元組（沒有模型容量資訊時的預設）。 */
 export const DEFAULT_MAX_REFERENCE_BYTES = 65_536;
 
 const PROMPT_PREFIX = `## Referenced sessions
@@ -120,7 +108,7 @@ export function parseReferencedText(
   };
 }
 
-/** 去重（第一次出現的標題留下）、擋自己、擋太多，同 dsh 的 `normalizeReferences`。 */
+/** 去重（第一次出現的標題留下）、擋自己、擋太多。 */
 export function normalizeReferences(
   selfId: string,
   references: readonly NormalizedReference[],
@@ -197,7 +185,7 @@ export interface ReferenceRetentionStats {
   readonly truncated: boolean;
 }
 
-/** 不讓來源資料拼出一個 XML 式的開標籤：`<` 換成 `<`，解析結果不變。同 dsh 的 `stringifyTagSafeJson`。 */
+/** 不讓來源資料拼出一個 XML 式的開標籤：`<` 換成 `<`，解析結果不變。 */
 export function stringifyTagSafeJson(value: unknown): string {
   const serialized: unknown = JSON.stringify(value);
   if (typeof serialized !== 'string') {
@@ -435,7 +423,6 @@ export function renderReferencePrompt(data: readonly ReferencedSessionData[]): s
   return `${PROMPT_PREFIX}${stringifyTagSafeJson(data)}${PROMPT_SUFFIX}`;
 }
 
-/** 全文存下來了沒有，照 dsh `spill.ts:12-13` 的 `FullSnapshot`。 */
 type FullSnapshot =
   | ({ readonly status: 'saved' } & SpillRef)
   | {
@@ -458,7 +445,6 @@ interface OmissionSource {
 }
 
 /**
- * 預覽少了字的那一條，存全文並回一則說明，照 dsh `spill.ts:23-50` 的 `prepareReferenceOmission`。沒有截斷就是 `undefined`。
  * 沒有存檔服務回 `storage-not-configured`；存檔拋錯回 `save-failed`——存不下不能把殘缺的預覽說成有全文，也不讓這一輪失敗。
  * 取消不在這裡吞：外層 {@link settleWithCancellation} 照樣拋 `CANCELLED`。
  *
@@ -506,10 +492,6 @@ function omission(source: OmissionSource, fullSnapshot: FullSnapshot): OmissionN
   };
 }
 
-/**
- * 截斷的那一條的完整逐字稿，逐字照 dsh `spill.ts:62-81` 的 `renderTranscript`：警告、擷取的中繼資料，每則訊息切成最多 64 個
- * code point 一段的 JSON 字串、一段一行（沒有換行的長訊息也讀得了，逐段 `JSON.parse` 串起來就是原文）。
- */
 function renderTranscript(data: ReferencedSessionData, capturedFormatVersion: number): string {
   const { conversation, ...capture } = data;
   return [
@@ -553,7 +535,7 @@ export interface PrepareReferencesOptions {
   /** 每條來源序列化後的位元組上限，省略即 {@link DEFAULT_MAX_REFERENCE_BYTES}。 */
   readonly maxReferenceBytes?: number;
   /**
-   * 截斷時存全文的地方，**接收這段脈絡的那條 thread 自己的**存檔服務（dsh 取 `ctx.get('spillStore')`，owner 是接收的會話）。
+   * 截斷時存全文的地方，**接收這段脈絡的那條 thread 自己的**存檔服務（owner 是接收的會話）。
    * 缺席就回 `storage-not-configured`。
    */
   readonly spillStore?: SpillStore;
@@ -572,7 +554,6 @@ function cancelled(signal: AbortSignal): SessionReferenceError {
   );
 }
 
-/** 等 `work`，但取消時不等它：同 dsh 的 `settleWithCancellation`。 */
 function settleWithCancellation<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return work;
   if (signal.aborted) {
@@ -647,12 +628,11 @@ export async function prepareSessionReferences(
         'SESSION_REFERENCE_BUDGET_EXCEEDED',
       );
     }
-    // 記磁碟上那份的版號，不是轉譯後的 `header.version`：事件沒轉譯，原樣交到這裡（#1856；dsh 記的是後者，
-    // 偏離「引用快照的 capturedFormatVersion 記原版號」見 `@nexus/core` 的 `session-store.ts`）。
+    // 記磁碟上那份的版號，不是轉譯後的 `header.version`：事件沒轉譯，原樣交到這裡（#1856；
+    // 「引用快照的 capturedFormatVersion 記原版號」見 `@nexus/core` 的 `session-store.ts`）。
     return { ...retained, capturedFormatVersion: storedFormatVersion };
   });
 
-  // 照 dsh `index.ts:348-352`：逐條存，存的時候也等得到取消。
   const omissions = await settleWithCancellation(
     Promise.all(
       rendered.map((source, index) => prepareReferenceOmission(options.spillStore, source, index)),
