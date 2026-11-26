@@ -1,10 +1,9 @@
 /**
  * serve 與 CLI 的 Cordis 根（[#1401](https://github.com/DemianLi/nexus-agent/issues/1401)，決議 §3-1 第 5 條的第一步）。
  *
- * ## 啟動順序
+ * ## 樹上的列
  *
- * 順序：`new Context()`、根上 provide 宿主的值、`await ctx.plugin(Loader)`、掛列、`loader.await()`、`auditStartupEntries`。
- * 宿主的值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有這幾列：
+ * 根上 provide 的宿主值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有這幾列：
  *
  * | 列 id | 是什麼 |
  * |---|---|

@@ -62,8 +62,8 @@
  * （檢查與 syscall 之間祖先 symlink 被抽換）被接受——核心級的隔離是 shell sandbox 的事
  * （`feat/sandbox-plugin`）。
  *
- * **TOCTOU 窗口要說明白。** 檢查的 canonical 目標與實際寫入用的路徑不是同一個身分
- * `delete`／`uploadFiles` 走基座：`super.delete()`／`super.uploadFiles()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
+ * **TOCTOU 窗口要說明白。** 檢查的 canonical 目標與實際寫入用的路徑不是同一個身分。
+ * 只有 `delete`／`uploadFiles` 走基座：`super.delete()`／`super.uploadFiles()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
  * 傳一個 realpath 進去只會被當成虛擬路徑接到 `cwd` 底下。所以這裡回傳的是「canonical 之後
  * 再表達回去的虛擬路徑」——祖先的 symlink 已經被解掉，但基座那一次 lexical resolve 仍在
  * 我們的檢查之後發生。
