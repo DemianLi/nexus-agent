@@ -397,7 +397,7 @@ describe('排不出來的每一種，理由各自有名字', () => {
 
   /**
    * **收尾在授權之前才算數**（#1516）：人下的暫停一定中止在跑的那一輪，所以「暫停 → 恢復」每次都是
-   * 「最後一顆 `turn/end` 是 aborted，後面接一次 `resume`」。dsh 在 `turn/end` 抵達的當下收回，事後的 resume 不受影響；
+   * 「最後一顆 `turn/end` 是 aborted，後面接一次 `resume`」。
    * 我們的決定讀日誌算，要靠先後。
    */
   describe('收尾之後又有人授權（create／resume）', () => {
@@ -502,8 +502,7 @@ describe('排不出來的每一種，理由各自有名字', () => {
 });
 
 /**
- * **撞到輸出上限、被人中止、拋錯：不只這一次不排，還收回授權**（#433、#660），同 dsh 的
- * `goal-round-driver` 看到 max-tokens 與 aborted 就 `disarm`、收到 `agent/error` 也是。對照組是同一份日誌、
+ * **撞到輸出上限、被人中止、拋錯：不只這一次不排，還收回授權**（#433、#660）。對照組是同一份日誌、
  * 授權已經不在：不再收一次。
  */
 describe('上一輪撞到輸出上限、被中止或拋錯', () => {
@@ -567,8 +566,7 @@ describe('上一輪撞到輸出上限、被中止或拋錯', () => {
 });
 
 /**
- * 背景子代理還在推進就先等（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `goal-round-driver/src/index.ts`
- * 的 `drive`：檢查點 → `waitForChildren` → 複查 → 判上限、預約）。接上真 pump 與真背景 host 的驗收在 `goal-driver-pump.test.ts`。
+ * 背景子代理還在推進就先等（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）。接上真 pump 與真背景 host 的驗收在 `goal-driver-pump.test.ts`。
  */
 describe('等背景子代理（N0372）', () => {
   /** 一份記下每一步先後的 port；`waits` 是每次 `waitForChildren` 要回的值（用完回 `false`）。 */

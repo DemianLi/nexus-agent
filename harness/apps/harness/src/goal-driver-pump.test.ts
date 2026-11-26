@@ -792,8 +792,7 @@ describe('掛了旗標', () => {
   });
 
   /**
-   * **收線之後日誌上不會再多一顆事件。** dsh 的 teardown 也是這樣：關掉準入、取消進行
-   * 中的、等停穩。
+   * **收線之後日誌上不會再多一顆事件。**
    *
    * 擋住那一輪的是 `submit()` 自己的拒絕（收線之後它一律 reject），不是
    * `#driveGoalRound` 裡那兩處 `#closed`——那兩處只是提早退出，量過拿掉行為不變。
@@ -1267,7 +1266,7 @@ describe('封存的會話（#633）', () => {
     expect(pump.pendings).toHaveLength(0);
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'resume']);
     expect(endKinds(pump.sessionLog).at(-1)).toBe('blocked');
-    // 核准是在叫模型之前就給的：dsh 的一步是「叫模型→跑工具」，`ArchivedSessionGate` 掛在步前，所以掛著的核准照樣落地。
+    // 核准是在叫模型之前就給的，掛著的核准照樣落地。
     const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
     expect(results).toHaveLength(1);
     await stop();
@@ -1516,7 +1515,7 @@ describe('續行等背景子代理（N0372）', () => {
     await until(() => state.turn >= 4);
     await settle(pump);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    // 放行之前不記 blocker：輪數雖然到頂了，先等子代理（dsh：先等、再判上限）。
+    // 放行之前不記 blocker：輪數雖然到頂了，先等子代理。
     const blocked = () =>
       pump.sessionLog.events.some(
         (event) =>

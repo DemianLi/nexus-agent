@@ -1,8 +1,7 @@
 /**
  * 啟動時裝一次對外代理（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
  *
- * 照 dsh：**啟動流程的第一件事**，排在載完分層環境之後、第一顆外掛載入之前
- * （`apps/cli/src/profile-boot.ts:245-252`，`477b4f4`）。值從啟動環境讀（`LaunchEnvironment`），
+ * **啟動流程的第一件事**，排在載完分層環境之後、第一顆外掛載入之前。值從啟動環境讀（`LaunchEnvironment`），
  * 所以寫在 harness home 那份 `.env` 裡的代理也生效；目前資料夾那份設代理，`launch-env.ts` 已經在載入時拒絕。
  *
  * **每一條啟動路徑都裝，不只 `--live`**：網路上的 MCP（`transport: 'http'`）在假模型路徑上一樣連外。

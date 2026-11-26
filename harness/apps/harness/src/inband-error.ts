@@ -1,19 +1,16 @@
 /**
  * 串流內錯誤信封（`{ "error": { type, code, message } }`）→ 失敗碼與載體狀態（[#1805](https://github.com/DemianLi/nexus-agent/issues/1805)）。
  *
- * 照 dsh 的 `providerError`（`packages/llm/llm-deepseek/src/transport.ts:22-35`，`687f282e`）的梯子：每一階都是
+ * 梯子：每一階都是
  * 「狀態條件**或**欄位／字樣條件」，順序是 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`，
- * 都對不上才看有沒有狀態（有：`HTTP_<狀態>`；沒有：`SERVER`）。dsh 的串流內信封不帶狀態
- * （`packages/llm/llm-deepseek/src/sse.ts:25`：`providerError(event, undefined)`），所以它只看 `error.type`、字串型的
- * `error.code` 與訊息。
+ * 都對不上才看有沒有狀態（有：`HTTP_<狀態>`；沒有：`SERVER`）。
  *
- * ## 與 dsh 的偏離（理由 1）
+ * ## 數字碼那一階
  *
- * **數字碼那一階是我們加的**：信封的數字 `code`／`status`（400–599）當成 dsh 的 `status` 餵進同一條梯子。理由：基座
+ * **數字碼那一階是我們加的**：信封的數字 `code`／`status`（400–599）當成 `status` 餵進同一條梯子。理由：基座
  * （OpenAI SDK／LangChain 的重試與分類）整條路只看 HTTP 狀態，第一則事件就是信封的端點（#516）必須翻成帶狀態的 HTTP 回應
  * 基座才認得出來，所以信封裡的數字要當成狀態。數字碼與 `type`／字樣**同時**出現時，沒有誰蓋掉誰：每一階是「或」，
- * 先到的階贏——`{ code: 503, type: 'authentication_error' }` 是 `AUTH`（dsh 對 `status = 503` 加同樣的 `type` 也是 `AUTH`，
- * 因為 `AUTH` 在 `SERVER` 前面）。
+ * 先到的階贏——`{ code: 503, type: 'authentication_error' }` 是 `AUTH`（因為 `AUTH` 在 `SERVER` 前面）。
  *
  * **載體狀態**：梯子的結果還要翻回一個 HTTP 狀態（第一則事件合成的 Response 要帶、`turn/failed.status` 要寫），讓
  * `failureCodeOfStatus` 回到同一個碼。`AUTH`（401／403）、`INVALID_REQUEST`（400／413）、`SERVER`（≥ 500）、`HTTP_<狀態>` 沿用信封自己的數字碼，沒有就補該階的代表狀態（401／400／500；`permission_error` 是 403）；`QUOTA` 一律 402（信封說 429 也是——否則合成的 429 回應會被讀成 `RATE_LIMIT`），`RATE_LIMIT` 一律 429。
@@ -22,18 +19,16 @@
  * {@link InbandFailure.code}。第一則事件就是信封的那一條不靠旗標：合成的 400 回應交給轉接器（`BaseChatOpenAI`），它自己認得超窗的 400，
  * 實測（`model-failure-classification.test.ts` 的 `typedRows`）也是 `CONTEXT_WINDOW_EXCEEDED`。
  *
- * **字樣偵測**：下面兩支照搬 dsh `isContextWindowExceededError`／`isQuotaExceededError`。#1805 只套在信封上；#1557 起
- * `classifyTurnFailure` 也把它套到模型呼叫錯誤鏈上每一環的 `type`、`code`、`message`（dsh 的 deepseek adapter 與 pi-ai 兩條路都這樣做）。
+ * **字樣偵測**：#1805 只套在信封上；#1557 起
+ * `classifyTurnFailure` 也把它套到模型呼叫錯誤鏈上每一環的 `type`、`code`、`message`。
  */
 
-/** 逐字照 dsh：`packages/llm/llm/src/error.ts:53-58`（`687f282e`）。 */
 const STRUCTURED_CONTEXT_OVERFLOW = new RegExp(
   String.raw`(?:^|[^a-z0-9])context[\s_-](?:length|window)[\s_-]` +
     String.raw`(?:exceed(?:ed|s)?|overflow(?:ed)?|limit[\s_-]exceeded)(?:$|[^a-z0-9])`,
   'i',
 );
 
-/** 逐字照 dsh：`error.ts:61-65`。 */
 const TOO_LARGE_FOR_CONTEXT = new RegExp(
   String.raw`\b(?:request|prompt|input|messages?)\s+(?:is\s+|are\s+)?` +
     String.raw`too\s+(?:large|long)\s+for\s+(?:(?:this|the)\s+)?` +
@@ -41,7 +36,6 @@ const TOO_LARGE_FOR_CONTEXT = new RegExp(
   'i',
 );
 
-/** 逐字照 dsh：`error.ts:68-73`。 */
 const EXCEEDS_MODEL_CONTEXT = new RegExp(
   String.raw`\b(?:input|prompt|request|messages?)\b.{0,40}` +
     String.raw`\b(?:exceed(?:s|ed)?|overflows?|is\s+larger\s+than)\b.{0,40}` +
@@ -49,7 +43,7 @@ const EXCEEDS_MODEL_CONTEXT = new RegExp(
   'i',
 );
 
-/** 照搬 dsh `isContextWindowExceededError`（`error.ts:83-89`）：請求超出模型上下文窗口的字樣。 */
+/** 請求超出模型上下文窗口的字樣。 */
 export function isContextWindowExceededDetail(detail: string): boolean {
   return (
     STRUCTURED_CONTEXT_OVERFLOW.test(detail) ||
@@ -64,7 +58,7 @@ export function isContextWindowExceededDetail(detail: string): boolean {
   );
 }
 
-/** 照搬 dsh `isQuotaExceededError`（`error.ts:97-103`）：帳號額度耗盡（不是限流）的字樣。 */
+/** 帳號額度耗盡（不是限流）的字樣。 */
 export function isQuotaExceededDetail(detail: string): boolean {
   return (
     /\binsufficient[\s_-]+(?:quota|balance|credits?)\b/i.test(detail) ||
@@ -109,7 +103,7 @@ export function classifyInbandError(error: Record<string, unknown> | undefined):
   const fields = error ?? {};
   const status = numericStatusOf(fields);
   const type = typeof fields.type === 'string' ? fields.type : '';
-  // 照 dsh：`${type} ${code（字串才算）} ${message}`。
+  // `${type} ${code（字串才算）} ${message}`。
   const detail = `${type} ${typeof fields.code === 'string' ? fields.code : ''} ${typeof fields.message === 'string' ? fields.message : ''}`;
 
   if (
@@ -145,7 +139,7 @@ export function classifyInbandError(error: Record<string, unknown> | undefined):
     const serverStatus = status !== undefined && status >= 500 ? status : 500;
     return { code: 'SERVER', status: serverStatus, overflow: false };
   }
-  // 有數字碼但不在上面任何一階（404、408、410、422…）：`HTTP_<狀態>`；完全沒有狀態：`SERVER`（照 dsh，載體 500）。
+  // 有數字碼但不在上面任何一階（404、408、410、422…）：`HTTP_<狀態>`；完全沒有狀態：`SERVER`（載體 500）。
   return status === undefined
     ? { code: 'SERVER', status: 500, overflow: false }
     : { code: `HTTP_${String(status)}`, status, overflow: false };

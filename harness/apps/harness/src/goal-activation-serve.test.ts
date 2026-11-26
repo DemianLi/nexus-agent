@@ -1,5 +1,5 @@
 /**
- * 目標會不會自己續行，**走真的 serve 與下行**（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `goal/activation-changed`）。
+ * 目標會不會自己續行，**走真的 serve 與下行**（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376）。
  *
  * 事件是 wire 的 `custom` frame（`goal/activation`）：**行程內的狀態、不是日誌事件**，所以不落盤、不進歷史頁。這一檔量：
  * 授權變了才送（建立、暫停、恢復、按停止）、新接上的下行補送「現在」、重啟之後有目標的 thread 拿到 `disarmed`、沒有目標的 thread 一顆都沒有。
