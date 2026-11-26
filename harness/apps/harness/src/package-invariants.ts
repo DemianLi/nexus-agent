@@ -9,7 +9,7 @@
  * 空 installer 本身是違規。**剩下的八個是暫時保留、觀察中**。
  * 代價是新增 package 的人不再被這裡擋下來——那條目的消失了，是接受的。
  *
- * **規則是「**必須** default export 一顆具名常數」**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * **規則是「必須 default export 一顆具名常數」**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 第一刀）。配套入口匯出的是一顆巢狀的 `NexusPlugin` 常數，namespace 不是 plugin，default export 遮不掉任何
  * 東西；而 `cordis.yml` 的 `name` 要靠 default export 才指得到它。「specifier
  * 要留得住具名匯出」的理由，變成「default export 必須是**本檔具名 export 的常數**」

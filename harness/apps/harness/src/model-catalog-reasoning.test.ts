@@ -5,8 +5,8 @@
  * 值是空字串，三種都在載入時拒收，訊息指名是哪一顆模型的哪一級。以前這三種都靜靜收下：`{}` 讓 `selectableEfforts` 回空清單，選單上不出現強度，
  * 也看不出是設定寫錯。
  *
- * **不搬第四條（「`off` 以外至少一級」）**：nexus 裡 `default` 是隱含的等級，`{ off: null }` 是有意義的宣告，所以它要照常過，
- * 而且 `selectableEfforts` 回 `['off']`（見 `model-selection-host.ts` 開頭那一條已登記的差異）。
+ * **不要求「`off` 以外至少一級」**：nexus 裡 `default` 是隱含的等級，`{ off: null }` 是有意義的宣告，所以它要照常過，
+ * 而且 `selectableEfforts` 回 `['off']`（見 `model-selection-host.ts` 開頭「推理強度只認 `off` 與 `default`」那一條）。
  *
  * 照常過的那一組**用產品實際載入的設定跑**（`loadDefaultPlugins`，CLI 與 serve 兩份出廠清單），不另抄一份。
  */
