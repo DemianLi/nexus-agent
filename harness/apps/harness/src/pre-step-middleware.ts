@@ -137,8 +137,7 @@ export function createPreStepMiddleware(
 }
 
 /**
- * 一則注入的來源：listener 給了就用它（契約 1.2.0，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)；dsh 的 listener 自己帶
- * `source`，例如 `tool-skill/src/index.ts:198-202`，`687f282e`），沒給是 `{ kind: 'plugin', plugin: <名字> }`。
+ * 一則注入的來源：listener 給了就用它（契約 1.2.0，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），沒給是 `{ kind: 'plugin', plugin: <名字> }`。
  *
  * **只收兩種**（[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）：`plugin` 而且是自己的名字（可帶 `form: 'instructions'`，
  * 契約 1.3.0），或形狀完整的 `skill-invocation`。
@@ -170,10 +169,9 @@ function injectionSource(name: string, injection: PreStepInjection): UserMessage
 }
 
 /**
- * 交給 listener 的中止訊號（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：dsh 交的是這一步的 `signal`
- * （`packages/core/agent-loop/src/agent.ts:275`），也就是人按停止時舉起的那一顆。
+ * 交給 listener 的中止訊號（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）。
  *
- * 我們這一顆**不在 `runtime.signal`**：pump 把這一輪的中止訊號放在 `configurable` 的 `TURN_CANCEL_CONFIG_KEY`，刻意不交給
+ * 這一顆**不在 `runtime.signal`**：pump 把這一輪的中止訊號放在 `configurable` 的 `TURN_CANCEL_CONFIG_KEY`，刻意不交給
  * LangGraph（交了會丟下正在跑的工具，見 `@nexus/core` 的 `turn-cancel.ts`）。所以先讀那一顆；呼叫端若另外給了 LangGraph 的
  * `signal`（`runtime.signal`，langchain `dist/agents/nodes/middleware.js:52`），兩顆任一舉起都算。CLI 與 eval 兩顆都沒有，就不交。
  */
@@ -210,8 +208,7 @@ function visibleFromLog(
  * 把注入的訊息記成 `user/message`。認不出屬於哪一份就不記。
  *
  * **寫不進去原錯往外拋，這一輪失敗**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：注入的訊息進模型歷史，
- * 照 dsh 不吞——`agent/pre-step` 交回的訊息在步驟裡直接 append（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`）。
- * 吞掉的話這則照樣進 state、日誌上沒有，續接後模型看到的歷史跟之前不同。插件交來的 `additionalKwargs` 帶了有損值或巢狀超過
+ * 不吞。吞掉的話這則照樣進 state、日誌上沒有，續接後模型看到的歷史跟之前不同。插件交來的 `additionalKwargs` 帶了有損值或巢狀超過
  * 上限，就會從這裡拋。
  */
 function record(

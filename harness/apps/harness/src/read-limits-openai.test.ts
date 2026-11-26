@@ -179,7 +179,7 @@ function expectDshReadFile(requests: readonly RecordedRequest[]): void {
   expect(toolTexts(requests[2]).join('\n')).toContain(
     '(Showing lines 1-2000 of 2500. Use offset=2000 to continue.)',
   );
-  // root 帶 3000：dsh 的原句，由圍堵轉成工具錯誤。
+  // root 帶 3000：由圍堵轉成工具錯誤。
   const last = toolTexts(requests[4]).at(-1) ?? '';
   expect(last).toContain('limit must be less than or equal to 2000');
   expect(last).not.toContain('line 1');

@@ -5,11 +5,9 @@
  * 到（一次模型呼叫帶十個工具，就是二十幾顆挨在一起的事件），下行量 ≈ 事件數 × view 大小，而 view 大的時候（軌跡滿載單顆
  * 377 KB）這個乘積是 GB 級。
  *
- * ## 照 dsh 的作法：整份值、一陣一顆
+ * ## 整份值、一陣一顆
  *
- * dsh 的 job-controller 觀察串流也是整份取代（`streamJobRows`：「一顆開啟時、之後每陣合併過的生命週期提交一顆」），
- * 作法是等一次 `wake` 之後睡一個合併視窗（`observeFlushMs`，預設 100 毫秒），**醒來才讀現況**再送一顆
- * （`packages/api/job-controller/src/rows.ts`、`wake.ts`，`5badb15`）。這裡同形：一個單元的值變了，若這個單元沒有排著的
+ * 一個單元的值變了，若這個單元沒有排著的
  * 視窗，就開一個；視窗到了送**那一刻最新的**值；視窗內再變的只換掉待送的那份，不另開。
  *
  * ## 最後一顆一定是最終值
@@ -20,7 +18,7 @@
  *
  * ## 不在這裡
  *
- * - 視窗是固定毫秒數，不看 view 大小：dsh 同（`observeFlushMs` 是部署政策，不隨幀大小變）。view 本身太大是另一條路
+ * - 視窗是固定毫秒數，不看 view 大小。view 本身太大是另一條路
  *   （降低軌跡的完整輪數，見 #1069 備註），與這裡正交。
  * - 不合併「別種」frame：訊息、工具、`custom` 的其他名字都不經過這裡。
  *
@@ -29,7 +27,7 @@
 
 import type { CustomFrameData } from '@nexus/wire';
 
-/** 合併視窗的預設，毫秒。同 dsh `observeFlushMs` 的預設；部署時用 `projection-flush` 那一列（`settings/projection-flush.ts`）改。 */
+/** 合併視窗的預設，毫秒。部署時用 `projection-flush` 那一列（`settings/projection-flush.ts`）改。 */
 export const PROJECTION_FLUSH_MS = 100;
 
 /** 計時器的縫，測試換成假的。 */

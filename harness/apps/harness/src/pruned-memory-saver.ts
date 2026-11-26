@@ -11,8 +11,6 @@
  *
  * - **這顆 saver 本來就不耐久**（重啟就沒，見 `session-resume-doors.test.ts` 的門 B）：舊存檔點沒有「當機後回復」的價值。
  *   對話的真相是會話日誌，重開時從日誌推回來（`conversation-restore.ts`）。
- * - **照 dsh**：dsh 沒有逐步存檔點，一輪到下一輪的狀態是只增不減的會話日誌加上當下的記憶體狀態，沒有「狀態的歷史」
- *   （`packages/core/agent-loop`）。「只留最新的即時狀態」是我們在 LangGraph 上最接近的形狀。
  * - **LangGraph 讀舊存檔點的只有兩處**：`getStateHistory` 與 `replay.js`（帶 `checkpoint_id` 的重放／時間旅行），
  *   nexus 都沒有用。續行（`Command({ resume })`）、`updateState`、`getState` 讀的都是最新那一份與它的 pending writes。
  *

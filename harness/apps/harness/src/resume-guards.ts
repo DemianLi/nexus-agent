@@ -20,16 +20,14 @@
 import type { StoredSessionHeader } from '@nexus/core';
 
 /**
- * 續接的那份會話屬於另一個目錄——照 dsh 的 `ApiSessionCwdConflict`
- * （`packages/api/session-controller/src/agent.ts`，SHA `c291e79`）。
+ * 續接的那份會話屬於另一個目錄。
  *
- * dsh 的會話**按目錄歸屬**：header 的 `cwd` 是建立當下的事實，採用一份已存會話之前先比，
+ * 會話**按目錄歸屬**：header 的 `cwd` 是建立當下的事實，採用一份已存會話之前先比，
  * 對不上就拒；**沒記 `cwd` 的也拒**，不猜。這是 [#251](https://github.com/DemianLi/nexus-agent/issues/251)
- * 「組合一致」那一件的全部：dsh 在 preset 那一格的規則是「照存的組回來」，而我們沒有 preset
- * ——每個旗標每次都是明著的請求，「照存的組回來」表達不出來，「不符就拒」又會是一條偏離，
- * 所以只抄得到 `cwd` 這一格。
+ * 「組合一致」那一件的全部：我們沒有 preset，每個旗標每次都是明著的請求，
+ * 所以只比得到 `cwd` 這一格。
  *
- * 我們這側還多一個後果：`--workspace`、`--patch` 都照 cwd 解析，換了目錄接回來，同一串
+ * 還有一個後果：`--workspace`、`--patch` 都照 cwd 解析，換了目錄接回來，同一串
  * 旗標指到的就不是同一個地方。**反過來不成立**——同一個目錄底下換一個 `--workspace`，這一格
  * 一模一樣，那一半由 {@link assertSameWorkspaceRoot} 擋（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。serve 那條另有一個理由：會話根按目錄分（`projectKey`），而
  * 那個目錄名是有損的，兩個不同的目錄可能落在同一格——header 的 `cwd` 是唯一分得開的東西。
@@ -83,14 +81,6 @@ export function assertSameCwd(
  * 所以「同一個目錄、不同的 `--workspace`」在 {@link assertSameCwd} 底下是通的，而那一次接回來，
  * 一顆重播的 `deliverables/presented` 記的路徑會指到**另一個工作區裡的同名檔**，畫面上跟讀對了
  * 一模一樣。
- *
- * dsh 沒有這個分岔：它的會話 `cwd` **就是**工作區根，所以它的 header 不需要第二格。兩處出處
- * （`ddefc45`）：`packages/sandbox/sandbox-policy/src/index.ts:83`「Calling session; its immutable
- * cwd becomes the workspace boundary.」與 `:168` 的
- * `resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)`；
- * `packages/deliverables/workspace-changes/src/index.ts:58-61` 的 `eligible` 直接回 `header.cwd`。
- * （#504 的 triage 把這兩行引成 `packages/core/sandbox-policy/…`，`ddefc45` 上沒有那個路徑；
- * 行號與內容對得上，錯的只有套件位置。）
  */
 export class ResumeWorkspaceConflictError extends Error {
   override readonly name = 'ResumeWorkspaceConflictError';

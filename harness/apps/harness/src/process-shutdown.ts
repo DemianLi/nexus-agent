@@ -1,10 +1,8 @@
 /**
  * 長命行程的收尾控制器：有上限、會升級（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。
  *
- * **形狀照 dsh 的 `apps/cli/src/process-shutdown.ts`（`477b4f4`）逐條抄**：
- *
  * - 第一次訊號開始優雅收尾，收完強制結束——掛著的控制代碼不該讓行程賴著不走。
- * - **收尾進行中再來一次訊號就當場結束。** 那是使用者的「我不等了」，也是 dsh 的政策；
+ * - **收尾進行中再來一次訊號就當場結束。** 那是使用者的「我不等了」；
  *   代價是收尾沒做完的那一截會丟，所以耐久不能只靠收尾，要靠一輪之中的檢查點
  *   （`@nexus/core` 的 `sessionCheckpointPlugin`）。
  * - 收尾有上限（{@link PROCESS_SHUTDOWN_TIMEOUT_MS}），到了就強制結束：一個卡住的

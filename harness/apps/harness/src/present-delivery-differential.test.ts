@@ -1,7 +1,7 @@
 /**
  * **差分測試**（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)）：`present` 的交付寫入從「訂閱自己那份日誌、
  * 等同 `callId` 的 `tool/result`」搬到 `tools/result` 的一位監聽者。**三種事件各自的內容逐筆相同，只有次序從
- * `call → result → presented` 變成 dsh 的 `call → presented → result`。**
+ * `call → result → presented` 變成 `call → presented → result`。**
  *
  * 這個檔在 `0eee059e` 先立在搬之前的實作上跑綠（舊次序）；搬完之後**只翻了「預期次序」那幾格**（每一組 `presented` 與同
  * `callId` 的 `result` 對調），案例、夾具、比對的欄位一字未動。期望值是寫死的字面值，不從實作裡算。前四顆 commit 是

@@ -2,7 +2,7 @@
  * **解出來的重試政策是凍結的，而且凍結一路走到組裝點**（[#1603](https://github.com/DemianLi/nexus-agent/issues/1603)，N0470）。
  *
  * 這一份政策由 `startupSetting` 在起動期解一次、全行程的對話共用（主模型的 `streamRetry`、標題的 `retry`）。
- * 凍結照 dsh `retry-policy.ts:149-195`：誰在執行期對它寫東西，當場拋 `TypeError`，不是靜靜改到所有對話。
+ * 凍結：誰在執行期對它寫東西，當場拋 `TypeError`，不是靜靜改到所有對話。
  *
  * **前三條從組裝點拿，不在測試裡自己呼叫 `streamRetryOptionsOf`**：`createNexusAgent` 收到的 `streamRetry` 與
  * `createSessionTitleLlm` 收到的 `retry` 是 `assembly-root.ts` 交出去的那一份。設定在路上若被複製一份（外掛列的

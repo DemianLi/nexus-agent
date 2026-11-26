@@ -9,7 +9,7 @@
  * 早就發過了（`tool-frame-classify.test.ts`、`ask-user-wire.test.ts`）。**三條路的證據不能互相引用。**
  *
  * **卡從會話日誌來**（[#297](https://github.com/DemianLi/nexus-agent/issues/297)）：圍堵在閘門之前記
- * `tool/call`、閘門回來之後記 `tool/result`，pump 照這兩顆開卡、收卡，同 dsh。所以這份組裝要跟 serve
+ * `tool/call`、閘門回來之後記 `tool/result`，pump 照這兩顆開卡、收卡。所以這份組裝要跟 serve
  * 一樣接上 `attachSession`——沒接的話圍堵不記日誌，「零張卡」會在一個根本不是產品路徑的組裝上綠。
  *
  * **核准那一格是承重的對照組**：它證明線本身收得到基座的 `tools` frame，拒絕那條的「基座零顆」才不是
@@ -189,7 +189,7 @@ describe('核准的兩個方向在下行上長什麼樣', () => {
   it('**拒絕 → 一張失敗的卡、紅字是拒絕理由**，與「已拒絕」那一則並存；基座一顆 frame 都沒發', async () => {
     const session = await open('r1');
     await until(session, requested);
-    // 照 dsh：`tool/call` 在核准之前就記，所以等核准時畫面上已經有一張執行中的卡。
+    // `tool/call` 在核准之前就記，所以等核准時畫面上已經有一張執行中的卡。
     expect(toolCards(session).map((card) => [card.name, card.status])).toEqual([
       [GATED, 'running'],
     ]);
