@@ -4,8 +4,7 @@
  * 成一行 JSON。
  *
  * **它為第二刀的決策存在**（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/invariant-companions-decision-2026-10-03.md 第七節）：
- * 違規原本只進 `console.error`、沒有計數，所以「這八個檢查過去有沒有報過」答不了。**dsh 沒有這個
- * 記錄**（它已把整套運行時不變量移除），這是我們自己加的；第二刀若選全部拿掉，這個檔案、
+ * 違規原本只進 `console.error`、沒有計數，所以「這八個檢查過去有沒有報過」答不了。第二刀若選全部拿掉，這個檔案、
  * `InvariantTap` 與 `invariantTap` 選項一起拿掉。
  *
  * **兩種行都要有，缺一不可。** 只記違規的話，「零違規」與「檢查根本沒掛上」長得一模一樣
