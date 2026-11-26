@@ -17,9 +17,8 @@
  *
  * ## 沒有那一列的時候
  *
- * 回 schema 的預設值。**那不是退讓，是 dsh 的常態**：`workspace-files` 在 dsh 就是一列沒寫
- * `config:` 的列，吃 schema 預設。我們多一種情形——**連列都沒有**（手搭清單的測試、或一份把它
- * 拿掉的 patch），兩種都回同一份預設值，因為「沒人講」的答案只有一個。
+ * 回 schema 的預設值。**連列都沒有**（手搭清單的測試、或一份把它
+ * 拿掉的 patch）也一樣，因為「沒人講」的答案只有一個。
  *
  * @module
  */
@@ -60,11 +59,9 @@ export function startupSetting<T>(plugins: readonly PluginEntry[], plugin: Nexus
  * 在清單上也標成 `disabled: true`（#751），所以算沒掛——`session-persistence` 寫壞了就是只在記憶體裡，不會一邊
  * 當成有掛、一邊拿到預設值。
  *
- * **語意照 dsh：沒有那一列就是沒掛。** dsh 的會話落盤是清單上的一列
- * （`session-persistence-jsonl`，`packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`），
- * 不掛就沒有持久化服務，消費端各自 `ctx.get('sessionPersistence')` 拿到 `undefined`。
+ * **沒有那一列就是沒掛。** 不掛就沒有持久化服務，消費端各自 `ctx.get('sessionPersistence')` 拿到 `undefined`。
  * 產品路徑上那一列一定在（出貨的 `cordis.yml` 寫著它，patch 刪不掉列），所以「沒有那一列」
- * 只發生在手搭清單的呼叫端——那裡照 dsh 算沒掛，不另發明一個「沒講就開」。
+ * 只發生在手搭清單的呼叫端——那裡算沒掛，不另發明一個「沒講就開」。
  *
  * **跟 {@link startupSetting} 分開是承重的**：那一支把關掉的列當成沒有、回 schema 預設，
  * 拿它判開關會讀成「永遠開著」——正是 #612 要擋的那個誤會。

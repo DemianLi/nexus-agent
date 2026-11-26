@@ -149,7 +149,7 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
     expect(Buffer.byteLength(patchedTitle, 'utf8')).toBeLessThanOrEqual(6);
     expect(patchedTitle).not.toBe(bareTitle);
 
-    // **記下的標題不會被讀的那一台重截**：latest-wins，同 dsh 的 `title` 投影。帶 patch 的那台列不帶 patch
+    // **記下的標題不會被讀的那一台重截**：latest-wins。帶 patch 的那台列不帶 patch
     // 寫的日誌，拿到的仍是完整的那句。上限只管還沒有標題的舊日誌（當場推的那一支，見 `session-title.ts`）。
     expect(await listedTitle(bareRoot, ['--patch', OVERRIDE_PATCH])).toBe(PROMPT);
   });
@@ -259,7 +259,7 @@ describe('startupSetting', () => {
     const { plugins } = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
     expect(startupSetting(plugins, threadTitlePlugin).maxTitleBytes).toBe(80);
-    // 字面值，理由同下一段：照 dsh base 的 `session-title-llm`（#650）。
+    // 字面值，理由同下一段（#650）。
     expect(startupSetting(plugins, threadTitleLlmPlugin)).toEqual({
       targetWords: 5,
       targetCjkCharacters: 10,
@@ -372,7 +372,7 @@ describe('startupSetting', () => {
   });
 
   it('投影合併視窗低於 1 毫秒或不是整數：載入期就失敗', () => {
-    // 釘的是 schema 的 `int().min(1)`（形狀抄 dsh 的 `observeFlushMs`）。`0` 在合併器建構子是「不合併」，留給測試，設定層不收。
+    // 釘的是 schema 的 `int().min(1)`。`0` 在合併器建構子是「不合併」，留給測試，設定層不收。
     for (const flushMs of [0, -5, 1.5]) {
       expect(() =>
         startupSetting(
