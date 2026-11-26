@@ -2,44 +2,31 @@
  * 下行訂閱者的**位元組有界佇列**（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，Q2 (a)）。`ThreadPump`
  * （每條 thread 的下行）與 `ThreadFeed`（全域下行）共用這一份，不寫兩份。
  *
- * ## 照 dsh 的哪裡
+ * ## 形狀與容器
  *
- * 形狀與語意照 `TerminalFollower`（`packages/api/terminal-controller/src/stream.ts:5-87`，`1517a4db`，與 `687f282e` 的 blob 相同）：
  * 每顆以 `Buffer.byteLength(JSON.stringify(frame), 'utf8')` 計，`已排位元組 + 這顆 > 上限` 就失敗並清空佇列，只斷這一個訂閱者；
- * 上限預設 `2 * 1024 * 1024`（`terminal-controller/src/index.ts:87`）。底下的容器用 {@link Deque}（`@nexus/deque`，原碼照抄
- * dsh `packages/util/deque`），和 dsh 的 `RemoteEventQueue`（`packages/api/gateway/src/index.ts:1172-1210`）、`TerminalFollower` 一樣，
- * 不用 `Array.shift()`（O(n)）。
+ * 上限預設 `2 * 1024 * 1024`。底下的容器用 {@link Deque}（`@nexus/deque`），不用 `Array.shift()`（O(n)）。
  *
- * ## 偏離 B：事件下行加位元組上限（理由 2：產品需求超出 dsh）
+ * ## 偏離 B：事件下行加位元組上限（理由 2：產品需求）
  *
- * **dsh 的事件下行沒有這一層**：跟 `ThreadFeed` 對應的 `RemoteEventQueue` 是沒有上限的 `Deque`，dsh 對事件下行的保護只有寫入等完成與
- * 死線淘汰（`wire-server.ts` 檔頭）。我們是一台主機多人共用：一個分頁的積壓吃掉的是同機每個人的記憶體，而偏離 A 的死線判準又抓不到
- * 「慢慢 drain、但比生產慢」的線。補的是 `TerminalFollower` 的形狀，數字與語意照抄。
+ * 我們是一台主機多人共用：一個分頁的積壓吃掉的是同機每個人的記憶體，而偏離 A 的死線判準又抓不到
+ * 「慢慢 drain、但比生產慢」的線。所以每條下行線有位元組上限。
  *
  * ## 偏離 C：超限、死線或序列化失敗時只斷線，不送終止 frame（理由 1：基座表達不出來）
  *
- * dsh 斷之前會送一顆錯誤訊框（`stream-server.ts:279-288`）。我們的 SSE 協定沒有中途錯誤 frame 的位置，只有開線那一下的
+ * 我們的 SSE 協定沒有中途錯誤 frame 的位置，只有開線那一下的
  * 200＋error 封包（#1481）。web 遇到下行結束本來就走重連並重抓歷史（`web/src/hooks/use-conversation.ts` 的 `lose(undefined)`）。
  * 退到：serve 記一行 warn，斷線。**這一條擴及序列化失敗**（算位元組的 `JSON.stringify` 拋錯，見 {@link frameBytes}）：那顆事件對所有
  * 該收的訂閱者都送不出去，收線並記一行 warn，錯誤不回到產生事件的路徑。
  *
- * **更正（#1384，N1384）**：這裡原本寫「用戶端看到的結果跟 dsh 一樣是『連線中斷→重連』」，不對。dsh 的 gateway 對序列化失敗送的是
- * 那一條 logical stream 的終止 `error` frame（`gateway/internal`），實體連線不斷，客戶端把它當終止錯誤、**不重連**
- * （`gateway/src/client/remote-stream.ts:132` 的 `terminalStreamFailure`）；重連只發生在 socket 被關的 carrier 路徑。我們斷線之後
- * 的重連是我們這邊 SSE 協定的退讓，不是 dsh 的行為。偏離的理由（1）不變，等價宣稱收回。
- *
- * ## 偏離 D：下行副本的巢狀深度截斷（理由 2：產品需求超出 dsh，#1560 N1384）
+ * ## 偏離 D：下行副本的巢狀深度截斷（理由 2：產品需求，#1560 N1384）
  *
  * 下行的 `JSON.stringify` 是遞迴的：模型給出幾千層巢狀的工具參數時，那顆 `messages` 事件在 Linux 的預設 stack 上約 5000 層就
  * `Maximum call stack size exceeded`（macOS 不會；實測 Linux Node 22.23.3，5000 層斷線、2000 層無事）。上面偏離 C 的處理是斷線，
  * 於是客戶端只看到串流斷了、重連，而這一輪其實已經以 `NESTING_TOO_DEEP` 失敗（日誌那一關正確擋下）。{@link boundFrame} 在序列化之前
  * 把超過 {@link DOWNLINK_MAX_DEPTH} 層的子樹換成 {@link DEPTH_TRUNCATED}，下行不斷，之後 root 的 `lifecycle failed` 照常到。
  *
- * - **dsh 的對照**：gateway 沒有預檢（遞迴 `JSON.stringify`，失敗送終止 `error` frame，見上）；headless NDJSON 投影
- *   （`packages/bundle/headless/src/json-stream.ts:65-89`，`687f282e`）有 `MAX_DEPTH = 64`、超過換成 `'[truncated: depth]'`，註解點名的就是
- *   這個情境。我們採後者的做法（壓形狀）、前者的標記字串。dsh 的事件裡工具參數是模型吐的原始字串，不會以巢狀物件進事件流；
- *   我們的 `messages` 事件帶 parse 後的物件，這是結構差異。
- * - **為什麼不用 64**：64 是 headless 專用；套到 web 下行會截掉合法的深值。我們的門檻只截「連日誌都收不下」的那一類。
+ * - **門檻只截「連日誌都收不下」的那一類**，不截合法的深值。我們的 `messages` 事件帶 parse 後的物件。
  * - **為什麼是 1200**：日誌的上限是 {@link SESSION_EVENT_MAX_DEPTH}（600）；`toLoggedMessage` 的預檢門檻是它的兩倍（
  *   `nexus-core/src/logged-message.ts` 的 `PRECHECK_DEPTH`，理由：超過兩倍的訊息包進事件後一定也超過上限）。這裡取同一個數，所以被截的
  *   一定是日誌也收不下、那一輪必以 `NESTING_TOO_DEEP` 失敗的訊息，**截斷不改變哪些訊息記得進去**。同時 1200 在實測可行的 2000 層之下。
@@ -55,7 +42,7 @@
  *   指標要嘛照搬、要嘛換成佔位）。這時若 `JSON.stringify` 仍爆堆疊，照偏離 C 斷線，不比沒有這一層更糟。要嚴格的上界得放棄共用副本
  *   （`JSON.stringify` 本來就會把共用的子物件各寫一遍，輸出大小也就跟著指數成長），這張不做。
  * - **撤除條件**（只有這兩條，PR 內文同）：① 下行改成迭代序列化、不再遞迴（那時不必截斷，門檻也就不再需要）；② 事件裡的工具參數改成原始字串、
- *   不再以 parse 後的巢狀物件進事件流（同 dsh，見上）。日誌的深度上限動了**不算**：這裡的 1200 只是借用它來保證「截斷不改變哪些訊息記得進去」，
+ *   不再以 parse 後的巢狀物件進事件流。日誌的深度上限動了**不算**：這裡的 1200 只是借用它來保證「截斷不改變哪些訊息記得進去」，
  *   上限拿掉、截斷仍然擋著下行那一顆的堆疊爆掉。
  *
  * @module
@@ -64,7 +51,7 @@
 import { SESSION_EVENT_MAX_DEPTH } from '@nexus/core';
 import { Deque } from '@nexus/deque';
 
-/** 每條下行線的位元組上限預設值：2 MiB，照 dsh `maxBufferedBytes` 的預設。 */
+/** 每條下行線的位元組上限預設值：2 MiB。 */
 export const DEFAULT_DOWNLINK_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
@@ -83,7 +70,7 @@ export function frameBytes(frame: unknown): number {
 /** 下行副本巢狀深度的上限：日誌上限的兩倍，理由見檔頭偏離 D。 */
 export const DOWNLINK_MAX_DEPTH = SESSION_EVENT_MAX_DEPTH * 2;
 
-/** 超過 {@link DOWNLINK_MAX_DEPTH} 的子樹換成這個字串，字串同 dsh headless 的 `json-stream.ts`。 */
+/** 超過 {@link DOWNLINK_MAX_DEPTH} 的子樹換成這個字串。 */
 export const DEPTH_TRUNCATED = '[truncated: depth]';
 
 /** {@link boundFrame} 的結果。 */
@@ -129,7 +116,7 @@ function truncateDepth<T>(frame: T, limit: number): T {
   if (!isContainer(frame)) return frame;
   const copies = new Map<object, object>();
   const make = (source: object): object => {
-    // 物件的副本用空原型：`{}` 上設一個自有的 `__proto__` 鍵會改到原型、鍵就被吃掉（同 dsh `json-stream.ts:90-94` 的做法）。
+    // 物件的副本用空原型：`{}` 上設一個自有的 `__proto__` 鍵會改到原型、鍵就被吃掉。
     const copy: object = Array.isArray(source) ? [] : Object.create(null);
     copies.set(source, copy);
     return copy;

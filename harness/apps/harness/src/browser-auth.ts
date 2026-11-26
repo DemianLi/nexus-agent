@@ -26,14 +26,11 @@
  *
  * - ~~**有效期寫死 30 天，不能設定。**~~ **這一條沒了**
  *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：有效期現在由
- *   `#settings/browser-session` 那一列講，預設仍是 dsh 的 30。剩下的偏離只在**載體**上
- *   ——dsh 的擁有者是一個套件，我們退到 package-internal specifier，理由逐條在
+ *   `#settings/browser-session` 那一列講，預設是 30。擁有者是 package-internal specifier，理由逐條在
  *   [`./settings/thread-title.ts`](./settings/thread-title.ts) 的檔頭。
- * - **不自動開瀏覽器。** dsh 的 `dsh-web-app` 印出並打開一次帶 token 的網址（SSH 底下只印）。我們本來
- *   就沒有開瀏覽器這一段；而在多人主機上，負責開瀏覽器的子行程會把網址放在命令列參數裡，別的
+ * - **不自動開瀏覽器。** 在多人主機上，負責開瀏覽器的子行程會把網址放在命令列參數裡，別的
  *   使用者用 `ps` 就看得到 token。
- * - **token 跟著這個物件，不跟著「根 context」。** dsh 用一個 `WeakMap` 讓 Connection 熱重載時保留
- *   同一個 token；我們沒有熱重載，一次 `runServe` 建一個，行程內重啟 serve（測試）等於換一個 token。
+ * - **token 跟著這個物件，不跟著「根 context」。** 沒有熱重載，一次 `runServe` 建一個，行程內重啟 serve（測試）等於換一個 token。
  */
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -63,7 +60,7 @@ export function encodeBase64Url(value: Uint8Array): string {
   return Buffer.from(value).toString('base64url');
 }
 
-/** 只收 canonical 的 base64url，同 dsh 的 `decodeBase64Url`。 */
+/** 只收 canonical 的 base64url。 */
 export function decodeBase64Url(value: string): Buffer | undefined {
   if (!BASE64URL_PATTERN.test(value)) return undefined;
   const decoded = Buffer.from(value, 'base64url');

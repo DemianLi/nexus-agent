@@ -1,5 +1,5 @@
 /**
- * **讀到二進位檔的 `read_file` 照 dsh 拒絕，不把圖片塊送進模型**——[#642](https://github.com/DemianLi/nexus-agent/issues/642)。
+ * **讀到二進位檔的 `read_file` 拒絕，不把圖片塊送進模型**——[#642](https://github.com/DemianLi/nexus-agent/issues/642)。
  *
  * 缺陷是量出來的：deepagents 的 `read_file` 碰到圖片回 `{type:'image', mimeType, data}`，`@langchain/openai` 的轉換器
  * 原樣塞進 `role: tool`，而 NVIDIA 的端點對 `role: tool` 只收字串或文字塊，回 400。帶圖的那則工具結果已經在叫模型
@@ -7,7 +7,7 @@
  *
  * 兩層各驗：
  *
- * - **後端的判準**：照 dsh 的 `readWholeText`（`packages/fs/fs-local/src/fsio.ts:386-399`，`477b4f4`）看內容——前 8KB
+ * - **後端的判準**：看內容——前 8KB
  *   有 NUL 就是 `binary file`，不是合法 UTF-8 就是 `invalid UTF-8 text`。兩種 backend 各驗：落磁碟的
  *   `ContainedFilesystemBackend`，與沒給 `--workspace` 時墊底的 `TextOnlyStateBackend`（state 裡真的有位元組時同樣中毒，實測；
  *   #1813 之前模型 `write_file` 一張 base64 的 PNG 就能把位元組寫進去，現在 `write` 一律存文字，位元組只剩 `uploadFiles` 灌進來的）。
@@ -37,7 +37,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-/** 一張 1×1 的 PNG。檔頭的 IHDR 長度欄位就有 NUL，所以它在 dsh 的判準下是二進位。 */
+/** 一張 1×1 的 PNG。檔頭的 IHDR 長度欄位就有 NUL，所以它在內容判準下是二進位。 */
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
   'base64',
@@ -394,10 +394,10 @@ async function twoTurns(
 describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
   // 墊底那一格與兩個路由格都是 `TextOnlyStateBackend`。
   //
-  // #1813 之前這裡是「模型把一張 base64 的 PNG 寫進 .png 再讀，讀到 dsh 那句 binary file」：基座的 `write` 對非文字副檔名
-  // 把內容 base64 解成位元組存起來。現在 `write` 一律存文字（照 dsh，沒有依副檔名的分支），模型這條路寫不出位元組，
+  // #1813 之前這裡是「模型把一張 base64 的 PNG 寫進 .png 再讀，讀到 binary file 那句」：基座的 `write` 對非文字副檔名
+  // 把內容 base64 解成位元組存起來。現在 `write` 一律存文字（沒有依副檔名的分支），模型這條路寫不出位元組，
   // 寫進去的 base64 字串就是文字，讀回來是同一段字——一樣不會中毒（讀到的是字串、不是圖片塊）。
-  // 「state 裡真的有位元組時 `read` 照 dsh 拒絕」由下面「沒掛工作區的虛擬 FS 一樣拒絕」直接餵 state 驗。
+  // 「state 裡真的有位元組時 `read` 拒絕」由下面「沒掛工作區的虛擬 FS 一樣拒絕」直接餵 state 驗。
   it.each([
     { path: '/dot.png' },
     { path: `${TOOL_RESULT_STASH_PREFIX}/dot.png` },
