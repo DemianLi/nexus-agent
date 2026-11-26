@@ -2,32 +2,29 @@
  * 插件與執行中的 nexus 相不相容，**在 import 之前**判
  * （[#1137](https://github.com/DemianLi/nexus-agent/issues/1137)、[#1568](https://github.com/DemianLi/nexus-agent/issues/1568)）。
  *
- * 照 dsh `packages/boot/app-boot/src/plugin-compatibility.ts`（`687f282e`，`unmetRequirements` 在 `:55-74`）：只讀插件 manifest，用 `semver`
+ * 只讀插件 manifest，用 `semver`
  * 對執行中的版本，不 import 插件程式碼。判法：
  *
  * - 插件自己有 `engines.nexus` → **只看它**，`peerDependencies` 不看；它不滿足就擋，形狀不是字串就拋。
  * - 否則逐一走 `peerDependencies`，凡是「跟 runtime 同版號的家族」（`@nexus/core`、`@nexus/sdk`、`@nexus/tools`…，
  *   見 {@link isRuntimeFamily}）都要滿足執行中的版本，**全部**不滿足的一次列出。
  * - peer 寫 `workspace:^`、`workspace:~`、`workspace:*`（從 repo 裡的出貨插件複製出去的 `package.json` 就是這樣）視為「執行中的版本」。
- *   `engines.nexus` 寫 `workspace:` 不算（dsh 同）。
+ *   `engines.nexus` 寫 `workspace:` 不算。
  * - 範圍是空字串或不合法的，算不滿足（`includePrerelease: true`）；欄位**形狀**不對（`engines` 不是物件、`engines.nexus` 或某個 peer 的範圍不是字串、
  *   `peerDependencies` 不是表、manifest 讀不了）一律拒絕——檢查不了的東西不當成檢查過了。
  *
- * **家族的劃法。** dsh 用名字劃出「跟 runtime 同版號」的一家（`@deepseek-ai/dsh` 與 `@deepseek-ai/dsh-*`），Cordis 在家族外：它有自己的版號。
+ * **家族的劃法。** Cordis 在「跟 runtime 同版號」的家族外：它有自己的版號。
  * nexus 的 vendor 在 #1403 搬進了 `@nexus` scope，版號仍是上游的（`@nexus/cordis` 4.0.0-rc.12 之類），所以用名單把它們排出去；
  * 名單由 `plugin-compatibility.test.ts` 對照 `harness/vendor/` 底下每一份 `package.json` 的 `name` 釘住，多一個少一個都會紅。劃出來的是同一個家族。
  *
- * **與 dsh 的偏離（docs/plugin-contract.md〈偏離〉 的偏離規則）：**
+ * **判的時機與範圍：**
  *
- * - dsh 在 `plugin-manager` 於 pnpm 安裝之前判（`pnpm view` 或讀 path spec 的 manifest）；我們沒有安裝流程，判在載入器
- *   （{@link ./plugin-config.ts | resolveEntryModule}）import 之前。表達得出來，只是時機晚到「讀設定」，而不是「安裝」。
- * - **沒有豁免機制。** dsh 的 `compatibility.json`（鍵是精確的 `package@version`、值是精確的 runtime 版本）我們不做：
- *   第一版沒有人需要放行一個宣告不相容的插件。要做時照 dsh 的形狀，不要另發明。dsh 警告句裡「怎麼豁免」那一段因此不抄，
- *   「可能崩潰或遺失資料」的風險說明照抄。
+ * - 沒有安裝流程，判在載入器（{@link ./plugin-config.ts | resolveEntryModule}）import 之前，時機是「讀設定」。
+ * - **沒有豁免機制。** 第一版沒有人需要放行一個宣告不相容的插件。
  * - 只檢查 `file:` 開頭的條目。出貨清單的 `name` 全是裸 specifier（`@nexus/*`），跟 core 同一棵 workspace，版本由 pnpm 一起解。
  *
  * **前提：所有成員同一個版號**（#1502 的 bump 腳本把同一個版號寫進每一份 manifest；今天開發樹裡每一份都是 `0.0.0`）。執行中的版本取
- * `NEXUS_CORE_VERSION`，它就等於 dsh 的 runtime 版本。
+ * `NEXUS_CORE_VERSION`。
  *
  * @module
  */

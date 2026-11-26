@@ -5,14 +5,14 @@
  * 入口是主機端的 `plugin-cli.ts`。沒有管理員身分，所以不開 wire 路由（見 `plugin-snapshot.ts` 偏離登記第 1 條同一個理由）；
  * 進得了主機的人本來就能手改 `cordis.patch.yml`，這裡沒有放寬任何權限，只是把改動記下來。
  *
- * ## 語意照 dsh
+ * ## 被更高層（`--patch`）蓋掉時
  *
- * | 操作 | dsh | 被更高層（`--patch`）蓋掉時 |
- * |---|---|---|
- * | 停用／啟用 | `writePluginEnabled`（`packages/boot/plugin-manager/src/patch.ts:14-43`） | **照寫、回報 `overridden`**（`plugin-manager/src/index.ts:460-466`） |
- * | 改設定／恢復 | `configEditor.edit`（`packages/boot/config-editor/src/index.ts:136-150`） | **寫入前就拒絕**（`:140-143`）；寫入後協調失敗寫回舊文件（`:145-150`，我們沒有協調這一步，見下） |
+ * | 操作 | 結果 |
+ * |---|---|
+ * | 停用／啟用 | **照寫、回報 `overridden`** |
+ * | 改設定／恢復 | **寫入前就拒絕** |
  *
- * 新值**等於繼承值**時照 dsh 拿掉那一列的覆蓋（`:119-125`），不抄一份：紀錄裡記成恢復、帶 `requested: 'config-set'`
+ * 新值**等於繼承值**時拿掉那一列的覆蓋，不抄一份：紀錄裡記成恢復、帶 `requested: 'config-set'`
  * （PM 2026-10-13）。
  *
  * ## 寫入前先驗
@@ -33,17 +33,16 @@
  *
  * ## 偏離登記
  *
- * 1. **記「誰」**：dsh 沒有使用者身分（`ChangeResult` 與 `plugin-manager/changed` 只帶 `reason`，`plugin-manager/src/types.ts:244-246`）。
- *    這裡記主機帳號；sudo 前原本登入的帳號是從環境變數自報的，標在 `invokerSource`，不是身分認證（加 4）。
- * 2. **變更歷史**：dsh 完全沒有；這是產品需求（決議 §3-5 第 18 條）。
- * 3. **寫入回報帶 actor、序號、前後值**：dsh 的 `ChangeResult` 只有 `reason`。CLI 與日誌**不印設定值**，只印哪幾個欄位變了（加 7）。
- * 4. **沒有「寫入後協調失敗就寫回舊文件」**：dsh 的 `edit` 寫完立刻在同一個行程裡 reconcile 活的 Loader 樹，失敗寫回。
+ * 1. **記「誰」**：這裡記主機帳號；sudo 前原本登入的帳號是從環境變數自報的，標在 `invokerSource`，不是身分認證（加 4）。
+ * 2. **變更歷史**：這是產品需求（決議 §3-5 第 18 條）。
+ * 3. **寫入回報帶 actor、序號、前後值**：CLI 與日誌**不印設定值**，只印哪幾個欄位變了（加 7）。
+ * 4. **沒有「寫入後協調失敗就寫回舊文件」**：
  *    我們的寫入口是另一個行程，樹在 serve 裡，下一條 thread 才重讀；紀錄追加之後沒有可以協調的對象，所以才把驗證全部
  *    搬到追加之前。
  * 5. **紀錄裡留著舊的 `disable`、而那一列後來改成關不掉時，救得回來**（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）：
  *    找列與找繼承值不檢查保護名單，只有寫入之後的整份清單才檢查，所以 `enable` 寫得進去、新的 `disable` 照樣被拒；
  *    清單還壞著時別的改動也被拒，訊息帶 `plugin enable <id>` 那一句修法（`plugin-config.ts` 的 `assertNotProtected`）。
- *    dsh 沒有變更紀錄，這一條跟第 2 條同屬寫入口本身那條理由 2（稽核）。
+ *    這一條跟第 2 條同屬寫入口本身那條理由 2（稽核）。
  *
  * @module
  */
@@ -366,7 +365,7 @@ export async function changePlugin(
           case 'config-set': {
             const inherited = inheritedWithout();
             if (isDeepStrictEqual(change.config, inherited)) {
-              // 照 dsh `config-editor/src/index.ts:119-125`：新值等於繼承值，就是拿掉那一列的覆蓋。
+              // 新值等於繼承值，就是拿掉那一列的覆蓋。
               if (override?.config === undefined) {
                 unchangedReason = '新值等於繼承值，而紀錄裡這一列本來就沒有設定覆蓋，沒有寫。';
                 return undefined;

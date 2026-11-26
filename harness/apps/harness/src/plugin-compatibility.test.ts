@@ -235,7 +235,7 @@ describe('#1568：看 engines 與每個同版的 @nexus 套件', () => {
         assertPluginCompatible(file, '0.0.0');
       }).not.toThrow();
     }
-    // 其他 workspace: 寫法不是 dsh 認得的那三種，算不滿足。
+    // 其他 workspace: 寫法不是 `workspace:^`、`workspace:~`、`workspace:*` 那三種，算不滿足。
     expect(() => {
       assertPluginCompatible(
         plugin({
