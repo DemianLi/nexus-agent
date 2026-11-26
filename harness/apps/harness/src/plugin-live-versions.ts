@@ -24,7 +24,7 @@
  * - **只綁 root thread id**：子代理沿用 root 那一份清單，不另綁自己的 id。
  * - **引用計數不跨重啟**（Q1 (a)）：表只活在行程記憶體裡。
  *
- * ## 四個決定
+ * ## 偏離登記
  *
  * 1. **單位**：一版是一列的一份宣告。本專案判過不做 preset
  *    （https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/seven-layer-inventory-2026-09-26.md#L330，T-29），版本路由以列為單位（決議 §3-2 第 6 條）。
