@@ -915,7 +915,7 @@ async function startUnderHomeLock(
     log: (message) => {
       serverLog.logger('mcp').warn(message);
     },
-      error: (message) => {
+    error: (message) => {
       serverLog.logger('mcp').error(message);
     },
   });
