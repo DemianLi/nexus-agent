@@ -1,6 +1,5 @@
 /**
- * **`/plan` 收附件走完產品路徑**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607) 驗收 1–3，照 dsh `plan-mode` 的
- * `input: { hint: '[off|message]', attachments: true }`）。
+ * **`/plan` 收附件走完產品路徑**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607) 驗收 1–3）。
  *
  * 真 handler＋真 client＋真執行器＋出貨清單（`plan-mode` 那一列）＋附件儲存；模型是腳本。
  *

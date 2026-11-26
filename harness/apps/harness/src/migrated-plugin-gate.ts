@@ -2,8 +2,7 @@
  * **遷出的插件套件的 gate**（[#1420](https://github.com/DemianLi/nexus-agent/issues/1420)）：插件規範四層強制
  * （決議 §3-4 第 12 條）的後兩層之一，保證「每顆遷出的插件都套了 lint、都有一條跑一致性套件的測試」。
  *
- * 形狀照 dsh 的 verify gate（`AGENTS.md:171`：可機械檢查的規則進一道執行的 gate），nexus 的前例是
- * `package-invariants.ts`：純函式、由 `migrated-plugin-gate.test.ts` 在 `pnpm -r run test` 裡跑，CI 不必多一個 step。
+ * 形狀的前例是 `package-invariants.ts`：純函式、由 `migrated-plugin-gate.test.ts` 在 `pnpm -r run test` 裡跑，CI 不必多一個 step。
  *
  * ## 什麼叫「遷出的」
  *

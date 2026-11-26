@@ -143,7 +143,6 @@ describe('沒讀過的檔不准改', () => {
 
   it('**帶 offset / limit 的部分讀也算讀過**——這是刻意的弱化', async () => {
     const root = await workspace();
-    // dsh：「任何窗口读取都会授权对未变文件执行全文件覆盖，这有意弱于完整视图规则」。
     const messages = await run(root, [
       read('/notes.md', { offset: 1, limit: 1 }),
       edit('原本的內容', '被改掉了'),
@@ -231,7 +230,6 @@ describe('射程', () => {
   /**
    * **紀錄逐 agent 一份，不是逐 session 一份。**
    *
-   * dsh 的 owner 是 `agent.session`，而那邊 agent id ≡ session id、child agent 各自一份。
    * 共用一份的下場是 root 讀過的檔變成每個 subagent 都可以直接改——那正好把這件事要擋的
    * 東西放掉。這條紅了就是 `foldObservationPolicy` 被改成回一份共用實例了。
    */
@@ -283,8 +281,7 @@ describe('規則要在模型動手之前就講給它聽：系統提示詞的 sec
   /**
    * **這幾句是機制的一部分，不是文件。**
    *
-   * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要價值。dsh 把同一件事寫在系統提示詞的 section
-   * （`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，工具在場才寫），這裡一樣由 `observation.ts` 的 `wrapModelCall` 接在系統提示後面。
+   * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要價值。這裡由 `observation.ts` 的 `OBSERVATION_SECTION` 接在系統提示後面。
    */
   async function modelSees(options: { observationPolicy?: false }): Promise<{
     descriptions: Record<string, string>;
@@ -326,7 +323,7 @@ describe('規則要在模型動手之前就講給它聽：系統提示詞的 sec
     expect(system).toContain(
       'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.',
     );
-    // 規則不在工具描述裡：dsh 的描述只有一句 UTF-8 文字檔的說明，我們這邊維持基座的原文。
+    // 規則不在工具描述裡，維持基座的原文。
     expect(descriptions['write_file']).toContain('You do not need to read the file first');
     expect(descriptions['write_file']).not.toContain('fs-observation-policy');
     expect(descriptions['edit_file']).not.toContain('fs-observation-policy');
