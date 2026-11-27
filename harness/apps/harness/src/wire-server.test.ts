@@ -413,6 +413,25 @@ describe('gzip 壓縮（#1570）', () => {
     expect(sizes[0]).toBeGreaterThan(sizes[1]!);
   });
 
+  it('pipelining 的第二個請求（res.socket 還是 null）照樣壓', async () => {
+    running = await startWireServer({
+      handler: fixed(() => json(BIG_JSON)),
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const raw = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(new URL(running!.url).port), '127.0.0.1');
+      const chunks: Buffer[] = [];
+      const head = (extra: string): string =>
+        `GET / HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n${extra}\r\n`;
+      socket.on('connect', () => socket.write(head('') + head('Connection: close\r\n')));
+      socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+      socket.on('close', () => resolve(Buffer.concat(chunks).toString('latin1')));
+      socket.on('error', reject);
+    });
+    expect(raw.match(/^HTTP\/1\.1 200/gmu)).toHaveLength(2);
+    expect(raw.match(/^content-encoding: gzip\r$/gimu)).toHaveLength(2);
+  });
+
   it('不給選項不壓：同一個請求，沒有 content-encoding，位元組原樣（預設不變）', async () => {
     running = await startWireServer({ handler: fixed(() => json(BIG_JSON)) });
     const response = await rawGet(running.url, { 'accept-encoding': 'gzip' });
