@@ -1,28 +1,26 @@
 /**
  * 把 `(Request) => Response` 的 handler 接上一個真的 socket。
  *
- * **handler 與 listener 是分開的兩件事，這是刻意的**（當初照的是 dsh 的
- * `fetch/handler.ts` 與它的載體分層——那個套件在 HEAD `0a53fb55` 已經不在了，
- * 見 [`wire-handler.ts`](./wire-handler.ts) 的檔頭）：協定的行為在 handler 上驗得完，
+ * **handler 與 listener 是分開的兩件事，這是刻意的**
+ * （見 [`wire-handler.ts`](./wire-handler.ts) 的檔頭）：協定的行為在 handler 上驗得完，
  * 不必綁 port；這一層只負責把 `node:http` 的 stream 翻成 fetch 的那組型別，
  * 它自己的正確性靠一次真的 loopback 往返來釘。
  *
  * ## 下行的背壓、心跳與死線淘汰（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）
  *
- * - **寫入等 drain**：`write` 回 `false` 且連線還沒毀，就等 `'drain'` 或 `'close'` 其中一個，照 dsh
- *   `packages/client/connection/src/http-bridge.ts:106-124`（`1517a4db`，與 `687f282e` 的 blob 相同）。沒有它，對方不收時
- *   Node 照樣把每一顆 frame 收進寫入緩衝，緩衝沒有上限。斷線之後照 dsh 把 body 讀完但不寫。
+ * - **寫入等 drain**：`write` 回 `false` 且連線還沒毀，就等 `'drain'` 或 `'close'` 其中一個。沒有它，對方不收時
+ *   Node 照樣把每一顆 frame 收進寫入緩衝，緩衝沒有上限。斷線之後把 body 讀完但不寫。
  *   **一個回應只掛一組常駐的 listener**，每次卡住只換喚醒的函式（[#1903](https://github.com/DemianLi/nexus-agent/issues/1903)）：
  *   `compression` 1.8.2 在 listener 的方法裡只改寫 `res.on`：壓縮時 `'drain'` 掛到 gzip 串流上，`off`／`removeListener` 與
  *   `once` 的自我移除卻對 res 做，拆不掉。若每次卡住都掛一組新的，它們會在 gzip 串流上一路累積，超過 10 個就印
  *   `MaxListenersExceededWarning`。
- * - **SSE 心跳與死線**：對應 dsh `packages/api/gateway/src/stream-server.ts`（`MAX_MISSED_HEARTBEATS = 2`、預設間隔 2000 ms）。
+ * - **SSE 心跳與死線**：`MAX_MISSED_HEARTBEATS = 2`、預設間隔 2000 ms。
  *   一支共用、`unref()` 的計時器，第一條 SSE 開線時才起，`close()` 先清它。
  *
  * ### 偏離 A：心跳退成 SSE 註解行，死線判準退成「位元組卡著、連兩拍沒排出去」（理由 1：基座表達不出來）
  *
  * 我們的載體是已拍板的 SSE（https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/development-plan.md 決策 6），HTTP/1.1 回應沒有 ping／pong 控制幀，對方無從回應，
- * 「漏了 pong」這個判準做不出來。退到最接近的：每拍寫 `: ping\n\n`（解碼端本來就跳過註解）；dsh 判準裡做得到的那一半是
+ * 「漏了 pong」這個判準做不出來。退到最接近的：每拍寫 `: ping\n\n`（解碼端本來就跳過註解）；判準裡做得到的那一半是
  * 「排過隊之後才完成的寫入」＝ `'drain'`，另外**緩衝縮小也算活著**（對方有在收，只是慢）。只有寫入緩衝裡有位元組卡著
  * （`writableLength > 0`）、又沒有任何進展的那一拍算漏拍；閒著、緩衝是空的線不算漏拍，不然健康的閒置線閒過兩個間隔就被殺。
  * **代價**：沒有 frame 在流、緩衝是空的死線，serve 判不出來——TCP 的對端是 sshd 不是使用者的機器，這一段要靠 sshd 的
@@ -33,11 +31,10 @@
  *
  * ## 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）
  *
- * 照 dsh `packages/host/webserver/src/index.ts`（`createGzipMiddleware`，`:218-246`；接在 listener 最外層，`:443-457`）：
- * 預設**不壓**（dsh 的 `compression` 預設 `'none'`），`compression` 選項給了才在 `handle` 外面包一層 `compression` 套件的中介層。
- * 排除條件與 dsh 逐條相同——有 `content-range` 不壓、`text/event-stream` 不壓（壓縮緩衝會把逐顆 frame 積著，等於關掉 SSE 的即時性）、
+ * 預設**不壓**，`compression` 選項給了才在 `handle` 外面包一層 `compression` 套件的中介層。
+ * 排除條件：有 `content-range` 不壓、`text/event-stream` 不壓（壓縮緩衝會把逐顆 frame 積著，等於關掉 SSE 的即時性）、
  * `multipart/form-data` 一律壓、其餘走 `compression.filter`；先用 `Negotiator` 在 `gzip`／`identity` 之間協商，再把結果改寫進
- * `accept-encoding`；沒有 socket 的 response 跳過。**最後一道防線留在 `next` 裡面**（同 dsh）：壓縮層不吃 `handle` 的 rejection。
+ * `accept-encoding`；沒有 socket 的 response 跳過。**最後一道防線留在 `next` 裡面**：壓縮層不吃 `handle` 的 rejection。
  * 設定走 `serve` 的旗標而不是 `cordis.yml` 的列：listener 的設定（port）本來就是旗標，#1547 的 host 與 TLS 也走旗標。
  */
 
@@ -54,29 +51,28 @@ import { wireRequestBodyMode } from './wire-handler.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /**
- * 先收完整份的路由（JSON 路由）的本文上限：300 MiB，照 dsh `client/connection/src/http-bridge.ts` 的
- * `DEFAULT_MAX_REQUEST_BODY_BYTES`。**串流路由（今天只有上傳）不受這個上限管**——儲存配額由路由自己負責，
- * 這版不做（dsh 預設也沒有）。見 `docs/operations.md`。
+ * 先收完整份的路由（JSON 路由）的本文上限：300 MiB。**串流路由（今天只有上傳）不受這個上限管**——儲存配額由路由自己負責，
+ * 這版不做。見 `docs/operations.md`。
  */
 export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024;
 
-/** SSE 心跳間隔預設值（毫秒），照 dsh `websocketHeartbeatIntervalMs` 的預設。 */
+/** SSE 心跳間隔預設值（毫秒）。 */
 export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 export { MAX_MISSED_HEARTBEATS };
 
-/** `setInterval` 收得下的最大間隔（毫秒）；也是 dsh 設定範圍的上界。 */
+/** `setInterval` 收得下的最大間隔（毫秒）。 */
 export const MAX_SSE_HEARTBEAT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
 
 const SSE_PING = ': ping\n\n';
 
-/** gzip 等級預設值，照 dsh `DEFAULT_COMPRESSION_LEVEL`（`webserver/src/index.ts`）。 */
+/** gzip 等級預設值。 */
 export const DEFAULT_COMPRESSION_LEVEL = 1;
 
-/** 已知長度小於這個位元組數就不壓，照 dsh `DEFAULT_COMPRESSION_THRESHOLD_BYTES`；長度未知的串流可以壓。 */
+/** 已知長度小於這個位元組數就不壓；長度未知的串流可以壓。 */
 export const DEFAULT_COMPRESSION_THRESHOLD_BYTES = 1024;
 
-/** gzip 壓縮設定（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。不給 `compression` 選項就是 dsh 的 `'none'`。 */
+/** gzip 壓縮設定（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。不給 `compression` 選項就不壓。 */
 export interface WireCompression {
   /** zlib 等級，0 到 9 的整數。 */
   readonly level: number;
@@ -85,9 +81,9 @@ export interface WireCompression {
 }
 
 /**
- * 把 `serve` 的三個壓縮旗標驗成 {@link WireCompression}（沒打開就是 `undefined`）。驗法照 dsh 的 schema（`webserver/src/index.ts:294-296`）：
+ * 把 `serve` 的三個壓縮旗標驗成 {@link WireCompression}（沒打開就是 `undefined`）。
  * 等級是 0 到 9 的整數，門檻是非負整數；不合法丟 `Error`，由呼叫端接上用法說明。
- * **逐欄獨立驗**（dsh 的 schema 就是這樣）：`--compression none` 配上等級或門檻照收（值驗過、然後不用），不做三個旗標之間的交叉檢查。
+ * **逐欄獨立驗**：`--compression none` 配上等級或門檻照收（值驗過、然後不用），不做三個旗標之間的交叉檢查。
  */
 export function parseCompressionFlags(flags: {
   readonly compression?: string | undefined;
@@ -122,7 +118,7 @@ function integerFlag(text: string): number | undefined {
 type NodeMiddleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
 
 /**
- * gzip 中介層，逐條照 dsh `webserver/src/index.ts:218-246`。`compression` 的型別是給 Express 的，執行期只碰
+ * gzip 中介層。`compression` 的型別是給 Express 的，執行期只碰
  * node:http 的 request／response 成員。
  */
 function createGzipMiddleware(config: WireCompression): NodeMiddleware {
@@ -146,7 +142,7 @@ function createGzipMiddleware(config: WireCompression): NodeMiddleware {
   }) as unknown as NodeMiddleware;
 
   return (req, res, next) => {
-    // 沒有 socket 的 response（dsh 的 Web Worker 通道）搬的是原樣位元組，不壓。照 dsh 逐字保留；
+    // 沒有 socket 的 response 搬的是原樣位元組，不壓。
     // nexus 沒有這種通道，而 node:http 在 pipelining 時第二個請求的 socket 是 `null` 不是 `undefined`，所以這個條件在這裡不會成立。
     if ((res as { socket?: unknown }).socket === undefined) {
       next();
@@ -183,7 +179,6 @@ export interface StartWireServerOptions {
    * 第二個參數是那個請求的方法與 pathname（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），管理者才知道是哪一個請求。
    * **`path` 只有 pathname，不帶 query**：`/?token=…` 的權杖在 query 裡，進日誌就洩了。
    *
-   * **與 dsh 的偏離（理由 2：產品需求超出 dsh）**：dsh 的 webserver 最後一道防線只記錯誤本身（`packages/host/webserver/src/index.ts`）。
    * nexus 是多人共用的 `serve`，管理者要從使用者回報的時間找到是哪一個請求，所以多帶方法與 pathname。
    */
   readonly warn?: (error: Error, request: WarnedRequest) => void;
@@ -203,7 +198,7 @@ export interface StartWireServerOptions {
    */
   readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
   /**
-   * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。**不給就不壓**，跟今天完全一樣（dsh 的 `compression: 'none'`）。
+   * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。**不給就不壓**，跟今天完全一樣。
    * 給了之後，歷史頁、列表的 JSON 與網頁 bundle 在瀏覽器支援時壓縮再送；SSE 下行與帶 `content-range` 的回應照原樣送。見檔頭。
    */
   readonly compression?: WireCompression;
@@ -245,7 +240,7 @@ async function toRequest(
   }
   const method = incoming.method ?? 'GET';
   const hasBody = method !== 'GET' && method !== 'HEAD';
-  // **只取路徑與 query**，照 dsh `packages/host/webserver/src/index.ts` 的 `new URL(req.url, 'http://x').pathname`：
+  // **只取路徑與 query**：
   // 請求行可以是 absolute-form（`GET http://evil/threads HTTP/1.1`），直接接在 origin 後面會拼出一個
   // 解析不了的網址。它帶的 authority 不算數——信任看 `Host` 標頭（`request-trust.ts`）。
   const target = new URL(incoming.url ?? '/', 'http://x');
@@ -253,7 +248,7 @@ async function toRequest(
   if (!hasBody) return { request: new Request(url, { method, headers }), streaming: false };
 
   // **串流路由（上傳）不聚合**：位元組一路從 socket 流到路由手上，行程裡不留整份檔案。
-  // 路由自己負責落地、取消與配額；這裡不套總量上限（照 dsh 的 `requestBodyMode: 'streaming'`）。
+  // 路由自己負責落地、取消與配額；這裡不套總量上限。
   if (wireRequestBodyMode(method, target.pathname) === 'streaming') {
     const body = Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>;
     return {
@@ -417,10 +412,10 @@ async function writeResponse(
       if (done) {
         break;
       }
-      // 斷線之後照樣把 body 讀完（讓來源收得到結束），但不寫（dsh `http-bridge.ts:109`）。
+      // 斷線之後照樣把 body 讀完（讓來源收得到結束），但不寫。
       if (outgoing.destroyed) continue;
       // 每一顆 frame 立刻推出去；SSE 的重點就是不要在這裡積著。
-      // **背壓**（照 dsh `http-bridge.ts:106-124`）：回 `false` 表示 socket 緩衝滿了，等 `'drain'`，不再往 heap 裡積。
+      // **背壓**：回 `false` 表示 socket 緩衝滿了，等 `'drain'`，不再往 heap 裡積。
       // 'close' 也算一個出口，斷線時迴圈才不會停在這裡。
       if (!outgoing.write(value) && !outgoing.destroyed) {
         await new Promise<void>((resolve) => {
@@ -518,7 +513,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     count(incoming, path, response.status);
     if (streaming) {
       // 串流本文路由回應時本文可能還沒讀完（早退的 415、錯誤）：這條連線不能再當 keep-alive 用，
-      // 回完就把沒讀完的請求端砍掉（照 dsh 的串流模式）。
+      // 回完就把沒讀完的請求端砍掉。
       const headers = new Headers(response.headers);
       headers.set('connection', 'close');
       await writeResponse(
@@ -535,10 +530,10 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     }
     await writeResponse(response, outgoing, heartbeat, path);
   };
-  // **最後一道防線**，照 dsh `packages/host/webserver/src/index.ts`（`ddefc45`）：一個請求的失敗只收在那個
+  // **最後一道防線**：一個請求的失敗只收在那個
   // 請求上——記一筆、回 400，已經送出標頭的就斷線。沒有這一層，`handle` 的 rejection 沒人接，Node 會讓
   // 整個行程退出：同機任何人送一個畸形的請求就能把 serve 打掉（#424 審查時實測過）。
-  // 壓縮中介層只依設定建一次（同 dsh `this.gzip`）；不給就是 `undefined`，listener 直接進 `handle`。
+  // 壓縮中介層只依設定建一次；不給就是 `undefined`，listener 直接進 `handle`。
   const gzip =
     options.compression === undefined ? undefined : createGzipMiddleware(options.compression);
   const server: Server = createServer((incoming, outgoing) => {

@@ -1,6 +1,6 @@
 /**
  * 上傳走真的 socket（[#732](https://github.com/DemianLi/nexus-agent/issues/732) 第二張）：Node 轉接層對上傳路由**串流**、
- * 對先收完整份的 JSON 路由套本文上限（照 dsh `client/connection` 的 `requestBodyMode`）。
+ * 對先收完整份的 JSON 路由套本文上限。
  *
  * 這一支量的是只有真的 socket 才量得到的東西：位元組是不是真的一路流進儲存、行程記憶體跟不跟著檔案大小漲、
  * 超過上限的 JSON 本文有沒有被擋在讀進記憶體之前。**零憑證、零外部連線**；附件根放 `/var/tmp`。
