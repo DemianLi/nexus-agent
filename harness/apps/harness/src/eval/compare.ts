@@ -4,7 +4,7 @@
  *
  * ## 唯一變動的是 model
  *
- * 三個橫階跑的是同一份 [`BENCHMARK`](./dataset.ts)、同一份 [`benchmarkPlugins()`](./assembly.ts)、
+ * 三個橫階跑的是同一份 [`BENCHMARK`](./dataset.ts)、同一份 serve 出貨組裝（[`assembly.ts`](./assembly.ts)）、
  * 同一個 [`runBenchmarkCase`](./runner.ts)、同一組評分器。`createModel` 是注進來的，
  * 所以測試餵得進假模型 —— 這個檔案本身**不需要任何憑證**，連外的只有呼叫端。
  *
@@ -26,8 +26,7 @@
  * 單次取樣的一個數字讀起來像判決，但它不是。
  */
 
-import type { AgentModel, StreamRetryOptions } from '@nexus/core';
-import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
+import type { AgentModel } from '@nexus/core';
 import { isRetryableRateLimit } from '../live-model.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import { runBenchmarkCase, type BenchmarkRun, type TokenUsage } from './runner.js';
@@ -71,39 +70,45 @@ export type FailureReason =
 /**
  * 基準任務的迴圈上限，比組裝點的預設緊。
  *
- * 換算是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`。基準任務的組裝（`benchmarkPlugins()`
- * 經 `createNexusAgent`，提醒器打底）每輪三格，所以 40 是 13 輪模型呼叫（2026-10-02 用
- * `LoopingChatModel` 走 `runTier` 實測）。取這個值的理由是實測：
- * 正常的執行裡最多的一次是 `oss-20b` 在 `edit-after-read` 上多叫 8 次（共 11 次工具呼叫
- * ≈ 24 個 super-step），而跑掉的那次是 25 次多叫（共 28 次 ≈ 58 個）——40 落在兩者中間。
- * **這兩個 super-step 數字是每輪兩格算的**；換成每輪三格約 36 與 87（推算，沒有重跑），
- * 40 仍落在兩者中間。
+ * 換算是 `模型輪數 = max(0, floor((recursionLimit - 6) / 每輪格數))`（見 {@link evalModelRounds}）。基準任務跑的是 serve 的出貨組裝
+ * （`assembly.ts`），每輪四格，另有開頭六格（出貨清單上那些 `beforeAgent` 節點），所以 40 是 8 輪模型呼叫
+ * （2026-11-28 用 `LoopingChatModel` 走 `runTier` 實測）。
+ *
+ * 這個上限是舊組裝（只有 `echo`、提醒器打底，40 是 13 輪）時定的：正常的執行裡最多的一次是 `oss-20b` 在 `edit-after-read` 上多叫 8 次
+ * （共 11 次工具呼叫 ≈ 24 個 super-step），而跑掉的那次是 25 次多叫（共 28 次 ≈ 58 個）——40 落在兩者中間。
+ * **這兩個 super-step 數字是舊組裝每輪兩格算的**，沒有在出貨組裝上重跑；出貨組裝每輪四格、開頭六格，同樣是 11 次工具呼叫的執行
+ * 需要的上限會比 40 高。
  */
 export const EVAL_RECURSION_LIMIT = 40;
 
 /**
  * 基準任務的組裝每一輪模型呼叫佔幾個 super-step。
  *
- * 預設組裝打底提醒器，而 `beforeModel` 在 LangGraph 裡是圖裡的一個節點，所以每輪是
- * 模型、工具、提醒器三格，不是裸組裝的兩格（換算與逐格實測見
+ * 出貨組裝每輪四格（模型、工具與兩格前置節點），不是裸組裝的兩格（換算與逐格實測見
  * [`looping-model.ts`](../looping-model.ts) 檔頭的表）。`compare.test.ts` 用
- * `benchmarkPlugins()` 配 `LoopingChatModel` 實跑打滿上限，釘死這個值與下面那個換算。
+ * `LoopingChatModel` 在 `openBenchmarkAgent` 組出來的 agent 上實跑打滿上限，釘死這個值與下面兩個。
  */
-export const EVAL_SUPERSTEPS_PER_ROUND = 3;
+export const EVAL_SUPERSTEPS_PER_ROUND = 4;
 
 /**
- * 一個迴圈上限約等於幾輪模型呼叫：`floor((recursionLimit - 1) / 每輪格數)`。
+ * 出貨組裝在第一輪模型呼叫之前佔的 super-step：`beforeAgent` 那幾個節點與進入點。
+ * 2026-11-27 對 serve 的出貨清單逐一實測得 6（上限 10 才有第一輪）；清單上多一顆 `beforeAgent` 的 plugin 這個數字就會變，
+ * `compare.test.ts` 的實測會紅。
+ */
+export const EVAL_SUPERSTEPS_OVERHEAD = 6;
+
+/**
+ * 一個迴圈上限約等於幾輪模型呼叫：`max(0, floor((recursionLimit - 開頭格數) / 每輪格數))`。
  *
- * **CLI 印給人看的輪數與結果檔記下的輪數都從這裡來。** 之前 `compare-cli.ts` 自己寫
- * `(上限 - 2) / 2`，那是裸組裝每輪兩格的舊算法，對基準任務的組裝印出 19 輪，實際是 13 輪。
+ * **CLI 印給人看的輪數與結果檔記下的輪數都從這裡來。**
  *
- * **只在上限 4 到 87 之間精確**（2026-10-04 用 `LoopingChatModel` 逐一實測，`compare.test.ts`
- * 有掃描）。從 88 起實測比這個換算多一輪（88 → 30 輪，換算 29；100 → 34，換算 33），
- * 原因沒有追。出貨的上限 {@link EVAL_RECURSION_LIMIT} 是 40，在精確的範圍內；CLI 沒有改上限的
- * 旗標，所以今天不會落到範圍外。
+ * 對 serve 的出貨組裝，2026-11-27 實測過的上限都精確（掃過的值與留下的代表值見 `compare.test.ts`）。
  */
 export function evalModelRounds(recursionLimit: number): number {
-  return Math.floor((recursionLimit - 1) / EVAL_SUPERSTEPS_PER_ROUND);
+  return Math.max(
+    0,
+    Math.floor((recursionLimit - EVAL_SUPERSTEPS_OVERHEAD) / EVAL_SUPERSTEPS_PER_ROUND),
+  );
 }
 
 /**
@@ -179,10 +184,6 @@ export interface CompareOptions<T extends ModelUnderTest = ModelUnderTest> {
   readonly recursionLimit?: number;
   /** 一次執行的時間預算，毫秒。預設 {@link EVAL_DEADLINE_MS}；給 `0` 表示不設。 */
   readonly deadlineMs?: number;
-  /**
-   * 模型呼叫失敗的重試政策（#1427），原樣交給 {@link runBenchmarkCase}。真模型的比較要給（SDK 層不重試了），假模型省略即只打一次。
-   */
-  readonly streamRetry?: StreamRetryOptions;
 }
 
 /**
@@ -266,12 +267,9 @@ async function runOnce(
   try {
     const run = await runBenchmarkCase(testCase, {
       model: options.createModel(tier.modelId, testCase),
-      plugins: benchmarkPlugins(),
-      systemPrompt: BENCHMARK_SYSTEM_PROMPT,
       recursionLimit: options.recursionLimit ?? EVAL_RECURSION_LIMIT,
       onUsage,
       ...(deadline === undefined ? {} : { signal: deadline }),
-      ...(options.streamRetry === undefined ? {} : { streamRetry: options.streamRetry }),
     });
     return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started), run };
   } catch (error) {

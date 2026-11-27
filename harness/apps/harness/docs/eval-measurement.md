@@ -37,20 +37,20 @@
 「哪天出現」指的是有人要把 LLM 評審或使用者模擬器接進評估流程的那一刻。**在那之前不要預先建**：
 沒有對象的量具量不出任何東西，只會留下一個看起來有人把關的空殼。
 
-## 二、這七題的分數當上限，不當實力
+## 二、這幾題的分數當上限，不當實力
 
-[`dataset.ts`](../src/eval/dataset.ts) 那七題（見 `GLOSSARY.md` 的「基準任務」）同時被拿來**挑設定**與**報成績**，
+[`dataset.ts`](../src/eval/dataset.ts) 那幾題（見 `GLOSSARY.md` 的「基準任務」）同時被拿來**挑設定**與**報成績**，
 中間沒有切開：
 
-- **預設模型**是在這七題上決選出來的（2026-09-04，七題 × 3 次，見
+- **預設模型**是在當時那七題上決選出來的（2026-09-04，七題 × 3 次，見
   [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)）；`live-model.test.ts` 還要求預設的 id
   必須出自量過的清單。
-- **迴圈上限 40 與時鐘 300 秒**（`EVAL_RECURSION_LIMIT`、`EVAL_DEADLINE_MS`，在 `compare.ts`）是照這七題
+- **迴圈上限 40 與時鐘 300 秒**（`EVAL_RECURSION_LIMIT`、`EVAL_DEADLINE_MS`，在 `compare.ts`）是照當時那七題
   實測的分佈挑的，註解裡記著挑在哪兩個觀測之間。
 - **後四題是看了 [#84](https://github.com/DemianLi/nexus-agent/issues/84) 的結果才加的**：前三題在那份資料上
   已經分不出高下，後四題是為了讓參數那一欄重新有解析度。
 
-所以這七題上的分數有兩個讀法限制：
+所以這幾題上的分數有兩個讀法限制：
 
 1. **當上限，不當實力。** 設定是對著這份題挑出來的，這份題上的成績偏高；它回答的是「在我們挑好的
    條件下最多能到多少」，不是「換一批題會是多少」。

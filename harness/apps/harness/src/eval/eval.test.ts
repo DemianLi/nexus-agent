@@ -40,7 +40,6 @@ import type { Server } from 'node:http';
 import * as ls from 'langsmith/vitest';
 import { afterAll, beforeAll, expect } from 'vitest';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
-import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
 import { BENCHMARK, BENCHMARK_FILE, type BenchmarkCase } from './dataset.js';
 import { runBenchmarkCase } from './runner.js';
 import { scoreCase } from './scorers.js';
@@ -57,29 +56,6 @@ import { scoreCase } from './scorers.js';
  * （假模型不給時回報的是 `undefined`，不是零 —— 見 `runner.ts`）。
  */
 const SCRIPTS: Readonly<Record<string, readonly ScriptedTurn[]>> = {
-  'echo-once': [
-    {
-      content: '我來回聲。',
-      toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
-      usage: { inputTokens: 120, outputTokens: 18 },
-    },
-    { content: '回聲：接線測試', usage: { inputTokens: 150, outputTokens: 9 } },
-  ],
-  'echo-then-write': [
-    {
-      content: '先回聲。',
-      toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
-      usage: { inputTokens: 130, outputTokens: 20 },
-    },
-    {
-      content: '再寫進檔案。',
-      toolCalls: [
-        { name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '回聲：接線測試' } },
-      ],
-      usage: { inputTokens: 180, outputTokens: 26 },
-    },
-    { content: '寫好了。', usage: { inputTokens: 210, outputTokens: 7 } },
-  ],
   'write-then-read': [
     {
       content: '先寫。',
@@ -171,8 +147,10 @@ const SCRIPTS: Readonly<Record<string, readonly ScriptedTurn[]>> = {
  */
 const SABOTEUR: readonly ScriptedTurn[] = [
   {
-    content: '我隨便回聲一下就好。',
-    toolCalls: [{ name: 'echo', args: { message: '完全不是那句話' } }],
+    content: '我隨便寫一下就好。',
+    toolCalls: [
+      { name: 'write_file', args: { file_path: '/別的檔案.md', content: '完全不是那句話' } },
+    ],
     usage: { inputTokens: 130, outputTokens: 20 },
   },
   { content: '做完了。', usage: { inputTokens: 160, outputTokens: 5 } },
@@ -198,7 +176,7 @@ const RESTLESS: readonly ScriptedTurn[] = [
 const RESTRAINT_CASE = BENCHMARK.find((entry) => entry.id === 'no-tool-needed');
 
 /** saboteur 那條要跑的題目。兩個工具、參數明確，所以「少叫一個又寫錯」扣得乾淨。 */
-const SABOTAGED_CASE = BENCHMARK.find((entry) => entry.id === 'echo-then-write');
+const SABOTAGED_CASE = BENCHMARK.find((entry) => entry.id === 'write-then-read');
 
 /** 真的跑完的 `ls.test` 條數。**這是本檔的主判準**，理由見檔頭。 */
 let executed = 0;
@@ -281,8 +259,6 @@ async function evaluateCase(
 ): Promise<ReturnType<typeof scoreCase>> {
   const run = await runBenchmarkCase(testCase, {
     model: new ScriptedChatModel({ turns }),
-    plugins: benchmarkPlugins(),
-    systemPrompt: BENCHMARK_SYSTEM_PROMPT,
   });
   const score = scoreCase(testCase, run);
 

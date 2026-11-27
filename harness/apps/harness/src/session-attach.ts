@@ -7,7 +7,7 @@
  * 每條 thread 的不變量檢查整個消失，或遙測一筆都不送，CLI 照常所以本機看不出來。這個檔把「接什麼、什麼順序、
  * 怎麼收」定成一個函式，兩個入口與測試共用同一份。
  *
- * **不收進 `createNexusAgent`**：eval 走它而且刻意不接註冊表（`eval/session-absence.test.ts`）。這裡只是組合
+ * **不收進 `createNexusAgent`**：eval 走的是 `assembly.create`（`createCliAgent`）而且刻意不接註冊表（`eval/session-absence.test.ts`）。這裡只是組合
  * 三個口的純函式，不碰註冊表，所以 eval 的決定不受影響。
  */
 

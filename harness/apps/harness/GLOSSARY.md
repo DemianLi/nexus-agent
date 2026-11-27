@@ -15,5 +15,5 @@ _Avoid_: 通過、全對、成功率
 _Avoid_: 成功率（單獨一個「成功率」分不出是哪一個）
 
 **基準任務**:
-[`dataset.ts`](./src/eval/dataset.ts) 裡的那七題，每題一句話、單輪，供應商中立。
+[`dataset.ts`](./src/eval/dataset.ts) 裡的那五題，每題一句話、單輪，供應商中立。
 _Avoid_: 測試集、benchmark、題庫（「題庫版本」是結果檔記下的版本，指的是這份資料）

@@ -41,10 +41,8 @@
  * 組裝點**（它呼叫 `createCliAgent`，不自己 `createNexusAgent`），所以釘一處就把 CLI 與 web
  * 兩條產品路徑都蓋住了。
  *
- * **明著在柵欄外的兩處**：`eval/runner.ts` 與 `spike/spike-agent.ts` 也呼叫
- * `createNexusAgent`，但**兩處都不給 checkpointer**（`eval/runner.ts` 那個「沒有 checkpointer」
- * 甚至是核准閘門今天走 `no-channel` 的原因，那一段自己記著）。它們哪天長出一顆，下面那張
- * 表就會多一列而當場紅——**那正是該響的時候**。
+ * **明著在柵欄外的一處**：`spike/spike-agent.ts` 也呼叫 `createNexusAgent`，但**不給 checkpointer**。它哪天長出一顆，下面那張
+ * 表就會多一列而當場紅——**那正是該響的時候**。（eval 走相容層的 `assembly.create`，也就是 `createCliAgent`，在這道柵欄裡。）
  *
  * **釘的是會翻面的那個宣稱本身，不是數量**（承
  * [#195](https://github.com/DemianLi/nexus-agent/issues/195) 與

@@ -3478,6 +3478,10 @@ pnpm --filter @nexus/harness exec vitest run src/eval
 pnpm --filter @nexus/harness run eval:compare --samples 2
 ```
 
+eval 組的是 serve 一條 thread 的出貨組裝（出貨清單加 serve 層、相容層 `assembly.create`、私有根與 `/shared` 用暫存目錄、核准政策取出廠值；
+`src/eval/assembly.ts`），所以結果檔每個受測模型各記一份提示詞雜湊（`settings.systemPromptVersions`，鍵是模型 id），記的是那個模型實際送出的 `request/system`——`{{model}}` 換成它的 id，所以每個模型不同。每次模型呼叫另記 `request/system`、工具名稱與雜湊、
+輸入／輸出 token（`src/eval/runner.ts` 的 `UsageTally`，不經會話日誌）。對話史來源明著用 `state`：沒有會話日誌，出廠的 `log` 組不起來。
+
 它跑 `MEASURED_MODELS`，`--models` 可以挑子集，`--cases` 只跑指定的題目。**成本是題數 × 模型數 ×
 取樣數的乘積**，跑滿是小時級。量過的結論與模型盤點在
 [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)。
@@ -3514,7 +3518,7 @@ pnpm --filter @nexus/harness run eval:compare --floor-only
 `eval:compare` 與 `eval:survey` 的報表上，「這題成功」「工具成功率」「參數正確性」「回覆提到」四欄底下各有一行**區間**
 （survey 全部與難題各一行），方法與 n 都印在行裡，並配著它自己的中心值（題均）：以題目為單位重抽的百分位 bootstrap（每題先把自己的執行取平均，再把題當獨立單位抽 2000
 次，取 2.5% 與 97.5%；種子固定，同一份資料永遠同一個區間）。同題重跑的變異在「每題先取平均」那
-一步收掉，不會單獨撐大區間；七題的區間很寬，這是對的。同一行也印**一題 = X 個百分點**（按該欄
+一步收掉，不會單獨撐大區間；題數少的區間很寬，這是對的。同一行也印**一題 = X 個百分點**（按該欄
 判得動的題數算，取樣不止一次時另印一次執行等於幾個百分點）。括號裡的「範圍」是最小到最大，**不是
 誤差棒**。少於兩題抽不出區間，所有題目同值時區間會塌成一點（報表會明說，那不代表沒有不確定度）。
 最後一行 **token 合計**把評到分的與失敗的執行分開列：失敗的（被上限切掉、被端點拒絕）也花了 token，
@@ -3523,7 +3527,7 @@ pnpm --filter @nexus/harness run eval:compare --floor-only
 CI 那條（`pnpm --filter @nexus/harness exec vitest run src/eval`）同時擋兩個方向：平凡 agent 不准
 被判成功（`floor.test.ts`），每題的標準解必須被判成功（`eval.test.ts`）。
 
-這七題上的分數**當上限、不當實力**（設定與題目是同一批挑的），要拿它挑改動就得在新題上驗過；
+這幾題上的分數**當上限、不當實力**（設定與題目是同一批挑的），要拿它挑改動就得在新題上驗過；
 LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 [`harness/apps/harness/docs/eval-measurement.md`](../harness/apps/harness/docs/eval-measurement.md)。
 

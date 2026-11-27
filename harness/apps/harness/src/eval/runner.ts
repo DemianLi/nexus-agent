@@ -12,9 +12,9 @@
  * ## 這條路上沒有會話日誌，而那是一個決定
  *
  * 另外兩個入口都有一張會話註冊表——CLI 在 `runCli` 裡建、`serve` 一條 thread 一張
- * （`thread-pump.ts`）——而 eval **一張都沒有**：它直接叫 `createNexusAgent`，繞過了
- * `createCliAgent`，所以連行程內的日誌都不存在，更談不上落盤
- * （[#174](https://github.com/DemianLi/nexus-agent/issues/174)）。
+ * （`thread-pump.ts`）——而 eval **一張都沒有**：它組的是 serve 一條 thread 的組裝（`assembly.ts`），但不接
+ * 註冊表，所以連行程內的日誌都不存在，更談不上落盤（[#174](https://github.com/DemianLi/nexus-agent/issues/174)）。
+ * 組裝因此明著傳 `historySource: 'state'`（出廠的 `log` 沒有日誌就組不起來），見 `assembly.ts`。
  *
  * **今天不接，理由是這條路沒有消費者，不是接不上：**
  *
@@ -29,18 +29,22 @@
  * [`session-absence.test.ts`](./session-absence.test.ts) 盯著這個檔的 import 行，
  * 出現 `SessionRegistry`／`attachSession`／`attachSessionPersistence` 就紅。那不是禁止
  * ——是要求接的人回來把這一段改掉，順便回答「那落盤呢」。
- *
- * 同一個形狀在這個檔裡已經有先例：`approvals` 明著傳 {@link HEADLESS_APPROVALS} 而不
- * 靠「反正沒有 checkpointer」的巧合（見 {@link runBenchmarkCase} 裡那段註解）。
  */
 
+import { createHash } from 'node:crypto';
+
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
+import type { Serialized } from '@langchain/core/load/serializable';
 import { AIMessage } from '@langchain/core/messages';
 import type { LLMResult } from '@langchain/core/outputs';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { AgentModel, PluginEntry, StreamRetryOptions } from '@nexus/core';
-import { createNexusAgent, HEADLESS_APPROVALS } from '../agent-factory.js';
+import { extractRequest, tagModelRoute } from '@nexus/core';
+import type { AgentModel, PluginEntry } from '@nexus/core';
+import type { createNexusAgent } from '../agent-factory.js';
 import { toAgentInvocation } from '../messages.js';
+import { openBenchmarkAgent } from './assembly.js';
+import { ScriptedChatModel } from '../scripted-model.js';
+import { BENCHMARK } from './dataset.js';
 import type { BenchmarkCase } from './dataset.js';
 
 /** 一次工具呼叫，只留評分要看的兩樣。 */
@@ -54,6 +58,26 @@ export interface TokenUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
+}
+
+/** 一次模型呼叫送出的工具：名稱與整份 schema 的雜湊（名稱、說明、參數一起算）。 */
+export interface RecordedTool {
+  readonly name: string;
+  readonly hash: string;
+}
+
+/**
+ * 一次模型呼叫記下的東西：LangChain 即將送進供應商的 `request/system` 全文、工具，與這一次的用量。
+ *
+ * 取的位置跟會話日誌的請求快照是同一個（`handleChatModelStart`，見 `@nexus/core` 的 `extractRequest`），所以記到的是洋蔥
+ * 走完之後實際送出的，不是組裝前的樣板。用量在呼叫結束才有；被中止的那一次沒有。
+ */
+export interface ModelCallRecord {
+  /** 渲染後的系統提示詞全文（所有系統訊息以空行串起來）。 */
+  readonly system: string;
+  readonly tools: readonly RecordedTool[];
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /** 一條基準任務跑完之後留下的東西。 */
@@ -70,10 +94,12 @@ export interface BenchmarkRun {
    * 「這條路免費」，另一個是「我們不知道」。假模型只在腳本明著給 `usage` 時才回報。
    */
   readonly usage?: TokenUsage;
+  /** 依發生順序的每一次模型呼叫（含工具回合之間的每一次）。 */
+  readonly calls?: readonly ModelCallRecord[];
 }
 
 /**
- * 每次模型呼叫結束時回報用量的觀察者。
+ * 每次模型呼叫開始時記下請求、結束時回報用量的觀察者。
  *
  * **它存在是為了失敗的執行**：`runBenchmarkCase` 丟出例外時，`result.messages` 跟著沒了，
  * 迴圈上限切掉的那一次可能已經燒了十幾輪的 token（#1002）。只有在呼叫結束的那一刻記帳，
@@ -84,16 +110,59 @@ export interface BenchmarkRun {
 export class UsageTally extends BaseCallbackHandler {
   name = 'eval-usage-tally';
 
-  constructor(private readonly sink: (usage: TokenUsage) => void) {
+  private readonly open = new Map<string, ModelCallRecord>();
+
+  /**
+   * @param sink - 每次呼叫結束回報一次用量。
+   * @param calls - 給了就在每次呼叫**開始**時推一筆 {@link ModelCallRecord}（結束時補上用量），整輪失敗也留得住已記的。
+   * @param toolsOf - 模型自己不在請求選項裡報工具時的備援：回這一刻綁在模型上的工具。
+   */
+  constructor(
+    private readonly sink: (usage: TokenUsage) => void,
+    private readonly calls?: ModelCallRecord[],
+    private readonly toolsOf?: () => readonly unknown[],
+  ) {
     super();
+    this.awaitHandlers = true;
   }
 
-  override handleLLMEnd(output: LLMResult): void {
+  override handleChatModelStart(
+    _llm: Serialized,
+    messages: BaseMessage[][],
+    runId: string,
+    _parentRunId?: string,
+    extraParams?: Record<string, unknown>,
+  ): void {
+    if (this.calls === undefined) return;
+    const invocation = extraParams?.['invocation_params'];
+    const options = extraParams?.['options'];
+    const { system, header: sent } = extractRequest(messages, invocation, options);
+    const header =
+      sent.tools === undefined && this.toolsOf !== undefined
+        ? extractRequest(messages, {}, { tools: this.toolsOf() }).header
+        : sent;
+    const record: ModelCallRecord = {
+      system,
+      tools: (header.tools ?? []).map((tool) => ({
+        name: tool.name,
+        hash: createHash('sha256').update(JSON.stringify(tool)).digest('hex').slice(0, 12),
+      })),
+    };
+    this.calls.push(record);
+    this.open.set(runId, record);
+  }
+
+  override handleLLMEnd(output: LLMResult, runId: string): void {
     for (const generation of output.generations.flat()) {
       const message = (generation as { message?: unknown }).message;
       if (!AIMessage.isInstance(message)) continue;
       const usage = message.usage_metadata;
       if (usage === undefined) continue;
+      const record = this.open.get(runId);
+      if (record !== undefined) {
+        record.inputTokens = (record.inputTokens ?? 0) + usage.input_tokens;
+        record.outputTokens = (record.outputTokens ?? 0) + usage.output_tokens;
+      }
       this.sink({
         inputTokens: usage.input_tokens,
         outputTokens: usage.output_tokens,
@@ -105,10 +174,15 @@ export class UsageTally extends BaseCallbackHandler {
 
 export interface RunBenchmarkOptions {
   /**
-   * 模型呼叫失敗的重試政策（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)）。SDK 層不重試了，所以真模型要靠它才會
-   * 重打；省略就是只打一次（CI 的假模型不需要）。eval 沒有會話日誌，所以只是打了更多次、不留痕跡。
+   * 每一次模型呼叫的請求與用量記到這裡，**包括後來整輪失敗的那一輪**。省略就只留在回傳值的 {@link BenchmarkRun.calls}
+   * （失敗時沒有回傳值，要留住就要自己傳一份）。
    */
-  readonly streamRetry?: StreamRetryOptions;
+  readonly calls?: ModelCallRecord[];
+  /**
+   * 整份清單換成這一份（測試用：在出貨清單上動一句提示詞）。省略即 serve 的出貨清單。
+   * 模型這一列照樣由 {@link model} 換。
+   */
+  readonly plugins?: readonly PluginEntry[];
   /**
    * 每次模型呼叫結束就回報一次用量，**包括後來整輪失敗的那一輪**。省略即不記。
    *
@@ -118,12 +192,8 @@ export interface RunBenchmarkOptions {
   readonly onUsage?: (usage: TokenUsage) => void;
   /** 這一輪用哪個模型。CI 傳假模型，供應商比較傳真模型。 */
   readonly model: AgentModel;
-  /** plugin 清單。兩邊必須是同一份，否則比的不是模型是組裝。 */
-  readonly plugins: readonly PluginEntry[];
-  /** 附加的 system prompt。省略即不加。 */
-  readonly systemPrompt?: string;
   /**
-   * agent 迴圈的上限。省略即組裝點的三態——這一層的 {@link plugins} 裡有 `recursion-limit`
+   * agent 迴圈的上限。省略即組裝點的三態——出貨清單裡有 `recursion-limit`
    * 那一列就用它的，沒有那一列才是 `DEFAULT_RECURSION_LIMIT`（#529）。**基準測試那條路永遠
    * 明著傳**（`compare.ts` 的 `options.recursionLimit ?? EVAL_RECURSION_LIMIT`），所以它恆走
    * 第一態，不會因為誰往清單裡加了那一列而改變。
@@ -147,6 +217,8 @@ export interface RunBenchmarkOptions {
   readonly signal?: AbortSignal;
 }
 
+type EvalAgent = Awaited<ReturnType<typeof createNexusAgent>>['agent'];
+
 /** 基座回的最終狀態，只取我們讀的那一格。 */
 interface AgentResult {
   readonly messages: readonly BaseMessage[];
@@ -159,50 +231,52 @@ interface AgentResult {
  * 第一題留下了什麼，而那不是我們要量的東西。
  *
  * @param testCase - 要跑的那條任務。
- * @param options - 模型與 plugin 清單。
+ * @param options - 模型與選項。
  * @returns 跑完之後的觀測值。
  */
 export async function runBenchmarkCase(
   testCase: BenchmarkCase,
   options: RunBenchmarkOptions,
 ): Promise<BenchmarkRun> {
-  const { agent, dispose } = await createNexusAgent({
+  const { agent, model, dispose } = await openBenchmarkAgent({
     model: options.model,
-    plugins: options.plugins,
-    // **基準任務是三個入口裡最 headless 的那個**：CI 跑、零憑證、沒有人看著
-    // （[#31](https://github.com/DemianLi/nexus-agent/issues/31)）。
-    //
-    // 今天不設它**看起來**也一樣：這裡沒給 checkpointer，所以核准閘門本來就走
-    // `no-channel` 那條確定性拒絕。但那是**推出來的**，不是說出來的——理由會變成
-    // 「接不回來」，而真正的理由是「沒有人被問到」。而且哪天有人替多輪基準任務補上
-    // checkpointer，那個巧合就沒了：政策一路退回預設的 `true`，一條標了核准的任務會
-    // 停在核准點等一個 CI 裡永遠不會來的答案（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-    approvals: HEADLESS_APPROVALS,
-    ...(options.systemPrompt === undefined ? {} : { systemPrompt: options.systemPrompt }),
+    ...(options.plugins === undefined ? {} : { plugins: options.plugins }),
     ...(options.recursionLimit === undefined ? {} : { recursionLimit: options.recursionLimit }),
-    ...(options.streamRetry === undefined ? {} : { streamRetry: options.streamRetry }),
   });
+  const calls = options.calls ?? [];
 
   try {
     const invoke = (
-      agent as unknown as { invoke(input: unknown, config?: unknown): Promise<AgentResult> }
+      agent as EvalAgent as unknown as {
+        invoke(input: unknown, config?: unknown): Promise<AgentResult>;
+      }
     ).invoke.bind(agent);
-    const config = {
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.onUsage === undefined ? {} : { callbacks: [new UsageTally(options.onUsage)] }),
-    };
-    const result = await invoke(
-      toAgentInvocation(testCase.prompt),
-      Object.keys(config).length === 0 ? undefined : config,
+    const boundTools = (model as unknown as { boundTools?: readonly unknown[] }).boundTools;
+    const tally = new UsageTally(
+      options.onUsage ?? (() => {}),
+      calls,
+      boundTools === undefined
+        ? undefined
+        : () => (model as unknown as { boundTools: readonly unknown[] }).boundTools,
     );
-    return summarize(testCase.id, result.messages);
+    const config = {
+      callbacks: [tally],
+      configurable: { thread_id: `eval-${testCase.id}` },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    };
+    const result = await invoke(toAgentInvocation(testCase.prompt), config);
+    return summarize(testCase.id, result.messages, calls);
   } finally {
     await dispose();
   }
 }
 
 /** 把最終訊息串收斂成觀測值。 */
-function summarize(caseId: string, messages: readonly BaseMessage[]): BenchmarkRun {
+function summarize(
+  caseId: string,
+  messages: readonly BaseMessage[],
+  calls: readonly ModelCallRecord[],
+): BenchmarkRun {
   const ai = messages.filter((message) => AIMessage.isInstance(message));
 
   const toolCalls: ObservedToolCall[] = [];
@@ -227,9 +301,40 @@ function summarize(caseId: string, messages: readonly BaseMessage[]): BenchmarkR
           totalTokens: sum(reported.map((entry) => entry.total_tokens)),
         };
 
-  return { caseId, toolCalls, finalText, ...(usage === undefined ? {} : { usage }) };
+  return { caseId, toolCalls, finalText, calls, ...(usage === undefined ? {} : { usage }) };
 }
 
 function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function tagged(model: ScriptedChatModel, modelId: string | undefined): ScriptedChatModel {
+  return modelId === undefined ? model : tagModelRoute(model, { model: modelId });
+}
+
+/**
+ * 出貨的組裝實際送出的 `request/system`：用一顆只回一句話的假模型跑一次，取第一次模型呼叫記下的那一份。
+ * 結果檔的提示詞雜湊記的是它，不是組裝前的樣板。
+ *
+ * 系統提示詞的 `{{model}}` 跟著那一步實際用的模型走，而且只認貼過路由標籤的實例（`system-prompt-middleware.ts`）。
+ * 真模型是 `createLiveModel` 貼上標籤的，這裡給 `modelId` 就替假模型貼同一個標籤，送出的就跟那顆真模型一樣；
+ * 不給就是沒貼標籤的假模型（`{{model}}` 維持組裝時的假模型名）。
+ *
+ * @param plugins - 省略即 serve 的出貨清單。
+ * @param modelId - 受測模型的 id；省略即不貼標籤。
+ * @throws {Error} 一次模型呼叫都沒記到。
+ */
+export async function shippedSystemPrompt(
+  plugins?: readonly PluginEntry[],
+  modelId?: string,
+): Promise<string> {
+  const probe = BENCHMARK[0];
+  if (probe === undefined) throw new Error('題組是空的');
+  const run = await runBenchmarkCase(probe, {
+    model: tagged(new ScriptedChatModel({ turns: [{ content: '好。' }] }), modelId),
+    ...(plugins === undefined ? {} : { plugins }),
+  });
+  const system = run.calls?.[0]?.system;
+  if (system === undefined) throw new Error('組裝點沒有送出任何一次模型呼叫');
+  return system;
 }

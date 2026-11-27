@@ -1,29 +1,158 @@
 /**
- * 基準任務的組裝 —— **CI 那半與尺寸比較那半共用的同一份**。
+ * 基準任務的組裝 —— **跟 serve 一條 thread 組出來的是同一份**，CI 那半與尺寸比較那半共用。
  *
- * [`runner.ts`](./runner.ts) 寫著「plugin 清單兩邊必須是同一份，否則比的不是模型是組裝」。
- * 那句話只有在真的**同一份**時才成立：各自寫一份一模一樣的清單，第一天是對的，
- * 第一次有人只改其中一邊的那天就靜靜地不對了，而且沒有任何東西會紅。
+ * 量尺量的要是出貨的那一份，不然每張改提示詞的卡附的前後對照量的是別的東西（#3010）。
+ * 所以這裡不自己列清單、不自己寫提示詞：
  *
- * 所以清單與 system prompt 放這裡，`eval.test.ts` 與 `compare.ts` 都從這裡拿。
- * **這是唯一的定義點。**
+ * - 清單是 {@link shippedServePlugins}（出貨層加 serve 專屬層），跟 `serve` 零設定時組出來的相同；
+ * - 組 agent 走相容層的 `assembly.create`（`cordis-root.ts` 的 `compatLayer`，它呼叫 `createCliAgent`），serve 每條 thread
+ *   也是這一條（`serve-run.ts` 的 `assembly.create`）；入口那一列的答題管道、有圍堵都照 serve 交；
+ * - 私有可寫根與唯讀共用區是這一次的暫存目錄，核准政策不傳（serve 不傳，維持出廠值）；
+ *   `stepInbox`、背景續行（`background-subagents` 那一列是 `continuable` 時）與子代理選模型的政策，照 `serve-run.ts` 同一個條件傳。
+ *   背景續行與子代理選模型會改系統提示詞與工具（背景續行把 `task` 換成 `subagent`，多一句派工指引），漏傳就不是 serve 送出的那一份；
+ *   `stepInbox` 不改請求內容，照傳是為了行為與 serve 一致。
+ *   serve 另外傳的 `liveModel`、`credentials`、附件、工具結果暫存、標題與 `optionalEntries`，這裡沒傳：它們不碰請求內容，或假模型沒有。
+ *
+ * **這是唯一的定義點**，`runner.ts` 從這裡拿。
+ *
+ * ## 跟真的 serve 不同的地方
+ *
+ * - 模型是注進來的實例（CI 傳假模型、供應商比較傳真模型），用一列只回這顆實例的提供者掛在選擇列上（跟 `withScriptedModel` 同形），
+ *   不走 `--live`。系統提示詞的 `{{model}}` 跟著注進來的實例走：沒貼路由標籤的（CI 的假模型）是 `SCRIPTED_MODEL_NAME`，
+ *   貼了標籤的（`createLiveModel` 的真模型）是它的 id。結果檔那邊因此每個模型各記一份（`shippedSystemPrompt(plugins, modelId)`）。
+ * - 沒有會話日誌、沒有落盤（見 `runner.ts` 檔頭）。serve 的出廠對話史來源是日誌（`log`），沒有日誌時組不起來
+ *   （pre-step 找不到這次呼叫的日誌），所以這裡明著傳 `historySource: 'state'`，對話史走圖狀態。這只換「訊息串從哪來」，系統提示詞與
+ *   工具清單不經它；`assembly.test.ts` 對著真的 `runServe` 比過系統提示詞逐位元組相同。
+ *
+ * @module
  */
 
-import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin } from '../echo.fixture.js';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-/** 基準任務跑的 plugin 清單。 */
-export function benchmarkPlugins(): readonly PluginEntry[] {
-  return [createEchoPlugin()];
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { AgentModel, PluginEntry } from '@nexus/core';
+import { z } from 'zod';
+
+import { createCordisRoot, entryApprovalChannel } from '../cordis-root.js';
+import type { NexusAssembly } from '../cordis-root.js';
+import { shippedServePlugins } from '../fixtures.js';
+import { modelSelectionPolicyFor } from '../model-selection-policy.js';
+import type { ModelProviderPlugin } from '../model-provider.js';
+import { backgroundSubagentsPlugin } from '../settings/background-subagents.js';
+import { startupSetting } from '../settings/startup.js';
+import { subagentModelSelectionPlugin } from '../settings/subagent-model-selection.js';
+
+type CliAgent = Awaited<ReturnType<NexusAssembly['create']>>;
+
+/** 掛在選擇列上、回注進來那顆實例的提供者的 id。 */
+const EVAL_MODEL_PROVIDER = 'eval-model';
+
+/**
+ * 把選擇列（`agent-default-model`）指到一列只回 `model` 的提供者，其餘一列不動、順序不變。
+ *
+ * @param plugins - 出貨清單。
+ * @param model - 這一輪的受測模型。
+ * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回出貨的腳本。
+ */
+export function withModel(
+  plugins: readonly PluginEntry[],
+  model: AgentModel,
+): readonly PluginEntry[] {
+  let selected = false;
+  const rows = plugins.map((entry) => {
+    if (entry.id !== 'agent-default-model') return entry;
+    selected = true;
+    return { ...entry, config: { provider: EVAL_MODEL_PROVIDER } };
+  });
+  if (!selected) throw new Error('清單上沒有 agent-default-model 那一列，換不了模型');
+  const provider: ModelProviderPlugin<Record<string, never>> = {
+    name: 'eval-model',
+    Config: z.strictObject({}),
+    apply: () => {},
+    createModel: () => model as BaseChatModel,
+  };
+  return [...rows, { id: EVAL_MODEL_PROVIDER, plugin: provider, config: {} }];
+}
+
+/** 組好的基準任務 agent。 */
+export interface BenchmarkAgent {
+  readonly agent: CliAgent['agent'];
+  /** agent 手上的那顆模型（`bindTools` 之前的那一份），讀工具綁定用。 */
+  readonly model: CliAgent['model'];
+  /** 收掉 agent、樹與暫存目錄。 */
+  dispose(): Promise<void>;
+}
+
+export interface OpenBenchmarkAgentOptions {
+  /** 這一輪的受測模型。 */
+  readonly model: AgentModel;
+  /** 迴圈上限；省略即組裝點的預設。 */
+  readonly recursionLimit?: number;
+  /** 整份清單換成這一份（測試用：在出貨清單上動一句提示詞）；省略即出貨清單。 */
+  readonly plugins?: readonly PluginEntry[];
 }
 
 /**
- * 附加在基準任務上的 system prompt。
+ * 組一個跟 serve 一條 thread 同形的 agent。
  *
- * 第二句是**必要的**而不是禮貌話：小模型很常把「我要呼叫 echo」寫在文字裡就交差，
- * 那會被評分器記成「該叫的沒叫」。這句話讓那個分數量的是能力而不是誤會。
+ * 每次呼叫建一棵新的根、新的暫存目錄：虛擬 FS 與對話狀態都不跨題。
+ *
+ * @throws {Error} 出貨清單有列沒掛上，或組裝失敗；已經開的東西先收掉再拋。
  */
-export const BENCHMARK_SYSTEM_PROMPT = [
-  '你是 nexus-agent 的基準任務受測者。',
-  '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。',
-].join('\n');
+export async function openBenchmarkAgent(
+  options: OpenBenchmarkAgentOptions,
+): Promise<BenchmarkAgent> {
+  const base = options.plugins ?? (await shippedServePlugins());
+  const plugins = withModel(base, options.model);
+  const scratch = await mkdtemp(join(tmpdir(), 'nexus-eval-'));
+  const privateRoot = join(scratch, 'private');
+  const sharedRoot = join(scratch, 'shared');
+  const root = createCordisRoot({ channel: entryApprovalChannel(undefined), contained: true });
+  let built: CliAgent | undefined;
+  try {
+    await mkdir(privateRoot);
+    await mkdir(sharedRoot);
+    const assembly = await root.boot('serve', { plugins, cwd: scratch });
+    const background = startupSetting(plugins, backgroundSubagentsPlugin);
+    const modelSelectionPolicy = modelSelectionPolicyFor({
+      resumedEvents: undefined,
+      setting: startupSetting(plugins, subagentModelSelectionPlugin),
+    });
+    built = await assembly.create(
+      {
+        live: false,
+        historySource: 'state',
+        workspace: sharedRoot,
+        workspaceRoot: privateRoot,
+        sharedWorkspaceRoot: sharedRoot,
+        stepInbox: true,
+        ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
+        ...(background.backgroundMode === 'continuable' && {
+          backgroundSubagents: { maxActive: background.maxActiveSubagents },
+        }),
+        ...(options.recursionLimit === undefined ? {} : { recursionLimit: options.recursionLimit }),
+      },
+      { plugins },
+    );
+  } catch (error) {
+    await built?.dispose().catch(() => {});
+    await root.dispose().catch(() => {});
+    await rm(scratch, { recursive: true, force: true });
+    throw error;
+  }
+  const opened = built;
+  return {
+    agent: opened.agent,
+    model: opened.model,
+    dispose: async () => {
+      try {
+        await opened.dispose();
+      } finally {
+        await root.dispose();
+        await rm(scratch, { recursive: true, force: true });
+      }
+    },
+  };
+}

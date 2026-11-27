@@ -73,12 +73,11 @@ export const DO_NOTHING: FloorAgent = {
 /**
  * 固定亂吐的那一串工具呼叫。
  *
- * **這個順序是承重的**：每一題的期望序列（`echo`／`write_file`×2／`read_file`／`edit_file`／
+ * **這個順序是承重的**：每一題的期望序列（`write_file`×2／`read_file`／`edit_file`／
  * `grep` 的各種排列）都是它的子序列，所以工具成功率那一欄在每一個有呼叫的題目上都是 `1.00`。
  * 改它之前先看 `floor.test.ts` 那條「牙齒」的斷言。
  */
 export const SPRAY_CALLS: readonly ScriptedToolCall[] = [
-  { name: 'echo', args: { message: '無關緊要' } },
   { name: 'write_file', args: { file_path: '/floor-1.md', content: '無關緊要' } },
   { name: 'write_file', args: { file_path: '/floor-2.md', content: '隨便' } },
   { name: 'read_file', args: { file_path: '/floor-1.md' } },
@@ -131,7 +130,6 @@ export function randomLegalCalls(caseId: string): readonly ScriptedToolCall[] {
   const path = (): string => pick(SCRATCH_PATHS);
 
   const makers: readonly (() => ScriptedToolCall)[] = [
-    () => ({ name: 'echo', args: { message: word() } }),
     () => ({ name: 'write_file', args: { file_path: path(), content: word() } }),
     () => ({ name: 'read_file', args: { file_path: path() } }),
     () => ({

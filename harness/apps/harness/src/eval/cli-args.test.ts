@@ -41,7 +41,7 @@ describe('parseCases', () => {
 
   it('認不得的 id 當場拋，不默默略過', () => {
     // 默默略過的話會跑了個比預期少的子集，而報表上看不出來少了哪一題。
-    expect(() => parseCases(['--cases', 'echo-once,nope'])).toThrow(/認不得/);
+    expect(() => parseCases(['--cases', 'write-then-read,nope'])).toThrow(/認不得/);
   });
 
   it('拋出來的訊息要指名是哪個 id 打錯了', () => {
@@ -60,10 +60,9 @@ describe('parseCases', () => {
   });
 
   it('吃得下空白', () => {
-    expect(parseCases(['--cases', ' echo-once , write-then-read ']).map((c) => c.id)).toEqual([
-      'echo-once',
-      'write-then-read',
-    ]);
+    expect(parseCases(['--cases', ' edit-after-read , write-then-read ']).map((c) => c.id)).toEqual(
+      ['write-then-read', 'edit-after-read'],
+    );
   });
 
   it('後面接著另一個旗標時拋，不把旗標當成 id', () => {
