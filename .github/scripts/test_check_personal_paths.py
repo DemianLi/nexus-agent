@@ -19,6 +19,38 @@ REAL = {
 }
 
 
+RELATIVE = {
+    'placeholder': '<E>',
+    'variable': '$D',
+    'braced variable': '${D}',
+    'plain segment': 'build',
+    'parent': '..',
+    'dot': '.',
+    'nested segment': 'a/b',
+}
+ABSOLUTE_OR_LITERAL = {
+    'redirect': '>',
+    'redirect after word': 'cat>',
+    'option': '-o',
+    'mnt': '/mnt/c',
+    'system volumes': '/System/Volumes/Data',
+    'vscode url': 'vscode://file',
+    'file localhost': 'file://localhost',
+    'file url': 'file://',
+}
+DELIMITED = {
+    'line start': '',
+    'space': ' ',
+    'backtick': '`',
+    'single quote': "'",
+    'double quote': '"',
+    'paren': '(',
+    'equals': '=',
+    'colon': ':',
+    'path list': 'a:',
+}
+
+
 class TextTest(unittest.TestCase):
     def test_each_kind_of_path_is_reported(self) -> None:
         for kind, path in REAL.items():
@@ -41,6 +73,29 @@ class TextTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(text_violations(path, 'f.md'), [])
+
+    def test_home_after_relative_prefix_passes(self) -> None:
+        for kind, prefix in RELATIVE.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(text_violations(prefix + '/home/' + 'x1/a', 'f.md'), [])
+
+    def test_relative_prefix_after_each_delimiter_passes(self) -> None:
+        for kind, delimiter in {'space': ' ', 'backtick': '`', 'single quote': "'", 'double quote': '"', 'paren': '(', 'equals': '='}.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(text_violations('x' + delimiter + 'build/home/' + 'x1/a', 'f.md'), [])
+
+    def test_html_tag_before_home_is_accepted_as_placeholder(self) -> None:
+        self.assertEqual(text_violations('<code>/home/' + 'x1/a', 'f.md'), [])
+
+    def test_users_is_reported_after_any_prefix(self) -> None:
+        for kind, prefix in {**RELATIVE, **ABSOLUTE_OR_LITERAL, **DELIMITED}.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(len(text_violations(prefix + '/Users/' + 'alice/a', 'f.md')), 1)
+
+    def test_home_is_reported_after_each_non_relative_prefix(self) -> None:
+        for kind, prefix in {**ABSOLUTE_OR_LITERAL, **DELIMITED}.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(len(text_violations(prefix + '/home/' + 'bob/a', 'f.md')), 1)
 
     def test_report_has_file_and_line(self) -> None:
         self.assertIn('f.md:2：', text_violations('ok\n' + REAL['users'], 'f.md')[0])
