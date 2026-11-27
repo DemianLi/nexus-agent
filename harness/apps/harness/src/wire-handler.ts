@@ -1,17 +1,11 @@
 /**
  * 線的 server 端：一個 `(Request) => Response` 的 handler。
  *
- * **不綁 port 是刻意的。** 這個形狀當初照的是 dsh 的
- * `packages/host/apiproxy/src/fetch/handler.ts`（對讀版本 `cd5ef814`）——
- * **那個套件在 HEAD `0a53fb55` 已經整個不見了**：dsh 的載體換成了
- * `packages/host/webserver` 的 `node:http` route 註冊 ＋ WebSocket upgrade，
- * 沒有 fetch 形狀的 handler 了。所以底下每一條標著「照 dsh」的，指的都是那個版本。
- *
- * **不綁 port 這件事今天站的是自己的理由**，不是那份引用：這一整條線在測試裡跑得完
+ * **不綁 port 是刻意的。** 這一整條線在測試裡跑得完
  * ——零 port、零網路、零憑證，而 CI 上沒有任何服務憑證
  * （[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須自足。
  *
- * 錯誤分兩層，也照 dsh：
+ * 錯誤分兩層：
  *
  * - **載體層**用 HTTP status：403（來源不可信）、401（沒有有效的瀏覽器會話）、
  *   415（media type 不是 JSON）、400（body 不是 JSON）、404（路徑不指向任何 method）。
@@ -21,11 +15,11 @@
  * preflight，只收 `application/json` 等於逼出一個這個 server 從不回答的 preflight。
  *
  * **它擋得住跨站，擋不住 DNS rebinding**——被 rebinding 的頁面在瀏覽器眼裡是同源，preflight
- * 根本不發。那一條由排在它前面的 403 擋，判準照 dsh，見 [`request-trust.ts`](./request-trust.ts)
+ * 根本不發。那一條由排在它前面的 403 擋，判準見 [`request-trust.ts`](./request-trust.ts)
  * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)）。
  *
  * **圍欄不建立身分**：curl 帶一個 loopback 的 `Host` 就過得去。緊接在它後面的 401 才是身分——
- * 瀏覽器會話 cookie，照 dsh `rpc-host.ts` 的 `requestRejection`（先 403、再 401，都在路徑判斷之前），
+ * 瀏覽器會話 cookie（先 403、再 401，都在路徑判斷之前），
  * 見 [`browser-auth.ts`](./browser-auth.ts)（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
  */
 
@@ -424,8 +418,7 @@ export interface ThreadAgent {
   /**
    * 人改目標的把手（`goal.pause`，[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）：讀目前的目標、暫停它。
    *
-   * **跟續行排程器無關**——`--no-goal-driver` 的組裝也給（只要有 goal 域）。照 dsh：暫停是 goal 服務本身的 `@Remote('pause')`
-   * （`packages/goal/goal/src/index.ts:351-354`），不經 `goal-round-driver`。所以 `goal.pause` 與 `/goal pause` 打到同一個服務。
+   * **跟續行排程器無關**——`--no-goal-driver` 的組裝也給（只要有 goal 域）。暫停不經 `goal-round-driver`。所以 `goal.pause` 與 `/goal pause` 打到同一個服務。
    * 缺席＝這個組裝沒有 goal 域（`goal.pause` 回 `not_supported`）。
    *
    * @param log - 讀這條 thread 的 root 日誌。
@@ -468,9 +461,9 @@ export interface ThreadAgent {
 /**
  * 分叉出來的子 thread 要從什麼長出來（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580) 刀 2），交給 {@link WireHandlerOptions.createAgent}。
  *
- * 照 dsh fork 交給 `agents.create` 的那幾樣（`session-controller/src/commands.ts:276-290`，`687f282e`）：seed（`buildForkSeed` 的結果），
+ * 交給 {@link WireHandlerOptions.createAgent} 的有兩樣：seed（`buildForkSeed` 的結果），
  * 與來源的 header（新 header 的 `cwd` 與根照抄它、`parentSession` 指向它）。**這裡不寫檔**：落盤照常延遲到第一次 flush 才實體化，
- * 同 dsh 的 `createStoredSession` 只拿把手、`appendUnstoredSuffix` 在發佈時才寫，組裝失敗磁碟上什麼都不留。
+ * 組裝失敗磁碟上什麼都不留。
  */
 export interface ThreadForkSeed {
   /** 來源 thread 冷讀回來的 header。 */
@@ -536,7 +529,7 @@ export interface WireHandlerOptions {
    * **缺席就是沒有落盤**：`thread.fork` 回 `not_supported`（沒有會話日誌就沒有可以分的東西）。
    */
   readStoredThread?(threadId: string): Promise<ColdStoredSession | undefined>;
-  /** 分叉出來的子 thread 用什麼 id（測試接縫）。省略即 `randomUUID()`，同 dsh 由 Host 產生（`commands.ts:272`）。 */
+  /** 分叉出來的子 thread 用什麼 id（測試接縫）。省略即 `randomUUID()`。 */
   newThreadId?(): string;
   /**
    * 讀以前落盤的 thread（`GET /threads`，[#302](https://github.com/DemianLi/nexus-agent/issues/302)），選配。
@@ -545,7 +538,7 @@ export interface WireHandlerOptions {
    * 用缺席表達「沒開落盤」的規矩。答案來自呼叫方式（serve 的日誌根），所以跟落盤一樣住在組裝點；
    * `serve` 只在清單把落盤那一列關掉時不給（#612；#444 起預設就給），另外就是手搭的組裝。
    *
-   * **它不准碰 {@link createAgent}**：列表照 dsh 是冷讀，一條 thread 都不為它啟動。`running` 那一格由這個
+   * **它不准碰 {@link createAgent}**：列表是冷讀，一條 thread 都不為它啟動。`running` 那一格由這個
    * handler 從手上活著的 thread 補，不從檔案猜。
    *
    * **`signal` 是這一個請求的**（客戶端斷線就中止，同 {@link searchThreads}；[#983](https://github.com/DemianLi/nexus-agent/issues/983)）：
@@ -560,7 +553,7 @@ export interface WireHandlerOptions {
    */
   readonly threadOrganization?: ThreadOrganization;
   /**
-   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查，同 dsh 的 `sessionKnown`：活著的，或存放處裡有）。實作是 `serve-run.ts` 用
+   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查：活著的，或存放處裡有）。實作是 `serve-run.ts` 用
    * `SessionStore.open(id, 'read')` 讀 header，並用列表的可見規則（`isListedThread`）過濾——**能釘的一定列得出來**。
    * **儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
@@ -585,7 +578,7 @@ export interface WireHandlerOptions {
    * `thread-search.ts` 的 `ThreadSearch.search`，失敗拋 `ThreadSearchError`。
    *
    * **缺席就是清單上沒掛 `thread-search` 那一列**（`disabled: true`）：查詢合法時一律回 `not_supported`，連沒有東西可搜
-   * 也是，同 dsh 沒掛 `sessionQuery`（`packages/api/session-controller/src/list.ts:170-177`，`477b4f4`）。掛了但沒接落盤、
+   * 也是。掛了但沒接落盤、
    * 或設成 `openAt: never`，由它自己回空或拋，不在這裡判。**同 {@link listThreads}，它不准碰 {@link createAgent}**。
    */
   searchThreads?(query: unknown, signal: AbortSignal): Promise<ThreadSearchResult>;
@@ -614,7 +607,7 @@ export interface WireHandlerOptions {
   /**
    * `session-reference` 那一列的值（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862），選配：每則訊息最多引用幾條，
    * 與每條來源的位元組預算（`maxReferenceBytes` 或窗口的 `referenceContextFraction`）。`candidateLimit` 不在這裡，候選上限在
-   * `serve-run.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
+   * `serve-run.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**，同 `toolText`。
    *
    * **預算跟著這條 thread 下一步會走的模型**：每條 thread 的 pump 在這裡組出 `SessionReferencePolicy`，窗口問該 thread 的
    * `modelSelection.nextContextWindow`，所以使用者在兩次引用之間換了模型，下一次就用新那顆的窗口。
@@ -674,10 +667,9 @@ export interface WireHandlerOptions {
   readonly projectionFlushMs?: number;
   /**
    * 每條下行（含全域那一條）排著的位元組上限（`downlink` 那一列的 `maxQueuedBytes`，
-   * [#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）。**省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
+   * [#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）。**省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB）。
    *
    * 超限就只斷那一條線（它自己重連、重抓歷史），其他線不受影響；經 {@link warn} 講一行，不含 thread 內容。
-   * **偏離登記：產品需求超出 dsh**（事件下行 dsh 沒有上限），逐點見 `bounded-event-queue.ts`。
    */
   readonly downlinkMaxBytes?: number;
   /**
@@ -694,7 +686,6 @@ export interface WireHandlerOptions {
    * 已在行程裡的 thread 不受影響，不經 `threadFor` 的路（列表、`run.cancel`、回饋等）也不經過這一道。名額不會自己回來，
    * 要重啟 serve。每次拒收經 {@link warn} 講一行，含目前數量與上限。
    *
-   * **偏離登記：產品需求超出 dsh**——dsh 沒有 thread 數上限；借的是它背景工作准入的形狀，逐點見 `settings/thread-capacity.ts` 的檔頭。
    */
   readonly maxThreads?: number;
   /**
@@ -706,13 +697,12 @@ export interface WireHandlerOptions {
    * 閒置多久（毫秒）之後把一條 thread 從行程裡撤掉（`thread-capacity` 那一列的 `idleEvictAfterMs`，
    * [#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，保險絲第 1 級）。**省略就不逐出**，行為與沒有這個選項時逐位元組相同。
    *
-   * **閒置＝下面每一條同時成立**，任何一條不成立就重新計時（同 dsh 終端保留期：條件全成立才開始計、中途忙了就歸零、到期才收，
+   * **閒置＝下面每一條同時成立**，任何一條不成立就重新計時（條件全成立才開始計、中途忙了就歸零、到期才收，
    * 沒有「容量滿了先收最舊的」）：沒有 run 在跑、沒有掛著的中斷、送出佇列與插話佇列是空的；背景子代理沒有在跑／叫醒中／被中斷
    * 暫停而排著的輪次；沒有續行授權（目標 active 且 armed）也沒有一次續行排程在飛；沒有 LLM 標題在產生；沒有請求握著這條 thread
    * （含還在收本文、等附件的）；沒有斜線命令在跑；沒有下行掛著。「最後活動時間」在請求進出、下行掛上與放掉、pump 狀態變動時更新。
    *
    * 撤掉＝不重啟 serve 的前提下做「等價於重啟」那一半：磁碟上的日誌是真相，之後有人再開這條 thread 就照今天重啟後的路徑重組。
-   * **偏離登記：dsh 頂層沒有閒置逐出（遺留 TODO）**；閒置條件借子代理結算（`manager.ts` 的 settlement），計時借終端保留期（`retention.ts`）。
    *
    * 只有落盤開著才該給——沒有落盤的日誌只在記憶體裡，撤掉就沒了；`serve-run.ts` 只在 `sessionStore` 存在時傳。
    */
@@ -775,7 +765,7 @@ export interface WireHandlerOptions {
    * **走到它的有兩類**：回應照樣成功、不講就看不見的；回應只給碼或固定訊息、細節留給管理者的。例如：
    *
    * - 一頁歷史的位元組上限是**軟的**（單獨一輪就超標時不從輪中間切，見 `conversation-history.ts` 的 `fitBytes`）。
-   * - 退回標題寫不進去（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：那一輪照跑，同 dsh；經 pump 的建構子傳下去。
+   * - 退回標題寫不進去（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：那一輪照跑；經 pump 的建構子傳下去。
    * - 模型標題寫不成（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：留著退回標題，同上。
    * - 拒收新 thread（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，{@link maxThreads}）：回應是專用錯誤碼，但管理者要在日誌看到目前數量與上限。
    * - 一條 thread 建不起來的原因（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）與接不上的兩個根（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）。
@@ -801,8 +791,7 @@ export interface WireHandlerOptions {
    */
   readonly attachments?: AttachmentStore;
   /**
-   * 單次上傳的位元組上限，選填；超過回 `invalid_argument`、什麼都不留。**省略就沒有上限**，同 dsh 的 `file-upload`
-   * （`http-route.ts` 串流收、沒有上限）：位元組串流進暫存檔、不聚合，吃的是磁碟不是記憶體。
+   * 單次上傳的位元組上限，選填；超過回 `invalid_argument`、什麼都不留。**省略就沒有上限**：位元組串流進暫存檔、不聚合，吃的是磁碟不是記憶體。
    */
   readonly maxUploadBytes?: number;
   /**
@@ -892,10 +881,8 @@ export interface IdleSweepingWireHandler extends WireHandler {
   open(threadId: string): Promise<void>;
   /**
    * 已經建好、活著的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)，內容搜尋讀它們記憶體裡的日誌）。**同步、只讀 `ready`**：
-   * 還在建的不算（不等它組裝），正在撤的也不算：`evictThread` 先 `ready.delete`、最後的排空在後面，撤的期間搜尋改走冷讀。dsh 撤出時
-   * 也是先離開 `list()`（`detachEntered` 先 `store.delete`、之後才發 `session/disposed`，`core/session/src/index.ts:1253-1255`）。冷讀到一半
-   * 檔又被寫，由搜尋那一側提交前的第二次列表比 revision 重來。照 dsh 觀察活會話用的 `ctx.sessions.list()`
-   * （`session-query-sqlite/src/index.ts:503,549`，`687f282e`），不改任何東西：不 flush、不建檔。
+   * 還在建的不算（不等它組裝），正在撤的也不算：`evictThread` 先 `ready.delete`、最後的排空在後面，撤的期間搜尋改走冷讀。冷讀到一半
+   * 檔又被寫，由搜尋那一側提交前的第二次列表比 revision 重來。不改任何東西：不 flush、不建檔。
    */
   liveThreads(): readonly LiveThread[];
   /**
@@ -987,10 +974,8 @@ async function skillListResponse(
 }
 
 /**
- * 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。
- * 其餘四種在 harness 裡分得開（#1552 N0843），線上一律 `unknown_error`：同 dsh host 把提供方的失敗一律交 `gateway/internal`
- * （`session-controller/src/list.ts:282-287`）。`aborted` 對到 dsh `:283`：請求自己的 signal 中止時 dsh 直接拋 reason，沒有碼可交
- * （`:284-285` 的 `gateway/cancelled` 只在提供方自己回 ABORTED、請求還活著時才走得到，nexus 的中止只來自請求）；這裡沿用 `unknown_error`。
+ * 搜尋失敗怎麼上線。`disabled`：web 收到就退回只比標題。
+ * 其餘四種在 harness 裡分得開（#1552 N0843），線上一律 `unknown_error`。`aborted` 沿用 `unknown_error`：nexus 的中止只來自請求自己的 signal。
  */
 const SEARCH_ERROR_CODES: Record<ThreadSearchErrorKind, WireErrorCode> = {
   invalid: 'invalid_argument',
@@ -1118,7 +1103,7 @@ export function parsePath(
 }
 
 /**
- * 這個請求的本文要怎麼讀（照 dsh `client/connection` 的 `requestBodyMode`，`http-bridge.ts`）：
+ * 這個請求的本文要怎麼讀：
  * `buffered` 先收完整份、有總量上限（JSON 路由）；`streaming` 不聚合、不受那個上限管，由路由自己負責落地與取消。
  * 今天只有上傳是 `streaming`——位元組不是 JSON，不該為了它在行程裡先留一份整檔。
  *
@@ -1137,14 +1122,14 @@ export function wireRequestBodyMode(method: string, pathname: string): 'buffered
 
 const NUMERIC = /^\d+$/;
 
-/** 查詢字串裡的一個非負整數座標，照 dsh `present-open.ts` 的 `coordinate`。 */
+/** 查詢字串裡的一個非負整數座標。 */
 function coordinate(value: string | null): number | undefined {
   return value !== null && NUMERIC.test(value) && Number.isSafeInteger(Number(value))
     ? Number(value)
     : undefined;
 }
 
-/** `changes` 兩條路由的回應：錯誤協定照 dsh，純文字加 HTTP status；成功是 JSON。一律不快取。 */
+/** `changes` 兩條路由的回應：錯誤協定是純文字加 HTTP status；成功是 JSON。一律不快取。 */
 function changesResponse(body: unknown, status = 200): Response {
   return status === 200
     ? new Response(JSON.stringify(body), {
@@ -1161,7 +1146,7 @@ function changesResponse(body: unknown, status = 200): Response {
  * 一個拒絕的理由對到命令通道上的哪個碼（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）。
  *
  * **值域是 wire 的 {@link DeliverableRefusalCode}**：寫一個 wire 沒有的字串當場編不過，而 wire 的碼清單是網頁分畫面的依據。
- * `bad-request` 不在裡面：參數本身不合格照 dsh 算閘道層的錯，回協定錯誤 `invalid_argument`，見 {@link deliverableFailure}。
+ * `bad-request` 不在裡面：參數本身不合格算閘道層的錯，回協定錯誤 `invalid_argument`，見 {@link deliverableFailure}。
  */
 const DELIVERABLE_REFUSAL_CODE: Readonly<
   Record<Exclude<DeliverableRefusal, 'bad-request'>, DeliverableRefusalCode>
@@ -1175,7 +1160,7 @@ const DELIVERABLE_REFUSAL_CODE: Readonly<
 
 /**
  * 命令通道上的交付檔拒絕：業務上的拒絕是成功回應裡的 `{ ok: false, error: { code, … } }`（同回饋那幾支），
- * 參數不合格是協定錯誤 `invalid_argument`（dsh 的 `gateway/bad-request`）。`too-large` 帶上限數字，照 dsh。
+ * 參數不合格是協定錯誤 `invalid_argument`。
  */
 function deliverableFailure(
   id: number,
@@ -1312,8 +1297,8 @@ interface ThreadState {
    * `@` 引用的列檔索引（[#651](https://github.com/DemianLi/nexus-agent/issues/651)），**沒給 `--workspace` 就是
    * `undefined`**，那時列檔回「不提供」、不碰磁碟。
    *
-   * **一條 thread 一份，只聽 root 日誌的 `tool/result`**：dsh 是一個 agent 一份、各聽各的。子代理寫的檔，要等父那顆
-   * `task` 的 `tool/result` 落在 root 日誌上才過期——dsh 那邊父 agent 的索引也是等到那一刻，所以逐格等價。
+   * **一條 thread 一份，只聽 root 日誌的 `tool/result`**：子代理寫的檔，要等父那顆
+   * `task` 的 `tool/result` 落在 root 日誌上才過期。
    */
   readonly fileSearch: WorkspaceFileSearch | undefined;
   /** 對單一背景子代理傳話、單獨停的控制面（#865）。這份組裝沒有背景派出就沒有。 */
@@ -1553,7 +1538,7 @@ function mentionOf(
 /**
  * `model.catalog`／`model.select`（#723）。業務失敗（選不上）走成功回應的 `ok: false`，`ErrorResponse` 只給「這條線收不了」。
  *
- * 照 dsh `selectModel`：型錄沒有那顆、或帶了沒宣告的強度，在記進日誌之前就拒，選擇不變。
+ * 型錄沒有那顆、或帶了沒宣告的強度，在記進日誌之前就拒，選擇不變。
  */
 function modelResponse(
   selection: ThreadState['modelSelection'],
@@ -1899,10 +1884,9 @@ const SERVER_CLOSING_MESSAGE =
   'serve 正在收尾，這個請求沒有處理；等它重新起來再送一次（run.start 帶同一個 request_id）。';
 
 /**
- * 上行命令的 `params` 精確檢查（N1228，[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)）：照 dsh 的 `assertExactArguments`
- * （`gateway/src/index.ts:1613-1640`，`687f282e`）。回 `undefined` 表示通過。
+ * 上行命令的 `params` 精確檢查（N1228，[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)）。回 `undefined` 表示通過。
  *
- * - **有給 `params` 就要是物件**（`:1618-1620`，`args must be a plain object`）：`null`、陣列、字串、數字一律 `invalid_argument`。
+ * - **有給 `params` 就要是物件**：`null`、陣列、字串、數字一律 `invalid_argument`。
  *   **省略 `params` 照收**：有些命令的型別本來就沒有 `params`，缺不缺由各命令自己決定（`feedback.list` 省略今天回「缺 params」）。
  * - **多一格就拒**，訊息只指名欄位、不帶值；鍵名用 `JSON.stringify` 加引號（空字串鍵、含換行或控制字元的鍵都讀得出來）。
  * - 協定型別上合法、但這台 server 沒實作的欄位（{@link RPC_PARAMS_NOT_IMPLEMENTED}）有值回 `not_supported`，同 `attachments`、`mention`。
@@ -2216,11 +2200,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       const bound = options.boundThread();
       if (bound !== threadId) return Promise.reject(new ThreadNotBoundError(threadId, bound));
     }
-    // **thread 數上限（#1476，保險絲第 2 級；偏離登記：產品需求超出 dsh，借 jobs-local 的准入形狀）。**
+    // **thread 數上限（#1476，保險絲第 2 級）。**
     // 順序是承重的：在 `threads.get` 沒命中之後（已在行程裡的不受影響，同一個新 id 的並行請求也在上面共用同一個 promise、
     // 只佔一個名額）、在 `createAgent` 與 `threads.set` 之前（拒收不建任何資源、不留任何紀錄）。數 `threads.size` 而不是
     // `ready.size`：建構中的 promise 同步就佔了位，N 條都卡在 `createAgent` 時第 N+1 條也要被拒；建失敗 `threads.delete`
-    // 之後名額就回來。沒有排隊、搶占、自動關最舊的（dsh 決策紀錄明確否決）。
+    // 之後名額就回來。沒有排隊、搶占、自動關最舊的。
     // **撤中的也佔名額**（#1484）：它的寫租約與底下的資源要等收完才還。
     if (options.maxThreads !== undefined && threads.size + closing.size >= options.maxThreads) {
       const current = threads.size + closing.size;
@@ -2275,10 +2259,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           }
         };
         await step('下行', () => detachFeed?.());
-        // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
-        // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
+        // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去。
+        // 排在參與者前面，理由同下一條：寫得動日誌的先停手。
         await step('標題', () => attached.detachTitle?.());
-        // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
+        // **列檔索引接著收**：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
         // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
         await step('續行授權退訂', () => attached.unsubscribeGoalActivation?.());
         await step('列檔索引退訂', () => attached.unsubscribeFileSearch?.());
@@ -2406,7 +2390,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             onTurnFailed: (failure: BackgroundTurnFailure) =>
               options.onTurnFailed!({ threadId, ...failure }),
           }),
-          // 背景子代理的每一步也過封存閘門（#633，dsh 沿 lineage 看 root）。
+          // 背景子代理的每一步也過封存閘門（#633）。
           ...(options.threadOrganization !== undefined && {
             isArchived: () => options.threadOrganization!.isArchived(threadId),
           }),
@@ -2509,7 +2493,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             await release((step, error) => {
               failures.push(new Error(`${step}收尾失敗`, { cause: error }));
             });
-            // 照 dsh ACP `session.ts:450-484`：只有一步失敗就丟那一個，兩步以上才聚合。外層 `close()` 一律聚合並包 thread id。
+            // 外層 `close()` 一律聚合並包 thread id。
             if (failures.length === 1) throw failures[0];
             if (failures.length > 1) {
               throw new AggregateError(
@@ -2524,9 +2508,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         pump.watch(() => {
           state.lastActiveAt = now();
         });
-        // **分叉的子 thread 在這裡第一次排空**（#1580）：seed 這一刻才實體化成檔，同 dsh `create` 在發佈那一刻 `appendUnstoredSuffix`
-        // （`agent-loop/src/index.ts:688-735`，`687f282e`）。排在登記 `ready` 之前：寫不進去就走下面的 `catch` 收掉（落盤那一步關把手）、
-        // 不登記，同 dsh 發佈失敗不留下 agent。**從接上落盤到這一行之間不准有 await**：協調器一接上就開批次窗口，
+        // **分叉的子 thread 在這裡第一次排空**（#1580）：seed 這一刻才實體化成檔。排在登記 `ready` 之前：寫不進去就走下面的 `catch` 收掉（落盤那一步關把手）、
+        // 不登記。**從接上落盤到這一行之間不准有 await**：協調器一接上就開批次窗口，
         // 中間讓出去的話窗口到期會先把 seed 寫出去，下面的丟棄就救不回來。
         if (fork !== undefined) await pump.sessions.flush(pump.sessionLog);
         ready.set(threadId, state);
@@ -2535,8 +2518,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         // 建不起來的那條不留在全域下行上：它的中斷永遠答不到。已經接上的每一樣也一併收掉（#1467）：
         // 下一次請求用同一個 thread id 重組，舊的訂閱、背景 host、落盤不收的話會和新的並存。
         // 組裝失敗那條路：收尾的錯沒有人能處理，吞掉，原本的錯才不會被蓋掉。
-        // **還沒發佈的分叉子 thread 丟掉落盤、不排空**（#1580）：磁碟上不留這條，同 dsh `create` 失敗時只關還沒實體化的把手
-        // （`agent-loop/src/index.ts:688-702`，`687f282e`）；`dispose` 會先排空，等於把 seed 寫出去。**排在 `release` 之前、
+        // **還沒發佈的分叉子 thread 丟掉落盤、不排空**（#1580）：磁碟上不留這條；`dispose` 會先排空，等於把 seed 寫出去。**排在 `release` 之前、
         // 同步呼叫**：`release` 前幾步會 await，批次窗口在那之間到期就會把 seed 寫出去。
         const persistence = attached.persistence;
         if (fork !== undefined && persistence?.abandon !== undefined) {
@@ -2733,7 +2715,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
 
   /**
    * `GET /threads/:id/attachments/:attachmentId`（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）：契約見 `@nexus/wire` 的
-   * `attachmentPath`。**授權＝這條 thread 的日誌引用過它**（`referencedImage`，照 dsh `session.attachment`），不是知道 id。
+   * `attachmentPath`。**授權＝這條 thread 的日誌引用過它**（`referencedImage`），不是知道 id。
    * 讀記憶體裡那份 root 日誌（含還沒落盤的），**只讀已經載入的 thread**：沒載入的一律 `attachment_not_found`，不為了讀圖建 thread。
    * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小或雜湊對不上、檔頭的媒體類型或寬高跟參照對不上，#1566）是 `unknown_error`。
    */
@@ -2801,8 +2783,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 收下一句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：**全部通過才收，一張不行整句拒收**。
    *
-   * 1. **收圖檢查**：這條 thread 下一個請求用的那顆宣告了輸入種類、而裡面沒有 `image` → `model_does_not_support_images`
-   *    （照 dsh `commands.ts:336-348`）；什麼都沒宣告照收。檢查在碰收據、解 base64 之前。
+   * 1. **收圖檢查**：這條 thread 下一個請求用的那顆宣告了輸入種類、而裡面沒有 `image` → `model_does_not_support_images`；
+   *    什麼都沒宣告照收。檢查在碰收據、解 base64 之前。
    * 2. **收據**：必須是這條 thread 發的、沒用過的；同一句話不能用兩次。**收下的那一刻就從表裡拿掉**（同步，賽跑的第二個請求拿不到），
    *    後面任何一步失敗再放回去——整句拒收，使用者可以修了重送，檔案不必重傳。
    * 3. **圖**：五道上限與格式（`image-intake.ts`：每張位元組、每句張數、每句總量、每張像素、每張單邊），通過才存進附件儲存。
@@ -3058,7 +3040,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     if (request.since !== undefined) {
       // **明確拒絕，不靜靜忽略。** 靜靜忽略會生出看不見的斷檔；重播要能做得先有
-      // frame 的持久化。接回來的方式是重開這條線 ＋ 重抓歷史，照 dsh 的 v1。
+      // frame 的持久化。接回來的方式是重開這條線 ＋ 重抓歷史。
       return json(
         errorResponse(null, 'not_supported', '這一版不支援 since 重播：重開下行並重抓歷史'),
       );
@@ -3104,7 +3086,6 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       return json(errorResponse(null, 'invalid_argument', 'body 不是上行封包'));
     }
     if (envelope.method !== method) {
-      // dsh 的不變量：路徑指名 method、封包裡也帶 method，兩者不合就是錯誤。
       return json(
         errorResponse(
           envelope.id,
@@ -3121,14 +3102,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
 
     if (isRunCancelMethod(method)) {
-      // 中止這一輪（#276）：**受理就回，不等停穩**，停下來的事實走下行——照 dsh 的
-      // `session.cancel` → `{ accepted: true }`。不查是哪個分頁送的（#265 的 Q3），也不看
+      // 中止這一輪（#276）：**受理就回，不等停穩**，停下來的事實走下行。不查是哪個分頁送的（#265 的 Q3），也不看
       // `slashInFlight`：斜線命令有自己的中止路，`run.cancel` 只管 agent 這一輪（Q13）。
       //
       // **不經 `threadFor`**：那會替一條沒人開過的 thread 建一個 agent（連 MCP 子行程），
       // 只為了中止一件不存在的事。沒建過的就是閒著，照「閒著時中止什麼都不做」回受理。
       const existing = threads.get(threadId);
-      // 子代理的會話不是 thread（#1544，照 dsh `session-controller/src/commands.ts:506-507`：對子代理會話的 cancel 丟 ownership 錯誤）。
       // 記憶體裡沒有它才需要問（子代理的會話永遠進不了 `threads`）；冷讀失敗當「不是」——中止是盡力而為，這條路本來就沒有東西在跑。
       if (existing === undefined && (await asSubagentSession(threadId))) {
         return json(
@@ -3157,14 +3136,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 對單一背景子代理傳話、單獨停（#865）。
       //
       // - `subagent.interrupt`：**不經 `threadFor`**，同 `run.cancel`——host 是這條 thread 的 agent 的，沒建過的 thread 沒有任何
-      //   常駐的背景子代理，不為了回「沒有」建一個 agent；冷的子代理 interrupt 本來就是 no-op（dsh）。
+      //   常駐的背景子代理，不為了回「沒有」建一個 agent；冷的子代理 interrupt 本來就是 no-op。
       // - `subagent.send`：**經 `threadFor`**（#1271）。重啟之後 host 的編號表在記憶體裡沒了，冷的子代理要這條 thread 的 agent
-      //   建起來、host 冷讀 root 日誌上的 `subagent/catalog`，才叫得醒（dsh：只有送話才把冷的接回來）。磁碟上沒有這條 thread 的
+      //   建起來、host 冷讀 root 日誌上的 `subagent/catalog`，才叫得醒。磁碟上沒有這條 thread 的
       //   不建——那時就是找不到，不為它建一個 agent。
       const existing = threads.get(threadId);
       let thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       if (method === SUBAGENT_SEND_METHOD && options.threadOrganization?.isArchived(threadId)) {
-        // 封存的會話不跑模型（#633）：人對背景子代理說話會開一輪，那是這條會話的後代在跑模型（dsh 的閘門沿 subagent 血緣往上找）。
+        // 封存的會話不跑模型（#633）：人對背景子代理說話會開一輪，那是這條會話的後代在跑模型。
         return json(
           errorResponse(
             envelope.id,
@@ -3198,7 +3177,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     if (method === 'thread.rename') {
-      // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
+      // 改名（#633 第二張）：要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
       return handleRename(threadId, envelope.id, body);
     }
     if (method === 'thread.fork') {
@@ -3291,7 +3270,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (typeof params?.assistant_id !== 'string') {
         return json(errorResponse(command.id, 'invalid_argument', 'run.start 缺 assistant_id'));
       }
-      // 客戶端的請求編號（#1335）：選填，照 dsh `session.prompt` 的 `requestId`。**排在所有會「用掉東西」的檢查之前**：重送
+      // 客戶端的請求編號（#1335）。**排在所有會「用掉東西」的檢查之前**：重送
       // 帶的是同一批附件收據，收據第一次就用掉了，晚一步查的話重送會先撞上「收據已用過」，而不是被認出來。
       const rawRequestId = (params as { request_id?: unknown }).request_id;
       if (
@@ -3309,8 +3288,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
       const requestId = rawRequestId as string | undefined;
-      // 使用者的時區（#1629）：選填，照 dsh `session.prompt` 的 `clientTimeZone`（`session-controller/src/index.ts:467-482`，`687f282e`）。
-      // 邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回正規名），不合法回 `invalid_argument` 並指名欄位，那句話不進佇列。
+      // 使用者的時區（#1629）：邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回正規名），不合法回 `invalid_argument` 並指名欄位，那句話不進佇列。
       // **排在重送認人之前**：不合法的輸入不論是不是重送都被擋下，不會因為編號收過就悄悄回原本那一件。
       const rawClientTimeZone = (params as { client_time_zone?: unknown }).client_time_zone;
       let clientTimeZone: string | undefined;
@@ -3330,8 +3308,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         }
       }
       if (requestId !== undefined) {
-        // 收過就回原本那一件的 `run_id`，不再排。**只比編號、不比內容**（同 dsh）。回應形狀的偏離登記在 `findPromptRequest`
-        // （`@nexus/core` 的 `inbox.ts`）：dsh 回 `{ accepted: true }`，我們的 `run_id` 兼作佇列項目 id，畫面靠它對人。
+        // 收過就回原本那一件的 `run_id`，不再排。**只比編號、不比內容**。回應形狀見 `findPromptRequest`
+        // （`@nexus/core` 的 `inbox.ts`）：`run_id` 兼作佇列項目 id，畫面靠它對人。
         for (;;) {
           const seen = pump.findPromptRequest(requestId);
           if (seen !== undefined) return json(successResponse(command.id, { run_id: seen }));
@@ -3362,8 +3340,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             ),
           );
         }
-        // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
-        // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
+        // **停在核准點時照收**（#637 的 Q4）。
+        // 收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
         // 附件（#732）：先驗形狀（便宜、不碰任何東西），收據與圖的收下留到最後——前面任何一道擋掉這句話時，收據不該被用掉。
         const parsedAttachments = attachmentsParam(command.id, 'run.start', params);
         if (parsedAttachments instanceof Response) return parsedAttachments;
@@ -3422,7 +3400,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           if (outcome.kind === 'rejected') {
             return json(errorResponse(command.id, outcome.code, outcome.message));
           }
-          // **准入的 `await` 回來之後再查一次**（#1787，同 dsh `commands.ts:342-347`：await 之後重查 agent 還在不在）：等附件的那段時間
+          // **准入的 `await` 回來之後再查一次**（#1787）：等附件的那段時間
           // 收尾可能開始了。收據已經用掉，放回去，使用者稍後重送不必重傳。
           if (admissionClosed()) {
             outcome.restore();
@@ -3737,11 +3715,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     const accepted = () => json(successResponse(id, { accepted: true }));
     if (method !== SUBAGENT_SEND_METHOD) {
-      // 不認得的、沒在跑的、沒有背景派出：被接受的 no-op（dsh 的 `interruptByParent`），不讓呼叫端靠回應試探編號。
+      // 不認得的、沒在跑的、沒有背景派出：被接受的 no-op，不讓呼叫端靠回應試探編號。
       background?.interrupt(params.run_id);
       return accepted();
     }
-    // 同 `queue.update` 的 edit，也同 dsh 的 `hasPromptContent`：只有空白不算一句話。**不展開 `@` 引用**——那是 `run.start`
+    // **不展開 `@` 引用**——那是 `run.start`
     // 的事，傳給子代理的是原文。
     if (typeof params.text !== 'string' || params.text.trim() === '') {
       return json(errorResponse(id, 'invalid_argument', `${method} 要有非空白的 text`));
@@ -3802,8 +3780,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 改或刪送出佇列裡排著的一件（`queue.update`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。
    *
-   * **經 `threadFor`**，不學 `run.cancel` 那種「沒建過就當沒有」：dsh 的 `updateQueue` 會把冷的 agent 接回來
-   * （`resolveAgent`），而重啟之後停住的佇列就在一條還沒建的 thread 上——不接回來的話它改不動。**也不看
+   * **經 `threadFor`**，不學 `run.cancel` 那種「沒建過就當沒有」：重啟之後停住的佇列就在一條還沒建的 thread 上——不接回來的話它改不動。**也不看
    * `slashInFlight` 與 `awaitingInput`**：跑著、停在核准點、停住時都能改能刪。
    */
   function handleQueueUpdate(pump: ThreadPump, id: number, body: unknown): Response {
@@ -3815,13 +3792,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     const kind = params.action?.kind;
     let action: QueueAction;
     if (kind === 'steer') {
-      // 排著的那一件改成插話（#710）：收不收由 pump 照 dsh 的條件判，見 `ThreadPump.updateQueue`。
+      // 排著的那一件改成插話（#710），見 `ThreadPump.updateQueue`。
       action = { kind: 'steer' };
     } else if (kind === 'remove') {
       action = { kind: 'remove' };
     } else if (kind === 'edit') {
       const text = params.action?.text;
-      // 同 dsh 的 `hasPromptContent`：只有空白不算一句話。
       if (typeof text !== 'string' || text.trim() === '') {
         return json(errorResponse(id, 'invalid_argument', 'queue.update 的 edit 要有非空白的文字'));
       }
@@ -3892,8 +3868,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 封存帶 `stopActivity`：封存已經寫下去之後，請這條會話的工作停下，**走使用者自己按停止的那幾條路**（照 dsh 的
-   * `workspace/session-stop`：「through the same cancel paths the user's own stop actions use」）——這一輪合作式中止
+   * 封存帶 `stopActivity`：封存已經寫下去之後，請這條會話的工作停下，**走使用者自己按停止的那幾條路**——這一輪合作式中止
    * （停在核准點的收回）、背景子代理全部中斷並暫停。不等停穩。
    */
   function stopActivityOf(threadId: string): void {
@@ -4026,11 +4001,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `thread.rename`（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 第二張）。照 dsh `SessionController.rename`：
+   * `thread.rename`（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 第二張）：
    * 標題正規化，追加成這條會話日誌上的一顆 `session/title`（`source: user`，**釘住**），回受理後的標題與事件的 `seq`；
    * 正規化完是空的 → `title_invalid`（成功回應裡的業務失敗，標題不變）。
    *
-   * dsh 要這條會話**活著**（`resolveAgent`）；我們的「活著」是 `threadFor`（只在磁碟上的會重開）。不存在 → `thread_not_found`。
+   * 要這條會話**活著**：「活著」是 `threadFor`（只在磁碟上的會重開）。不存在 → `thread_not_found`。
    * 寫在日誌上，所以沒落盤的 server 上改名只活到這個行程結束，同這個 server 上其他所有日誌事件。
    */
   async function handleRename(threadId: string, id: number, body: unknown): Promise<Response> {
@@ -4080,8 +4055,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 讀一條 thread 現在的樣子（#1580 分叉的來源；#1599 的搜尋不經這裡，它不等、不排空，見 `liveThreads`）：**活的讀記憶體，不在就冷讀**，照 dsh `observeSession`
-   * （`session-query/src/observation.ts:105-106,275-315`，`687f282e`）。不能一律冷讀：落盤有批次窗口，冷讀會缺尾巴。
+   * 讀一條 thread 現在的樣子（#1580 分叉的來源；#1599 的搜尋不經這裡，它不等、不排空，見 `liveThreads`）：**活的讀記憶體，不在就冷讀**。不能一律冷讀：落盤有批次窗口，冷讀會缺尾巴。
    *
    * **不經 `threadFor`**：冷的來源不為它建 agent、不佔名額。還在建的等它建好再讀記憶體；正在撤的等撤完再冷讀（撤的時候會排空到磁碟）。
    * header 一律讀磁碟那一份（活的 thread 在記憶體裡沒有 header）；一份還沒實體化的活 thread（剛開、第一次 flush 之前）先排空再讀。
@@ -4112,8 +4086,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 分叉（`thread.fork`，#1580 刀 2）：把指名那一輪（含）之前的對話複製成一條新 thread，照 dsh `session.fork`
-   * （`session-controller/src/commands.ts:227-310`，`687f282e`）。
+   * 分叉（`thread.fork`，#1580 刀 2）：把指名那一輪（含）之前的對話複製成一條新 thread。
    *
    * 判斷的順序（PM 裁定，issuecomment-6365749290）：
    * 1. 沒有落盤 → `not_supported`；
@@ -4121,8 +4094,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 3. 讀來源，看不到 → `thread_not_found`；
    * 4. 換算切點，分不出去 → `fork_unavailable`（**排在名額之前**：同一個請求的結果不隨負載變）；
    * 5. 子 thread 經 `threadFor` 建：名額滿 → `thread_at_capacity`（協定層），佔位與建失敗的釋放都在 `threadFor`；
-   * 6. **登記之前排空子 thread 的日誌**（在 `threadFor` 裡）：seed 在這一刻才實體化成檔（同 dsh 發佈時 `appendUnstoredSuffix`），
-   *    回傳之後重啟也還在。組裝失敗時沒有任何東西落盤，同 dsh「leaves no stored residue」；寫不進去就收掉、不登記，回 `unknown_error`。
+   * 6. **登記之前排空子 thread 的日誌**（在 `threadFor` 裡）：seed 在這一刻才實體化成檔，
+   *    回傳之後重啟也還在。組裝失敗時沒有任何東西落盤；寫不進去就收掉、不登記，回 `unknown_error`。
    */
   async function handleFork(sourceId: string, id: number, body: unknown): Promise<Response> {
     // 對話行程（#2338）只放一條 thread，不在這裡建子 thread：前台經內部路由向來源要 seed（`fork-seed`），另起一個行程交給它建（`fork-adopt`）。
@@ -4410,7 +4383,6 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     let result: ThreadSearchResult;
     try {
       if (options.searchThreads === undefined) {
-        // 查詢不合法的話先講那一條，同 dsh 在問提供方之前先正規化（`list.ts:164`）。
         normalizeThreadSearchQuery(query);
         return json(
           errorResponse(
@@ -4447,8 +4419,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /threads/:id/history`（#306）。**經 `threadFor`**，跟列表相反：照 dsh 的 `session.follow` 開的是那條
-   * session，而 web 拿歷史之前已經開了下行、這條 thread 本來就建起來了。
+   * `GET /threads/:id/history`（#306）。**經 `threadFor`**，跟列表相反：web 拿歷史之前已經開了下行、這條 thread 本來就建起來了。
    *
    * **讀的是記憶體裡那份 root 日誌，不讀檔**：它含上一個行程留下的 seed（`SessionLog` 建構時接上），也含這個
    * 行程寫的、還沒落盤的那幾筆——讀檔的話那幾筆的 frame 可能早就送出去了，兩邊都沒有。順帶的：沒接
@@ -4640,7 +4611,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `changes` 那樣回 404。也同 `slash.list` **不看「還在跑」與核准點**：它只讀，沒有東西可以跟誰賽跑。
    *
    * **取消與失敗分開**：請求被取消（web 每打一個字就取消上一次）時照樣拋出去，由載體收掉，同 `changes/diff`；
-   * 其他失敗（例如工作區根讀不到，索引照 dsh 不落定成空的）回協定層的錯誤封包。
+   * 其他失敗（例如工作區根讀不到，索引不落定成空的）回協定層的錯誤封包。
    */
   async function handleFileReferences(
     threadId: string,
@@ -4721,11 +4692,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /threads/:id/changes/summary?seq=`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），照 dsh 的
-   * `handleChangesSummary`：400 座標不對，404 這台 server 不再服務這份摘要。
+   * `GET /threads/:id/changes/summary?seq=`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）：400 座標不對，404 這台 server 不再服務這份摘要。
    *
    * **錯誤協定是這個檔案的第三種寫法，刻意的**：檔頭那兩層（載體層 status、協定層 200＋封包）是我們自己的 RPC
-   * 形狀，這兩條照的是 dsh 的裸 status。「這台 server 根本不記改動（沒給 `--workspace`）」與「這份摘要已經不在」
+   * 形狀，這兩條是裸 status。「這台 server 根本不記改動（沒給 `--workspace`）」與「這份摘要已經不在」
    * 也刻意壓成同一個 404——跟 `handleList` 分得出「沒開」與「空的」不同，對 web 這兩種是同一個動作：不畫卡。
    *
    * **不經 `threadFor`**：摘要只對這個行程裡活著的 thread 存在，為了回一句「沒有」把一條 thread 建起來是反的
@@ -4740,7 +4710,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * `GET /threads/:id/changes/diff?seq=&index=`，照 dsh 的 `handleChangesDiff`：400 座標不對，404 這台 server 不再
+   * `GET /threads/:id/changes/diff?seq=&index=`：400 座標不對，404 這台 server 不再
    * 服務這份摘要、或沒有那個 index，500 讀檔失敗（找不到檔算 404）。請求被取消時照樣拋出去，由載體收掉。
    */
   async function handleChangesDiff(
@@ -4916,7 +4886,6 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (offset === undefined || length === undefined) {
         return json(errorResponse(id, 'invalid_argument', '交付檔的位元組窗口參數不對。'));
       }
-      // 窗口參數先驗、再找檔，照 dsh 的順序。
       const window = resolveDeliverableWindow(offset, length, deliverableLimits);
       if (window.kind === 'refused') return deliverableFailure(id, window);
       const found = await locateAt(threadId, seq, index);
@@ -5365,9 +5334,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       for (const { state } of settled) {
         state?.pump.close();
       }
-      // **每條 thread 都收完，再把失敗聚合起來拒絕**（#1511，照 dsh ACP bridge 的 `quiesce`：`Promise.allSettled`，
-      // `packages/acp/acp/src/index.ts:398-424`）。以前這裡 `.catch(() => undefined)` 把錯整個吞掉，
-      // serve 關機時最後一次落盤失敗一行都不會印。message 嵌入每條 thread 的 id 與原因鏈：呼叫端只印 `error.message`。
+      // **每條 thread 都收完，再把失敗聚合起來拒絕**（#1511，`Promise.allSettled`）。
+      // message 嵌入每條 thread 的 id 與原因鏈：呼叫端只印 `error.message`。
       const results = await Promise.allSettled(settled.map(({ state }) => state?.dispose()));
       const failures: Error[] = [];
       for (const [index, result] of results.entries()) {
