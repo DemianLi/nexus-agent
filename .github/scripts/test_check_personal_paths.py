@@ -42,6 +42,25 @@ class TextTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(text_violations(path, 'f.md'), [])
 
+    def test_home_segment_inside_relative_path_passes(self) -> None:
+        for path in ('<E>/home/x1/', '$D/home/x1/', 'build/home/x1/', '${D}/home/x1/', '../home/x1/', 'a-b/Users/x1/'):
+            with self.subTest(path=path):
+                self.assertEqual(text_violations(path, 'f.md'), [])
+
+    def test_absolute_path_after_separator_is_reported(self) -> None:
+        for text in (
+            '/home/' + 'bob/a',
+            '看 /Users/' + 'alice/a',
+            '`/Users/' + 'alice/a`',
+            'file:///Users/' + 'alice/a',
+            'HOME=/Users/' + 'alice/a',
+            'PATH=a:/home/' + 'bob/a',
+            '("/home/' + 'bob/a")',
+            '在/home/' + 'bob/a',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(len(text_violations(text, 'f.md')), 1)
+
     def test_report_has_file_and_line(self) -> None:
         self.assertIn('f.md:2：', text_violations('ok\n' + REAL['users'], 'f.md')[0])
 

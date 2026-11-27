@@ -1,6 +1,6 @@
 """擋進版控的檔與 PR 內文裡的個人或本機暫存的絕對路徑（#3325）。repo 是公開的，這類路徑會洩漏使用者名與機器配置。
 
-- 擋四種：`/Users/<名字>/`、`/home/<名字>/`、`/private/tmp/claude-<數字>/`、`/var/folders/<2 碼>/<20 碼以上>`（macOS 真正的暫存根）。
+- 擋四種（`/Users`、`/home` 只在絕對路徑的開頭算數：前面接字母數字、`_`、`-`、`.`、`/`、`>`、`}`、`)`、`$` 是相對路徑的一段，不擋；`file://` 後面的照擋）：`/Users/<名字>/`、`/home/<名字>/`、`/private/tmp/claude-<數字>/`、`/var/folders/<2 碼>/<20 碼以上>`（macOS 真正的暫存根）。
 - `<名字>` 在 `PLACEHOLDER_NAMES` 的放行；名字段不是純英數與 `._-`（例如 `<名字>`、`$USER`、`…`）的也放行，那是寫給人看的樣板。
   `/var/folders/` 後面接的不是真的暫存根長相（測試用的 `ab/cd1234`、省略號）也放行。佔位名清單只在這裡定義。
 - 只擋路徑，不擋主機架構字樣：`darwin-arm64`、`linux-x64` 在這個 repo 是正當的平台名。
@@ -22,7 +22,7 @@ PLACEHOLDER_NAMES = frozenset({'x', 'u', 'you', 'someone', 'FAKE', 'user', 'user
 GENERATED = frozenset({'pnpm-lock.yaml', 'Cargo.lock', 'package-lock.json', 'yarn.lock'})
 SELF = frozenset({'.github/scripts/check_personal_paths.py', '.github/scripts/test_check_personal_paths.py'})
 
-HOME_RE = re.compile(r'/(?:Users|home)/([^/\s\'"`<>()\[\]{}]+)/')
+HOME_RE = re.compile(r'(?:(?<![A-Za-z0-9_.\-/>}$)])|(?<=file://))/(?:Users|home)/([^/\s\'"`<>()\[\]{}]+)/')
 SCRATCH_RE = re.compile(r'/private/tmp/claude-\d+/')
 FOLDERS_RE = re.compile(r'/var/folders/[A-Za-z0-9_]{2}/[A-Za-z0-9_]{20,}')
 REAL_NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
