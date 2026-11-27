@@ -338,7 +338,7 @@ describe('最後一道防線', () => {
 });
 
 /**
- * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)），逐條對 dsh `tests/webserver.spec.ts:313-401`。
+ * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。
  *
  * 用 `node:http` 的原始請求讀回應：`fetch` 會自己解壓，`content-encoding` 與位元組都被它吃掉，量不到「線上到底送了什麼」。
  */

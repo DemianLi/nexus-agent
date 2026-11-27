@@ -3,7 +3,7 @@
  * 寬容」這筆賭注寫下來。
  *
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它第三條查項
- * （第 7 格的 `additionalContexts` 契約）掉出來的
+ * 掉出來的
  * [#202](https://github.com/DemianLi/nexus-agent/issues/202)。**那條查項的前提是錯的**：
  * 表上寫著「今天零生產者踩得到它」，而生產者今天就在樹上。
  *
@@ -15,12 +15,6 @@
  * 訊息：自己那顆 `ToolMessage`，**後面當場接一則 `HumanMessage`**。模型那一輪若同時叫了
  * 第二顆工具，這則 `HumanMessage` 就**插進兩顆工具結果中間**。
  *
- * 這正是 dsh 明著否決的做法：`additionalContexts` 是「ferried on the returned result for
- * the loop's **active-batch FIFO**」（`references/deepseek-harness/packages/core/tools/src/
- * index.ts:1727`，SHA `d347e703908d0406b7a7ef80e3a0e594d86b2215`）——**批次結算完才排隊
- * 送**，不是當場插。那份 clone 不進版控且**會凍在 clone 當下**，重對前先自己
- * `git -C references/deepseek-harness fetch` 再對 SHA。
- *
  * ## 路徑閘門是量出來的，不是猜的
  *
  * 收尾指示**只在續行輪注入**：`tools.ts` 那句 `authority.kind !== 'goal-round'` 之後只回
@@ -30,7 +24,7 @@
  *
  * ## 判決：不是今天的 bug，是一筆沒有人記著的賭注
  *
- * dsh 給的理由（工具呼叫與結果的鄰接性）**在我們今天打的端點上不成立**——它不驗這件事。
+ * `HumanMessage` 插在兩顆工具結果中間會破壞呼叫與結果的鄰接性——這**在我們今天打的端點上不成立**——它不驗這件事。
  * 2026-09-07 實測，先架本機端點攔請求正文（不燒 key），確認 `@langchain/openai`
  * **原封不動送出**交錯順序 `tool(a) → user → tool(b)`；然後三組序列打真端點：
  *
@@ -63,10 +57,6 @@
  * 順帶加一條「`update_goal` 收尾不得與其他工具同批」的檢查**刻意不做**：那是行為改動（會
  * 拒絕一個今天跑得動的批次），而**今天沒有任何證據說那個批次是壞的**。留到有端點真的拒絕
  * 那天——屆時下面這條 characterization **反過來寫就是它的驗收句**（絆索要翻面不要刪）。
- *
- * 照 dsh 改成批次結算後 FIFO 這條路**也不做**：它解的是我們碰不到的拒絕，而且**我們這側
- * 沒有批次結算的縫可以掛**——`Command` 當初被選上正是因為這個（`tools.ts` 檔頭那筆已登記
- * 的對讀）。
  *
  * ## 下面釘的是位置，不是數量，而且它釘的是現況不是理想
  *
@@ -186,8 +176,7 @@ function wrapupBatch(state: ScriptedModelState): string[] {
 /**
  * 今天真的送給模型的那個序列。**收尾指示夾在自己的工具結果與 `ls` 的結果中間。**
  *
- * 這一行是 characterization：它記的是現況，不是我們認為對的形狀。dsh 那側對的形狀會是
- * `ai → tool:update_goal → tool:ls → human:goal-wrapup(complete)`——**哪天真的改成那樣，
+ * 這一行是 characterization：它記的是現況，不是對的形狀（`ai → tool:update_goal → tool:ls → human:goal-wrapup(complete)`）。**哪天改成那樣，
  * 這裡就照著改，然後回頭把檔頭那筆賭注一起收掉。**
  */
 const TOOL_HUMAN_TOOL = [

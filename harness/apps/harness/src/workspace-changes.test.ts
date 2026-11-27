@@ -340,8 +340,7 @@ describe('每一輪的改動紀錄在真的圖上', () => {
       };
       expect(folded).toEqual([[entry], [entry]]);
 
-      // **builder 的輸出先對手寫的字串，再把同一段手寫的查詢送進真的 handler**（照 dsh 的 host spec，
-      // `changes-open.host.spec.ts`）：wire 把參數改名而 handler 沒跟上，這一行先紅；反過來 handler 改名而
+      // **builder 的輸出先對手寫的字串，再把同一段手寫的查詢送進真的 handler**：wire 把參數改名而 handler 沒跟上，這一行先紅；反過來 handler 改名而
       // builder 沒跟上，下面的請求 400。兩邊都拼自己的字串時，兩邊一起改，全綠，web 照舊送舊名。
       expect(changesSummaryUrl(THREAD_ID, seq)).toBe(`${changesSummaryPath(THREAD_ID)}?seq=${seq}`);
       expect(changesDiffUrl(THREAD_ID, seq, 2)).toBe(
@@ -351,7 +350,7 @@ describe('每一輪的改動紀錄在真的圖上', () => {
       expect(summary.status).toBe(200);
       expect(summary.headers.get('cache-control')).toBe('no-store');
       const summaryBody: unknown = await summary.json();
-      // 回應過 wire 的 validator：server 改了形狀而 validator 沒跟上，web 會把卡當成讀壞（dsh 沒有這一條）。
+      // 回應過 wire 的 validator：server 改了形狀而 validator 沒跟上，web 會把卡當成讀壞。
       expect(isChangesSummary(summaryBody)).toBe(true);
       expect(summaryBody).toEqual({
         files: [
@@ -535,7 +534,7 @@ describe('每一輪的改動紀錄在真的圖上', () => {
     try {
       // **不在 repo 裡的工作區的前提**：`--workspace` 底下模型改檔只經這三顆，沒有 `execute`（#443 第二則
       // 決議）。這一條紅了表示換了一顆有 shell 的 backend：repo 裡的工作區有 git 快照（#461）照樣涵蓋，
-      // 不在 repo 裡的會漏掉 shell 改的檔——dsh 同樣（README 的已知限制），但那時要重新決定要不要接受。
+      // 不在 repo 裡的會漏掉 shell 改的檔，到時要重新決定接不接受這個缺口。
       expect(outcome.boundToolNames).toEqual(
         expect.arrayContaining(['write_file', 'edit_file', 'delete']),
       );
@@ -712,8 +711,8 @@ describe('工作區外', () => {
   });
 
   it('danger-full-access：列出來，`path` 是主機絕對路徑，diff 帶內容', async () => {
-    // dsh README 的已知限制：比較會把工作區外的檔的全文送到 client；必須把這類內容留在 Host 上的部署要把
-    // 這個 plugin 組合出去。瀏覽器那端是通過會話認證（#424）的同一個人，讀得到的也是 harness 行程本來就讀得到的。
+    // 比較會把工作區外的檔的全文送到瀏覽器；必須把這類內容留在主機上的部署要把
+    // 這項功能從組裝拿掉。瀏覽器那端是通過會話認證（#424）的同一個人，讀得到的也是 harness 行程本來就讀得到的。
     const outside = await outsideDirectory();
     const outcome = await run(THROUGH_LINK, FILES, {
       mode: 'danger-full-access',
