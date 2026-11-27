@@ -51,8 +51,7 @@ import { wireRequestBodyMode } from './wire-handler.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /**
- * 先收完整份的路由（JSON 路由）的本文上限：300 MiB。**串流路由（今天只有上傳）不受這個上限管**——儲存配額由路由自己負責，
- * 這版不做。見 `docs/operations.md`。
+ * 先收完整份的路由（JSON 路由）的本文上限：300 MiB。**串流路由（今天只有上傳）不受這個上限管**——儲存配額歸路由管，目前沒有配額。見 `docs/operations.md`。
  */
 export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024;
 
@@ -66,7 +65,6 @@ export const MAX_SSE_HEARTBEAT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
 
 const SSE_PING = ': ping\n\n';
 
-/** gzip 等級預設值。 */
 export const DEFAULT_COMPRESSION_LEVEL = 1;
 
 /** 已知長度小於這個位元組數就不壓；長度未知的串流可以壓。 */
@@ -118,7 +116,7 @@ function integerFlag(text: string): number | undefined {
 type NodeMiddleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
 
 /**
- * gzip 中介層。`compression` 的型別是給 Express 的，執行期只碰
+ * `compression` 的型別是給 Express 的，執行期只碰
  * node:http 的 request／response 成員。
  */
 function createGzipMiddleware(config: WireCompression): NodeMiddleware {
@@ -143,7 +141,7 @@ function createGzipMiddleware(config: WireCompression): NodeMiddleware {
 
   return (req, res, next) => {
     // 沒有 socket 的 response 搬的是原樣位元組，不壓。
-    // nexus 沒有這種通道，而 node:http 在 pipelining 時第二個請求的 socket 是 `null` 不是 `undefined`，所以這個條件在這裡不會成立。
+    // nexus 沒有不帶 socket 的 response；node:http 在 pipelining 時第二個請求的 socket 是 `null` 不是 `undefined`，所以這個條件在這裡不會成立。
     if ((res as { socket?: unknown }).socket === undefined) {
       next();
       return;
@@ -176,10 +174,8 @@ export interface StartWireServerOptions {
   readonly maxRequestBodyBytes?: number;
   /**
    * 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。
-   * 第二個參數是那個請求的方法與 pathname（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），管理者才知道是哪一個請求。
+   * 第二個參數是那個請求的方法與 pathname（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），管理者要從使用者回報的時間找到是哪一個請求。
    * **`path` 只有 pathname，不帶 query**：`/?token=…` 的權杖在 query 裡，進日誌就洩了。
-   *
-   * nexus 是多人共用的 `serve`，管理者要從使用者回報的時間找到是哪一個請求，所以多帶方法與 pathname。
    */
   readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**
@@ -198,7 +194,7 @@ export interface StartWireServerOptions {
    */
   readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
   /**
-   * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。**不給就不壓**，跟今天完全一樣。
+   * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。**不給就不壓**。
    * 給了之後，歷史頁、列表的 JSON 與網頁 bundle 在瀏覽器支援時壓縮再送；SSE 下行與帶 `content-range` 的回應照原樣送。見檔頭。
    */
   readonly compression?: WireCompression;
@@ -533,7 +529,6 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
   // **最後一道防線**：一個請求的失敗只收在那個
   // 請求上——記一筆、回 400，已經送出標頭的就斷線。沒有這一層，`handle` 的 rejection 沒人接，Node 會讓
   // 整個行程退出：同機任何人送一個畸形的請求就能把 serve 打掉（#424 審查時實測過）。
-  // 壓縮中介層只依設定建一次；不給就是 `undefined`，listener 直接進 `handle`。
   const gzip =
     options.compression === undefined ? undefined : createGzipMiddleware(options.compression);
   const server: Server = createServer((incoming, outgoing) => {

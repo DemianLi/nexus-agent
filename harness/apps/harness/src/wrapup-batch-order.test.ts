@@ -3,7 +3,7 @@
  * 寬容」這筆賭注寫下來。
  *
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它第三條查項
- * （第 7 格的 `additionalContexts` 契約）掉出來的
+ * 掉出來的
  * [#202](https://github.com/DemianLi/nexus-agent/issues/202)。**那條查項的前提是錯的**：
  * 表上寫著「今天零生產者踩得到它」，而生產者今天就在樹上。
  *
@@ -24,7 +24,7 @@
  *
  * ## 判決：不是今天的 bug，是一筆沒有人記著的賭注
  *
- * 工具呼叫與結果的鄰接性這個顧慮**在我們今天打的端點上不成立**——它不驗這件事。
+ * `HumanMessage` 插在兩顆工具結果中間會破壞呼叫與結果的鄰接性——這**在我們今天打的端點上不成立**——它不驗這件事。
  * 2026-09-07 實測，先架本機端點攔請求正文（不燒 key），確認 `@langchain/openai`
  * **原封不動送出**交錯順序 `tool(a) → user → tool(b)`；然後三組序列打真端點：
  *
@@ -176,7 +176,7 @@ function wrapupBatch(state: ScriptedModelState): string[] {
 /**
  * 今天真的送給模型的那個序列。**收尾指示夾在自己的工具結果與 `ls` 的結果中間。**
  *
- * 這一行是 characterization：它記的是現況，不是我們認為對的形狀。**哪天順序改了，
+ * 這一行是 characterization：它記的是現況，不是對的形狀（`ai → tool:update_goal → tool:ls → human:goal-wrapup(complete)`）。**哪天改成那樣，
  * 這裡就照著改，然後回頭把檔頭那筆賭注一起收掉。**
  */
 const TOOL_HUMAN_TOOL = [

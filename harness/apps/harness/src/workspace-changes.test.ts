@@ -534,7 +534,7 @@ describe('每一輪的改動紀錄在真的圖上', () => {
     try {
       // **不在 repo 裡的工作區的前提**：`--workspace` 底下模型改檔只經這三顆，沒有 `execute`（#443 第二則
       // 決議）。這一條紅了表示換了一顆有 shell 的 backend：repo 裡的工作區有 git 快照（#461）照樣涵蓋，
-      // 不在 repo 裡的會漏掉 shell 改的檔，但那時要重新決定要不要接受。
+      // 不在 repo 裡的會漏掉 shell 改的檔，到時要重新決定接不接受這個缺口。
       expect(outcome.boundToolNames).toEqual(
         expect.arrayContaining(['write_file', 'edit_file', 'delete']),
       );
@@ -711,8 +711,8 @@ describe('工作區外', () => {
   });
 
   it('danger-full-access：列出來，`path` 是主機絕對路徑，diff 帶內容', async () => {
-    // 比較會把工作區外的檔的全文送到 client；必須把這類內容留在 Host 上的部署要把
-    // 這個 plugin 組合出去。瀏覽器那端是通過會話認證（#424）的同一個人，讀得到的也是 harness 行程本來就讀得到的。
+    // 比較會把工作區外的檔的全文送到瀏覽器；必須把這類內容留在主機上的部署要把
+    // 這項功能從組裝拿掉。瀏覽器那端是通過會話認證（#424）的同一個人，讀得到的也是 harness 行程本來就讀得到的。
     const outside = await outsideDirectory();
     const outcome = await run(THROUGH_LINK, FILES, {
       mode: 'danger-full-access',
