@@ -4,12 +4,7 @@
  *
  * ## 為什麼從日誌抽
  *
- * dsh 的工具卡，結果文字只從會話日誌導出，就是 `tool/result` 那一則的內容，`isError` 是另一個旗標——
- * **成功的結果文字照樣帶**（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:51-68`，
- * `ddefc45`；`5badb15009a` 的 `rootResult` 仍是這樣，只是行號位移。開卡的時機則已提前到參數串流中，見
- * `thread-pump.ts` 檔頭）。提問卡解析的就是這段字（`ui-tool/.../toolviews/ask-question-row.tsx`）。
- *
- * 我們這邊另一個現成的來源是基座那顆 `tool-finished` 的 `output`，但它**比日誌差**：基座的
+ * 基座那顆 `tool-finished` 的 `output` 也是現成的來源，但它**比日誌差**：基座的
  * `FilesystemMiddleware` 排在圍堵外層，超過 80,000 字元的結果在那裡已經被換成預覽
  * （`agent-factory.ts` 的 `TOOL_RESULT_STASH_PREFIX`），而圍堵寫日誌時拿到的是基座搬移之前那一份
  * （`@nexus/core` 的 `session-log.ts`；外溢層開著時是外溢換過的那則，見下面）。加上它是序列化過的 LangChain `ToolMessage`，
@@ -22,22 +17,17 @@
  *
  * ## 文字放上線不截（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）
  *
- * 照 dsh：上限在**模型面**，日誌到畫面這一段不再截。dsh 的 `spill-policy` 掛在 `tools/post-execute`，超過預算就把全文
- * 存成 spill 檔、內容換成頭尾預覽加一行帶路徑的通知（`packages/spill/spill-policy/src/index.ts:133-150`），日誌記的就是
- * 換過的那則（`packages/core/agent-loop/src/tool-calls.ts:152-156`）；工具卡直接拿 `tool/result` 的內容
- * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:64-74`）。以上對 dsh `c1b47e4`，卡上引的 `477b4f4` 同內容。
- *
- * 我們的外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)，`@nexus/core` 的 `spill-policy.ts`）做的是
- * 同一件事，日誌記的也是換過的那則。所以這裡**原樣交出日誌裡那則**：即時與重播都是預覽加路徑，一字不差，沒有第二層截斷。
+ * 上限在**模型面**，日誌到畫面這一段不再截。外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)，`@nexus/core` 的 `spill-policy.ts`）超過預算就換成預覽加路徑，
+ * 日誌記的就是換過的那則。所以這裡**原樣交出日誌裡那則**：即時與重播都是預覽加路徑，一字不差，沒有第二層截斷。
  * 這裡原本截在**放上線**那一刻（頭尾各半、中間一句「沒有送出來」），那是「沒有外溢、日誌保全文」時登記的偏離；
  * 前提不在了，偏離收掉。
  *
  * 一張卡的文字因此由**生產者自己的上限**決定，不再由 `tool-text` 那一列決定：
  *
  * - **外溢層開著**：一則最多 `maxInlineTokens`（出廠 12500）個估算 token，含通知。
- * - **`read_file` 不外溢**（同 dsh 只放過 `read`）：受讀檔自己的上限，一頁 2000 行、累計 50 KiB 就停
+ * - **`read_file` 不外溢**：受讀檔自己的上限，一頁 2000 行、累計 50 KiB 就停
  *   （`@nexus/core` 的 `read-continuation.ts`）；單行超過時退到基座格式化後的 80,000 字元。
- * - **外溢層關掉**（刪掉 `maxInlineTokens`）：日誌回到全文，文字沒有上限——**dsh 關掉時也一樣**。
+ * - **外溢層關掉**（刪掉 `maxInlineTokens`）：日誌回到全文，文字沒有上限。
  *
  * 一頁歷史的位元組預算怎麼跟著算，見 `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES`。
  *
@@ -144,7 +134,7 @@ function metaBytes(meta: unknown): number {
 export const READ_META_MAX_BYTES_FACTOR = 2;
 
 /**
- * 是不是讀檔的 meta（`@nexus/core` 的 `ReadResultMeta`，同 dsh 的 `FsReadMeta`）。
+ * 是不是讀檔的 meta（`@nexus/core` 的 `ReadResultMeta`）。
  *
  * 生產者只有五處：`read_file` 寫這個形狀，`grep`／`glob` 寫帶 `shape` 的搜尋，`write_file`／`edit_file`
  * 寫帶 `diffs` 的改檔。只有讀檔帶 `lines` 陣列與 `totalLines`。
@@ -160,12 +150,12 @@ function isReadMeta(meta: unknown): boolean {
  * - **搜尋與 diff 的上限就是 `tool-text` 那一列的 `maxBytes`**
  *   （[#617](https://github.com/DemianLi/nexus-agent/issues/617) 決定 2；那時它也是工具文字的上限，#736 之後文字不再截）。
  * - **讀檔是 {@link READ_META_MAX_BYTES_FACTOR} 倍**（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）：
- *   #602 把一頁放大到 dsh 的 2000 行之後，每行 `{"number":N,"text":"…"}` 的外殼約 25 位元組，短行的大檔
+ *   一頁 2000 行時，每行 `{"number":N,"text":"…"}` 的外殼約 25 位元組，短行的大檔
  *   文字沒被截、meta 卻超過一倍的上限。兩倍裝得下一整頁 2000 行短行。
- * - **搜尋照 dsh 的 `capMetaBytes`**（`fs/tool-fs-search/src/presentation.ts:107-117`）：從尾巴整組砍，
+ * - **搜尋從尾巴整組砍**，
  *   標 `truncated`，`total` 不動，至少留一項——一項自己就超過的也留著，不讓一張空卡蓋掉真的結果。
- * - **讀檔與 diff 超過就整格不給**：dsh 這兩種沒有上限；我們的歷史頁是照每張卡的最大值算的，
- *   一次大改寫的 diff 會讓一頁失控（偏離）。web 照 dsh 退：write 用參數算 diff，其他走 generic。
+ * - **讀檔與 diff 超過就整格不給**：歷史頁是照每張卡的最大值算的，
+ *   一次大改寫的 diff 會讓一頁失控。web 退成：write 用參數算 diff，其他走 generic。
  *
  * **量的與交出去的都是一份沒凍過的副本**（#1526）：日誌裡那一份是凍過的，V8 對凍過的巢狀 `JSON.stringify` 撐得比較淺：
  * CI（Node 22.23.3 Linux x64）上凍過的陣列約 2200 層就 `RangeError`，沒凍過的約 4100 層（Node 25 上沒凍過的撐得過

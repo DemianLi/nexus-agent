@@ -14,8 +14,8 @@
  *    「沒外洩」同樣被「tracing 壓根沒開」「端點打錯」滿足。
  * 2. `LANGSMITH_HIDE_INPUTS` / `HIDE_OUTPUTS` 是全有全無的煞車（**在另一個檔案**，
  *    理由見 {@link tracing-hidden.test.ts} 與下面 singleton 那段）。
- * 3. 自備一個帶 `hideInputs` 函式的 `Client`，基座會讓路——所以 dsh 的脫敏 waterfall
- *    在這裡表達得出來，不是偏離。
+ * 3. 自備一個帶 `hideInputs` 函式的 `Client`，基座會讓路——所以脫敏的 waterfall
+ *    在這裡表達得出來。
  *
  * **singleton 陷阱**：`getDefaultLangChainClientSingleton()` 是 module-private 的
  * `let client`，沒有 setter（`dist/singletons/tracer.js`）。一個 process 裡第一次觸發

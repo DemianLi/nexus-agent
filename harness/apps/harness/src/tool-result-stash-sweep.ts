@@ -1,6 +1,5 @@
 /**
- * 工具結果暫存的啟動清掃**放到背景**（#1553 N0952），照 dsh `spill-local` 的 `LocalSpillStore` 建構子
- * （`packages/spill/spill-local/src/index.ts:90-101`，`687f282e`）：啟動時放出一次清掃、**不等它**，服務照常開始；
+ * 工具結果暫存的啟動清掃**放到背景**（#1553 N0952）：啟動時放出一次清掃、**不等它**，服務照常開始；
  * 清掃歸一個 effect 所有，它交出的 disposer 等**同一顆** promise，所以卸載一定等清掃收斂，沒有清掃的 I/O 活得比擁有者久。
  *
  * 擁有者是 Cordis 根的 context：`serve` 與 `cli` 起得來、起不來、跑完，每一條收尾都會卸載根（`root.dispose()`），
@@ -16,9 +15,9 @@ import type { Context } from '@nexus/cordis';
 import { cleanupToolResultStash } from './tool-result-stash.js';
 
 /**
- * 在 `ctx` 上放出一次背景清掃。`cleanupPeriodDays` 為 `0` 時不清，disposer 什麼都不等（dsh 同）。
+ * 在 `ctx` 上放出一次背景清掃。`cleanupPeriodDays` 為 `0` 時不清，disposer 什麼都不等。
  *
- * `cleanupToolResultStash` 自己接住每一個檔案系統錯誤；萬一它還是拒絕，照 dsh 走 `warn` 講一聲，不讓 disposer 拋。
+ * `cleanupToolResultStash` 自己接住每一個檔案系統錯誤；萬一它還是拒絕，走 `warn` 講一聲，不讓 disposer 拋。
  *
  * @param ctx - 擁有這次清掃的 context（入口的 Cordis 根）。
  * @param rootDir - 暫存根。

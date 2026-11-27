@@ -2,13 +2,7 @@
  * **模型工具寫得進哪一份會話日誌** —— [#134](https://github.com/DemianLi/nexus-agent/issues/134)
  * 開的頭，[#137](https://github.com/DemianLi/nexus-agent/issues/137) 收的尾。
  *
- * dsh 的模型工具靠 `exec.agent.session.append(...)` 寫日誌
- * （`references/deepseek-harness/packages/todo/tool-todo/src/index.ts:210`），而那個
- * `agent` 是 **agent loop 派發工具時主動塞進去的**（`packages/core/agent-loop/src/tool-calls.ts:78`，
- * `ToolExecutionInput.agent` 的註解就寫著 “set by the agent loop”）。**那個派發點是
- * dsh 自己的**；我們的工具是 LangGraph 的 ToolNode 在跑，插不進去。
- *
- * 所以答案分兩半，而兩半現在都有了：
+ * 我們的工具是 LangGraph 的 ToolNode 在跑，沒有派發點可以把呼叫者身分塞進去，所以答案分兩半：
  *
  * 1. **「哪一份日誌」** —— 一次組裝一張會話註冊表（`SessionRegistry`），由
  *    `attachSession` 綁上來。第一條測試驗它。
@@ -29,7 +23,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 
 const WRITER_TOOL_NAME = 'writer_tool';
 
-/** 沒接線時工具回的話。**明確講出來，不要靜默 no-op** —— 照 dsh 那句註解的理由。 */
+/** 沒接線時工具回的話。**明確講出來，不要靜默 no-op**。 */
 const NOT_ATTACHED = '這次組裝沒有接上會話日誌，所以沒有寫。';
 
 /**
@@ -148,14 +142,8 @@ describe('模型工具與會話日誌', () => {
   });
 
   /**
-   * **這一條是翻過面的絆索。**
-   *
-   * 它以前釘的是現況：root 與 subagent 寫進**同一份**日誌，而那跟 dsh 的單一所有者規則
-   * 相反（`tool-todo/README.zh.md`：「subagent 与其他 agent 各自维护自己的列表」）。當時
-   * 缺的不只是判斷依據，還缺**第二份日誌可以寫**——認得出來與有地方去是兩件事。
-   *
-   * 兩件都補上了，所以它反過來寫。**留著這條而不是刪掉**：哪天有人把身分那一層拆掉，
-   * 兩筆會重新落回同一份，而紅的就是這裡。
+   * root 與 subagent 各寫各的一份（單一所有者；subagent 與其他 agent 各自維護自己的列表）。
+   * 哪天有人把身分那一層拆掉，兩筆會重新落回同一份，而紅的就是這裡。
    */
   it('root 與 subagent 各寫各的一份——單一所有者', async () => {
     const model = new ScriptedChatModel({
