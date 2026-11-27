@@ -1,15 +1,17 @@
 /**
  * 平凡地板（[#1001](https://github.com/DemianLi/nexus-agent/issues/1001)）：三個不需要模型的
- * agent，跑七題，每一題都必須判成「不成功」。零憑證、不連外。
+ * agent，跑整份題組，每一題都必須判成「不成功」。零憑證、不連外。
  *
  * **每一條都要先確認那次執行是 `scored`，再看它成不成功。** 失敗的執行（被拒、逾時、腳本用
  * 完）同樣「不成功」，但那是沒有資料，不是評分器擋住了它 —— 只斷言「不成功」的話，地板
  * 壞掉（例如腳本假模型被改壞、每題都拋）時這個檔案照樣全綠。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// 每一次執行都組一份 serve 的出貨組裝，一次約半秒；整份資料集跑好幾輪的測試放寬逾時。
+vi.setConfig({ testTimeout: 60_000 });
 import { ScriptedChatModel } from '../scripted-model.js';
-import { benchmarkPlugins } from './assembly.js';
 import { summarize, type TierOutcome } from './compare.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import {
@@ -30,7 +32,7 @@ import { runBenchmarkCase } from './runner.js';
 type Scored = Extract<TierOutcome, { kind: 'scored' }>;
 
 /**
- * 整份資料集的地板結果，**整個檔案只跑一次**。三個 agent × 七題是 21 次完整的 agent 執行，
+ * 整份資料集的地板結果，**整個檔案只跑一次**。三個 agent × 五題是 15 次完整的 agent 執行，
  * 每條測試各跑一遍的話本機快、CI 慢的差距會把它推到逾時（#1005 的 CI 就栽在這個形狀上）。
  * 結果是確定的，共用沒有風險。
  */
@@ -113,7 +115,7 @@ describe('固定亂吐要有牙齒', () => {
     }
   });
 
-  it('寬鬆判準會讓它成功 —— 放寬到「只看名字與關鍵字」，七題全過', async () => {
+  it('寬鬆判準會讓它成功 —— 放寬到「只看名字與關鍵字」，整份題組全過', async () => {
     // 這是在說明「拿掉參數與多叫次數這兩項，地板就紅」是真的：用同一批分數照寬鬆的
     // 判準重判一次，亂吐必須整份通過。這裡的 `loose` 只活在測試裡，不是產品程式碼。
     const loose = (outcome: Scored): boolean => {
@@ -156,7 +158,6 @@ describe('隨機合法動作', () => {
     });
     await runBenchmarkCase(BENCHMARK[0] as BenchmarkCase, {
       model,
-      plugins: benchmarkPlugins(),
     });
     for (const entry of BENCHMARK) {
       for (const call of randomLegalCalls(entry.id)) {

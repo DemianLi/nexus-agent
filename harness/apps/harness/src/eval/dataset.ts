@@ -53,9 +53,8 @@ export const BENCHMARK_FILE = '/benchmark.md';
  *
  * ## 兩批，分界在「難的地方在哪一欄」
  *
- * 前三條（`echo-once` / `echo-then-write` / `write-then-read`）由淺入深：單一工具、
- * 兩個工具且有順序、工具之間有資料相依。**它們已經分不出高下了** —— #84 量到 20B 到
- * 550B 五個橫階在這三條上工具成功率與參數正確性全部是 `1.00`。
+ * 第一條（`write-then-read`）是入門題：兩個工具、有順序、工具之間有資料相依。**它已經分不出高下了** ——
+ * #84 量到 20B 到 550B 五個橫階在它上面工具成功率與參數正確性全部是 `1.00`。
  *
  * 後四條是為了讓那兩欄重新有解析度而加的，而且**難的地方刻意放在參數**：同一份 #84
  * 的資料裡，工具名字那一欄五階全平，參數那一欄卻在 11B 掉到 `0.19` —— 有動態範圍的是
@@ -74,24 +73,6 @@ export const BENCHMARK_FILE = '/benchmark.md';
  *    判準太窄，不是模型錯。做不到就把題目講死（例如明著說「用 grep 找」）。
  */
 export const BENCHMARK: readonly BenchmarkCase[] = [
-  {
-    id: 'echo-once',
-    prompt: '把「接線測試」這句話回聲一次。',
-    expected: {
-      toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
-      mentions: ['接線測試'],
-    },
-  },
-  {
-    id: 'echo-then-write',
-    prompt: '把「接線測試」回聲一次，然後把回聲的結果寫進 /benchmark.md。',
-    expected: {
-      toolCalls: [
-        { name: 'echo', args: { message: '接線測試' } },
-        { name: 'write_file', args: { file_path: BENCHMARK_FILE } },
-      ],
-    },
-  },
   {
     id: 'write-then-read',
     prompt: '把「第二次」寫進 /benchmark.md，然後讀回來告訴我裡面是什麼。',
@@ -129,7 +110,7 @@ export const BENCHMARK: readonly BenchmarkCase[] = [
   },
   {
     id: 'reverse-round-trip',
-    // 正確的參數是前一步輸出的**變換**，不是複製。前三條裡每一個工具參數都能從題目直接
+    // 正確的參數是前一步輸出的**變換**，不是複製。前面的題裡每一個工具參數都能從題目直接
     // 抄過去，所以「照抄」跟「真的做了那件事」在分數上分不開；這一條把它們分開。
     // 目標字串沒有換行也沒有標點，所以逐字比對量的是模型，不是我們對換行的假設。
     prompt:
@@ -168,7 +149,7 @@ export const BENCHMARK: readonly BenchmarkCase[] = [
     // ——「沒有可判的」不該被平均（見 `scorers.ts`）。它的訊號整個落在**多叫次數**上。
     //
     // 別把它讀太重：#84 只有 11B 那個對照組會亂叫（平均 7.17 次），20B 以上本來就克制。
-    // 而且七題平均之後，這一條叫 0 次或 2 次只動得了總平均 0.3 —— 要看它得看
+    // 而且五題平均之後，這一條叫 0 次或 2 次只動得了總平均 0.3 —— 要看它得看
     // CLI 逐次那一行，不是彙總那一欄。
     prompt: '這題不需要任何工具，也不要建立檔案。直接用一句話回答我：3 加 4 等於多少？',
     expected: {
@@ -179,16 +160,16 @@ export const BENCHMARK: readonly BenchmarkCase[] = [
 ];
 
 /**
- * 前幾條是「已經分不出高下」的那一批。分界在第三條之後 —— 見檔頭「兩批」那一段。
+ * 「已經分不出高下」的那一批有幾條。分界在第一條之後 —— 見檔頭「兩批」那一段。
  *
- * 這個常數存在是因為**易題會稀釋平均**：三條簡單題在每一階上都是 `1.00`，混進七題的
+ * 這個常數存在是因為**易題會稀釋平均**：簡單題在每一階上都是 `1.00`，混進整份題組的
  * 平均之後階間差異被壓縮，看起來像判準又飽和了。報表要能把兩批分開印，那個分界就不能
  * 只活在檔頭的散文裡。
  */
-export const EASY_CASE_COUNT = 3;
+export const EASY_CASE_COUNT = 1;
 
 /** 有解析度的那四條。報表的第二組數字算在這上面。 */
 export const HARD_CASES: readonly BenchmarkCase[] = BENCHMARK.slice(EASY_CASE_COUNT);
 
-/** 已經飽和的那三條。留著跑是因為「連這個都做不到」仍然是資訊。 */
+/** 已經飽和的那一條。留著跑是因為「連這個都做不到」仍然是資訊。 */
 export const EASY_CASES: readonly BenchmarkCase[] = BENCHMARK.slice(0, EASY_CASE_COUNT);

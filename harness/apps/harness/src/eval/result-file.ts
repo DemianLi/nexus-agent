@@ -43,7 +43,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readGitProvenance, type BuildVersion } from '../build-version.js';
 import { stableStringify } from '../stable-stringify.js';
-import { BENCHMARK_SYSTEM_PROMPT } from './assembly.js';
 import {
   EVAL_DEADLINE_MS,
   EVAL_RECURSION_LIMIT,
@@ -81,7 +80,7 @@ export interface EvalRunSettings {
   /** 模型實例上讀到的取樣溫度；讀不到是 `null`。 */
   readonly temperature: number | null;
   readonly topP: number | null;
-  /** `BENCHMARK_SYSTEM_PROMPT` 的雜湊。提示詞也是受測條件的一部分。 */
+  /** 實際送出的 `request/system` 的雜湊。提示詞也是受測條件的一部分。 */
   readonly systemPromptVersion: string;
 }
 
@@ -154,8 +153,8 @@ export function scorerVersion(readSource: (name: string) => string = readOwnSour
   return shortHash(parts.join('\0\0'));
 }
 
-/** `BENCHMARK_SYSTEM_PROMPT` 的雜湊。 */
-export function systemPromptVersion(prompt: string = BENCHMARK_SYSTEM_PROMPT): string {
+/** 實際送出的 `request/system`（`runner.ts` 的 `shippedSystemPrompt`）的雜湊。 */
+export function systemPromptVersion(prompt: string): string {
   return shortHash(prompt);
 }
 
@@ -168,6 +167,8 @@ export interface DescribeSettingsInput {
   /** 從模型實例讀到的取樣設定；`undefined` 記成 `null`，不補預設值。 */
   readonly temperature?: number | undefined;
   readonly topP?: number | undefined;
+  /** 這一輪實際送出的 `request/system` 全文（`runner.ts` 的 `shippedSystemPrompt`）。 */
+  readonly systemPrompt: string;
 }
 
 export function describeSettings(input: DescribeSettingsInput): EvalRunSettings {
@@ -178,7 +179,7 @@ export function describeSettings(input: DescribeSettingsInput): EvalRunSettings 
     deadlineMs: input.deadlineMs,
     temperature: input.temperature ?? null,
     topP: input.topP ?? null,
-    systemPromptVersion: systemPromptVersion(),
+    systemPromptVersion: systemPromptVersion(input.systemPrompt),
   };
 }
 
@@ -243,6 +244,8 @@ export interface StartResultFileInput {
   readonly cases: readonly BenchmarkCase[];
   readonly models: readonly ModelUnderTest[];
   readonly samples: number;
+  /** 這一輪實際送出的 `request/system` 全文，取自 `runner.ts` 的 `shippedSystemPrompt`。 */
+  readonly systemPrompt: string;
   /** 模型實例上讀到的取樣設定。由呼叫端讀，這個模組不去猜、也不抄一份字面值。 */
   readonly sampling: {
     readonly temperature?: number | undefined;
@@ -270,6 +273,7 @@ export function startResultFile(input: StartResultFileInput): ResultWriter {
       samples: input.samples,
       recursionLimit: EVAL_RECURSION_LIMIT,
       deadlineMs: EVAL_DEADLINE_MS,
+      systemPrompt: input.systemPrompt,
       ...input.sampling,
     }),
     models: input.models,

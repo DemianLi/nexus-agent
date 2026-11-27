@@ -35,21 +35,26 @@ const TIER: MeasuredModel = {
   note: '假的 —— 這個檔案不連外。',
 };
 
-const ECHO_CASE = BENCHMARK[0] as BenchmarkCase;
+const FIRST_CASE = BENCHMARK[0] as BenchmarkCase;
 
 /** 照著做的腳本：叫對工具、參數對、有回報 usage。 */
 const PERFECT: readonly ScriptedTurn[] = [
   {
-    content: '我來回聲。',
-    toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
+    content: '先寫。',
+    toolCalls: [{ name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '第二次' } }],
     usage: { inputTokens: 100, outputTokens: 10 },
   },
-  { content: '回聲：接線測試', usage: { inputTokens: 120, outputTokens: 6 } },
+  {
+    content: '再讀回來。',
+    toolCalls: [{ name: 'read_file', args: { file_path: BENCHMARK_FILE } }],
+    usage: { inputTokens: 120, outputTokens: 6 },
+  },
+  { content: '裡面是「第二次」。', usage: { inputTokens: 140, outputTokens: 6 } },
 ];
 
 /** 只講話不動手 —— 小模型最常見的那種失敗，而它是**結果**，該被評到分。 */
 const ALL_TALK: readonly ScriptedTurn[] = [
-  { content: '我打算呼叫 echo。', usage: { inputTokens: 100, outputTokens: 8 } },
+  { content: '我打算呼叫 write_file。', usage: { inputTokens: 100, outputTokens: 8 } },
 ];
 
 /** 拋錯的模型工廠，模擬端點回 4xx／掛住。 */
@@ -67,7 +72,7 @@ describe('runTier：跑得完的那條', () => {
   it('照著做的腳本三個指標都滿分，而且成本量得到', async () => {
     const report = await runTier(TIER, {
       createModel: scripted(PERFECT),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
 
     expect(report.outcomes).toHaveLength(1);
@@ -82,7 +87,7 @@ describe('runTier：跑得完的那條', () => {
   it('只講話不動手是零分，不是失敗 —— 這一格要留在 scored 裡', async () => {
     const report = await runTier(TIER, {
       createModel: scripted(ALL_TALK),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
 
     const summary = summarize(report);
@@ -95,7 +100,7 @@ describe('runTier：跑得完的那條', () => {
   it('samples 收得下重複次數，每一次都是一筆', async () => {
     const report = await runTier(TIER, {
       createModel: scripted(PERFECT),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       samples: 3,
     });
 
@@ -107,7 +112,7 @@ describe('runTier：跑得完的那條', () => {
 describe('runTier：失敗的分類', () => {
   it('帶 status 的錯誤歸 rejected，而且 status 留著', async () => {
     const error = Object.assign(new Error('Tool use has not been enabled'), { status: 400 });
-    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [FIRST_CASE] });
 
     const [outcome] = report.outcomes;
     expect(outcome?.kind).toBe('failed');
@@ -115,7 +120,7 @@ describe('runTier：失敗的分類', () => {
     expect(outcome.reason).toBe('rejected');
     expect(outcome.status).toBe(400);
     // 題目的 id 要跟著失敗一起留下來，否則報表上看得到「壞了」看不到「哪一題壞了」。
-    expect(outcome.caseId).toBe(ECHO_CASE.id);
+    expect(outcome.caseId).toBe(FIRST_CASE.id);
   });
 
   it('限流不歸 rejected —— 混在一起會把「我們打太快」讀成「這個模型不行」', async () => {
@@ -125,7 +130,7 @@ describe('runTier：失敗的分類', () => {
     const error = Object.assign(new Error('429 {"status":429,"title":"Too Many Requests"}'), {
       status: 429,
     });
-    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [FIRST_CASE] });
 
     const [outcome] = report.outcomes;
     expect(outcome?.kind).toBe('failed');
@@ -142,7 +147,7 @@ describe('runTier：失敗的分類', () => {
       status: 429,
       code: 'insufficient_quota',
     });
-    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [FIRST_CASE] });
 
     const [outcome] = report.outcomes;
     expect(outcome?.kind).toBe('failed');
@@ -156,7 +161,7 @@ describe('runTier：失敗的分類', () => {
     const byMessage = new Error('Request timed out.');
 
     for (const error of [byName, byMessage]) {
-      const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+      const report = await runTier(TIER, { createModel: throwing(error), cases: [FIRST_CASE] });
       const [outcome] = report.outcomes;
       expect(outcome?.kind).toBe('failed');
       if (outcome?.kind !== 'failed') continue;
@@ -179,7 +184,7 @@ describe('runTier：失敗的分類', () => {
     const wrapped = new Error('400 This model only supports single tool-calls at once!', {
       cause: new Error('wrap', { cause: new Error('wrap', { cause: inner }) }),
     });
-    const report = await runTier(TIER, { createModel: throwing(wrapped), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(wrapped), cases: [FIRST_CASE] });
 
     const [outcome] = report.outcomes;
     expect(outcome?.kind).toBe('failed');
@@ -193,7 +198,7 @@ describe('runTier：失敗的分類', () => {
     // 一個要換 id 的 4xx 會被記成「掛住了」。
     const inner = Object.assign(new Error('Not found for account'), { status: 404 });
     const wrapped = new Error('Run aborted', { cause: inner });
-    const report = await runTier(TIER, { createModel: throwing(wrapped), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(wrapped), cases: [FIRST_CASE] });
 
     const [outcome] = report.outcomes;
     expect(outcome?.kind === 'failed' && outcome.reason).toBe('rejected');
@@ -204,7 +209,7 @@ describe('runTier：失敗的分類', () => {
     const inner = Object.assign(new Error('whatever'), { name: 'APIConnectionTimeoutError' });
     const report = await runTier(TIER, {
       createModel: throwing(new Error('model call failed', { cause: inner })),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
 
     expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('timeout');
@@ -216,7 +221,7 @@ describe('runTier：失敗的分類', () => {
     const a = new Error('a');
     const b = new Error('b', { cause: a });
     (a as { cause?: unknown }).cause = b;
-    const report = await runTier(TIER, { createModel: throwing(b), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(b), cases: [FIRST_CASE] });
 
     expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('transport');
   });
@@ -229,7 +234,7 @@ describe('runTier：失敗的分類', () => {
       new Error('Recursion limit of 40 reached without hitting a stop condition.'),
       { name: 'GraphRecursionError' },
     );
-    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [FIRST_CASE] });
 
     const [outcome] = report.outcomes;
     expect(outcome?.kind === 'failed' && outcome.reason).toBe('budget');
@@ -243,7 +248,7 @@ describe('runTier：失敗的分類', () => {
     const error = Object.assign(new Error('Run aborted: Recursion limit of 40 reached'), {
       name: 'GraphRecursionError',
     });
-    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [FIRST_CASE] });
 
     expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('budget');
   });
@@ -253,7 +258,7 @@ describe('runTier：失敗的分類', () => {
     // 所以基座哪天換了錯誤的形狀，它會紅而上面兩條不會。
     const report = await runTier(TIER, {
       createModel: () => new LoopingChatModel() as unknown as AgentModel,
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       recursionLimit: 6,
     });
 
@@ -275,7 +280,7 @@ describe('runTier：失敗的分類', () => {
     // `AbortSignal.timeout` 永遠不會觸發（實測過，見 `looping-model.ts`）。
     const report = await runTier(TIER, {
       createModel: () => new LoopingChatModel({ delayMs: 5 }) as unknown as AgentModel,
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       deadlineMs: 20,
     });
 
@@ -288,7 +293,7 @@ describe('runTier：失敗的分類', () => {
     // 沒有這條的話，「預設有上限」與「永遠有上限」分不開，而長題目要跑得完得關得掉它。
     const report = await runTier(TIER, {
       createModel: () => new LoopingChatModel({ delayMs: 1 }) as unknown as AgentModel,
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       recursionLimit: 6,
       deadlineMs: 0,
     });
@@ -303,7 +308,7 @@ describe('runTier：失敗的分類', () => {
   it('認不出來的歸 transport，不猜', async () => {
     const report = await runTier(TIER, {
       createModel: throwing(new Error('socket hang up')),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
 
     const [outcome] = report.outcomes;
@@ -332,10 +337,17 @@ describe('summarize：失敗不會被平均成零分', () => {
 
   it('沒回報 usage 的執行不算進成本，但仍然算進分數', async () => {
     const noUsage: readonly ScriptedTurn[] = [
-      { content: '我來回聲。', toolCalls: [{ name: 'echo', args: { message: '接線測試' } }] },
-      { content: '回聲：接線測試' },
+      {
+        content: '先寫。',
+        toolCalls: [{ name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '第二次' } }],
+      },
+      {
+        content: '再讀。',
+        toolCalls: [{ name: 'read_file', args: { file_path: BENCHMARK_FILE } }],
+      },
+      { content: '裡面是「第二次」。' },
     ];
-    const report = await runTier(TIER, { createModel: scripted(noUsage), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: scripted(noUsage), cases: [FIRST_CASE] });
 
     const summary = summarize(report);
     expect(summary.scored).toBe(1);
@@ -357,11 +369,11 @@ describe('summarize：失敗不會被平均成零分', () => {
     // 一題照做（滿分）、一題只講話（零分）、一題是克制題（沒有可判的）。
     const report = await runTier(TIER, {
       createModel: () => new ScriptedChatModel({ turns: PERFECT }) as AgentModel,
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
     const talky = await runTier(TIER, {
       createModel: scripted(ALL_TALK),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
     const restrained = await runTier(TIER, {
       createModel: scripted(ALL_TALK),
@@ -385,19 +397,19 @@ describe('summarize：失敗不會被平均成零分', () => {
   it('回覆提到那一欄印得出來 —— 以前算完就丟掉了', async () => {
     // `scoreCase` 從第一天就算了 `mentions`，但 `summarize` 沒收，所以尺寸比較的報表上
     // 少了一整欄品質指標。它問的是「有沒有把結果講出來」，跟前兩欄的「有沒有做」不同。
-    const report = await runTier(TIER, { createModel: scripted(PERFECT), cases: [ECHO_CASE] });
+    const report = await runTier(TIER, { createModel: scripted(PERFECT), cases: [FIRST_CASE] });
     const summary = summarize(report);
 
-    expect(ECHO_CASE.expected.mentions).toBeDefined();
+    expect(FIRST_CASE.expected.mentions).toBeDefined();
     expect(summary.mentions).toMatchObject({ mean: 1, count: 1 });
   });
 
   it('「這題成功」只算評到分的執行：成功的算一題、只講話的算零、失敗的不進分母', async () => {
-    const good = await runTier(TIER, { createModel: scripted(PERFECT), cases: [ECHO_CASE] });
-    const talky = await runTier(TIER, { createModel: scripted(ALL_TALK), cases: [ECHO_CASE] });
+    const good = await runTier(TIER, { createModel: scripted(PERFECT), cases: [FIRST_CASE] });
+    const talky = await runTier(TIER, { createModel: scripted(ALL_TALK), cases: [FIRST_CASE] });
     const dead = await runTier(TIER, {
       createModel: throwing(Object.assign(new Error('x'), { status: 400 })),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
     const summary = summarize({
       tier: TIER,
@@ -416,9 +428,9 @@ describe('summarize：失敗不會被平均成零分', () => {
         seen.push(testCase.id);
         return new ScriptedChatModel({ turns: PERFECT });
       },
-      cases: [ECHO_CASE, BENCHMARK[1] as BenchmarkCase],
+      cases: [FIRST_CASE, BENCHMARK[1] as BenchmarkCase],
     });
-    expect(seen).toEqual([ECHO_CASE.id, (BENCHMARK[1] as BenchmarkCase).id]);
+    expect(seen).toEqual([FIRST_CASE.id, (BENCHMARK[1] as BenchmarkCase).id]);
   });
 
   it('全距報得出來 —— 單次取樣的一個數字不該讀成定論', async () => {
@@ -427,7 +439,7 @@ describe('summarize：失敗不會被平均成零分', () => {
       // 一次照做、一次只講話，平均 0.5 而全距 0–1。
       createModel: () =>
         new ScriptedChatModel({ turns: (call += 1) === 1 ? PERFECT : ALL_TALK }) as AgentModel,
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       samples: 2,
     });
 
@@ -449,7 +461,7 @@ describe('compareTiers', () => {
         seen.push(modelId);
         return new ScriptedChatModel({ turns: PERFECT });
       },
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
 
     expect(reports.map((report) => report.tier.label)).toEqual(['small', 'large']);
@@ -460,7 +472,7 @@ describe('compareTiers', () => {
     const seen: string[] = [];
     await compareTiers([TIER], {
       createModel: scripted(PERFECT),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       onOutcome: (tier, outcome) => seen.push(`${tier.label}:${outcome.kind}`),
     });
 
@@ -471,10 +483,10 @@ describe('compareTiers', () => {
     // 這條釘的是 `assembly.ts` 的存在理由：兩邊各寫一份時它仍然全綠，但那時漂移已經開始了。
     const report = await runTier(TIER, {
       createModel: scripted(PERFECT),
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
     });
     const [outcome] = report.outcomes;
-    expect(outcome?.kind === 'scored' && outcome.score.caseId).toBe(ECHO_CASE.id);
+    expect(outcome?.kind === 'scored' && outcome.score.caseId).toBe(FIRST_CASE.id);
     // 題目本身真的用了共用的檔名常數 —— 資料集若被改成別的路徑，這條會紅。
     expect(BENCHMARK_FILE).toBe('/benchmark.md');
   });
@@ -490,16 +502,16 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
         made.push(model);
         return model as unknown as AgentModel;
       },
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       recursionLimit,
       deadlineMs: 0,
     });
     return made[0]?.calls ?? -1;
   }
 
-  // 換算在 4 到 87 之間是精確的（2026-10-04 逐一掃過每個值）。這裡只留代表值：頭一段每個值（輪數
-  // 逐格往上跳的地方）、出貨的 40 附近、精確範圍的最後幾個。全掃要 84 次完整 agent 迴圈，
-  // 在 CI 上跑了 5.8 秒、超過預設逾時。
+  // 換算對 serve 的出貨組裝在掃過的上限上都精確（2026-11-27 掃過 4–16、20、30、37–44、60、85–88、100）。這裡只留代表值：
+  // 頭一段每個值（輪數逐格往上跳的地方）、出貨的 40 附近、85 以上幾個。全掃要近百次完整 agent 迴圈，
+  // 在 CI 上會超過預設逾時。
   const EXACT_LIMITS = [
     ...Array.from({ length: 13 }, (_, at) => 4 + at), // 4..16
     37,
@@ -512,10 +524,12 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
     60,
     85,
     86,
-    87, // 精確範圍的尾端；88 起實測多一輪
+    87,
+    88,
+    100,
   ];
 
-  it('代表性的上限：換算都等於實測（預設組裝每輪三格）', async () => {
+  it('代表性的上限：換算都等於實測（出貨組裝每輪三格、開頭六格）', async () => {
     const mismatches: string[] = [];
     for (const limit of EXACT_LIMITS) {
       const actual = await roundsAt(limit);
@@ -526,13 +540,13 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
     expect(mismatches).toEqual([]);
   }, 30_000);
 
-  it('出貨的上限實測就是 13 輪', async () => {
-    expect(await roundsAt(EVAL_RECURSION_LIMIT)).toBe(13);
+  it('出貨的上限實測就是 11 輪', async () => {
+    expect(await roundsAt(EVAL_RECURSION_LIMIT)).toBe(11);
   });
 
-  it('出貨的上限是 13 輪，不是舊算法印出來的 19', () => {
-    expect(evalModelRounds(EVAL_RECURSION_LIMIT)).toBe(13);
-    // 舊的 `(上限 - 2) / 2` 是裸組裝每輪兩格的算法，對這個組裝多算了六輪。
+  it('出貨的上限是 11 輪，不是舊算法印出來的 19', () => {
+    expect(evalModelRounds(EVAL_RECURSION_LIMIT)).toBe(11);
+    // 舊的 `(上限 - 2) / 2` 是裸組裝每輪兩格的算法，對這個組裝多算了八輪。
     expect((EVAL_RECURSION_LIMIT - 2) / 2).toBe(19);
   });
 });

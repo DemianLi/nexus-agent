@@ -4,12 +4,14 @@
  */
 
 import type { AgentModel } from '@nexus/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// 每一次執行都組一份 serve 的出貨組裝，一次約半秒；整份資料集跑好幾輪的測試放寬逾時。
+vi.setConfig({ testTimeout: 60_000 });
 import { LoopingChatModel } from '../looping-model.js';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { runBenchmarkCase, UsageTally } from './runner.js';
-import { benchmarkPlugins } from './assembly.js';
 import { restrictTo } from './compare.js';
 import { summarize, runTier, evalModelRounds, EVAL_RECURSION_LIMIT } from './compare.js';
 import { intervalLines, summaryLines, tokenTotalsLine } from './compare-report.js';
@@ -26,14 +28,17 @@ const TIER: MeasuredModel = {
 /** 六條一模一樣難的題，只差 id。 */
 const CASES: readonly BenchmarkCase[] = Array.from({ length: 6 }, (_, index) => ({
   id: `c${index}`,
-  prompt: '回聲 a',
-  expected: { toolCalls: [{ name: 'echo', args: { message: 'a' } }], mentions: ['a'] },
+  prompt: '把 a 寫進 /a.md',
+  expected: {
+    toolCalls: [{ name: 'write_file', args: { file_path: '/a.md', content: 'a' } }],
+    mentions: ['a'],
+  },
 }));
 
 const PASS: readonly ScriptedTurn[] = [
   {
     content: '',
-    toolCalls: [{ name: 'echo', args: { message: 'a' } }],
+    toolCalls: [{ name: 'write_file', args: { file_path: '/a.md', content: 'a' } }],
     usage: { inputTokens: 100, outputTokens: 10 },
   },
   { content: 'a', usage: { inputTokens: 120, outputTokens: 5 } },
@@ -142,7 +147,7 @@ describe('失敗那幾次的 token 也進成本', () => {
   const ERROR_AFTER_ONE_CALL: readonly ScriptedTurn[] = [
     {
       content: '',
-      toolCalls: [{ name: 'echo', args: { message: 'a' } }],
+      toolCalls: [{ name: 'write_file', args: { file_path: '/a.md', content: 'a' } }],
       usage: { inputTokens: 300, outputTokens: 20 },
     },
     { content: '', error: '端點掛了' },
@@ -184,8 +189,8 @@ describe('失敗那幾次的 token 也進成本', () => {
     if (outcome?.kind !== 'failed') return;
     expect(outcome.reason).toBe('budget');
 
-    // 每一輪模型呼叫 `looping-model.ts` 回報 100＋10 = 110；上限 40 約 13 輪（見 compare.ts）。
-    // 實測 2026-10-04：13 輪、1430（輸入 1300＋輸出 130），與 `evalModelRounds` 一致。
+    // 每一輪模型呼叫 `looping-model.ts` 回報 100＋10 = 110；上限 40 約 11 輪（見 compare.ts）。
+    // 實測 2026-11-27：11 輪，與 `evalModelRounds` 一致。
     const rounds = evalModelRounds(EVAL_RECURSION_LIMIT);
     expect(outcome.usage?.totalTokens).toBe(110 * rounds);
   });
@@ -243,7 +248,6 @@ describe('兩本帳是同一把尺量的', () => {
     let tallied = 0;
     const run = await runBenchmarkCase(CASES[0] as BenchmarkCase, {
       model: new ScriptedChatModel({ turns: PASS }),
-      plugins: benchmarkPlugins(),
       onUsage: (usage) => {
         tallied += usage.totalTokens;
       },

@@ -18,7 +18,7 @@ import type { AgentModel } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
 import { compareTiers, evalModelRounds, summarize, type TierOutcome } from './compare.js';
-import { BENCHMARK, EASY_CASE_COUNT, type BenchmarkCase } from './dataset.js';
+import { BENCHMARK, BENCHMARK_FILE, EASY_CASE_COUNT, type BenchmarkCase } from './dataset.js';
 import type { ModelUnderTest } from './model-under-test.js';
 import {
   EVAL_RESULT_FORMAT_VERSION,
@@ -37,15 +37,20 @@ import {
   type GitProbe,
 } from './result-file.js';
 
-const ECHO_CASE = BENCHMARK[0] as BenchmarkCase;
+const FIRST_CASE = BENCHMARK[0] as BenchmarkCase;
 
 const PERFECT: readonly ScriptedTurn[] = [
   {
-    content: '我來回聲。',
-    toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
+    content: '先寫。',
+    toolCalls: [{ name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '第二次' } }],
     usage: { inputTokens: 100, outputTokens: 10 },
   },
-  { content: '回聲：接線測試', usage: { inputTokens: 120, outputTokens: 6 } },
+  {
+    content: '再讀回來。',
+    toolCalls: [{ name: 'read_file', args: { file_path: BENCHMARK_FILE } }],
+    usage: { inputTokens: 120, outputTokens: 6 },
+  },
+  { content: '裡面是「第二次」。', usage: { inputTokens: 140, outputTokens: 6 } },
 ];
 
 const GOOD: ModelUnderTest & { measuredOn: string } = {
@@ -57,6 +62,9 @@ const BROKEN: ModelUnderTest = { label: 'broken', modelId: 'fake/broken' };
 
 const CLEAN_GIT: GitProbe = (args) =>
   args[0] === 'rev-parse' ? 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\n' : '';
+
+/** 實際送出的 `request/system` 的替身；雜湊只看這個字串。 */
+const SENT_SYSTEM = '你是 nexus-agent。';
 
 let dir: string;
 beforeEach(() => {
@@ -73,13 +81,14 @@ function headerFor(models: readonly ModelUnderTest[], provenance = readGitProven
     startedAt: new Date('2026-10-04T12:34:56.789Z'),
     argv: ['--samples', '2'],
     provenance,
-    cases: [ECHO_CASE],
+    cases: [FIRST_CASE],
     settings: describeSettings({
       samples: 2,
       recursionLimit: 40,
       deadlineMs: 300_000,
       temperature: 1,
       topP: 0.95,
+      systemPrompt: SENT_SYSTEM,
     }),
     models,
   });
@@ -178,12 +187,18 @@ describe('readGitProvenance', () => {
 
 describe('describeSettings', () => {
   it('輪數用跟 CLI 同一個換算；沒讀到的取樣設定是 null 不是預設值', () => {
-    const settings = describeSettings({ samples: 3, recursionLimit: 40, deadlineMs: 300_000 });
+    const settings = describeSettings({
+      samples: 3,
+      recursionLimit: 40,
+      deadlineMs: 300_000,
+      systemPrompt: SENT_SYSTEM,
+    });
     expect(settings.modelRounds).toBe(evalModelRounds(40));
-    expect(settings.modelRounds).toBe(13);
+    expect(settings.modelRounds).toBe(11);
     expect(settings.temperature).toBeNull();
     expect(settings.topP).toBeNull();
-    expect(settings.systemPromptVersion).toBe(systemPromptVersion());
+    expect(settings.systemPromptVersion).toBe(systemPromptVersion(SENT_SYSTEM));
+    expect(systemPromptVersion(`${SENT_SYSTEM}。`)).not.toBe(systemPromptVersion(SENT_SYSTEM));
   });
 });
 
@@ -232,7 +247,7 @@ describe('結果檔：寫出去再讀回來', () => {
         }
         return new ScriptedChatModel({ turns: PERFECT }) as unknown as AgentModel;
       },
-      cases: [ECHO_CASE],
+      cases: [FIRST_CASE],
       samples: 2,
       onOutcome: (_tier, outcome) => void created.push(outcome),
     });
@@ -276,16 +291,16 @@ describe('結果檔：寫出去再讀回來', () => {
       commit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
       dirty: false,
     });
-    expect(header.dataset).toEqual({ version: datasetVersion(), caseIds: [ECHO_CASE.id] });
+    expect(header.dataset).toEqual({ version: datasetVersion(), caseIds: [FIRST_CASE.id] });
     expect(header.scorer).toEqual({ version: scorerVersion(), files: SCORER_SOURCE_FILES });
     expect(header.settings).toEqual({
       samples: 2,
       recursionLimit: 40,
-      modelRounds: 13,
+      modelRounds: 11,
       deadlineMs: 300_000,
       temperature: 1,
       topP: 0.95,
-      systemPromptVersion: systemPromptVersion(),
+      systemPromptVersion: systemPromptVersion(SENT_SYSTEM),
     });
     expect(header.models).toEqual([GOOD, BROKEN]);
   });
@@ -299,8 +314,11 @@ describe('結果檔：寫出去再讀回來', () => {
     const [first] = parseResultFile(readFileSync(writer.path, 'utf8')).outcomes;
     expect(first?.outcome.kind).toBe('scored');
     if (first?.outcome.kind !== 'scored') return;
-    expect(first.outcome.run.toolCalls).toEqual([{ name: 'echo', args: { message: '接線測試' } }]);
-    expect(first.outcome.run.finalText).toBe('回聲：接線測試');
+    expect(first.outcome.run.toolCalls).toEqual([
+      { name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '第二次' } },
+      { name: 'read_file', args: { file_path: BENCHMARK_FILE } },
+    ]);
+    expect(first.outcome.run.finalText).toBe('裡面是「第二次」。');
     expect(first.outcome.run.usage).toBeDefined();
   });
 
@@ -378,7 +396,7 @@ describe('結果檔：寫出去再讀回來', () => {
     mkdirSync(writer.path);
     const outcome: TierOutcome = {
       kind: 'failed',
-      caseId: ECHO_CASE.id,
+      caseId: FIRST_CASE.id,
       reason: 'transport',
       message: 'x',
       seconds: 0,
@@ -402,7 +420,7 @@ describe('parseResultFile 拒絕不認得的東西', () => {
     const writer = openResultFile({ dir, header: headerFor([GOOD]) });
     writer.append(BROKEN, {
       kind: 'failed',
-      caseId: ECHO_CASE.id,
+      caseId: FIRST_CASE.id,
       reason: 'transport',
       message: 'x',
       seconds: 0,

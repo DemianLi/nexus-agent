@@ -8,7 +8,7 @@
  * [`survey.ts`](./survey.ts)）。合成一支的話，那條「不是在比尺寸」的界線遲早會被某次
  * 順手的重構抹掉。
  *
- * **不進 CI。** 需要 `NVIDIA_API_KEY`，會花錢也會花時間 —— 十六個候選 × 七題 × 三次取樣
+ * **不進 CI。** 需要 `NVIDIA_API_KEY`，會花錢也會花時間 —— 十六個候選 × 整份題組 × 三次取樣
  * 是 336 次執行。**開跑前先用 `--models` 加 `--cases` 冒煙**：整輪的上限我們沒有，
  * 只有單次執行的（見 `compare.ts` 的兩個常數），所以「跑多久」要自己先算。
  *
@@ -39,6 +39,7 @@ import {
 import { BENCHMARK, HARD_CASES } from './dataset.js';
 import { intervalLines, tokenTotalsLine } from './compare-report.js';
 import { startResultFile } from './result-file.js';
+import { shippedSystemPrompt } from './runner.js';
 import type { CaseStats } from './stats.js';
 import { SURVEY_INVENTORY_DATE, SURVEY_MODELS, type SurveyModel } from './survey.js';
 
@@ -202,6 +203,7 @@ async function main(argv: readonly string[]): Promise<void> {
   if (first === undefined) throw new Error('沒有要跑的候選');
   const probe = createLiveModel(liveModelConfigForModel(first.modelId), undefined, credentials);
   const writer = startResultFile({
+    systemPrompt: await shippedSystemPrompt(),
     tool: 'eval:survey',
     argv,
     cases,
@@ -218,8 +220,6 @@ async function main(argv: readonly string[]): Promise<void> {
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
     createModel: (modelId) =>
       createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
-    // 重試政策也吃 schema 預設（#1427）：SDK 層不重試了，沒有它真模型第一次限流就失敗。
-    streamRetry: EVAL_RETRY_POLICY,
     samples,
     cases,
     onOutcome: (model, outcome) => {

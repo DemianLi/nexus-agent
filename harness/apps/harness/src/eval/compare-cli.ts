@@ -1,7 +1,7 @@
 /**
  * 跑基準任務的進入點 —— `pnpm --filter @nexus/harness eval:compare`。
  *
- * **不進 CI。** 它需要 `NVIDIA_API_KEY` 而且會花錢跟花時間（五個模型 × 七題，跑滿是
+ * **不進 CI。** 它需要 `NVIDIA_API_KEY` 而且會花錢跟花時間（五個模型 × 整份題組，跑滿是
  * 半小時級）。CI 那半是 [`eval.test.ts`](./eval.test.ts)：同一份資料、同一組評分器、零憑證。
  *
  * **2026-09-05：它原本叫「尺寸比較」、按階梯分段印，而階梯收掉了**
@@ -41,6 +41,7 @@ import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import { summaryLines } from './compare-report.js';
 import { floorHolds, formatFloor, summarizeFloor } from './floor.js';
 import { startResultFile, type ResultWriter } from './result-file.js';
+import { shippedSystemPrompt } from './runner.js';
 import { MEASURED_MODELS, type MeasuredModel } from './tiers.js';
 
 /** eval 的重試政策（#1427）：跟出貨預設同一份，不跟任何一台部署的設定走（`settings/live-model.ts` 的「eval 不跟這一列走」）。 */
@@ -120,8 +121,6 @@ async function runAll(
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
     createModel: (modelId) =>
       createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
-    // 重試政策也吃 schema 預設（#1427）：SDK 層不重試了，沒有它真模型第一次限流就失敗。
-    streamRetry: EVAL_RETRY_POLICY,
     samples,
     cases,
     onOutcome: (tier, outcome) => {
@@ -180,6 +179,7 @@ async function main(argv: readonly string[]): Promise<void> {
   if (first === undefined) throw new Error('沒有要跑的模型');
   const probe = createLiveModel(liveModelConfigForModel(first.modelId), undefined, credentials);
   const writer = startResultFile({
+    systemPrompt: await shippedSystemPrompt(),
     tool: 'eval:compare',
     argv,
     cases,
