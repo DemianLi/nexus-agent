@@ -5,9 +5,15 @@ import { fakeBackgroundAgent, fakePumpAgent } from './fake-agent.fixture.js';
 describe('假 agent 工廠', () => {
   it('沒給的必要成員一被呼叫就拋錯，訊息寫出是哪個成員', () => {
     const agent = fakePumpAgent({});
-    expect(() => agent.getState({ configurable: { thread_id: 't' } })).toThrow(/getState/);
-    expect(() => (agent.streamEvents as () => unknown)()).toThrow(/streamEvents/);
-    expect(() => (fakeBackgroundAgent().streamEvents as () => unknown)()).toThrow(/streamEvents/);
+    expect(() => agent.getState({ configurable: { thread_id: 't' } })).toThrow(
+      '假 agent 沒給成員 getState，卻被呼叫了',
+    );
+    expect(() => (agent.streamEvents as () => unknown)()).toThrow(
+      '假 agent 沒給成員 streamEvents，卻被呼叫了',
+    );
+    expect(() => (fakeBackgroundAgent().streamEvents as () => unknown)()).toThrow(
+      '假 agent 沒給成員 streamEvents，卻被呼叫了',
+    );
   });
 
   it('給的成員照常運作', async () => {

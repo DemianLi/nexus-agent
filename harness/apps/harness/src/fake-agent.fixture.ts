@@ -7,9 +7,9 @@ function fakeMembers<T extends object>(required: MemberNames<T>, members: Partia
   const target: Record<string, unknown> = { ...members };
   return new Proxy(target, {
     get(held, name) {
-      if (typeof name === 'string' && !(name in held) && required.includes(name as never)) {
+      if (!(name in held) && required.includes(name as never)) {
         return () => {
-          throw new Error(`假 agent 沒給成員 ${name}，卻被呼叫了`);
+          throw new Error(`假 agent 沒給成員 ${String(name)}，卻被呼叫了`);
         };
       }
       return Reflect.get(held, name);
