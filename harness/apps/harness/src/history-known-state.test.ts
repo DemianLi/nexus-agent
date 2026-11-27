@@ -15,9 +15,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { historyPage, isLegacyLog } from './conversation-history.js';
 import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
 import { TOY_PROJECTION_KEY, toyUnit } from './projection-toy.fixture.js';
-import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 vi.mock('@nexus/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@nexus/core')>();
@@ -58,7 +58,7 @@ describe('handler 讀歷史', () => {
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
-        agent: {} as PumpAgent,
+        agent: fakePumpAgent(),
         attachSessions: noSessions,
         commands: emptyCommandPoint(),
         projections: { list: () => [counting.unit] },
@@ -93,7 +93,7 @@ describe('handler 讀歷史', () => {
 describe('pump 的已知值', () => {
   it('投影值跟著日誌走，與從頭折的相同；legacy 長度變了才重算', () => {
     const pump = new ThreadPump(
-      {} as PumpAgent,
+      fakePumpAgent(),
       'known',
       undefined,
       undefined,

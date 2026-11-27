@@ -11,14 +11,15 @@ import { describe, expect, it } from 'vitest';
 
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent, TurnFailedReport } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 /** streamEvents 一叫就拋這顆錯（像 OpenAI SDK 的 APIError：`status` 與 `headers` 在錯誤物件上）。 */
 function failingAgent(error: unknown): PumpAgent {
-  return {
+  return fakePumpAgent({
     streamEvents: () => Promise.reject(error),
     getState: () => Promise.resolve({ values: {} }),
     updateState: () => Promise.resolve(undefined),
-  } as unknown as PumpAgent;
+  });
 }
 
 function providerError(headers: Record<string, string>): Error {
@@ -121,7 +122,7 @@ describe('ThreadPump 的 onTurnFailed', () => {
     // 一直等到這一輪的中止訊號舉起來，才拋（被切斷的請求拋什麼看供應商，pump 認的是訊號）。
     let started: () => void = () => undefined;
     const running = new Promise<void>((resolve) => (started = resolve));
-    const waiting: PumpAgent = {
+    const waiting = fakePumpAgent({
       streamEvents: (_input: unknown, config: { configurable: Record<string, unknown> }) =>
         new Promise((_resolve, reject) => {
           started();
@@ -130,7 +131,7 @@ describe('ThreadPump 的 onTurnFailed', () => {
         }),
       getState: () => Promise.resolve({ values: {} }),
       updateState: () => Promise.resolve(undefined),
-    } as unknown as PumpAgent;
+    });
     const pump = pumpWith(waiting, (report) => reports.push(report));
     const done = pump.submit({ kind: 'message', text: '嗨' });
     await running;

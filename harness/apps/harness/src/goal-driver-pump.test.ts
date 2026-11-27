@@ -40,6 +40,7 @@ import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
 import { GOALS_SERVICE, renderGoalRoundPrompt } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import type { GoalCore } from '@nexus/plugin-goal';
+import { fakeBackgroundAgent } from './fake-agent.fixture.js';
 
 /** 一份 port，記下它被要求做過什麼。 */
 function portFor(
@@ -1281,7 +1282,7 @@ describe('封存的會話（#633）', () => {
 describe('續行等背景子代理（N0372）', () => {
   /** 背景子代理的假 agent：等 `hold` 才收；`abortable` 時被中止就收。 */
   function holdingAgent(hold: Promise<void>): BackgroundAgent {
-    return {
+    return fakeBackgroundAgent({
       async streamEvents(_input: unknown, config: { configurable: Record<string, unknown> }) {
         const signal = config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal | undefined;
         await Promise.race([
@@ -1290,7 +1291,7 @@ describe('續行等背景子代理（N0372）', () => {
         ]);
         return (async function* () {})() as never;
       },
-    } as never;
+    });
   }
 
   function spawnPlugin(spawn: () => void): PluginEntry {

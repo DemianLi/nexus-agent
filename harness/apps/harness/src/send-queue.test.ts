@@ -41,6 +41,7 @@ import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import type { GoalView } from '@nexus/goal';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -147,7 +148,7 @@ interface Step {
  */
 function scriptedAgent(steps: readonly Step[] = []) {
   let call = 0;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
       const step = steps[call] ?? {};
       call += 1;
@@ -177,8 +178,8 @@ function scriptedAgent(steps: readonly Step[] = []) {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return agent as unknown as PumpAgent;
+  });
+  return agent;
 }
 
 /** 一個 pump 加一條訂了全部 channel 的下行。 */

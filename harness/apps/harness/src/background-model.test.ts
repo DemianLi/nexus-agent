@@ -24,6 +24,7 @@ import { BackgroundSubagentHost } from './background-subagents.js';
 import type { BackgroundAgent, ModelChoice } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { fakeBackgroundAgent } from './fake-agent.fixture.js';
 
 /** 一顆手動開的閘門。 */
 function gate() {
@@ -44,7 +45,7 @@ describe('host 逐次帶模型（假 agent）', () => {
       compile: (subagent, choice) => {
         compiled.push({ subagent, choice });
         const label = `${subagent}/${choice?.model ?? '-'}${choice?.effort === undefined ? '' : `@${choice.effort}`}#${String(compiled.length)}`;
-        const agent: BackgroundAgent = {
+        const agent = fakeBackgroundAgent({
           async streamEvents(input) {
             const text = String(
               (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -53,7 +54,7 @@ describe('host 逐次帶模型（假 agent）', () => {
             await hold;
             return (async function* () {})() as never;
           },
-        };
+        });
         return agent;
       },
     });

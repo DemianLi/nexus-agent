@@ -53,6 +53,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { fakeBackgroundAgent } from './fake-agent.fixture.js';
 
 const OVERLOADED = 'Service temporarily overloaded';
 
@@ -89,7 +90,7 @@ describe('載體本身（假 agent）', () => {
   /** 假 agent：記下每一輪的 configurable 與當下的 ALS，再交給腳本。 */
   function fakeAgent(script: (text: string) => Promise<void> | void = () => undefined) {
     const seen: { configurable: Record<string, unknown>; store: unknown; text: string }[] = [];
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
           (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -98,7 +99,7 @@ describe('載體本身（假 agent）', () => {
         await script(text);
         return (async function* () {})() as never;
       },
-    };
+    });
     return { agent, seen };
   }
 
@@ -133,7 +134,7 @@ describe('載體本身（假 agent）', () => {
 
   it('每一輪開跑前先收回這條 thread 停在等待點的 run（native 的 run 停著就開不了下一次）', async () => {
     const calls: string[] = [];
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents(_input, config) {
         calls.push(`stream:${String(config.configurable['thread_id'])}`);
         return (async function* () {})() as never;
@@ -141,7 +142,7 @@ describe('載體本身（假 agent）', () => {
       discardSuspended(config) {
         calls.push(`discard:${config.configurable.thread_id}`);
       },
-    };
+    });
     const { host } = make(() => agent);
     await host.submit({ runId: 'bg-1', subagent: 'worker', text: '第一句' });
     await host.submit({ runId: 'bg-1', subagent: 'worker', text: '第二句' });
@@ -211,17 +212,17 @@ describe('載體本身（假 agent）', () => {
   });
 
   it('串流拋錯與迭代中途拋錯都記成 turn/failed，下場是回傳值、不 reject、不漏 rejection', async () => {
-    const midStream: BackgroundAgent = {
+    const midStream = fakeBackgroundAgent({
       async streamEvents() {
         return (async function* () {
           yield 1;
           throw new Error('串流中途炸了');
         })() as never;
       },
-    };
-    const atOpen: BackgroundAgent = {
+    });
+    const atOpen = fakeBackgroundAgent({
       streamEvents: () => Promise.reject(new Error(OVERLOADED)),
-    };
+    });
     const { host, sessions } = make((name) => (name === 'mid' ? midStream : atOpen));
     expect(await host.submit({ runId: 'm', subagent: 'mid', text: '句' })).toEqual({
       ok: false,
@@ -258,7 +259,7 @@ describe('載體本身（假 agent）', () => {
         throw new Error('toString 拋錯');
       },
     };
-    const agent: BackgroundAgent = { streamEvents: () => Promise.reject(hostile) };
+    const agent = fakeBackgroundAgent({ streamEvents: () => Promise.reject(hostile) });
     const { host, sessions } = make(() => agent);
     const result = await host.submit({ runId: 'h', subagent: 'open', text: '句' });
     expect(result.ok).toBe(false);
@@ -278,7 +279,7 @@ describe('載體本身（假 agent）', () => {
   });
 
   it('子代理的 turn/failed 通知外面（#1536）：帶 run id、日誌第幾筆、失敗碼與請求編號；回呼拋錯只 warn、不改下場', async () => {
-    const failing: BackgroundAgent = {
+    const failing = fakeBackgroundAgent({
       streamEvents: () =>
         Promise.reject(
           Object.assign(new Error('Bad gateway'), {
@@ -286,7 +287,7 @@ describe('載體本身（假 agent）', () => {
             headers: new Headers({ 'x-request-id': 'gw-sub' }),
           }),
         ),
-    };
+    });
     const reports: unknown[] = [];
     const warnings: string[] = [];
     let throwing = false;
@@ -372,12 +373,12 @@ describe('載體本身（假 agent）', () => {
     const controller = new SandboxModeController('workspace-write');
     const sessions = new SessionRegistry('root-1');
     const modes: string[] = [];
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents() {
         modes.push(controller.current);
         return (async function* () {})() as never;
       },
-    };
+    });
     const host = new BackgroundSubagentHost({
       sessions,
       compile: () => agent,
@@ -507,7 +508,7 @@ describe('載體本身（假 agent）', () => {
   describe('interrupt（#838）', () => {
     /** 假 agent：腳本拿到這一輪的中止訊號，可以等它舉起來再收。 */
     function abortable(script: (text: string, signal: AbortSignal) => Promise<void> | void) {
-      const agent: BackgroundAgent = {
+      const agent = fakeBackgroundAgent({
         async streamEvents(input, config) {
           const text = String(
             (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -516,7 +517,7 @@ describe('載體本身（假 agent）', () => {
           await script(text, signal);
           return (async function* () {})() as never;
         },
-      };
+      });
       return agent;
     }
     const waitAbort = (signal: AbortSignal) =>
@@ -683,7 +684,7 @@ describe('載體本身（假 agent）', () => {
     it('被中斷後暫停的佇列：送話喚醒它，排在前面的輪次先跑（#838 的恢復路徑）', async () => {
       const entered = gate();
       const order: string[] = [];
-      const agent: BackgroundAgent = {
+      const agent = fakeBackgroundAgent({
         async streamEvents(input, config) {
           const text = String(
             (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -698,7 +699,7 @@ describe('載體本身（假 agent）', () => {
           }
           return (async function* () {})() as never;
         },
-      };
+      });
       const { host } = make(() => agent);
       const first = host.start({ subagent: 'worker', text: 'A1' });
       const queued = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
@@ -1935,7 +1936,7 @@ describe('結算通知（#840）', () => {
     const messages: BackgroundAgentMessage[] = [];
     const order: string[] = [];
     const warnings: string[] = [];
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
           (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -1949,7 +1950,7 @@ describe('結算通知（#840）', () => {
         );
         return (async function* () {})() as never;
       },
-    };
+    });
     const host = new BackgroundSubagentHost({
       sessions,
       compile: () => agent,
@@ -2689,9 +2690,9 @@ describe('結算通知（#840）', () => {
 
   it('沒有人接（沒給 onSettled）：照常跑完，不通知也不報錯', async () => {
     const sessions = new SessionRegistry('root-1');
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       streamEvents: () => Promise.resolve((async function* () {})() as never),
-    };
+    });
     const host = new BackgroundSubagentHost({ sessions, compile: () => agent });
     expect(await host.start({ subagent: 'worker', text: '查' }).outcome).toEqual({ ok: true });
     await host.close();
@@ -2704,11 +2705,11 @@ describe('sendToParent（#849）', () => {
   function setup(options: { readonly withPort?: boolean } = {}) {
     const sessions = new SessionRegistry('root-1');
     const messages: BackgroundAgentMessage[] = [];
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents() {
         return (async function* () {})() as never;
       },
-    };
+    });
     const host = new BackgroundSubagentHost({
       sessions,
       compile: () => agent,
@@ -2737,11 +2738,11 @@ describe('sendToParent（#849）', () => {
     const seen: (string | undefined)[] = [];
     const settledSeen: (string | undefined)[] = [];
     const sessions = new SessionRegistry('root-1');
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents() {
         return (async function* () {})() as never;
       },
-    };
+    });
     const host = new BackgroundSubagentHost({
       sessions,
       compile: () => agent,
@@ -2820,7 +2821,7 @@ describe('close 中止進行中的輪（#841）', () => {
     const started: string[] = [];
     const aborted: string[] = [];
     const settled: BackgroundSettlement[] = [];
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
           (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -2841,7 +2842,7 @@ describe('close 中止進行中的輪（#841）', () => {
         });
         return (async function* () {})() as never;
       },
-    };
+    });
     const host = new BackgroundSubagentHost({
       sessions,
       compile: () => agent,
@@ -2864,12 +2865,12 @@ describe('close 中止進行中的輪（#841）', () => {
     const sessions = new SessionRegistry('root-1');
     const settlements: BackgroundSettlement[] = [];
     let called = 0;
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents() {
         called += 1;
         return (async function* () {})() as never;
       },
-    };
+    });
     const host = new BackgroundSubagentHost({
       sessions,
       compile: () => agent,

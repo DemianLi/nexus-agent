@@ -31,8 +31,8 @@ import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve-run.js';
 import type { RunningServe } from './serve-run.js';
 import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionEventsOf } from './session-files.fixture.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 let running: RunningServe | undefined;
 
@@ -295,7 +295,7 @@ describe('running 標記', () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const agent: PumpAgent = {
+    const agent = fakePumpAgent({
       // 一顆事件都不吐，放行之前停在第一個 `next()`。
       streamEvents: async () => ({
         [Symbol.asyncIterator]: () => ({
@@ -307,7 +307,7 @@ describe('running 標記', () => {
       }),
       getState: async () => ({ values: {} }),
       updateState: async () => undefined,
-    };
+    });
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => {

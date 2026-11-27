@@ -19,11 +19,8 @@ import { describe, expect, it } from 'vitest';
 import type { ColdChildStore, ColdInspection } from './background-cold.js';
 import { inspectionOf } from './background-cold.js';
 import { BackgroundSubagentError, BackgroundSubagentHost } from './background-subagents.js';
-import type {
-  BackgroundAgent,
-  BackgroundSubagentStatus,
-  ModelChoice,
-} from './background-subagents.js';
+import type { BackgroundSubagentStatus, ModelChoice } from './background-subagents.js';
+import { fakeBackgroundAgent } from './fake-agent.fixture.js';
 
 const ROOT = 'root-1';
 
@@ -132,13 +129,13 @@ function fixture(runId: string, events = childEvents(runId)): ColdFixture {
 /** 假 agent：記下每一輪收到的字。 */
 function fakeAgent() {
   const seen: string[] = [];
-  const agent: BackgroundAgent = {
+  const agent = fakeBackgroundAgent({
     streamEvents(input) {
       seen.push(String((input as { messages: { content: unknown }[] }).messages.at(-1)?.content));
       return Promise.resolve((async function* () {})() as never);
     },
     updateState: () => Promise.resolve(undefined),
-  };
+  });
   return { agent, seen };
 }
 
@@ -376,12 +373,12 @@ describe('名額：在重建之前佔', () => {
     const m = make(['bg-cold'], [fixture('bg-cold')], { maxActive: 1 });
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
-    const busy: BackgroundAgent = {
+    const busy = fakeBackgroundAgent({
       streamEvents: async () => {
         await held;
         return (async function* () {})() as never;
       },
-    };
+    });
     const sessions = m.sessions;
     const host = new BackgroundSubagentHost({
       sessions,

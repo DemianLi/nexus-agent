@@ -19,6 +19,7 @@ import type { RunningServe } from './serve-run.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const TOO_LARGE = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
 const AT_LIMIT = 'y'.repeat(HUMAN_MESSAGE_LIMIT_CHARS);
@@ -52,7 +53,7 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
 /** 第一輪等 `hold` 開了才收尾的假 agent，讓後面送的那幾件排在隊裡。 */
 function heldAgent(hold: Promise<void>): PumpAgent {
   let call = 0;
-  return {
+  return fakePumpAgent({
     streamEvents: async () => {
       call += 1;
       const first = call === 1;
@@ -68,7 +69,7 @@ function heldAgent(hold: Promise<void>): PumpAgent {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  } as unknown as PumpAgent;
+  });
 }
 
 describe('wire handler 照 agentLoop 拒收', () => {

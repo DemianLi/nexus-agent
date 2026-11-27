@@ -29,9 +29,9 @@ import type { RpcMethod } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const COMPLETED = {
   type: 'event',
@@ -43,7 +43,7 @@ const COMPLETED = {
 /** 假 agent：每一輪立刻收尾。`ran` 記下開了幾輪，驗「被拒的那句話沒進佇列」。 */
 function fakeAgent() {
   const ran: string[] = [];
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (input: { messages?: { content?: unknown }[] }) => {
       ran.push(String(input.messages?.[0]?.content ?? ''));
       return (async function* () {
@@ -52,8 +52,8 @@ function fakeAgent() {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return { agent: agent as unknown as PumpAgent, ran };
+  });
+  return { agent: agent, ran };
 }
 
 const BASE_URL = 'http://exact-params.test';

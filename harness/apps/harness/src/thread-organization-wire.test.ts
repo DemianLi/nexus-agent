@@ -36,6 +36,7 @@ import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
 import { GOALS_SERVICE } from '@nexus/goal';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -88,7 +89,7 @@ function rig(options: Omit<HandlerOptions, 'auth'>) {
 }
 
 const stubAgent: HandlerOptions['createAgent'] = async () => ({
-  agent: {} as PumpAgent,
+  agent: fakePumpAgent(),
   commands: emptyCommandPoint(),
   dispose: async () => {},
   attachSessions: () => ({ detach: async () => {} }),

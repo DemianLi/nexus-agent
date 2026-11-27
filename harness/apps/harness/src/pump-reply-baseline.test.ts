@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { historyFrames } from './conversation-history.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { ThreadPump } from './thread-pump.js';
-import type { PumpAgent } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 type AiEntry = Extract<ConversationState['entries'][number], { kind: 'ai' }>;
 
@@ -76,7 +76,7 @@ function fedAgent() {
   const pending: unknown[] = [];
   let wake: (() => void) | undefined;
   let ended = false;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
       // 按了停止：像被切斷的模型請求那樣拋，pump 認的是中止訊號已經觸發（#276）。
       const signal = Object.values(config.configurable).find(
@@ -95,9 +95,9 @@ function fedAgent() {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
+  });
   return {
-    agent: agent as unknown as PumpAgent,
+    agent: agent,
     feed: (frame: unknown) => {
       pending.push(frame);
       wake?.();

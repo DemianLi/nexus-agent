@@ -39,6 +39,7 @@ import { sessionEventsOf } from './session-files.fixture.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 /** 超過 40 個位元組，所以標題是截過的、跟這句話本身不一樣。 */
 const FIRST = '請幫我把登入頁面的錯誤訊息改成中文並補上測試';
@@ -340,7 +341,7 @@ describe('CLI 那條', () => {
 
 describe('上限從組裝一路傳到用的那一刻', () => {
   it('pump 建構時就驗：上限壞了當場拋，不等到第一句開跑', () => {
-    const idle = {} as PumpAgent;
+    const idle = fakePumpAgent();
     expect(
       () =>
         new ThreadPump(idle, 't', undefined, undefined, undefined, { maxWords: 0, maxBytes: 40 }),
@@ -351,7 +352,7 @@ describe('上限從組裝一路傳到用的那一刻', () => {
     const old = new SessionLog('old');
     old.append('turn/start', { kind: 'message', text: FIRST });
     old.append('turn/end', {});
-    const idle = {} as PumpAgent;
+    const idle = fakePumpAgent();
 
     async function historyTitle(limits?: { maxWords: number; maxBytes: number }) {
       const handler = createWireHandler({

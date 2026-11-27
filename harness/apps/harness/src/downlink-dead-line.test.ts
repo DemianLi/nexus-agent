@@ -23,11 +23,11 @@ import {
   TEST_BROWSER_AUTH,
   testSessionCookie,
 } from './fixtures.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { IdleSweepingWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const T = 10_000;
 
@@ -59,7 +59,7 @@ function fedAgent() {
   const pending: unknown[] = [];
   let wake: (() => void) | undefined;
   let ended = false;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
       const signal = Object.values(config.configurable).find(
         (value): value is AbortSignal => value instanceof AbortSignal,
@@ -77,9 +77,9 @@ function fedAgent() {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
+  });
   return {
-    agent: agent as unknown as PumpAgent,
+    agent: agent,
     feed: (frame: unknown) => {
       pending.push(frame);
       wake?.();

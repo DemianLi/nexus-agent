@@ -35,9 +35,9 @@ import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixture
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import type { LogFileHandle, OpenLogFile } from './jsonl-session-store.js';
 import { findSession } from './session-files.fixture.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { ThreadForkSeed, WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const opened: WireHandler[] = [];
 const temporary: string[] = [];
@@ -108,7 +108,7 @@ function rig(
       }
       const rootSeed = fork?.seed ?? seeds?.[threadId];
       return {
-        agent: {} as PumpAgent,
+        agent: fakePumpAgent(),
         commands: emptyCommandPoint(),
         dispose: async () => {},
         attachSessions: () => ({ detach: async () => {} }),
@@ -244,7 +244,7 @@ async function realRig(options: {
     readStoredThread: async (id) => (id === 'src' ? cold('src', sourceEvents()) : undefined),
     maxThreads: 1,
     createAgent: async (_threadId: string, fork?: ThreadForkSeed) => ({
-      agent: {} as PumpAgent,
+      agent: fakePumpAgent(),
       commands: emptyCommandPoint(),
       dispose: async () => {},
       attachSessions: () => ({ detach: async () => {} }),

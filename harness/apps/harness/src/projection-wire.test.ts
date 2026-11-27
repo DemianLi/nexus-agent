@@ -37,8 +37,8 @@ import { serveClient } from './fixtures.js';
 import { TOY_PROJECTION_KEY, TOY_PROJECTION_VERSION, toyUnit } from './projection-toy.fixture.js';
 import { runServe } from './serve-run.js';
 import type { RunningServe } from './serve-run.js';
-import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const TOY = fileURLToPath(new URL('./projection-toy.patch.yml', import.meta.url));
 const TOY_DISABLED = fileURLToPath(new URL('./projection-toy-disabled.patch.yml', import.meta.url));
@@ -203,7 +203,7 @@ describe('單元拋錯只停用自己', () => {
   it('即時：壞的那個送一顆 failed、別的照常、之後不再重送；伺服器日誌講一次', async () => {
     const warnings: string[] = [];
     const pump = new ThreadPump(
-      {} as PumpAgent,
+      fakePumpAgent(),
       'proj-throw',
       undefined,
       undefined,
