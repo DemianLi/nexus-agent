@@ -189,8 +189,8 @@ describe('失敗那幾次的 token 也進成本', () => {
     if (outcome?.kind !== 'failed') return;
     expect(outcome.reason).toBe('budget');
 
-    // 每一輪模型呼叫 `looping-model.ts` 回報 100＋10 = 110；上限 40 約 11 輪（見 compare.ts）。
-    // 實測 2026-11-27：11 輪，與 `evalModelRounds` 一致。
+    // 每一輪模型呼叫 `looping-model.ts` 回報 100＋10 = 110；上限 40 約 8 輪（見 compare.ts）。
+    // 實測 2026-11-28：8 輪，與 `evalModelRounds` 一致。
     const rounds = evalModelRounds(EVAL_RECURSION_LIMIT);
     expect(outcome.usage?.totalTokens).toBe(110 * rounds);
   });

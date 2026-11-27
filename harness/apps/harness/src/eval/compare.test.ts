@@ -509,11 +509,11 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
     return made[0]?.calls ?? -1;
   }
 
-  // 換算對 serve 的出貨組裝在掃過的上限上都精確（2026-11-27 掃過 4–16、20、30、37–44、60、85–88、100）。這裡只留代表值：
+  // 換算對 serve 的出貨組裝在掃過的上限上都精確（2026-11-27 掃過 4–20、30、37–44、60、85–88、100）。這裡只留代表值：
   // 頭一段每個值（輪數逐格往上跳的地方）、出貨的 40 附近、85 以上幾個。全掃要近百次完整 agent 迴圈，
   // 在 CI 上會超過預設逾時。
   const EXACT_LIMITS = [
-    ...Array.from({ length: 13 }, (_, at) => 4 + at), // 4..16
+    ...Array.from({ length: 17 }, (_, at) => 4 + at), // 4..20
     37,
     38,
     39,
@@ -529,7 +529,7 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
     100,
   ];
 
-  it('代表性的上限：換算都等於實測（出貨組裝每輪三格、開頭六格）', async () => {
+  it('代表性的上限：換算都等於實測（出貨組裝每輪四格、開頭六格）', async () => {
     const mismatches: string[] = [];
     for (const limit of EXACT_LIMITS) {
       const actual = await roundsAt(limit);
@@ -540,13 +540,13 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
     expect(mismatches).toEqual([]);
   }, 30_000);
 
-  it('出貨的上限實測就是 11 輪', async () => {
-    expect(await roundsAt(EVAL_RECURSION_LIMIT)).toBe(11);
+  it('出貨的上限實測就是 8 輪', async () => {
+    expect(await roundsAt(EVAL_RECURSION_LIMIT)).toBe(8);
   });
 
-  it('出貨的上限是 11 輪，不是舊算法印出來的 19', () => {
-    expect(evalModelRounds(EVAL_RECURSION_LIMIT)).toBe(11);
-    // 舊的 `(上限 - 2) / 2` 是裸組裝每輪兩格的算法，對這個組裝多算了八輪。
+  it('出貨的上限是 8 輪，不是舊算法印出來的 19', () => {
+    expect(evalModelRounds(EVAL_RECURSION_LIMIT)).toBe(8);
+    // 舊的 `(上限 - 2) / 2` 是裸組裝每輪兩格的算法，對這個組裝多算了十一輪。
     expect((EVAL_RECURSION_LIMIT - 2) / 2).toBe(19);
   });
 });

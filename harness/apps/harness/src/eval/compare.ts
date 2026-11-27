@@ -71,28 +71,28 @@ export type FailureReason =
  * 基準任務的迴圈上限，比組裝點的預設緊。
  *
  * 換算是 `模型輪數 = max(0, floor((recursionLimit - 6) / 每輪格數))`（見 {@link evalModelRounds}）。基準任務跑的是 serve 的出貨組裝
- * （`assembly.ts`），每輪三格，另有開頭六格（出貨清單上那些 `beforeAgent` 節點），所以 40 是 11 輪模型呼叫
- * （2026-11-27 用 `LoopingChatModel` 走 `runTier` 實測）。
+ * （`assembly.ts`），每輪四格，另有開頭六格（出貨清單上那些 `beforeAgent` 節點），所以 40 是 8 輪模型呼叫
+ * （2026-11-28 用 `LoopingChatModel` 走 `runTier` 實測）。
  *
  * 這個上限是舊組裝（只有 `echo`、提醒器打底，40 是 13 輪）時定的：正常的執行裡最多的一次是 `oss-20b` 在 `edit-after-read` 上多叫 8 次
  * （共 11 次工具呼叫 ≈ 24 個 super-step），而跑掉的那次是 25 次多叫（共 28 次 ≈ 58 個）——40 落在兩者中間。
- * **這兩個 super-step 數字是每輪兩格算的**；換成每輪三格約 36 與 87（推算，沒有重跑），加上開頭六格是 42 與 93，
- * 40 比正常那一端的 42 還低。
+ * **這兩個 super-step 數字是舊組裝每輪兩格算的**，沒有在出貨組裝上重跑；出貨組裝每輪四格、開頭六格，同樣是 11 次工具呼叫的執行
+ * 需要的上限會比 40 高。
  */
 export const EVAL_RECURSION_LIMIT = 40;
 
 /**
  * 基準任務的組裝每一輪模型呼叫佔幾個 super-step。
  *
- * 出貨組裝每輪是模型、工具、再加一格 `beforeModel`，不是裸組裝的兩格（換算與逐格實測見
+ * 出貨組裝每輪四格（模型、工具與兩格前置節點），不是裸組裝的兩格（換算與逐格實測見
  * [`looping-model.ts`](../looping-model.ts) 檔頭的表）。`compare.test.ts` 用
  * `LoopingChatModel` 在 `openBenchmarkAgent` 組出來的 agent 上實跑打滿上限，釘死這個值與下面兩個。
  */
-export const EVAL_SUPERSTEPS_PER_ROUND = 3;
+export const EVAL_SUPERSTEPS_PER_ROUND = 4;
 
 /**
  * 出貨組裝在第一輪模型呼叫之前佔的 super-step：`beforeAgent` 那幾個節點與進入點。
- * 2026-11-27 對 serve 的出貨清單逐一實測得 6（上限 9 才有第一輪）；清單上多一顆 `beforeAgent` 的 plugin 這個數字就會變，
+ * 2026-11-27 對 serve 的出貨清單逐一實測得 6（上限 10 才有第一輪）；清單上多一顆 `beforeAgent` 的 plugin 這個數字就會變，
  * `compare.test.ts` 的實測會紅。
  */
 export const EVAL_SUPERSTEPS_OVERHEAD = 6;

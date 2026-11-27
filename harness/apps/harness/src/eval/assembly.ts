@@ -7,7 +7,10 @@
  * - 清單是 {@link shippedServePlugins}（出貨層加 serve 專屬層），跟 `serve` 零設定時組出來的相同；
  * - 組 agent 走相容層的 `assembly.create`（`cordis-root.ts` 的 `compatLayer`，它呼叫 `createCliAgent`），serve 每條 thread
  *   也是這一條（`serve-run.ts` 的 `assembly.create`）；入口那一列的答題管道、有圍堵都照 serve 交；
- * - 私有可寫根與唯讀共用區是這一次的暫存目錄，核准政策不傳（serve 不傳，維持出廠值）。
+ * - 私有可寫根與唯讀共用區是這一次的暫存目錄，核准政策不傳（serve 不傳，維持出廠值）；
+ *   `stepInbox`、背景續行（`background-subagents` 那一列是 `continuable` 時）與子代理選模型的政策，照 `serve-run.ts` 同一個條件傳。
+ *   這幾格會改系統提示詞與工具（背景續行把 `task` 換成 `subagent`，多一句派工指引），漏傳就不是 serve 送出的那一份。
+ *   serve 另外傳的 `liveModel`、`credentials`、附件、工具結果暫存、標題與 `optionalEntries`，這裡沒傳：它們不碰請求內容，或假模型沒有。
  *
  * **這是唯一的定義點**，`runner.ts` 從這裡拿。
  *
@@ -17,7 +20,7 @@
  *   不走 `--live`。所以系統提示詞裡的型號標籤是假模型那一個（`SCRIPTED_MODEL_NAME`），不是真模型的 id。
  * - 沒有會話日誌、沒有落盤（見 `runner.ts` 檔頭）。serve 的出廠對話史來源是日誌（`log`），沒有日誌時組不起來
  *   （pre-step 找不到這次呼叫的日誌），所以這裡明著傳 `historySource: 'state'`，對話史走圖狀態。這只換「訊息串從哪來」，系統提示詞與
- *   工具清單不經它；`assembly.test.ts` 對著接了日誌的組裝比過系統提示詞逐位元組相同。
+ *   工具清單不經它；`assembly.test.ts` 對著真的 `runServe` 比過系統提示詞逐位元組相同。
  *
  * @module
  */
@@ -33,7 +36,11 @@ import { z } from 'zod';
 import { createCordisRoot, entryApprovalChannel } from '../cordis-root.js';
 import type { NexusAssembly } from '../cordis-root.js';
 import { shippedServePlugins } from '../fixtures.js';
+import { modelSelectionPolicyFor } from '../model-selection-policy.js';
 import type { ModelProviderPlugin } from '../model-provider.js';
+import { backgroundSubagentsPlugin } from '../settings/background-subagents.js';
+import { startupSetting } from '../settings/startup.js';
+import { subagentModelSelectionPlugin } from '../settings/subagent-model-selection.js';
 
 type CliAgent = Awaited<ReturnType<NexusAssembly['create']>>;
 
@@ -106,6 +113,11 @@ export async function openBenchmarkAgent(
     await mkdir(privateRoot);
     await mkdir(sharedRoot);
     const assembly = await root.boot('serve', { plugins, cwd: scratch });
+    const background = startupSetting(plugins, backgroundSubagentsPlugin);
+    const modelSelectionPolicy = modelSelectionPolicyFor({
+      resumedEvents: undefined,
+      setting: startupSetting(plugins, subagentModelSelectionPlugin),
+    });
     built = await assembly.create(
       {
         live: false,
@@ -113,6 +125,11 @@ export async function openBenchmarkAgent(
         workspace: sharedRoot,
         workspaceRoot: privateRoot,
         sharedWorkspaceRoot: sharedRoot,
+        stepInbox: true,
+        ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
+        ...(background.backgroundMode === 'continuable' && {
+          backgroundSubagents: { maxActive: background.maxActiveSubagents },
+        }),
         ...(options.recursionLimit === undefined ? {} : { recursionLimit: options.recursionLimit }),
       },
       { plugins },

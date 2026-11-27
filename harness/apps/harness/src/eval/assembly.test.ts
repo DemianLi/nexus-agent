@@ -17,16 +17,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { BaseMessage } from '@langchain/core/messages';
-import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createCordisRoot, entryApprovalChannel } from '../cordis-root.js';
-import type { CordisRoot } from '../cordis-root.js';
-import { withScriptedModel } from '../fixtures.js';
+import { foldTurn, serveClient } from '../fixtures.js';
+import { startScriptedServe } from '../scripted-serve.js';
+import { closedSessionEvents, sessionOf } from '../session-files.fixture.js';
 import { HARNESS_HOME_ENV } from '../harness-home.js';
-import { toAgentInvocation } from '../messages.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { ScriptedChatModel } from '../scripted-model.js';
 import type { ScriptedTurn } from '../scripted-model.js';
@@ -38,7 +35,6 @@ import type { ModelCallRecord } from './runner.js';
 
 const T0 = Date.parse('2026-11-27T01:00:00Z');
 const temporary: string[] = [];
-const roots: CordisRoot[] = [];
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -47,7 +43,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  for (const root of roots.splice(0)) await root.dispose().catch(() => {});
   for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -88,22 +83,11 @@ async function record(
   return calls;
 }
 
-/** 出貨清單（serve 層）疊一份 patch，persona 前綴那一句換成別的，其餘一列不動——部署方換一句提示詞的真路徑。 */
-async function withPersona(prefix: string): Promise<readonly PluginEntry[]> {
-  const home = scratch('nexus-eval-persona-');
-  const patch = join(home, 'persona.patch.yml');
-  writeFileSync(
-    patch,
-    [
-      '- id: system-prompt',
-      '  config:',
-      '    includeHarnessIdentity: true',
-      `    personaPrefix: '${prefix}'`,
-      "    personaSuffix: 'Your working directory is {{cwd}}.'",
-      '',
-    ].join('\n'),
-    { mode: 0o600 },
-  );
+/** 出貨清單（serve 層）疊一份 patch：部署方改設定的真路徑。 */
+async function withPatch(patchText: string): Promise<readonly PluginEntry[]> {
+  const home = scratch('nexus-eval-patch-');
+  const patch = join(home, 'eval.patch.yml');
+  writeFileSync(patch, patchText, { mode: 0o600 });
   const { plugins } = await loadDefaultPlugins({
     serve: true,
     env: { [HARNESS_HOME_ENV]: home },
@@ -113,11 +97,18 @@ async function withPersona(prefix: string): Promise<readonly PluginEntry[]> {
   return plugins;
 }
 
-function systemTextOf(prompt: readonly BaseMessage[]): string {
-  return prompt
-    .filter((message) => message.getType() === 'system')
-    .map((message) => message.text)
-    .join('\n\n');
+/** persona 前綴那一句換成別的，其餘一列不動。 */
+function withPersona(prefix: string): Promise<readonly PluginEntry[]> {
+  return withPatch(
+    [
+      '- id: system-prompt',
+      '  config:',
+      '    includeHarnessIdentity: true',
+      `    personaPrefix: '${prefix}'`,
+      "    personaSuffix: 'Your working directory is {{cwd}}.'",
+      '',
+    ].join('\n'),
+  );
 }
 
 describe('每次模型呼叫都記下請求與用量', () => {
@@ -194,54 +185,64 @@ describe('request/system 會隨出貨提示詞變、不改就不變', () => {
 
 describe('跟 serve 組出來的是同一份', () => {
   /**
-   * serve 的入口順序（`serve-run.ts`）：讀 serve 層的清單（帶樹）→ 建根（答題管道、有圍堵）→ `boot('serve')` →
-   * 每條 thread `assembly.create`（私有根、共用區）→ 接會話日誌 → 說一句話。回模型收到的 system 文字與綁上的工具。
+   * 真的 `runServe`（`startScriptedServe`：出貨清單、真的 wire client、真的落盤），模型換成同一份腳本，說一句話，
+   * 從這條 thread 的會話日誌讀 `request/system`——那是 serve 實際送出的系統提示詞（日誌記的是模型被叫那一刻的全文）。
+   * 對照組不自己拼 `assembly.create` 的參數：serve 傳哪幾格由 `serve-run.ts` 決定，這裡只看它送出了什麼。
    */
-  async function serveSends(turns: readonly ScriptedTurn[]) {
-    const home = scratch('nexus-eval-serve-home-');
-    const privateRoot = scratch('nexus-eval-serve-private-');
-    const sharedRoot = scratch('nexus-eval-serve-shared-');
-    const root = createCordisRoot({ channel: entryApprovalChannel(undefined), contained: true });
-    roots.push(root);
-    const loaded = await loadDefaultPlugins(
-      { env: { [HARNESS_HOME_ENV]: home }, serve: true, warn: () => {} },
-      { tree: root.tree },
-    );
-    const assembly = await root.boot('serve', { plugins: loaded.plugins });
-    const built = await assembly.create(
-      {
-        live: false,
-        workspace: sharedRoot,
-        workspaceRoot: privateRoot,
-        sharedWorkspaceRoot: sharedRoot,
-      },
-      { plugins: withScriptedModel(loaded.plugins, turns) },
-    );
-    const attachment = built.attachSessions(new SessionRegistry('serve-thread'));
+  async function serveSends(turns: readonly ScriptedTurn[], extraRows = ''): Promise<string[]> {
+    const logs = scratch('nexus-eval-serve-logs-');
+    const workspace = scratch('nexus-eval-serve-ws-');
+    const serve = await startScriptedServe(turns, {
+      workspace,
+      extraRows,
+      argv: ['--session-log', logs],
+    });
     try {
-      await built.agent.invoke(toAgentInvocation(WRITE_THEN_READ.prompt), {
-        configurable: { thread_id: 'serve-thread' },
-      });
-      const model = built.model as ScriptedChatModel;
-      return {
-        prompts: model.prompts,
-        toolNames: model.boundToolNames,
-      };
+      const client = await serveClient(serve.running);
+      const events = await client.openEvents('eval-thread');
+      expect((await client.runStart('eval-thread', WRITE_THEN_READ.prompt)).type).toBe('success');
+      await foldTurn(events);
+      await events.return?.(undefined);
     } finally {
-      await attachment.detach();
-      await built.dispose();
+      await serve.close();
     }
+    const root = await sessionOf(logs, 'eval-thread');
+    return (await closedSessionEvents(root))
+      .filter((event) => event.type === 'request/system')
+      .map((event) => (event.data as { system: string }).system);
   }
 
-  it('每一輪的 system 文字逐位元組相同，工具名稱的集合與順序相同', async () => {
+  it('serve 實際送出的 request/system 跟評測記下的逐位元組相同', async () => {
     const served = await serveSends(STANDARD);
     const ours = await record(STANDARD);
-    expect(served.prompts).toHaveLength(ours.length);
-    expect(ours.map((call) => call.system)).toEqual(
-      served.prompts.map((prompt) => systemTextOf(prompt)),
-    );
-    expect(ours[0]?.tools.map((tool) => tool.name)).toEqual(served.toolNames);
-  }, 60_000);
+    expect(served).toHaveLength(1);
+    expect(new Set(ours.map((call) => call.system))).toEqual(new Set(served));
+  }, 90_000);
+
+  it('出廠是背景續行：serve 與評測的系統提示詞都帶 subagent 那一句，工具是 subagent 不是 task', async () => {
+    const [sent] = await serveSends(STANDARD);
+    const ours = await record(STANDARD);
+    expect(sent).toContain('`subagent`');
+    expect(ours[0]?.system).toContain('`subagent`');
+    const names = ours[0]?.tools.map((tool) => tool.name) ?? [];
+    expect(names).toContain('subagent');
+    expect(names).not.toContain('task');
+  }, 90_000);
+
+  it('serve 改成 one-shot：兩邊一起跟著變，仍然逐位元組相同', async () => {
+    const patch = [
+      '- id: background-subagents',
+      '  config:',
+      '    backgroundMode: one-shot',
+      '',
+    ].join('\n');
+    const served = await serveSends(STANDARD, patch);
+    const ours = await record(STANDARD, await withPatch(patch));
+    expect(served).toHaveLength(1);
+    expect(served[0]).not.toContain('`subagent`');
+    expect(new Set(ours.map((call) => call.system))).toEqual(new Set(served));
+    expect(ours[0]?.tools.map((tool) => tool.name)).toContain('task');
+  }, 90_000);
 });
 
 describe('評測的程式碼裡沒有舊的組裝', () => {

@@ -194,7 +194,7 @@ describe('describeSettings', () => {
       systemPrompt: SENT_SYSTEM,
     });
     expect(settings.modelRounds).toBe(evalModelRounds(40));
-    expect(settings.modelRounds).toBe(11);
+    expect(settings.modelRounds).toBe(8);
     expect(settings.temperature).toBeNull();
     expect(settings.topP).toBeNull();
     expect(settings.systemPromptVersion).toBe(systemPromptVersion(SENT_SYSTEM));
@@ -296,7 +296,7 @@ describe('結果檔：寫出去再讀回來', () => {
     expect(header.settings).toEqual({
       samples: 2,
       recursionLimit: 40,
-      modelRounds: 11,
+      modelRounds: 8,
       deadlineMs: 300_000,
       temperature: 1,
       topP: 0.95,
