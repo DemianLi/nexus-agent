@@ -1,7 +1,7 @@
 /**
  * **上行命令的 `params` 只收協定定義的欄位**——[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)（N1228）。
  *
- * 照 dsh 的 `assertExactArguments`（`packages/api/gateway/src/index.ts:1613-1640`，`687f282e`）：多一格就拒、訊息只指名欄位、不帶值。
+ * 多一格就拒、訊息只指名欄位、不帶值。
  * 以前每個命令只讀自己認得的那幾格，拼錯的欄位名（例如 `request_id` 寫成 `request_Id`，重送去重就靜靜失效）沒有人看、沒有任何訊息。
  *
  * 四組：

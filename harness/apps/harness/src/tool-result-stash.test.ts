@@ -166,8 +166,6 @@ describe('過大的工具結果搬走之後還取得回來', () => {
   });
 
   it('暫存不再落在使用者的工作區裡 —— 它是 harness 的暫存，不是模型在做的事', async () => {
-    // 這是這張卡刻意改掉的行為：修之前 workspace-write 會在使用者的專案目錄下留一個
-    // 永遠沒人清的 large_tool_results/。dsh 的 spill 同樣不寫工作區（它有自己的私有根）。
     const { root, backend } = await containedRoot('workspace-write');
     await fetchThenRead(OVERSIZED, backend);
     expect(await readdir(root)).not.toContain('large_tool_results');
@@ -665,7 +663,7 @@ describe('啟動時清掉超過保留期的暫存', () => {
   }
 
   /**
-   * **保留以單一檔為準**（#1553 N0951，dsh `index.ts:40-42`）：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著。
+   * **保留以單一檔為準**（#1553 N0951）：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著。
    * 以前以「會話裡最新的檔」為準，這條會整個不清（回 0、`call_1_0.txt` 還在）。
    */
   it('以單一檔為準：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著', async () => {
@@ -721,7 +719,7 @@ describe('啟動時清掉超過保留期的暫存', () => {
     expect(warnings).toEqual([]);
   });
 
-  /** 掃空的會話目錄收掉（#1553 N0951 驗收 3，dsh `cleanup.ts:327-341`）。 */
+  /** 掃空的會話目錄收掉（#1553 N0951 驗收 3）。 */
   it('只有過期檔的會話目錄，掃完整個目錄消失', async () => {
     const dir = await root();
     await session(dir, OLD, 60);
@@ -729,7 +727,7 @@ describe('啟動時清掉超過保留期的暫存', () => {
     expect(await readdir(dir)).toEqual([]);
   });
 
-  /** 別人改得動的會話目錄不進去，而且講一聲（dsh `cleanup.ts:322-326`）。以前只驗根，這種目錄照清。 */
+  /** 別人改得動的會話目錄不進去，而且講一聲。 */
   it('群組可寫的會話目錄：裡面的過期檔不碰，講一聲', async () => {
     const dir = await root();
     const shared = await session(dir, OLD, 60);
@@ -776,7 +774,7 @@ describe('啟動時清掉超過保留期的暫存', () => {
   });
 });
 
-/** 一則工具結果的外溢請求，形狀照 dsh `spill-policy` 填的那樣。 */
+/** 一則工具結果的外溢請求。 */
 function toolSpill(callId: string, content: string): SpillSaveRequest {
   return {
     source: { kind: 'tool', toolName: 'bulk', callId, label: 'result' },
@@ -785,7 +783,7 @@ function toolSpill(callId: string, content: string): SpillSaveRequest {
   };
 }
 
-/** 外溢層存檔服務的回傳（#1553 N0949，照 dsh `spill/src/types.ts` 的 `SpillRef` 與 `store.ts:110-130`）。 */
+/** 外溢層存檔服務的回傳（#1553 N0949）。 */
 describe('外溢存檔：回傳位元組數，檔名照建議檔名', () => {
   it('bytes 是內容的 UTF-8 位元組數，不是字元數', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stash-bytes-'));
@@ -821,7 +819,7 @@ describe('外溢存檔：回傳位元組數，檔名照建議檔名', () => {
 
 /**
  * 清掃會把掃空的會話目錄 `rmdir` 掉，而它跟續接中的寫入可能同時發生（#1553 N0952 的前提）。寫入撞上目錄已經不在，
- * 要重建目錄再寫，照 dsh `store.ts:112-124`。
+ * 要重建目錄再寫。
  *
  * 走外溢層的存檔服務，**不走路由的 `write`**：路由寫不進主機會退回記憶體、回報成功，拿掉重試也照樣綠。
  */
