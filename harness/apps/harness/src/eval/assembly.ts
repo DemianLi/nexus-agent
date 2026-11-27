@@ -9,7 +9,8 @@
  *   也是這一條（`serve-run.ts` 的 `assembly.create`）；入口那一列的答題管道、有圍堵都照 serve 交；
  * - 私有可寫根與唯讀共用區是這一次的暫存目錄，核准政策不傳（serve 不傳，維持出廠值）；
  *   `stepInbox`、背景續行（`background-subagents` 那一列是 `continuable` 時）與子代理選模型的政策，照 `serve-run.ts` 同一個條件傳。
- *   這幾格會改系統提示詞與工具（背景續行把 `task` 換成 `subagent`，多一句派工指引），漏傳就不是 serve 送出的那一份。
+ *   背景續行與子代理選模型會改系統提示詞與工具（背景續行把 `task` 換成 `subagent`，多一句派工指引），漏傳就不是 serve 送出的那一份；
+ *   `stepInbox` 不改請求內容，照傳是為了行為與 serve 一致。
  *   serve 另外傳的 `liveModel`、`credentials`、附件、工具結果暫存、標題與 `optionalEntries`，這裡沒傳：它們不碰請求內容，或假模型沒有。
  *
  * **這是唯一的定義點**，`runner.ts` 從這裡拿。
@@ -17,7 +18,8 @@
  * ## 跟真的 serve 不同的地方
  *
  * - 模型是注進來的實例（CI 傳假模型、供應商比較傳真模型），用一列只回這顆實例的提供者掛在選擇列上（跟 `withScriptedModel` 同形），
- *   不走 `--live`。所以系統提示詞裡的型號標籤是假模型那一個（`SCRIPTED_MODEL_NAME`），不是真模型的 id。
+ *   不走 `--live`。系統提示詞的 `{{model}}` 跟著注進來的實例走：沒貼路由標籤的（CI 的假模型）是 `SCRIPTED_MODEL_NAME`，
+ *   貼了標籤的（`createLiveModel` 的真模型）是它的 id。結果檔那邊因此每個模型各記一份（`shippedSystemPrompt(plugins, modelId)`）。
  * - 沒有會話日誌、沒有落盤（見 `runner.ts` 檔頭）。serve 的出廠對話史來源是日誌（`log`），沒有日誌時組不起來
  *   （pre-step 找不到這次呼叫的日誌），所以這裡明著傳 `historySource: 'state'`，對話史走圖狀態。這只換「訊息串從哪來」，系統提示詞與
  *   工具清單不經它；`assembly.test.ts` 對著真的 `runServe` 比過系統提示詞逐位元組相同。

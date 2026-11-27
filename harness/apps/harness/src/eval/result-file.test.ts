@@ -65,6 +65,11 @@ const CLEAN_GIT: GitProbe = (args) =>
 
 /** 實際送出的 `request/system` 的替身；雜湊只看這個字串。 */
 const SENT_SYSTEM = '你是 nexus-agent。';
+/** 兩個模型各自送出的 `request/system`：差在 `{{model}}` 換成的型號。 */
+const SENT_SYSTEMS = {
+  'fake/good': SENT_SYSTEM,
+  'fake/broken': '你是 nexus-agent（fake/broken）。',
+};
 
 let dir: string;
 beforeEach(() => {
@@ -88,7 +93,7 @@ function headerFor(models: readonly ModelUnderTest[], provenance = readGitProven
       deadlineMs: 300_000,
       temperature: 1,
       topP: 0.95,
-      systemPrompt: SENT_SYSTEM,
+      systemPrompts: SENT_SYSTEMS,
     }),
     models,
   });
@@ -191,13 +196,19 @@ describe('describeSettings', () => {
       samples: 3,
       recursionLimit: 40,
       deadlineMs: 300_000,
-      systemPrompt: SENT_SYSTEM,
+      systemPrompts: SENT_SYSTEMS,
     });
     expect(settings.modelRounds).toBe(evalModelRounds(40));
     expect(settings.modelRounds).toBe(8);
     expect(settings.temperature).toBeNull();
     expect(settings.topP).toBeNull();
-    expect(settings.systemPromptVersion).toBe(systemPromptVersion(SENT_SYSTEM));
+    expect(settings.systemPromptVersions).toEqual({
+      'fake/good': systemPromptVersion(SENT_SYSTEM),
+      'fake/broken': systemPromptVersion(SENT_SYSTEMS['fake/broken']),
+    });
+    expect(settings.systemPromptVersions['fake/good']).not.toBe(
+      settings.systemPromptVersions['fake/broken'],
+    );
     expect(systemPromptVersion(`${SENT_SYSTEM}。`)).not.toBe(systemPromptVersion(SENT_SYSTEM));
   });
 });
@@ -300,7 +311,10 @@ describe('結果檔：寫出去再讀回來', () => {
       deadlineMs: 300_000,
       temperature: 1,
       topP: 0.95,
-      systemPromptVersion: systemPromptVersion(SENT_SYSTEM),
+      systemPromptVersions: {
+        'fake/good': systemPromptVersion(SENT_SYSTEM),
+        'fake/broken': systemPromptVersion(SENT_SYSTEMS['fake/broken']),
+      },
     });
     expect(header.models).toEqual([GOOD, BROKEN]);
   });

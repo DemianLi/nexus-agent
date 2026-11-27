@@ -3479,7 +3479,7 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 ```
 
 eval 組的是 serve 一條 thread 的出貨組裝（出貨清單加 serve 層、相容層 `assembly.create`、私有根與 `/shared` 用暫存目錄、核准政策取出廠值；
-`src/eval/assembly.ts`），所以結果檔的提示詞雜湊記的是實際送出的 `request/system`。每次模型呼叫另記 `request/system`、工具名稱與雜湊、
+`src/eval/assembly.ts`），所以結果檔每個受測模型各記一份提示詞雜湊（`settings.systemPromptVersions`，鍵是模型 id），記的是那個模型實際送出的 `request/system`——`{{model}}` 換成它的 id，所以每個模型不同。每次模型呼叫另記 `request/system`、工具名稱與雜湊、
 輸入／輸出 token（`src/eval/runner.ts` 的 `UsageTally`，不經會話日誌）。對話史來源明著用 `state`：沒有會話日誌，出廠的 `log` 組不起來。
 
 它跑 `MEASURED_MODELS`，`--models` 可以挑子集，`--cases` 只跑指定的題目。**成本是題數 × 模型數 ×

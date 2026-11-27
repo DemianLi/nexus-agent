@@ -203,7 +203,14 @@ async function main(argv: readonly string[]): Promise<void> {
   if (first === undefined) throw new Error('沒有要跑的候選');
   const probe = createLiveModel(liveModelConfigForModel(first.modelId), undefined, credentials);
   const writer = startResultFile({
-    systemPrompt: await shippedSystemPrompt(),
+    systemPrompts: Object.fromEntries(
+      await Promise.all(
+        models.map(
+          async (model) =>
+            [model.modelId, await shippedSystemPrompt(undefined, model.modelId)] as const,
+        ),
+      ),
+    ),
     tool: 'eval:survey',
     argv,
     cases,

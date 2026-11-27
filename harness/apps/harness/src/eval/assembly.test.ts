@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { tagModelRoute } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,10 +74,12 @@ const STANDARD: readonly ScriptedTurn[] = [
 async function record(
   turns: readonly ScriptedTurn[],
   plugins?: readonly PluginEntry[],
+  modelId?: string,
 ): Promise<readonly ModelCallRecord[]> {
   const calls: ModelCallRecord[] = [];
+  const scripted = new ScriptedChatModel({ turns });
   await runBenchmarkCase(WRITE_THEN_READ, {
-    model: new ScriptedChatModel({ turns }),
+    model: modelId === undefined ? scripted : tagModelRoute(scripted, { model: modelId }),
     calls,
     ...(plugins === undefined ? {} : { plugins }),
   });
@@ -180,6 +183,29 @@ describe('request/system 會隨出貨提示詞變、不改就不變', () => {
     expect(await shippedSystemPrompt()).toBe(sent?.system);
     const changed = await withPersona('You are a terse assistant.');
     expect(await shippedSystemPrompt(changed)).toContain('You are a terse assistant.');
+  });
+});
+
+describe('真模型貼了型號標籤：{{model}} 換成它的 id，結果檔跟著模型記', () => {
+  const REAL = 'vendor/real-model-x';
+
+  it('貼標籤的實例送出的 request/system 帶真型號，shippedSystemPrompt(模型 id) 記到同一份', async () => {
+    const [sent] = await record([{ content: '好。' }], undefined, REAL);
+    const [plain] = await record([{ content: '好。' }]);
+    expect(sent?.system).toContain(`powered by the ${REAL} model`);
+    expect(sent?.system).not.toBe(plain?.system);
+    expect(await shippedSystemPrompt(undefined, REAL)).toBe(sent?.system);
+    expect(await shippedSystemPrompt()).toBe(plain?.system);
+  });
+
+  it('兩個模型的雜湊不同，各自對得上自己送出的那一份', async () => {
+    const other = 'vendor/real-model-y';
+    const [first] = await record([{ content: '好。' }], undefined, REAL);
+    const [second] = await record([{ content: '好。' }], undefined, other);
+    expect(systemPromptVersion(first?.system ?? '')).not.toBe(
+      systemPromptVersion(second?.system ?? ''),
+    );
+    expect(await shippedSystemPrompt(undefined, other)).toBe(second?.system);
   });
 });
 

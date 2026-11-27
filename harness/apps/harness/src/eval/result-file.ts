@@ -58,8 +58,11 @@ import type { ModelUnderTest } from './model-under-test.js';
  *
  * 2：每筆 scored 的 `score` 多了 `success`（「這題成功」）。舊檔沒有那一欄，照讀的話
  * `summarize` 會把成功題數靜靜算成 0，所以拋比讀得通好。
+ *
+ * 3：`settings.systemPromptVersion`（一個字串）換成 `systemPromptVersions`（模型 id → 雜湊）。系統提示詞的 `{{model}}`
+ * 跟著那一輪實際用的模型走，一份結果檔混跑幾個模型就有幾份不同的 `request/system`，一個雜湊對不上任何一個。
  */
-export const EVAL_RESULT_FORMAT_VERSION = 2;
+export const EVAL_RESULT_FORMAT_VERSION = 3;
 
 /** 哪一支進入點產生的。 */
 export type EvalTool = 'eval:compare' | 'eval:survey';
@@ -80,8 +83,11 @@ export interface EvalRunSettings {
   /** 模型實例上讀到的取樣溫度；讀不到是 `null`。 */
   readonly temperature: number | null;
   readonly topP: number | null;
-  /** 實際送出的 `request/system` 的雜湊。提示詞也是受測條件的一部分。 */
-  readonly systemPromptVersion: string;
+  /**
+   * 每個受測模型實際送出的 `request/system` 的雜湊，鍵是模型 id。提示詞也是受測條件的一部分；
+   * 每個模型一份，是因為系統提示詞的 `{{model}}` 換成那個模型的 id。
+   */
+  readonly systemPromptVersions: Readonly<Record<string, string>>;
 }
 
 /** 結果檔第一行。 */
@@ -153,7 +159,7 @@ export function scorerVersion(readSource: (name: string) => string = readOwnSour
   return shortHash(parts.join('\0\0'));
 }
 
-/** 實際送出的 `request/system`（`runner.ts` 的 `shippedSystemPrompt`）的雜湊。 */
+/** 一份 `request/system` 的雜湊（全文由 `runner.ts` 的 `shippedSystemPrompt` 給）。 */
 export function systemPromptVersion(prompt: string): string {
   return shortHash(prompt);
 }
@@ -167,8 +173,8 @@ export interface DescribeSettingsInput {
   /** 從模型實例讀到的取樣設定；`undefined` 記成 `null`，不補預設值。 */
   readonly temperature?: number | undefined;
   readonly topP?: number | undefined;
-  /** 這一輪實際送出的 `request/system` 全文（`runner.ts` 的 `shippedSystemPrompt`）。 */
-  readonly systemPrompt: string;
+  /** 每個受測模型實際送出的 `request/system` 全文，鍵是模型 id（`runner.ts` 的 `shippedSystemPrompt(plugins, modelId)`）。 */
+  readonly systemPrompts: Readonly<Record<string, string>>;
 }
 
 export function describeSettings(input: DescribeSettingsInput): EvalRunSettings {
@@ -179,7 +185,12 @@ export function describeSettings(input: DescribeSettingsInput): EvalRunSettings 
     deadlineMs: input.deadlineMs,
     temperature: input.temperature ?? null,
     topP: input.topP ?? null,
-    systemPromptVersion: systemPromptVersion(input.systemPrompt),
+    systemPromptVersions: Object.fromEntries(
+      Object.entries(input.systemPrompts).map(([modelId, prompt]) => [
+        modelId,
+        systemPromptVersion(prompt),
+      ]),
+    ),
   };
 }
 
@@ -244,8 +255,8 @@ export interface StartResultFileInput {
   readonly cases: readonly BenchmarkCase[];
   readonly models: readonly ModelUnderTest[];
   readonly samples: number;
-  /** 這一輪實際送出的 `request/system` 全文，取自 `runner.ts` 的 `shippedSystemPrompt`。 */
-  readonly systemPrompt: string;
+  /** 每個受測模型實際送出的 `request/system` 全文，鍵是模型 id，取自 `runner.ts` 的 `shippedSystemPrompt`。 */
+  readonly systemPrompts: Readonly<Record<string, string>>;
   /** 模型實例上讀到的取樣設定。由呼叫端讀，這個模組不去猜、也不抄一份字面值。 */
   readonly sampling: {
     readonly temperature?: number | undefined;
@@ -273,7 +284,7 @@ export function startResultFile(input: StartResultFileInput): ResultWriter {
       samples: input.samples,
       recursionLimit: EVAL_RECURSION_LIMIT,
       deadlineMs: EVAL_DEADLINE_MS,
-      systemPrompt: input.systemPrompt,
+      systemPrompts: input.systemPrompts,
       ...input.sampling,
     }),
     models: input.models,

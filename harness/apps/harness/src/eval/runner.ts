@@ -38,7 +38,7 @@ import type { Serialized } from '@langchain/core/load/serializable';
 import { AIMessage } from '@langchain/core/messages';
 import type { LLMResult } from '@langchain/core/outputs';
 import type { BaseMessage } from '@langchain/core/messages';
-import { extractRequest } from '@nexus/core';
+import { extractRequest, tagModelRoute } from '@nexus/core';
 import type { AgentModel, PluginEntry } from '@nexus/core';
 import type { createNexusAgent } from '../agent-factory.js';
 import { toAgentInvocation } from '../messages.js';
@@ -308,18 +308,30 @@ function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function tagged(model: ScriptedChatModel, modelId: string | undefined): ScriptedChatModel {
+  return modelId === undefined ? model : tagModelRoute(model, { model: modelId });
+}
+
 /**
  * 出貨的組裝實際送出的 `request/system`：用一顆只回一句話的假模型跑一次，取第一次模型呼叫記下的那一份。
  * 結果檔的提示詞雜湊記的是它，不是組裝前的樣板。
  *
+ * 系統提示詞的 `{{model}}` 跟著那一步實際用的模型走，而且只認貼過路由標籤的實例（`system-prompt-middleware.ts`）。
+ * 真模型是 `createLiveModel` 貼上標籤的，這裡給 `modelId` 就替假模型貼同一個標籤，送出的就跟那顆真模型一樣；
+ * 不給就是沒貼標籤的假模型（`{{model}}` 維持組裝時的假模型名）。
+ *
  * @param plugins - 省略即 serve 的出貨清單。
+ * @param modelId - 受測模型的 id；省略即不貼標籤。
  * @throws {Error} 一次模型呼叫都沒記到。
  */
-export async function shippedSystemPrompt(plugins?: readonly PluginEntry[]): Promise<string> {
+export async function shippedSystemPrompt(
+  plugins?: readonly PluginEntry[],
+  modelId?: string,
+): Promise<string> {
   const probe = BENCHMARK[0];
   if (probe === undefined) throw new Error('題組是空的');
   const run = await runBenchmarkCase(probe, {
-    model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+    model: tagged(new ScriptedChatModel({ turns: [{ content: '好。' }] }), modelId),
     ...(plugins === undefined ? {} : { plugins }),
   });
   const system = run.calls?.[0]?.system;
