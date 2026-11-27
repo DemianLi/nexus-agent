@@ -78,7 +78,7 @@ import type { ModelUnderTest } from './model-under-test.js';
  * 一個**真的跑過完整基準任務**的模型。
  *
  * 「跑過基準任務」與「探測回得出 `tool_calls`」是兩件事，而它們差得很遠：探測是一句話
- * 一個工具，基準任務是七題各跑多輪、要評四個指標。`survey.ts` 的 `SURVEY_MODELS` 是
+ * 一個工具，基準任務是五題各跑多輪、要評四個指標。`survey.ts` 的 `SURVEY_MODELS` 是
  * 前者的清單（候選），這裡是後者（量過的）。**預設模型只准從這裡挑**，見
  * `live-model.test.ts` 的「預設的那個 id 必須是我們真的量過的模型」。
  *

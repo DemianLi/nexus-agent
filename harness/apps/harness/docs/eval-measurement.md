@@ -45,7 +45,7 @@
 - **預設模型**是在當時那七題上決選出來的（2026-09-04，七題 × 3 次，見
   [`model-inventory.md（封存）`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/model-inventory.md)）；`live-model.test.ts` 還要求預設的 id
   必須出自量過的清單。
-- **迴圈上限 40 與時鐘 300 秒**（`EVAL_RECURSION_LIMIT`、`EVAL_DEADLINE_MS`，在 `compare.ts`）是照這七題
+- **迴圈上限 40 與時鐘 300 秒**（`EVAL_RECURSION_LIMIT`、`EVAL_DEADLINE_MS`，在 `compare.ts`）是照當時那七題
   實測的分佈挑的，註解裡記著挑在哪兩個觀測之間。
 - **後四題是看了 [#84](https://github.com/DemianLi/nexus-agent/issues/84) 的結果才加的**：前三題在那份資料上
   已經分不出高下，後四題是為了讓參數那一欄重新有解析度。
