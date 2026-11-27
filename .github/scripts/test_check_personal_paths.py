@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import check_pr
 from check_personal_paths import file_violations, main, text_violations
@@ -28,6 +32,7 @@ class TextTest(unittest.TestCase):
             '/home/you/.nexus-agent/a',
             '/home/FAKE/.credentials.yaml',
             '/home/u/.nexus',
+            '/home/runner/work/nexus-agent',
             '/Users/<名字>/專案',
             '/home/$USER/a',
             '/var/folders/ab/cd1234/T/nexus-lh-xyz',
@@ -49,7 +54,9 @@ class FilesTest(unittest.TestCase):
             (root / 'b.bin').write_bytes(b'\0' + REAL['home'].encode())
             (root / 'pnpm-lock.yaml').write_text(REAL['home'])
             (root / 'ok.md').write_text('/Users/x/a')
-            names = ['a.md', 'b.bin', 'pnpm-lock.yaml', 'ok.md']
+            (root / '.github/scripts').mkdir(parents=True)
+            (root / '.github/scripts/check_personal_paths.py').write_text(REAL['home'])
+            names = ['a.md', 'b.bin', 'pnpm-lock.yaml', 'ok.md', '.github/scripts/check_personal_paths.py']
             self.assertEqual(len(file_violations(root, names)), 1)
             self.assertEqual(main(['--root', str(root), '--files', 'ok.md']), 0)
             self.assertEqual(main(['--root', str(root), '--files', 'a.md']), 1)
@@ -69,6 +76,15 @@ class PrBodyTest(unittest.TestCase):
     def test_body_with_placeholder_passes(self) -> None:
         check_pr.check_personal_paths('Refs #1\n在 /Users/<名字>/x 與 <外層>/nexus 跑過')
         self.assertEqual(check_pr.errors, [])
+
+    def test_main_reads_body_from_env_for_every_base(self) -> None:
+        for base in ('develop', 'main'):
+            for body, code in ((f'## 變更內容\n## 驗證方式\n{REAL["home"]}', 1), ('## 變更內容\n## 驗證方式\n/home/you/a', 0)):
+                with self.subTest(base=base, code=code):
+                    check_pr.errors.clear()
+                    env = {'TITLE': 'ci: 擋個人絕對路徑的檢查接進閘門', 'BASE': base, 'BODY': body, 'ACTOR': ''}
+                    with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(check_pr.main(), code)
 
 
 if __name__ == '__main__':

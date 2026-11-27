@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-PLACEHOLDER_NAMES = frozenset({'x', 'u', 'you', 'someone', 'FAKE', 'user', 'username', 'name', 'me', 'example'})
+PLACEHOLDER_NAMES = frozenset({'x', 'u', 'you', 'someone', 'FAKE', 'user', 'username', 'name', 'me', 'example', 'runner'})
 GENERATED = frozenset({'pnpm-lock.yaml', 'Cargo.lock', 'package-lock.json', 'yarn.lock'})
 SELF = frozenset({'.github/scripts/check_personal_paths.py', '.github/scripts/test_check_personal_paths.py'})
 

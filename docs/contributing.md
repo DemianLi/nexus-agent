@@ -22,7 +22,7 @@ type：`feat` `fix` `refactor` `perf` `test` `docs` `ci` `chore`，`develop → 
 
 ## PR 內文
 
-- **feature → develop**：照 [`.github/pull_request_template.md`](../.github/pull_request_template.md)，段落標題與欄位名用英文、內文寫中文，用語照 [`GLOSSARY-MAP.md`](../GLOSSARY-MAP.md)。Summary 的圖優先用文字樹或 diff 草圖。第一行 `Refs #N`，不寫 Closes。`gh pr create --body` 不會套模板，要自己照填。Evidence **寫實際跑過的，沒跑過就寫沒跑過**。一般功能 PR 的內文 gate 不檢查；清掉註解裡 dsh 對照的 PR（階段 1，見下面〈對照 dsh〉）例外，內文要附逐句證據，本機跑 `python3 .github/scripts/check_dsh_cleanup.py` 印出要填的列。
+- **feature → develop**：照 [`.github/pull_request_template.md`](../.github/pull_request_template.md)，段落標題與欄位名用英文、內文寫中文，用語照 [`GLOSSARY-MAP.md`](../GLOSSARY-MAP.md)。Summary 的圖優先用文字樹或 diff 草圖。第一行 `Refs #N`，不寫 Closes。`gh pr create --body` 不會套模板，要自己照填。Evidence **寫實際跑過的，沒跑過就寫沒跑過**。一般功能 PR 的內文 gate 只查個人絕對路徑（見下一條），別的不查，而且改內文不會重跑 CI：被擋後改了內文要推一個 commit 才會重驗；清掉註解裡 dsh 對照的 PR（階段 1，見下面〈對照 dsh〉）例外，內文要附逐句證據，本機跑 `python3 .github/scripts/check_dsh_cleanup.py` 印出要填的列。
 - 開 PR 與每次推更新之前，對 diff 找出變更敘事的註解並刪掉（見〈註解〉），刪掉的列進內文。
 - **不寫個人絕對路徑**：進版控的檔與 PR 內文不寫 `/Users/<名字>/`、`/home/<名字>/`、`/private/tmp/claude-<數字>/`、真的 `/var/folders/…` 暫存根；範例用佔位名。gate 檢查（[`.github/scripts/check_personal_paths.py`](../.github/scripts/check_personal_paths.py)，佔位名清單只在那支裡）。只擋路徑，不擋 `darwin-arm64` 這類平台名。
 - **develop → main**：內文要有 `## 變更內容` 與 `## 驗證方式`（gate 檢查）；驗證方式同樣只寫實際跑過的。

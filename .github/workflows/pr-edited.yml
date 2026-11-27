@@ -7,6 +7,7 @@ name: PR 編輯後重驗
 #   - develop → main 的 PR 改內文：gate 驗內文的段落。
 #   - 功能 PR 改內文：只有清外部對照的 PR（只動註解與字串內容、對照詞計數下降，.github/scripts/check_dsh_cleanup.py 判）的 gate 讀內文，
 #     所以先用同一支腳本判範圍，在範圍內才重跑；其餘功能 PR 改內文照舊不重跑。
+#     例外：check_pr.py 對每張 PR 的內文查個人絕對路徑（check_personal_paths.py），這一項改內文不會重跑，要推一個 commit 才重驗。
 #
 # job 不能叫 gate：這支的 job 或步驟在不用重跑時會被跳過（例如範圍外的內文編輯只跳過 rerun 那一步），跳過的 required check 算成通過。
 on:
