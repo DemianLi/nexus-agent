@@ -1,7 +1,7 @@
 name: 異動與格式檢查
 description: >-
   算出這一輪的異動檔（寫進 changed.txt），再跑不用安裝相依的檢查：main 的 PR 來源、PR 標題與內文、升級指南、
-  Markdown 相對連結、ADR 格式、web 與 harness 的邊界、只降不升的計數、清外部對照 PR 的內文證據、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
+  Markdown 相對連結、ADR 格式、web 與 harness 的邊界、個人絕對路徑、只降不升的計數、清外部對照 PR 的內文證據、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
 
 outputs:
   count:
@@ -111,6 +111,10 @@ runs:
     - name: 檢查協作用的檔與舊路徑開頭的檔
       shell: bash
       run: python3 .github/scripts/check_legacy_paths.py
+
+    - name: 檢查個人絕對路徑
+      shell: bash
+      run: python3 .github/scripts/check_personal_paths.py
 
     - name: 只降不升的計數
       shell: bash

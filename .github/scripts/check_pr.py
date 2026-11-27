@@ -7,6 +7,8 @@ import os
 import re
 import sys
 
+from check_personal_paths import text_violations
+
 TYPES = ('feat', 'fix', 'refactor', 'perf', 'test', 'docs', 'ci', 'chore', 'release')
 
 # Dependabot 的 PR 標題由 GitHub 產生（例如 Bump vite from 7.1.12 to 7.1.13），
@@ -65,6 +67,11 @@ def check_body(body: str) -> None:
         )
 
 
+def check_personal_paths(body: str) -> None:
+    for violation in text_violations(body, 'PR 內文'):
+        fail(violation, '規則與佔位名清單見 .github/scripts/check_personal_paths.py，docs/contributing.md〈PR 內文〉。')
+
+
 def main() -> int:
     actor = os.environ.get('ACTOR', '')
     if actor in BOT_ACTORS:
@@ -72,8 +79,10 @@ def main() -> int:
     else:
         check_title(os.environ.get('TITLE', ''))
 
+    body = os.environ.get('BODY') or ''
     if os.environ.get('BASE') == 'main':
-        check_body(os.environ.get('BODY') or '')
+        check_body(body)
+    check_personal_paths(body)
 
     for error in errors:
         head, _, rest = error.partition('\n')
