@@ -1,6 +1,6 @@
 # 不掛 web 搜尋與抓取，也不做 Office 轉 PDF
 
-2026-09-19 的決定（類別：項目），取代 [`decisions-2026-09-19.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-09-19.md) 的第 1、11 題。部署完全在內網、連不到外網，所以出廠不掛 `web_search`、`web_fetch`，這是 dsh 為「網路政策更嚴的產品」預留的覆寫路，不必另外登記偏離。Office 轉 PDF（dsh 的 `office-to-pdf`）是 dsh web 文件預覽面板看 Office 檔的後端。我們的 web 有右側欄的交付檔預覽（`web/src/features/deliverable/preview.tsx:6`），但只畫文字與 Markdown，不是文字的檔回 `deliverable/not-text`、改走下載（`harness/apps/harness/src/wire-handler.ts:1173`、`preview.tsx:56`），沒有要在頁面上看 Office 檔的需求；也不想為它帶進 LibreOffice 這個很重的相依，所以不做，登記「需求未出現」。
+2026-09-19 的決定（類別：項目），取代 [`decisions-2026-09-19.md`](https://github.com/DemianLi/nexus-agent/blob/archive/docs-2026-11/.docs/decisions-2026-09-19.md) 的第 1、11 題。部署完全在內網、連不到外網，所以出廠不掛 `web_search`、`web_fetch`，這是 dsh 為「網路政策更嚴的產品」預留的覆寫路，不必另外登記偏離。Office 轉 PDF（dsh 的 `office-to-pdf`）是 dsh web 文件預覽面板看 Office 檔的後端。我們的 web 有右側欄的交付檔預覽（`web/src/features/deliverable/preview.tsx:6`），但只畫文字與 Markdown，不是文字的檔回 `deliverable/not-text`、改走下載（`harness/apps/harness/src/wire-handler.ts:1158`、`preview.tsx:56`），沒有要在頁面上看 Office 檔的需求；也不想為它帶進 LibreOffice 這個很重的相依，所以不做，登記「需求未出現」。
 
 ## Considered Options
 
