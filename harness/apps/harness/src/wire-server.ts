@@ -34,7 +34,7 @@
  * 預設**不壓**，`compression` 選項給了才在 `handle` 外面包一層 `compression` 套件的中介層。
  * 排除條件：有 `content-range` 不壓、`text/event-stream` 不壓（壓縮緩衝會把逐顆 frame 積著，等於關掉 SSE 的即時性）、
  * `multipart/form-data` 一律壓、其餘走 `compression.filter`；先用 `Negotiator` 在 `gzip`／`identity` 之間協商，再把結果改寫進
- * `accept-encoding`；沒有 socket 的 response 跳過。**最後一道防線留在 `next` 裡面**：壓縮層不吃 `handle` 的 rejection。
+ * `accept-encoding`。**最後一道防線留在 `next` 裡面**：壓縮層不吃 `handle` 的 rejection。
  * 設定走 `serve` 的旗標而不是 `cordis.yml` 的列：listener 的設定（port）本來就是旗標，#1547 的 host 與 TLS 也走旗標。
  */
 
@@ -140,12 +140,6 @@ function createGzipMiddleware(config: WireCompression): NodeMiddleware {
   }) as unknown as NodeMiddleware;
 
   return (req, res, next) => {
-    // 沒有 socket 的 response 搬的是原樣位元組，不壓。
-    // nexus 沒有不帶 socket 的 response；node:http 在 pipelining 時第二個請求的 socket 是 `null` 不是 `undefined`，所以這個條件在這裡不會成立。
-    if ((res as { socket?: unknown }).socket === undefined) {
-      next();
-      return;
-    }
     const encoding = new Negotiator(req).encoding(['gzip', 'identity']);
     const gzipRequest = Object.create(req) as IncomingMessage;
     Object.defineProperty(gzipRequest, 'headers', {
