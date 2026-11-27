@@ -24,7 +24,7 @@
  * - **goal**：`assembly-root.ts:1000` 每次組裝各從 services 拿一份 `goals`；`:1083-1095` 沒掛就是 `undefined`，排程器
  *   全用 `goals?.` 接；`serve-run.ts` 的 `runServe` 裡的 `goalDriver` 是那一條 thread 自己那次組裝的。
  * - **workspace-changes**：`assembly-root.ts:997` 每次組裝各取一份；`serve-run.ts` 的 `runServe` 在 thread 組裝區塊裡取兩次，沒掛就
- *   缺席；`wire-handler.ts:1139`、`:2563`、`:2582` 讀的是 `ready.get(threadId)?.workspaceChanges`，一條 thread 一份。它是
+ *   缺席；`wire-handler.ts:4707`、`:4726` 讀的是 `ready.get(threadId)?.workspaceChanges`，一條 thread 一份。它是
  *   `cordis.serve.yml:15` 的一列，不是組裝點自己建的。
  * - **sandbox-policy**：控制器每條 thread 組裝時各建一個（`assembly-root.ts:820`）。**關掉它的後果不是「照舊」而是
  *   「建不起來」**：有 `--workspace` 又沒掛這一列，那條 thread 的組裝直接拋（`:803-809`），重讀之後每條新 thread 都是。
@@ -33,7 +33,7 @@
  *   （`assembly-root.ts` 的必掛檢查）；它是 `/permission` 的唯一入口。
  *
  * `commands` 不是清單上的一列（`cordis.yml`／`cordis.serve.yml` 只有 `commands-invariant`），執行器是宿主自己建的
- * （`cli.ts:29`、`wire-handler.ts:126`），沒有可以切的列。
+ * （`cli.ts:789`、`wire-handler.ts:2435`），沒有可以切的列。
  *
  * 類別、判定與守衛測試照樣在：之後有哪一列真的是「掛不掛要重啟」，改一格就行。
  *
