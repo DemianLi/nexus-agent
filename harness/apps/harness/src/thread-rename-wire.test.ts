@@ -15,9 +15,9 @@ import { createWireClient } from '@nexus/wire';
 import type { Event } from '@nexus/wire';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const opened: WireHandler[] = [];
 
@@ -32,7 +32,7 @@ function rig(options: Partial<Omit<HandlerOptions, 'auth'>> = {}) {
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
-      agent: {} as PumpAgent,
+      agent: fakePumpAgent(),
       commands: emptyCommandPoint(),
       dispose: async () => {},
       attachSessions: (registry) => {
@@ -132,7 +132,7 @@ describe('thread.rename', () => {
       createAgent: async () => {
         created += 1;
         return {
-          agent: {} as PumpAgent,
+          agent: fakePumpAgent(),
           commands: emptyCommandPoint(),
           dispose: async () => {},
           attachSessions: () => ({ detach: async () => {} }),

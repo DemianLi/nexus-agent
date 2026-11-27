@@ -47,6 +47,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent, PumpInput } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -662,7 +663,7 @@ function handleAgent(
   const seen: string[][] = [];
   let call = 0;
   const texts = (messages: readonly BaseMessage[]) => messages.map((message) => message.text);
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
       const step = script[call] ?? {};
       call += 1;
@@ -686,8 +687,8 @@ function handleAgent(
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return { agent: agent as unknown as PumpAgent, seen };
+  });
+  return { agent: agent, seen };
 }
 
 describe('假 agent：收尾那一刻與重啟', () => {

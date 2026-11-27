@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { ContainedFilesystemBackend, pathlessReason } from './contained-backend.js';
 import { classifyTurnFailure, turnFailureOf } from './live-model.js';
 import { ThreadPump } from './thread-pump.js';
-import type { PumpAgent } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const MESSAGE = '主機的儲存空間滿了，這一輪沒做完，請聯絡管理員。';
 
@@ -85,7 +85,7 @@ describe('線上那顆 failed frame', () => {
   });
 
   async function runFailing(thrown: unknown, rethrow = true) {
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () =>
         (async function* () {
           yield failedFrame(String((thrown as Error).message));
@@ -93,7 +93,7 @@ describe('線上那顆 failed frame', () => {
         })(),
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    } as unknown as PumpAgent;
+    });
     const warnings: string[] = [];
     const pump = new ThreadPump(
       agent,

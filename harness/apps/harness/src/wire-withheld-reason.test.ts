@@ -14,10 +14,10 @@ import type { AttachmentStore } from './attachment-store.js';
 import { BackgroundSubagentError } from './background-subagents.js';
 import type { BackgroundSubagentControl } from './background-subagents.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
-import type { PumpAgent } from './thread-pump.js';
 import { ThreadSearchError } from './thread-search.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandlerOptions } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const SECRET = '/srv/secret/home/session.jsonl';
 const fsError = () => new Error(`EACCES: permission denied, open '${SECRET}'`);
@@ -56,7 +56,7 @@ async function rig(parts: Parts): Promise<Rig> {
     auth: TEST_BROWSER_AUTH,
     warn: (line) => lines.push(line),
     createAgent: async () => ({
-      agent: {} as PumpAgent,
+      agent: fakePumpAgent(),
       commands: emptyCommandPoint(),
       dispose: async () => undefined,
       attachSessions: () => ({

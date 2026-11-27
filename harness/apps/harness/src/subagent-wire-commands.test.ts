@@ -39,6 +39,7 @@ import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import { composeAttachSessions } from './session-attach.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -84,7 +85,7 @@ describe('替身控制面：wire 這一層', () => {
   function stubbed(control: BackgroundSubagentControl | undefined, agentLoop?: AgentLoopKind) {
     return rig(
       async () => ({
-        agent: {} as PumpAgent,
+        agent: fakePumpAgent(),
         commands: emptyCommandPoint(),
         dispose: async () => {},
         attachSessions: () => ({
@@ -250,7 +251,7 @@ describe('替身控制面：wire 這一層', () => {
       async () => {
         built += 1;
         return {
-          agent: {} as PumpAgent,
+          agent: fakePumpAgent(),
           commands: emptyCommandPoint(),
           dispose: async () => {},
           attachSessions: () => ({ detach: async () => {}, background: control }),
@@ -302,7 +303,7 @@ describe('替身控制面：wire 這一層', () => {
     const cold = rig(async () => {
       built += 1;
       return {
-        agent: {} as PumpAgent,
+        agent: fakePumpAgent(),
         attachSessions: noSessions,
         commands: emptyCommandPoint(),
         dispose: async () => {},
@@ -509,7 +510,7 @@ describe('goalDriver 的等子代理口（wire 這一層，#1575）', () => {
   function driverRig(background: BackgroundSubagentControl | undefined) {
     let captured: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
     const handled = rig(async () => ({
-      agent: {} as PumpAgent,
+      agent: fakePumpAgent(),
       commands: emptyCommandPoint(),
       dispose: async () => {},
       goalDriver: (_log, _flush, waitForChildren) => {

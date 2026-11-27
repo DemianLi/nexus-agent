@@ -35,9 +35,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { PNG_7X5 } from './image-fixtures.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { IdleSweepingWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -103,7 +103,7 @@ function rig(
   let created = 0;
   const sends: string[] = [];
   let log: (() => readonly SessionEvent[]) | undefined;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async () => {
       ran += 1;
       return (async function* () {
@@ -112,7 +112,7 @@ function rig(
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  } as unknown as PumpAgent;
+  });
 
   const registry = createRegistry();
   registry.enter({ id: 'closing-test#0', name: 'closing-test' });
@@ -394,7 +394,7 @@ describe('窗內：只擋新一輪', () => {
   it('run.cancel 停得掉正在跑的那一輪；讀取照常；窗前 run.start 與 stopAdmission 前都成功', async () => {
     const hold = gate();
     let ran = 0;
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
         ran += 1;
         // 這一輪的中止訊號（`TURN_CANCEL_CONFIG_KEY`）：被切斷就醒來拋錯，同真模型被中止時的樣子。
@@ -412,7 +412,7 @@ describe('窗內：只擋新一輪', () => {
       },
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    } as unknown as PumpAgent;
+    });
     let log: (() => readonly SessionEvent[]) | undefined;
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,

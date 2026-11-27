@@ -26,6 +26,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -54,7 +55,7 @@ const COMPLETED = {
 function agentWith(holds: readonly Promise<void>[] = []) {
   const ran: string[] = [];
   let call = 0;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (input: { messages?: { content?: unknown }[] }) => {
       const hold = holds[call];
       call += 1;
@@ -66,8 +67,8 @@ function agentWith(holds: readonly Promise<void>[] = []) {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return { agent: agent as unknown as PumpAgent, ran };
+  });
+  return { agent: agent, ran };
 }
 
 const turnStarts = (events: readonly SessionEvent[]) =>

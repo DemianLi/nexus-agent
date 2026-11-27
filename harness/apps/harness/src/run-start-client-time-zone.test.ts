@@ -24,6 +24,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -42,14 +43,14 @@ const COMPLETED = {
 
 /** 假 agent：每一輪立刻收尾。 */
 function instantAgent(): PumpAgent {
-  return {
+  return fakePumpAgent({
     streamEvents: async () =>
       (async function* () {
         yield COMPLETED;
       })(),
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  } as unknown as PumpAgent;
+  });
 }
 
 const turnStarts = (events: readonly SessionEvent[]) =>
@@ -289,7 +290,7 @@ describe('升 Node 之前排著的項目：原樣抄進新一輪，讀的時候�
 
   /** 領得走插話的假 agent：一輪開頭領一次、收尾前領到空為止。 */
   function claimingAgent(): PumpAgent {
-    return {
+    return fakePumpAgent({
       streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
         const inbox = config.configurable[STEP_INBOX_CONFIG_KEY] as StepInbox;
         return (async function* () {
@@ -300,7 +301,7 @@ describe('升 Node 之前排著的項目：原樣抄進新一輪，讀的時候�
       },
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    } as unknown as PumpAgent;
+    });
   }
 
   function pumpOver(seed: SessionLog, agent: PumpAgent): ThreadPump {

@@ -32,6 +32,7 @@ import { classifyFailedAttempt, classifyTurnFailure, turnFailureOf } from './liv
 import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 /** 一顆 `toString` 會拋錯的值。 */
 const hostile = (): object => ({
@@ -406,11 +407,11 @@ describe('收回那一步（#withdraw）失敗：同一支記法', () => {
     });
     const real = built.agent as unknown as PumpAgent;
     let broken = false;
-    const agent: PumpAgent = {
+    const agent = fakePumpAgent({
       streamEvents: (input, config) => real.streamEvents(input, config),
       getState: (config) => (broken ? Promise.reject(hostile()) : real.getState(config)),
       updateState: (config, values) => real.updateState!(config, values),
-    };
+    });
     const pump = new ThreadPump(agent, 'turn-failure-withdraw');
     const detach = built.attachSession(pump.sessions);
     try {

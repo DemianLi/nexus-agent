@@ -35,6 +35,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 /**
  * web 判斷工具被中止時手寫的兩個碼（`web/src/lib/tool-aborted.ts`、`question-view.ts`）。web 的產品碼不從 `@nexus/core` 取值，core 改字串編譯不會紅，
@@ -446,12 +447,12 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
       if (order === 'frame-first') settle();
       yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
     }
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    };
-    const pump = new ThreadPump(agent as unknown as PumpAgent, 'order');
+    });
+    const pump = new ThreadPump(agent, 'order');
     const frames: Event[] = [];
     const line = new AbortController();
     const draining = (async () => {

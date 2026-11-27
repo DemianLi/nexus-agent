@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import { historyPage } from './conversation-history.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const MESSAGE = {
   text: 'Agent settle-root/bg-1 sent a message: 入口在 A',
@@ -66,7 +67,7 @@ function fakeAgent(steps: readonly Step[] = []) {
   const inputs: string[] = [];
   const claimed: BaseMessage[][] = [];
   let call = 0;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (
       input: { messages?: BaseMessage[] },
       config: { configurable: Record<string, unknown> },
@@ -105,8 +106,8 @@ function fakeAgent(steps: readonly Step[] = []) {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return { agent: agent as unknown as PumpAgent, inputs, claimed };
+  });
+  return { agent: agent, inputs, claimed };
 }
 
 function open(

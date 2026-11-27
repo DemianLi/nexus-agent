@@ -38,6 +38,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 type ToolEntry = Extract<ConversationState['entries'][number], { kind: 'tool' }>;
 
@@ -355,12 +356,12 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
       }
       yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
     }
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    };
-    const pump = new ThreadPump(agent as unknown as PumpAgent, 'order');
+    });
+    const pump = new ThreadPump(agent, 'order');
     const frames: Event[] = [];
     const line = new AbortController();
     const draining = (async () => {
@@ -490,18 +491,12 @@ describe('結果文字：即時與重播同一串（#439）', () => {
       }
       yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
     }
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    };
-    const pump = new ThreadPump(
-      agent as unknown as PumpAgent,
-      'text',
-      undefined,
-      undefined,
-      toolText,
-    );
+    });
+    const pump = new ThreadPump(agent, 'text', undefined, undefined, toolText);
     const frames: Event[] = [];
     const line = new AbortController();
     const draining = (async () => {
@@ -647,18 +642,12 @@ describe('meta：即時與重播同一份（#617）', () => {
       record();
       yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
     }
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    };
-    const pump = new ThreadPump(
-      agent as unknown as PumpAgent,
-      'meta',
-      undefined,
-      undefined,
-      toolText,
-    );
+    });
+    const pump = new ThreadPump(agent, 'meta', undefined, undefined, toolText);
     const frames: Event[] = [];
     const line = new AbortController();
     const draining = (async () => {

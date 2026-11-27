@@ -34,6 +34,7 @@ import type { PumpAgent, PumpInput } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import { composeAttachSessions } from './session-attach.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 /** 工具跑到哪裡了——「跑沒跑」的答案在這裡，不在回傳的措辭上。 */
 interface Probe {
@@ -398,7 +399,7 @@ function scriptedAgent(
   steps: readonly { readonly interrupt?: string; readonly hold?: Promise<void> }[],
 ) {
   let call = 0;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async () => {
       const step = steps[call] ?? {};
       call += 1;
@@ -410,8 +411,8 @@ function scriptedAgent(
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return agent as unknown as PumpAgent;
+  });
+  return agent;
 }
 
 const approve = (interruptId: string): PumpInput => ({

@@ -34,7 +34,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { historyFrames } from './conversation-history.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { BackgroundSubagentHost } from './background-subagents.js';
-import type { BackgroundAgent, BackgroundSettlement } from './background-subagents.js';
+import type { BackgroundSettlement } from './background-subagents.js';
 import { emptyCommandPoint, loopbackRequest, serveClient, TEST_BROWSER_AUTH } from './fixtures.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
@@ -50,6 +50,7 @@ import { REAL_TURN_TIMERS, startTurnClock, unsettledToolNames } from './turn-clo
 import type { TurnClock, TurnTimers } from './turn-clock.js';
 import { createWireHandler } from './wire-handler.js';
 import type { AttachSessions } from './session-attach.js';
+import { fakeBackgroundAgent } from './fake-agent.fixture.js';
 
 /** 手動計時器：測試決定哪一顆什麼時候到點，也數得到還掛著幾顆。 */
 class ManualTimers implements TurnTimers {
@@ -851,7 +852,7 @@ describe('目標（驗收 8）', () => {
 describe('背景子代理（Q-B4 (a)）', () => {
   /** 假 agent：拿到這一輪的中止訊號，可以等它舉起來再收。 */
   function abortable(script: (text: string, signal: AbortSignal) => Promise<void> | void) {
-    const agent: BackgroundAgent = {
+    const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
           (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
@@ -859,7 +860,7 @@ describe('背景子代理（Q-B4 (a)）', () => {
         await script(text, config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal);
         return (async function* () {})() as never;
       },
-    };
+    });
     return agent;
   }
   const waitAbort = (signal: AbortSignal) =>

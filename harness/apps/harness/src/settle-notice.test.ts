@@ -32,6 +32,7 @@ import { historyPage } from './conversation-history.js';
 import { childForkSeed } from './thread-fork.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const NOTICE = {
   text: 'Background subagent bg-1 finished and will do no further work unless you send it more.\n\nIts closing message:\n找到三個檔案',
@@ -77,7 +78,7 @@ function fakeAgent(steps: readonly Step[] = []) {
   const inputs: string[] = [];
   const claimed: BaseMessage[][] = [];
   let call = 0;
-  const agent = {
+  const agent = fakePumpAgent({
     streamEvents: async (
       input: { messages?: BaseMessage[] },
       config: { configurable: Record<string, unknown> },
@@ -116,8 +117,8 @@ function fakeAgent(steps: readonly Step[] = []) {
     },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
-  };
-  return { agent: agent as unknown as PumpAgent, inputs, claimed };
+  });
+  return { agent: agent, inputs, claimed };
 }
 
 function open(

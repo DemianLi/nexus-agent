@@ -17,10 +17,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
-import type { PumpAgent } from './thread-pump.js';
 import { ThreadDeletions, threadDeletionPortFor } from './thread-deletion.js';
 import { ThreadFeed } from './thread-feed.js';
 import { createWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const CWD = '/work/wire-delete';
 const PROJECT = projectKey(CWD);
@@ -108,7 +108,7 @@ function setup(
         : // 同 `serve-run.ts` 用的那一份：綁專案格與「只列這格」都在它裡面。
           threadDeletionPortFor(deletions, PROJECT),
     createAgent: async () => ({
-      agent: {} as PumpAgent,
+      agent: fakePumpAgent(),
       commands: emptyCommandPoint(),
       dispose: async () => {},
       attachSessions: () => ({ detach: async () => {} }),

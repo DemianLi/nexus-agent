@@ -43,6 +43,7 @@ import { liveModelConfigSchema } from './settings/live-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 const LEAK = 'sk-FAKE-LEAK-1234567890';
 
@@ -380,7 +381,7 @@ describe('一輪失敗的錯誤碼', () => {
 describe('pump 的邊界', () => {
   it('補結果也失敗（AggregateError）：frame 與 turn/failed 同一個碼，原文照樣進伺服器日誌', async () => {
     const auth = Object.assign(new Error(`401 ${LEAK}`), { status: 401 });
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () =>
         (async function* () {
           pump.sessionLog.append('tool/call', { callId: 'c', name: 'x', arguments: '{}' });
@@ -400,7 +401,7 @@ describe('pump 的邊界', () => {
         throw new Error('存檔點讀不到');
       },
       updateState: async () => ({}),
-    } as unknown as PumpAgent;
+    });
     const warnings: string[] = [];
     const pump: ThreadPump = new ThreadPump(
       agent,
@@ -441,7 +442,7 @@ describe('取消', () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const agent = {
+    const agent = fakePumpAgent({
       streamEvents: async () =>
         (async function* () {
           await held;
@@ -459,7 +460,7 @@ describe('取消', () => {
         })(),
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
-    } as unknown as PumpAgent;
+    });
     const pump = new ThreadPump(agent, 'cancel');
     const frames: Event[] = [];
     const line = new AbortController();

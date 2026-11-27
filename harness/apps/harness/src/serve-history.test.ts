@@ -32,8 +32,8 @@ import {
 } from './fixtures.js';
 import { HISTORY_PAGE_MAX_BYTES } from '@nexus/wire';
 
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { fakePumpAgent } from './fake-agent.fixture.js';
 
 let running: RunningServe | undefined;
 
@@ -352,7 +352,7 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
   }
 
   /** 一顆什麼都不吐的 agent：這條測試不跑任何一輪，只打歷史路由。 */
-  const idle: PumpAgent = {
+  const idle = fakePumpAgent({
     streamEvents: async () => ({
       [Symbol.asyncIterator]: () => ({
         next: async () => ({ done: true as const, value: undefined }),
@@ -360,7 +360,7 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
     }),
     getState: async () => ({ values: {} }),
     updateState: async () => undefined,
-  };
+  });
 
   /**
    * **這條的前提是 seed 夠大。**
