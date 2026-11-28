@@ -1,4 +1,5 @@
 import { tool } from '@langchain/core/tools';
+import { adaptLangGraph } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Checkpoint, CheckpointMetadata } from '@langchain/langgraph-checkpoint';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
@@ -173,7 +174,7 @@ function buildAgent(
     checkpointer: saver,
     ...(interruptOn === undefined ? {} : { interruptOn: interruptOn as never }),
   });
-  return { agent: agent as unknown as PumpAgent, calls };
+  return { agent: adaptLangGraph(agent), calls };
 }
 
 function connect(agent: PumpAgent) {

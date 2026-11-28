@@ -306,7 +306,6 @@ describe('running 標記', () => {
         }),
       }),
       getState: async () => ({ values: {} }),
-      updateState: async () => undefined,
     });
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,

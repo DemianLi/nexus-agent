@@ -1,3 +1,3 @@
-import base from '../../../eslint.config.js';
+import base, { loopAgentCastGuard } from '../../../eslint.config.js';
 
-export default base;
+export default [...base, loopAgentCastGuard];

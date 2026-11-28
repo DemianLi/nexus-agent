@@ -54,8 +54,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
-import type { BaseMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   APPROVAL_INTERRUPT_KIND,
@@ -93,6 +92,12 @@ import {
   userContent,
   withModelCall,
   type ApprovalOutcome,
+  type LoopAgent,
+  type RawProtocolEvent,
+  type RunProjections,
+  type SubagentProjection,
+  type ThreadConfig,
+  type ToolCallProjection,
   type LoggedMessage,
   type AttachmentRef,
   type PageContextRef,
@@ -203,41 +208,6 @@ import { renderGoalRoundPrompt } from '@nexus/goal';
 import type {} from '@nexus/plugin-plan-mode';
 import type {} from '@nexus/plugin-workspace-changes';
 
-/** 基座 v3 run 抽出來的一顆原始封包（`GraphRunStream implements AsyncIterable<ProtocolEvent>`）。 */
-interface RawProtocolEvent {
-  readonly type: 'event';
-  readonly seq: number;
-  readonly method: string;
-  readonly params: {
-    readonly namespace: string[];
-    readonly timestamp: number;
-    readonly node?: string;
-    readonly data: unknown;
-  };
-}
-
-/** langchain 投影裡一次工具呼叫的那一格。這裡只碰得到它的 `output`。 */
-interface ToolCallProjection {
-  readonly output: Promise<unknown>;
-}
-
-/** langchain 投影裡一個子代理：自己的 `output`，外加它那一層的工具呼叫與再下一層的子代理。 */
-interface SubagentProjection {
-  readonly output: Promise<unknown>;
-  readonly toolCalls: AsyncIterable<ToolCallProjection>;
-  readonly subagents: AsyncIterable<SubagentProjection>;
-}
-
-/**
- * langchain 在 v3 run 物件上掛的原生投影裡，**帶 promise 的那兩種**。可選：替身 agent 沒有它們。
- *
- * 形狀照 `langchain@1.5.10` 的 `dist/agents/transformers/tool-call.js` 與 `subagent.js`。
- */
-export interface RunProjections {
-  readonly toolCalls?: AsyncIterable<ToolCallProjection>;
-  readonly subagents?: AsyncIterable<SubagentProjection>;
-}
-
 const ignore = (): void => undefined;
 
 /**
@@ -282,60 +252,8 @@ function markSubagents(subagents: AsyncIterable<SubagentProjection>): void {
   })().catch(ignore);
 }
 
-/** 這條 thread 的位址。 */
-interface ThreadConfig {
-  readonly configurable: { readonly thread_id: string };
-}
-
-/**
- * pump 對 agent 的全部要求：給我一個可抽的 v3 run，與把中止這一輪補的東西寫回對話（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）：
- * 停在核准點時收回要知道哪幾顆呼叫還懸著、要把收回的結果寫進去；模型講到一半被切斷時要把使用者看到的那半段寫回對話。
- * `langgraph` 的圖經 checkpoint 讀寫（`getState`／`updateState`），native agent 經 `appendLoggedMessages`。
- */
-export type PumpAgent = PumpAgentBase & (CheckpointPumpAgent | LoggedPumpAgent);
-
-/** 兩個 loop 共有的那一面。 */
-interface PumpAgentBase {
-  streamEvents(
-    input: never,
-    config: {
-      readonly version: 'v3';
-      readonly durability?: typeof RUN_DURABILITY;
-      readonly configurable: {
-        readonly thread_id: string;
-        /** 這一輪的中止訊號。**不交給 LangGraph 的 `signal`**，理由見 `@nexus/core` 的 `turn-cancel.ts`。 */
-        readonly [TURN_CANCEL_CONFIG_KEY]?: AbortSignal;
-        /** 插話的領取口（#710）。圖裡沒掛那顆 middleware 就沒人讀，見 `@nexus/core` 的 `step-inbox.ts`。 */
-        readonly [STEP_INBOX_CONFIG_KEY]?: StepInbox;
-        /** 準入閘門（#633）：每次模型呼叫之前問，回 `true` 就擋下。只有接了整理檔的組裝才放。 */
-        readonly [ARCHIVE_GATE_CONFIG_KEY]?: () => boolean;
-      };
-    },
-  ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
-  /** 這條 thread 的 state：`langgraph` 讀 checkpoint；native 是行程內快取的唯讀視圖，pump 在 native 下不讀它。 */
-  getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
-  /**
-   * 收回停在等待點、還在記憶體裡等答覆的那次 run（`@nexus/core` 的 `NativeAgent.discardSuspended`）：不發事件；停住那一步已經收完的呼叫寫入同步套進 state，等核准那幾顆的不寫。
-   * 只有停在中斷時 JS 呼叫沒結束的 loop 有這一支；LangGraph 的中斷當場收掉那次 run，沒有東西可收。
-   */
-  discardSuspended?(config: ThreadConfig): void;
-}
-
-/** `langgraph` 的圖：中止補的東西經 checkpoint 寫回。 */
-interface CheckpointPumpAgent {
-  updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
-  readonly appendLoggedMessages?: never;
-}
-
-/**
- * native agent：pump 不經 `getState`／`updateState` 碰它的 state，只經這一支接上剛寫進日誌的幾則；懸著的呼叫從日誌找，
- * 見 {@link danglingLoggedCalls}。
- */
-interface LoggedPumpAgent {
-  /** 把剛寫進日誌的幾則接到這條 thread 的對話後面（`@nexus/core` 的 `NativeAgent.appendLoggedMessages`）。 */
-  appendLoggedMessages(config: ThreadConfig, messages: readonly BaseMessage[]): void;
-  readonly updateState?: never;
-}
+/** pump 對 agent 的全部要求就是 {@link LoopAgent}；成員全部必有，pump 不分辨現在是哪條 loop。 */
+export type PumpAgent = LoopAgent;
 
 /**
  * 送出佇列的一件開跑時用哪一種 {@link PumpInput}，**由它的 `source` 推出來**（[#686](https://github.com/DemianLi/nexus-agent/issues/686)）。
@@ -1202,61 +1120,6 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
   if (raw.method !== 'lifecycle' || raw.params.namespace.length > 0) return false;
   const data = raw.params.data as { event?: unknown; graph_name?: unknown } | null;
   return data?.graph_name === 'root' && (data.event === 'completed' || data.event === 'failed');
-}
-
-/**
- * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
- *
- * 停在核准點時是那幾顆等核准的，加上同一批排在後面、還沒起跑的呼叫（見 {@link loggedCallIds}）。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
- * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
- */
-function danglingToolCalls(
-  values: unknown,
-): { readonly id: string; readonly name: string; readonly args: unknown }[] {
-  const messages = (values as { messages?: unknown } | null)?.messages;
-  if (!Array.isArray(messages)) return [];
-  let last = -1;
-  for (let at = messages.length - 1; at >= 0; at -= 1) {
-    const message: unknown = messages[at];
-    if (AIMessage.isInstance(message) && (message.tool_calls?.length ?? 0) > 0) {
-      last = at;
-      break;
-    }
-  }
-  if (last < 0) return [];
-  const answered = new Set<string>();
-  for (const message of messages.slice(last + 1) as unknown[]) {
-    if (ToolMessage.isInstance(message)) answered.add(message.tool_call_id);
-  }
-  const ai = messages[last] as AIMessage;
-  return (ai.tool_calls ?? [])
-    .filter((call) => call.id !== undefined && !answered.has(call.id))
-    .map((call) => ({ id: call.id as string, name: call.name, args: call.args }));
-}
-
-/**
- * 日誌上最後一則帶工具呼叫的 `assistant/message` 裡還沒有 `tool/result` 的那幾顆，規則同 {@link danglingToolCalls}，讀的是日誌。
- *
- * @param events - 這份日誌的事件，照 `seq` 排。
- */
-function danglingLoggedCalls(
-  events: readonly SessionEvent[],
-): { readonly id: string; readonly name: string; readonly args: unknown }[] {
-  const answered = new Set<string>();
-  for (let at = events.length - 1; at >= 0; at -= 1) {
-    const event = events[at]!;
-    if (event.type === 'tool/result') {
-      answered.add((event as SessionEvent<'tool/result'>).data.callId);
-      continue;
-    }
-    if (event.type !== 'assistant/message') continue;
-    const message = toBaseMessage((event as SessionEvent<'assistant/message'>).data.message);
-    if (!AIMessage.isInstance(message) || (message.tool_calls?.length ?? 0) === 0) continue;
-    return (message.tool_calls ?? [])
-      .filter((call) => call.id !== undefined && !answered.has(call.id))
-      .map((call) => ({ id: call.id as string, name: call.name, args: call.args }));
-  }
-  return [];
 }
 
 /**
@@ -2369,15 +2232,12 @@ export class ThreadPump {
     this.#discardSuspended();
     // 還欠決定的那幾顆核准問題，在這一輪裡收回（#1029）。
     for (const id of [...this.#approvalOpen]) this.#noteApprovalDecided(id, undefined);
-    let dangling: { readonly id: string; readonly name: string; readonly args: unknown }[];
+    let dangling: readonly { readonly id: string; readonly name: string; readonly args: unknown }[];
     let started: (call: { readonly id: string; readonly name: string }) => boolean;
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
       const agent = this.#agent;
-      dangling =
-        agent.appendLoggedMessages !== undefined
-          ? danglingLoggedCalls(log.events)
-          : danglingToolCalls((await agent.getState(config)).values);
+      dangling = await agent.danglingCalls(config, log.events);
       const logged = loggedCallIds(log.events);
       // 委派的那顆停在核准點時本體已經開始；沒記過 `tool/call` 的就是還沒起跑。
       started = (call) => logged.has(call.id) && DELEGATION_TOOLS.includes(call.name);
@@ -2406,13 +2266,7 @@ export class ThreadPump {
           message: toLoggedMessage(withdrawn[index]!),
         });
       }
-      if (withdrawn.length > 0) {
-        if (agent.appendLoggedMessages !== undefined) {
-          agent.appendLoggedMessages(config, withdrawn);
-        } else {
-          await agent.updateState(config, { messages: withdrawn });
-        }
-      }
+      if (withdrawn.length > 0) await agent.appendLoggedMessages(config, withdrawn);
       log.append('turn/end', { reason: { kind: 'aborted', cause } });
       this.#parkIfStopped();
     } catch (error) {
@@ -3010,7 +2864,7 @@ export class ThreadPump {
 
   /** 收掉這條 thread 停在等待點的那次 run（{@link PumpAgent.discardSuspended}）；沒有就什麼都不做。 */
   #discardSuspended(): void {
-    this.#agent.discardSuspended?.({ configurable: { thread_id: this.#threadId } });
+    this.#agent.discardSuspended({ configurable: { thread_id: this.#threadId } });
   }
 
   /**
@@ -3052,7 +2906,7 @@ export class ThreadPump {
    * 結果從 {@link unansweredCallResults} 拿，句子與碼同續接的補結。對話那一側也由這裡寫，同 {@link ThreadPump.#withdraw}：
    * 對話上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
    * 只推對話上真的懸著的：模型那一步還沒進對話就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
-   * `langgraph` 寫存檔點、只推存檔點上懸著的；native 經 `appendLoggedMessages`，懸著與否由它照快取篩。
+   * 經 {@link PumpAgent.appendLoggedMessages}：懸著與否由 agent 照自己的對話篩，不在懸著清單上的略過。
    * 先寫日誌、再寫存檔點：存檔點那一步失敗時日誌已經有結果，存檔點沒有，下一輪那幾顆由基座補（句子不同，則數一樣）。
    *
    * @param failure - 這一輪的原錯。
@@ -3065,21 +2919,10 @@ export class ThreadPump {
       if (results.length === 0) return failure;
       for (const { data } of results) log.append('tool/result', data);
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
-      const agent = this.#agent;
-      if (agent.appendLoggedMessages !== undefined) {
-        agent.appendLoggedMessages(
-          config,
-          results.map(({ message }) => toBaseMessage(message)),
-        );
-        return failure;
-      }
-      const pending = new Set(
-        danglingToolCalls((await agent.getState(config)).values).map((call) => call.id),
+      await this.#agent.appendLoggedMessages(
+        config,
+        results.map(({ message }) => toBaseMessage(message)),
       );
-      const messages = results
-        .filter(({ data }) => pending.has(data.callId))
-        .map(({ message }) => toBaseMessage(message));
-      if (messages.length > 0) await agent.updateState(config, { messages });
       return failure;
     } catch (recoveryError) {
       return new AggregateError(
@@ -3582,13 +3425,8 @@ export class ThreadPump {
       return;
     }
     const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
-    const agent = this.#agent;
-    if (agent.appendLoggedMessages !== undefined) {
-      agent.appendLoggedMessages(config, [reply]);
-      return;
-    }
     try {
-      await agent.updateState(config, { messages: [reply] });
+      await this.#agent.appendLoggedMessages(config, [reply]);
     } catch {
       // 見上面：這一輪照樣收成中止。
     }

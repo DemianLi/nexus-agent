@@ -5,6 +5,7 @@
  * `subagent-graph.test.ts` 與探針；這裡只驗出口自己的邊界：找不到就拋、不處理的欄位就拋、併法、存檔點。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { MemorySaver } from '@langchain/langgraph';
 import { StateBackend } from 'deepagents';
@@ -95,7 +96,7 @@ describe('compileSubagentGraph 的邊界', () => {
     const own = new FakeListChatModel({ responses: ['規格自己的'] });
     const graph = compileSubagentGraph(paramsWith({ model: own }), 'worker', options());
     const result = await graph.invoke(
-      { messages: [{ role: 'user', content: '嗨' }] },
+      { messages: [new HumanMessage('嗨')] },
       { configurable: { thread_id: 't' } },
     );
     expect(result.messages.at(-1)?.content).toBe('規格自己的');
@@ -124,10 +125,7 @@ describe('跟隨會話選擇的 middleware（#328 第 3 項）', () => {
     return {
       calls,
       run: () =>
-        graph.invoke(
-          { messages: [{ role: 'user', content: '嗨' }] },
-          { configurable: { thread_id: 't' } },
-        ),
+        graph.invoke({ messages: [new HumanMessage('嗨')] }, { configurable: { thread_id: 't' } }),
     };
   };
 
@@ -170,7 +168,7 @@ describe('跟隨會話選擇的 middleware（#328 第 3 項）', () => {
       ...options(),
     });
     await graph.invoke(
-      { messages: [{ role: 'user', content: '嗨' }] },
+      { messages: [new HumanMessage('嗨')] },
       { configurable: { thread_id: 't' } },
     );
     expect(order).toEqual(['follow', 'summary']);
@@ -190,10 +188,7 @@ describe('存檔點：同一個 thread id 的下一輪看得到上一輪', () =>
   it('第二輪的訊息串含第一輪的人話與回覆；換 thread id 就沒有', async () => {
     const graph = compileSubagentGraph(paramsWith(), 'worker', options());
     const say = (text: string, thread: string) =>
-      graph.invoke(
-        { messages: [{ role: 'user', content: text }] },
-        { configurable: { thread_id: thread } },
-      );
+      graph.invoke({ messages: [new HumanMessage(text)] }, { configurable: { thread_id: thread } });
     await say('第一輪的話', 'a');
     const second = await say('第二輪的話', 'a');
     // 回覆的內容不看（假模型的游標不跟著圖走），看的是第二輪的訊息串裡有第一輪的人話與回覆。

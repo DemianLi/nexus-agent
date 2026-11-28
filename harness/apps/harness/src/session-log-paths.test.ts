@@ -11,6 +11,7 @@
  * 兩條路拿得到的顆粒度不一樣（分片 vs 完整訊息），硬記會變成合成資料。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { SessionLog } from '@nexus/core';
@@ -38,17 +39,19 @@ function noteTool() {
 }
 
 function buildPumpAgent(turns: readonly ScriptedTurn[], gated = false): PumpAgent {
-  return createDeepAgent({
-    model: new ScriptedChatModel({ turns }),
-    tools: [noteTool()],
-    backend: new StateBackend(),
-    ...(gated
-      ? {
-          checkpointer: new MemorySaver(),
-          interruptOn: { take_note: { allowedDecisions: ['approve', 'reject'] as const } },
-        }
-      : {}),
-  }) as unknown as PumpAgent;
+  return adaptLangGraph(
+    createDeepAgent({
+      model: new ScriptedChatModel({ turns }),
+      tools: [noteTool()],
+      backend: new StateBackend(),
+      ...(gated
+        ? {
+            checkpointer: new MemorySaver(),
+            interruptOn: { take_note: { allowedDecisions: ['approve', 'reject'] as const } },
+          }
+        : {}),
+    }),
+  );
 }
 
 const PLAIN_TURNS: readonly ScriptedTurn[] = [{ content: '好的。' }];
@@ -118,7 +121,6 @@ describe('會話事件日誌：web 那條路', () => {
       streamEvents: () => Promise.reject(new Error('模型不見了')),
       // 中止這一輪（#276）才會讀寫 checkpoint，這條測試走不到。
       getState: () => Promise.reject(new Error('這條測試用不到 checkpoint')),
-      updateState: () => Promise.reject(new Error('這條測試用不到 checkpoint')),
     });
     const pump = new ThreadPump(failing, 'web-4');
 

@@ -1,4 +1,5 @@
 import { tool } from '@langchain/core/tools';
+import { adaptLangGraph } from '@nexus/core';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   appendDecision,
@@ -71,7 +72,7 @@ function build(
     checkpointer: new PrunedMemorySaver(),
     interruptOn: interruptOn as never,
   });
-  return { agent: agent as unknown as PumpAgent, calls };
+  return { agent: adaptLangGraph(agent), calls };
 }
 
 function connect(agent: PumpAgent) {

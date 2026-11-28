@@ -2,6 +2,7 @@
  * 一條 WebSocket 上的下行（#2262）：smoke 與 eval 走 SSE，走不到這條路，所以這裡用真的 socket 量。閘門用真的
  * `createWireHandler`，其餘用替身控制回應本體的節奏。
  */
+import { adaptLangGraph } from '@nexus/core';
 import { createMuxFetch, createWireClient, EMBED_PATH_PREFIX, WIRE_MUX_PATH } from '@nexus/wire';
 import type { MuxSocket } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
@@ -13,7 +14,6 @@ import WebSocket from 'ws';
 import { emptyCommandPoint, noSessions, TEST_BROWSER_AUTH, testSessionCookie } from './fixtures.js';
 import { startForcedGc } from './measure/abort-delivery.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import type { PumpAgent } from './thread-pump.js';
 import { BrowserAuth } from './browser-auth.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireMuxHandler } from './wire-mux.js';
@@ -114,11 +114,13 @@ const post = { method: 'POST', body: '{"channels":[]}' };
 
 describe('升級請求的閘門', () => {
   function realHandler(auth = TEST_BROWSER_AUTH) {
-    const agent = createDeepAgent({
-      model: new ScriptedChatModel({ turns: [] }),
-      tools: [],
-      backend: new StateBackend(),
-    }) as unknown as PumpAgent;
+    const agent = adaptLangGraph(
+      createDeepAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        tools: [],
+        backend: new StateBackend(),
+      }),
+    );
     return createWireHandler({
       auth,
       createAgent: () =>

@@ -410,7 +410,6 @@ function scriptedAgent(
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return agent;
 }

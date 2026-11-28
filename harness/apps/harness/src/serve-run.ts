@@ -103,7 +103,6 @@ import { createCredentialService } from './credentials.js';
 import { processLaunchEnv } from './launch-env.js';
 import { DEFAULT_LIVE_MODEL_ID, loadLiveLaunchEnv } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
-import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { assertTrustedAuthority } from './request-trust.js';
@@ -2109,7 +2108,7 @@ async function startServer(
         hostTools,
       } = built;
       return {
-        agent: agent as unknown as PumpAgent,
+        agent,
         stepInbox,
         // 外溢存檔服務（#1553 N0948）：引用別的會話被截斷時全文存這裡。沒開會話日誌就沒有暫存，缺席。
         ...(spillStore !== undefined && { spillStore }),

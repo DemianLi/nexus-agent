@@ -177,7 +177,6 @@ function scriptedAgent(steps: readonly Step[] = []) {
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return agent;
 }

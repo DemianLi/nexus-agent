@@ -72,6 +72,7 @@ import {
   turnReachedMaxTokens,
 } from '@nexus/core';
 import type {
+  LoopAgent,
   SessionEvent,
   SessionEventMap,
   SessionLog,
@@ -89,40 +90,12 @@ import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { declineAll, parseMcpElicitation } from './mcp-elicitation.js';
 import type { McpElicitation } from './mcp-elicitation.js';
 import { asInterruptEntries, markProjectionsHandled } from './thread-pump.js';
-import type { RunProjections } from './thread-pump.js';
 import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
 import { startTurnClock, unsettledToolNames } from './turn-clock.js';
 import type { TurnClock } from './turn-clock.js';
 
-/** host 對背景圖的全部要求：給我一個可抽的 v3 run。`AgentHandle.compileSubagent` 編出來的圖照 pump 的做法轉型過來。 */
-export interface BackgroundAgent {
-  streamEvents(
-    input: never,
-    config: {
-      readonly version: 'v3';
-      readonly durability?: typeof RUN_DURABILITY;
-      readonly configurable: Readonly<Record<string, unknown>>;
-    },
-  ): Promise<AsyncIterable<unknown> & RunProjections>;
-  /**
-   * 把對話灌回這條 thread 的 graph state（冷復活，#1271）。**選填**：只有冷復活用得到；這一支與 {@link seedThread} 都沒有的圖（測試替身）
-   * 叫不醒冷的子代理，叫醒時回 `resume-failed`。`ReactAgent` 有這一支。
-   */
-  updateState?(
-    config: { readonly configurable: { readonly thread_id: string } },
-    values: Record<string, unknown>,
-  ): Promise<unknown>;
-  /** 冷復活時把日誌推出來的對話放進還沒有快取的 thread（native agent 的 `seedThread`）。**選填**，同 {@link updateState}。 */
-  seedThread?(
-    config: { readonly configurable: { readonly thread_id: string } },
-    messages: readonly BaseMessage[],
-  ): void;
-  /**
-   * 收回這條 thread 停在等待點的那次 run（native agent 的 `discardSuspended`）。**選填**：native 的 run 停在等待點時留在記憶體裡，
-   * 同一條 thread 不收回就開不了下一次；`ReactAgent` 的中斷留在存檔點，下一次照樣開，沒有這個成員。
-   */
-  discardSuspended?(config: { readonly configurable: { readonly thread_id: string } }): void;
-}
+/** host 對背景圖的全部要求：一個可抽的 v3 run、冷復活灌回對話、收回停在等待點的 run。 */
+export type BackgroundAgent = Pick<LoopAgent, 'streamEvents' | 'seedThread' | 'discardSuspended'>;
 
 /** 一輪的下場。**永遠是回傳值，不會 reject**——拋錯已記成 `turn/failed`。 */
 export type BackgroundRoundOutcome =
@@ -1635,7 +1608,7 @@ export class BackgroundSubagentHost {
     // 沒掛上限那一格的圖不認這一鍵、照丟。
     let input: unknown = { messages: [new HumanMessage(job.text)], runModelCallCount: 0 };
     // 上一輪停在沒答完的反問上（被中止、代答到上限）：先收回，這一輪才開得起來。
-    this.#agentFor(job.subagent, job.choice).discardSuspended?.({
+    this.#agentFor(job.subagent, job.choice).discardSuspended({
       configurable: { thread_id: log.sessionId },
     });
     // 背景子代理背後沒有人：MCP server 反問（#1098）一律回絕，讓它的工具照常收尾，而不是停在一顆沒人會答的中斷上。

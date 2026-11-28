@@ -111,7 +111,6 @@ function rig(
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
 
   const registry = createRegistry();
@@ -411,7 +410,6 @@ describe('窗內：只擋新一輪', () => {
         })();
       },
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     let log: (() => readonly SessionEvent[]) | undefined;
     const handler = createWireHandler({

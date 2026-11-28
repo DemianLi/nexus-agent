@@ -114,7 +114,8 @@ describe('patch-closer', () => {
   const noUpdateState = (agent: PumpAgent): PumpAgent =>
     new Proxy(agent, {
       get(target, key, receiver) {
-        if (key === 'updateState') return () => Promise.reject(new Error('存檔點寫不進去'));
+        if (key === 'appendLoggedMessages')
+          return () => Promise.reject(new Error('存檔點寫不進去'));
         const value: unknown = Reflect.get(target, key, receiver);
         return typeof value === 'function'
           ? (value as (...args: unknown[]) => unknown).bind(target)

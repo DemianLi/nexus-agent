@@ -8,8 +8,8 @@
  *
  * ## 時刻
  *
- * 建好 agent 之後、第一輪之前寫進 `messages`：`langgraph` 用 `updateState`（一條沒有 checkpoint 的 thread 也寫得進去，之後的第一輪
- * 照常接在後面，實測）；native 用 `seedThread`，那條 thread 在這個行程裡還沒有快取，對話只從日誌來。入口各叫一次：serve 碰到以前寫過的
+ * 建好 agent 之後、第一輪之前寫進 `messages`：經 `LoopAgent.seedThread`：`langgraph` 的 adapter 寫存檔點（一條沒有 checkpoint 的 thread 也寫得進去，之後的第一輪
+ * 照常接在後面，實測）；native 的那條 thread 在這個行程裡還沒有快取，對話只從日誌來。入口各叫一次：serve 碰到以前寫過的
  * thread（`serve-run.ts`）、CLI 的 `--resume`（`cli.ts`）、冷復活的背景子代理（`background-cold.ts`）。
  *
  * **只寫 `messages`，不帶切點。** 壓縮過的會話灌回去的是「摘要＋之後的」，那一串就是新 state 的原始訊息串。
@@ -53,21 +53,12 @@ import type {
   UnreplayableReason,
 } from '@nexus/core';
 
+import type { LoopAgent } from '@nexus/core';
 import { CHECKPOINT_MAX_DEPTH, CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
 import { messageCheckpointDepth, vouchCheckpointDepth } from './pruned-memory-saver.js';
 
-/** 這條 thread 的位址。 */
-interface ThreadConfig {
-  readonly configurable: { readonly thread_id: string };
-}
-
-/**
- * 灌得進去的 agent 那一面：`langgraph` 的圖寫 state（`updateState`），native agent 把推出來的對話放進還沒有快取的 thread
- * （`@nexus/core` 的 `NativeAgent.seedThread`）。
- */
-export type RestorableAgent =
-  | { updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown> }
-  | { seedThread(config: ThreadConfig, messages: readonly BaseMessage[]): void };
+/** 灌得進去的 agent 那一面：{@link LoopAgent.seedThread}。 */
+export type RestorableAgent = Pick<LoopAgent, 'seedThread'>;
 
 /* -------------------------------------------------------------------------- */
 /* 過大的工具結果：模型看到的是組裝點換過的預覽                               */
@@ -182,7 +173,7 @@ function depthBounded(event: SessionEvent): boolean {
  * @param threadId - 這條 thread 的 id。
  * @param events - 續接讀回來的 root 日誌。
  * @returns 推的結果，給入口披露用。
- * @throws `updateState`／`seedThread` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
+ * @throws `seedThread` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
  *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
  *   native 沒有存檔點，灌回之前用同一把尺量一次（`messageCheckpointDepth`），兩個 loop 拒同一份日誌：太深的訊息灌進去，下一輪會在呼叫堆疊上爆，
  *   回的是認不得的錯。
@@ -208,21 +199,33 @@ export async function restoreConversation(
   });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
     const config = { configurable: { thread_id: threadId } };
-    if ('seedThread' in agent) {
-      for (const message of replay.messages as readonly BaseMessage[]) {
+    // native 沒有存檔點替它把關，灌進去之前量一次；`langgraph` 由存檔點寫入時量（下面接住它拋的錯）。兩條路拒的是同一份日誌，錯誤訊息的字各自照舊。
+    let guardError: unknown;
+    const guard = (messages: readonly BaseMessage[]): void => {
+      for (const message of messages) {
         if (bounded.has(message)) continue;
         const depth = messageCheckpointDepth(message);
         if (depth > CHECKPOINT_MAX_DEPTH) {
-          throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH, seqOf.get(message), 'thread');
+          guardError = new CheckpointDepthError(
+            depth,
+            CHECKPOINT_MAX_DEPTH,
+            seqOf.get(message),
+            'thread',
+          );
+          throw guardError;
         }
       }
-      agent.seedThread(config, replay.messages as readonly BaseMessage[]);
-      return replay;
-    }
+    };
     try {
-      await agent.updateState(config, { messages: [...replay.messages] as BaseMessage[] });
+      await agent.seedThread(config, replay.messages as readonly BaseMessage[], guard);
     } catch (error) {
-      if (!(error instanceof CheckpointDepthError) || error.seq !== undefined) throw error;
+      if (
+        error === guardError ||
+        !(error instanceof CheckpointDepthError) ||
+        error.seq !== undefined
+      ) {
+        throw error;
+      }
       let deepest: BaseMessage | undefined;
       let most = -1;
       for (const message of replay.messages) {

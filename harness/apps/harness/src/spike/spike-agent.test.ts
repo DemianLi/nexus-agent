@@ -34,11 +34,10 @@ describe('Phase 0 spike：最小 deep agent', () => {
     const { agent } = await createSpikeAgent();
 
     const nodes: string[] = [];
-    for await (const chunk of await agent.stream(
-      { messages: [new HumanMessage('跑一次。')] },
-      { streamMode: 'updates' },
-    )) {
-      nodes.push(...Object.keys(chunk as Record<string, unknown>));
+    for await (const chunk of await agent.stream({ messages: [new HumanMessage('跑一次。')] }, {
+      streamMode: 'updates',
+    } as never)) {
+      nodes.push(...Object.keys(chunk as unknown as Record<string, unknown>));
     }
 
     expect(nodes.length).toBeGreaterThan(1);
@@ -51,7 +50,7 @@ describe('Phase 0 spike：最小 deep agent', () => {
     const aiChunks: string[] = [];
     for await (const [message] of (await agent.stream(
       { messages: [new HumanMessage('跑一次。')] },
-      { streamMode: 'messages' },
+      { streamMode: 'messages' } as never,
     )) as AsyncIterable<[AIMessageChunk, unknown]>) {
       if (message.getType() === 'ai') {
         aiChunks.push(message.text);

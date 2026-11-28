@@ -17,7 +17,7 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   withModelCallStep,
 } from '@nexus/core';
-import type { AgentLoopKind, PluginEntry, SessionEvent } from '@nexus/core';
+import type { AgentLoopKind, PluginEntry, RunProjections, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -27,7 +27,6 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { markProjectionsHandled } from './thread-pump.js';
-import type { RunProjections } from './thread-pump.js';
 
 const THREAD = 'native-parity';
 
@@ -781,7 +780,7 @@ describe('native 的 stream() 的 streamMode，對照 LangGraph', () => {
           for await (const chunk of await built.agent.stream(toAgentInvocation('跑。'), {
             configurable: { thread_id: THREAD },
             ...(streamMode !== undefined && { streamMode }),
-          })) {
+          } as never)) {
             chunks.push(Object.keys(chunk as object));
           }
           return chunks;
@@ -1103,7 +1102,7 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
 });
 
 describe('native 的多輪、接回日誌上的幾則與上限，對照 LangGraph', () => {
-  it('同一條 thread：第一輪之後補一則（native 經 appendLoggedMessages、LangGraph 經 updateState），同 id 再補是取代，第二輪接著跑', async () => {
+  it('同一條 thread：第一輪之後經 appendLoggedMessages 補一則，同 id 再補是取代，第二輪接著跑', async () => {
     const run = async (loop: AgentLoopKind) => {
       const built = await createNexusAgent({
         model: new ScriptedChatModel({
@@ -1118,14 +1117,8 @@ describe('native 的多輪、接回日誌上的幾則與上限，對照 LangGrap
         agentLoop: loop,
       });
       const config = { configurable: { thread_id: THREAD } };
-      const agent = built.agent as unknown as {
-        appendLoggedMessages?(c: typeof config, messages: readonly BaseMessage[]): void;
-        updateState?(c: typeof config, values: Record<string, unknown>): Promise<unknown>;
-      };
-      const append = async (message: BaseMessage): Promise<void> => {
-        if (agent.appendLoggedMessages !== undefined) agent.appendLoggedMessages(config, [message]);
-        else await agent.updateState!(config, { messages: [message] });
-      };
+      const append = (message: BaseMessage): Promise<void> =>
+        built.agent.appendLoggedMessages(config, [message]);
       try {
         await built.agent.invoke(toAgentInvocation('第一句。'), config);
         await append(new AIMessage({ content: '補的', id: 'patched' }));

@@ -41,6 +41,16 @@ import type { RunnableConfig } from '@langchain/core/runnables';
 import { Command, GraphInterrupt, GraphRecursionError, isCommand } from '@langchain/langgraph';
 
 import { TurnBlockedError } from '../archive-gate.js';
+import {
+  danglingLoggedCalls,
+  type DanglingCall,
+  type LoopAgent,
+  type LoopDefaults,
+  type LoopInput,
+  type StreamConfig,
+  type ThreadConfig,
+} from '../loop-agent.js';
+import type { SessionEvent } from '../session-log.js';
 import type { EventDispatcher } from '../events.js';
 import { HUMAN_INPUT_CONFIG_KEY, HumanInputWithdrawn, NO_HUMAN_INPUT } from '../human-input.js';
 import { TURN_CANCEL_CONFIG_KEY, turnCancelSignalOf } from '../turn-cancel.js';
@@ -110,12 +120,6 @@ export type RunStopReason = { readonly kind: 'max-turns'; readonly limit: number
  */
 export const RUN_STOP_CONFIG_KEY = 'nexus_run_stop';
 
-/** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意同 LangGraph。 */
-interface LoopDefaults {
-  readonly recursionLimit?: number;
-  readonly maxConcurrency?: number;
-}
-
 /** 各掛鉤支援的跳轉目標；`canJumpTo` 宣告了別的就在建構時拋，不在跑到時靜靜忽略。 */
 const SUPPORTED_JUMPS: readonly (readonly [
   'beforeAgent' | 'beforeModel' | 'afterAgent',
@@ -131,10 +135,6 @@ const DEFAULT_RECURSION_LIMIT = 25;
 
 /** 沒給 `maxConcurrency` 時同一步的工具全部一起起跑，同 LangGraph。 */
 const UNBOUNDED = Number.POSITIVE_INFINITY;
-
-/** 一次 run 收到的輸入。 */
-type LoopInput =
-  { readonly messages?: readonly BaseMessage[]; readonly [key: string]: unknown } | Command;
 
 /** 一次 run 的觀察者：v3 事件、CLI 的 updates。 */
 interface RunObserver {
@@ -487,12 +487,11 @@ export interface NativeStateSnapshot {
 }
 
 /**
- * native loop 的 agent。形狀同 LangGraph 編出來的圖的成員，只有 harness 實際叫的那幾個（`streamEvents`、`stream`、`invoke`、`withConfig`，
- * 與只讀快取的 `getState`），沒有 `updateState`。thread 的 state 是這個實例的快取（`withConfig` 出來的共用同一份）：`messages` 由日誌推，
+ * native loop 的 agent，實作 {@link LoopAgent}：`streamEvents`、`stream`、`invoke`、`withConfig`，與只讀快取的 `getState`。thread 的 state 是這個實例的快取（`withConfig` 出來的共用同一份）：`messages` 由日誌推，
  * 寫進去的路只有跑一輪（含 {@link NativeAgent.discardSuspended} 收回時套進已收完的寫入）、{@link NativeAgent.seedThread} 與
  * {@link NativeAgent.appendLoggedMessages}；其餘鍵（例如 `files`）只在快取裡，快取不在就沒有。
  */
-export class NativeAgent {
+export class NativeAgent implements LoopAgent {
   readonly #params: NativeAgentParams;
   readonly #threads: Map<string, LoopState>;
   /** 停在等待點、等答覆的 run，一條 thread 至多一顆；`withConfig` 出來的那一份共用同一張表。 */
@@ -670,9 +669,15 @@ export class NativeAgent {
    * {@link appendLoggedMessages} 跟著日誌往前推。
    * @param config - 帶 `configurable.thread_id`。
    * @param messages - 從日誌推出來的對話。
-   * @throws 這條 thread 已經有快取：日誌以外的東西不能覆蓋它。
+   * @param guard - 沒有存檔點替它把關，放進去之前由這一支檢查，不能放就拋。
+   * @throws 這條 thread 已經有快取：日誌以外的東西不能覆蓋它；`guard` 拒收。
    */
-  seedThread(config: RunnableConfig, messages: readonly BaseMessage[]): void {
+  async seedThread(
+    config: ThreadConfig,
+    messages: readonly BaseMessage[],
+    guard: (messages: readonly BaseMessage[]) => void,
+  ): Promise<void> {
+    guard(messages);
     const threadId = threadIdOf(config);
     if (this.#threads.has(threadId)) {
       throw new Error(`native agent loop：thread "${threadId}" 已經有快取，不能再從日誌灌一次`);
@@ -687,7 +692,10 @@ export class NativeAgent {
    * @param config - 帶 `configurable.thread_id`。
    * @param messages - 已經寫進日誌的那幾則。
    */
-  appendLoggedMessages(config: RunnableConfig, messages: readonly BaseMessage[]): void {
+  async appendLoggedMessages(
+    config: ThreadConfig,
+    messages: readonly BaseMessage[],
+  ): Promise<void> {
     const state = this.#stateOf(threadIdOf(config));
     const pending = pendingCallIds(state.messages);
     const accepted = messages.filter(
@@ -712,6 +720,14 @@ export class NativeAgent {
    * @param input - `{ messages }`，加上不以 `_` 開頭、`stateSchema` 宣告過的鍵（{@link StateChannels.inputOf}）；其餘的鍵丟掉。
    * @param config - 帶 `configurable.thread_id`。
    */
+  async stream(
+    input: LoopInput,
+    config: StreamConfig,
+  ): Promise<AsyncIterable<readonly [mode: string, payload: unknown]>>;
+  async stream(
+    input: LoopInput,
+    config?: RunnableConfig & { readonly streamMode?: string | readonly string[] },
+  ): Promise<AsyncIterable<unknown>>;
   async stream(
     input: LoopInput,
     config: RunnableConfig & { readonly streamMode?: string | readonly string[] } = {},
@@ -787,12 +803,24 @@ export class NativeAgent {
    * 等核准那幾顆的日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
    * @param config - 帶 `configurable.thread_id`。
    */
-  discardSuspended(config: RunnableConfig): void {
+  discardSuspended(config: ThreadConfig): void {
     const threadId = threadIdOf(config);
     const link = this.#parked.get(threadId);
     if (link === undefined) return;
     this.#parked.delete(threadId);
     link.suspension.withdraw();
+  }
+
+  /**
+   * 這條 thread 對話上還沒配到結果的工具呼叫，從日誌算（{@link danglingLoggedCalls}）；不讀 thread 的快取。
+   * @param _config - 這條 thread 的位址；日誌已經是這條 thread 的。
+   * @param events - 這份日誌的事件，照 `seq` 排。
+   */
+  async danglingCalls(
+    _config: ThreadConfig,
+    events: readonly SessionEvent[],
+  ): Promise<readonly DanglingCall[]> {
+    return danglingLoggedCalls(events);
   }
 
   #resume(command: Command, config: RunnableConfig): AsyncIterable<NativeProtocolEvent> {

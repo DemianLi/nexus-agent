@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ColdChildStore, ColdInspection } from './background-cold.js';
 import { inspectionOf } from './background-cold.js';
-import { BackgroundSubagentError, BackgroundSubagentHost } from './background-subagents.js';
+import { BackgroundSubagentHost } from './background-subagents.js';
 import type { BackgroundSubagentStatus, ModelChoice } from './background-subagents.js';
 import { fakeBackgroundAgent } from './fake-agent.fixture.js';
 
@@ -131,10 +131,11 @@ function fakeAgent() {
   const seen: string[] = [];
   const agent = fakeBackgroundAgent({
     streamEvents(input) {
-      seen.push(String((input as { messages: { content: unknown }[] }).messages.at(-1)?.content));
+      seen.push(
+        String((input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content),
+      );
       return Promise.resolve((async function* () {})() as never);
     },
-    updateState: () => Promise.resolve(undefined),
   });
   return { agent, seen };
 }
@@ -445,28 +446,6 @@ describe('失敗：放掉租約、仍是冷的、可以再試', () => {
     expect(subagentLog(m.sessions, 'bg-1')).toBeUndefined();
     expect(m.worker.seen).toEqual([]);
     await m.host.close();
-  });
-
-  it('圖沒有 updateState（替身）：叫不醒，講得出原因', async () => {
-    const f = fixture('bg-1');
-    const fake = fakeStore([f]);
-    const store: ColdChildStore = {
-      ...fake.store,
-      restore: (agent) =>
-        agent.updateState === undefined
-          ? Promise.reject(new Error('這張圖不能把對話灌回去'))
-          : Promise.resolve({ kind: 'replayed', messages: [] } as never),
-    };
-    const host = new BackgroundSubagentHost({
-      sessions: new SessionRegistry(ROOT, { rootSeed: rootWithCatalog(['bg-1']) }),
-      compile: () => ({ streamEvents: () => Promise.reject(new Error('不該跑')) }),
-      cold: store,
-    });
-    await expect(host.control.sendFromUser('bg-1', '話')).rejects.toBeInstanceOf(
-      BackgroundSubagentError,
-    );
-    expect(f.closed).toBe(1);
-    await host.close();
   });
 
   it('接回來的那份日誌身分變了（冷讀之後被改過）：以接回來的為準，壞了就放掉不叫', async () => {

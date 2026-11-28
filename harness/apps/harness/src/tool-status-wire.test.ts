@@ -450,7 +450,6 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
     const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     const pump = new ThreadPump(agent, 'order');
     const frames: Event[] = [];

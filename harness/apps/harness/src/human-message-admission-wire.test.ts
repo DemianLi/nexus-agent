@@ -68,7 +68,6 @@ function heldAgent(hold: Promise<void>): PumpAgent {
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
 }
 

@@ -73,7 +73,12 @@ async function observe(create: (model: RecordingModel) => Promise<NexusAgentHand
     return JSON.stringify({
       requests: model.prompts.map((prompt) => project(prompt)),
       bindings: model.sink,
-      nodes: Object.keys(agent.graph?.nodes ?? {}),
+      nodes: Object.keys(
+        agent.graph?.nodes ??
+          (agent.graph as { graph?: { nodes?: Record<string, unknown> } } | undefined)?.graph
+            ?.nodes ??
+          {},
+      ),
       commands: handle.commands
         .list()
         .map((command) => command.name)

@@ -25,7 +25,8 @@ import {
 import { ScriptedChatModel } from '../scripted-model.js';
 import { ThreadFeed } from '../thread-feed.js';
 import { ThreadPump } from '../thread-pump.js';
-import type { PumpAgent } from '../thread-pump.js';
+import { adaptLangGraph } from '@nexus/core';
+import type { LoopAgent } from '@nexus/core';
 import { createWireHandler } from '../wire-handler.js';
 import { startForcedGc } from './abort-delivery.js';
 import type { StartWireServer } from './abort-delivery.js';
@@ -87,12 +88,14 @@ function countSubscriptions(target: { subscribe: Subscribe }): {
   };
 }
 
-function scriptedAgent(): PumpAgent {
-  return createDeepAgent({
-    model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-    tools: [],
-    backend: new StateBackend(),
-  }) as unknown as PumpAgent;
+function scriptedAgent(): LoopAgent {
+  return adaptLangGraph(
+    createDeepAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+      tools: [],
+      backend: new StateBackend(),
+    }),
+  );
 }
 
 /** 放棄 `total` 次，數有幾條訂閱沒收掉。 */

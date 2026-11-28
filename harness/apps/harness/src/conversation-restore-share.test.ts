@@ -162,7 +162,7 @@ function oldFormatDepth(levels: number): number {
 }
 
 describe('巢狀的值與讀盤的日誌共用', () => {
-  it('經真的 updateState 寫進去：巢狀的值就是日誌那一份（同一個物件），沒有 id 的那則補上了 id，整則凍過', async () => {
+  it('經真的 seedThread 寫進去：巢狀的值就是日誌那一份（同一個物件），沒有 id 的那則補上了 id，整則凍過', async () => {
     const agent = await realAgent();
     const events = readBack(lines(oneTurn({ q: { deep: [1, 2] } })));
 
@@ -186,10 +186,10 @@ describe('巢狀的值與讀盤的日誌共用', () => {
     const events = readBack(lines(oneTurn({ q: 'x' })));
     const before = JSON.stringify(events);
     const meddling: RestorableAgent = {
-      updateState: async (cfg, values) => {
-        const [, reply] = values['messages'] as BaseMessage[];
+      seedThread: async (cfg, messages, guard) => {
+        const [, reply] = messages;
         (reply as AIMessage).tool_calls![0]!.args['q'] = '被改了';
-        return agent.updateState(cfg, values);
+        return agent.seedThread(cfg, messages, guard);
       },
     };
 
@@ -219,9 +219,8 @@ describe('巢狀的值與讀盤的日誌共用', () => {
 
     await restoreConversation(
       {
-        updateState: async (_cfg, values) => {
-          written.push(values['messages'] as BaseMessage[]);
-          return {};
+        seedThread: async (_cfg, messages) => {
+          written.push([...messages]);
         },
       },
       THREAD,
@@ -318,7 +317,7 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     expect(checkpointDepth(restored) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH).toBe(CHECKPOINT_MAX_DEPTH);
 
     // 之後再寫一筆：不拋，深的那則參數不變（它已凍結，`seal` 跳過、不再量）。
-    await agent.updateState(config, { messages: [new HumanMessage('再一句')] });
+    await agent.appendLoggedMessages(config, [new HumanMessage('再一句')]);
     const after = await stateMessages(agent);
     expect(after.at(-1)?.content).toBe('再一句');
     expect(firstReply(after, events).reply.tool_calls?.[0]?.args).toEqual(args);
@@ -383,7 +382,7 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
         { type: 'text', text: '看' },
       ]);
 
-      await agent.updateState(config, { messages: [new HumanMessage('再一句')] });
+      await agent.appendLoggedMessages(config, [new HumanMessage('再一句')]);
       expect((await stateMessages(agent)).at(-1)?.content).toBe('再一句');
     },
   );

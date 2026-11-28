@@ -93,7 +93,7 @@ describe('載體本身（假 agent）', () => {
     const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
-          (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+          (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
         );
         seen.push({ configurable: { ...config.configurable }, store: als.getStore(), text });
         await script(text);
@@ -511,7 +511,7 @@ describe('載體本身（假 agent）', () => {
       const agent = fakeBackgroundAgent({
         async streamEvents(input, config) {
           const text = String(
-            (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+            (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
           );
           const signal = config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
           await script(text, signal);
@@ -687,7 +687,7 @@ describe('載體本身（假 agent）', () => {
       const agent = fakeBackgroundAgent({
         async streamEvents(input, config) {
           const text = String(
-            (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+            (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
           );
           order.push(text);
           const signal = config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
@@ -1939,7 +1939,7 @@ describe('結算通知（#840）', () => {
     const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
-          (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+          (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
         );
         const runId = config.configurable[BACKGROUND_SESSION_CONFIG_KEY] as string;
         await script(
@@ -2824,7 +2824,7 @@ describe('close 中止進行中的輪（#841）', () => {
     const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
-          (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+          (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
         );
         const runId = config.configurable[BACKGROUND_SESSION_CONFIG_KEY] as string;
         const signal = config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal;

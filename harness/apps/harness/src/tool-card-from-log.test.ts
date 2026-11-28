@@ -359,7 +359,6 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
     const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     const pump = new ThreadPump(agent, 'order');
     const frames: Event[] = [];
@@ -494,7 +493,6 @@ describe('結果文字：即時與重播同一串（#439）', () => {
     const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     const pump = new ThreadPump(agent, 'text', undefined, undefined, toolText);
     const frames: Event[] = [];
@@ -645,7 +643,6 @@ describe('meta：即時與重播同一份（#617）', () => {
     const agent = fakePumpAgent({
       streamEvents: async () => stream(),
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     const pump = new ThreadPump(agent, 'meta', undefined, undefined, toolText);
     const frames: Event[] = [];

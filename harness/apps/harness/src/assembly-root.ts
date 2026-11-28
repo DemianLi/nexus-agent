@@ -90,8 +90,8 @@ import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { GoalDriverPort, GoalRoundCap } from './goal-driver.js';
-import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
-import type { DelegationToolName } from '@nexus/core';
+import type { AssemblyDrop } from './agent-factory.js';
+import type { DelegationToolName, LoopAgent } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import {
   CONTAINED_FILESYSTEM,
@@ -832,7 +832,7 @@ function createCliModel(
   });
 }
 
-export type NexusAgent = NexusAgentHandle['agent'];
+export type NexusAgent = LoopAgent;
 
 /** {@link createCliAgent} 的入口身分選項。**省略都是有意義的**：兩個入口各自只傳自己的那幾格。 */
 export interface CreateCliAgentSession {

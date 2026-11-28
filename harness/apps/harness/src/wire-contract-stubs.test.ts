@@ -8,6 +8,7 @@
  * 收下文字、丟掉附件（使用者會以為檔案送出去了）。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   createWireClient,
@@ -20,7 +21,6 @@ import { describe, expect, it } from 'vitest';
 
 import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
 const BASE_URL = 'http://wire.test';
@@ -31,11 +31,13 @@ function connect() {
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => {
       created += 1;
-      const agent = createDeepAgent({
-        model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-        backend: new StateBackend(),
-        checkpointer: new MemorySaver(),
-      }) as unknown as PumpAgent;
+      const agent = adaptLangGraph(
+        createDeepAgent({
+          model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+          backend: new StateBackend(),
+          checkpointer: new MemorySaver(),
+        }),
+      );
       return {
         agent,
         attachSessions: noSessions,

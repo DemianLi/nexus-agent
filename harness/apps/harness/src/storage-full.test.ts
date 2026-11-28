@@ -92,7 +92,6 @@ describe('線上那顆 failed frame', () => {
           if (rethrow) throw thrown;
         })(),
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     const warnings: string[] = [];
     const pump = new ThreadPump(

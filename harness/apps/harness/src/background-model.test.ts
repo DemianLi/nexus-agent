@@ -48,7 +48,7 @@ describe('host 逐次帶模型（假 agent）', () => {
         const agent = fakeBackgroundAgent({
           async streamEvents(input) {
             const text = String(
-              (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+              (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
             );
             handled.push({ agent: label, text });
             await hold;

@@ -9,6 +9,7 @@
  * 否則「什麼都沒接上所以什麼都沒漏」也會綠。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -68,11 +69,13 @@ interface Faults {
 }
 
 function scriptedAgent(): PumpAgent {
-  return createDeepAgent({
-    model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-    tools: [],
-    backend: new StateBackend(),
-  }) as unknown as PumpAgent;
+  return adaptLangGraph(
+    createDeepAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+      tools: [],
+      backend: new StateBackend(),
+    }),
+  );
 }
 
 const workspaces: string[] = [];

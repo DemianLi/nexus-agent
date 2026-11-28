@@ -217,13 +217,6 @@ export interface RunBenchmarkOptions {
   readonly signal?: AbortSignal;
 }
 
-type EvalAgent = Awaited<ReturnType<typeof createNexusAgent>>['agent'];
-
-/** 基座回的最終狀態，只取我們讀的那一格。 */
-interface AgentResult {
-  readonly messages: readonly BaseMessage[];
-}
-
 /**
  * 跑一條基準任務。
  *
@@ -246,11 +239,8 @@ export async function runBenchmarkCase(
   const calls = options.calls ?? [];
 
   try {
-    const invoke = (
-      agent as EvalAgent as unknown as {
-        invoke(input: unknown, config?: unknown): Promise<AgentResult>;
-      }
-    ).invoke.bind(agent);
+    const invoke: Awaited<ReturnType<typeof createNexusAgent>>['agent']['invoke'] =
+      agent.invoke.bind(agent);
     const boundTools = (model as unknown as { boundTools?: readonly unknown[] }).boundTools;
     const tally = new UsageTally(
       options.onUsage ?? (() => {}),

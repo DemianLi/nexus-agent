@@ -400,7 +400,9 @@ describe('pump 的邊界', () => {
       getState: async () => {
         throw new Error('存檔點讀不到');
       },
-      updateState: async () => ({}),
+      appendLoggedMessages: async () => {
+        throw new Error('存檔點讀不到');
+      },
     });
     const warnings: string[] = [];
     const pump: ThreadPump = new ThreadPump(
@@ -459,7 +461,6 @@ describe('取消', () => {
           throw auth;
         })(),
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
     const pump = new ThreadPump(agent, 'cancel');
     const frames: Event[] = [];
