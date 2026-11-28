@@ -53,6 +53,12 @@ describe.each(Object.keys(PACKAGES) as (keyof typeof PACKAGES)[])('%s 的 lint',
     const [, code] = CASTS[0];
     expect(await restricted(name, code, 'src/violation.test.ts')).toEqual([]);
     expect(await restricted(name, code, 'src/violation.fixture.ts')).toEqual([]);
+    expect(await restricted(name, code, 'src/violation.test.helper.ts')).toEqual([]);
+  });
+
+  it('同一行放在 `.test.helper.ts` 以外的非測試檔照樣紅', async () => {
+    const [, code] = CASTS[0];
+    expect((await restricted(name, code, 'src/helper.ts')).length).toBeGreaterThan(0);
   });
 
   it('轉成別的型別、型別註記與 `satisfies` 不紅', async () => {
@@ -61,6 +67,8 @@ describe.each(Object.keys(PACKAGES) as (keyof typeof PACKAGES)[])('%s 的 lint',
       'export const a = x as string;',
       'export const b: LoopAgent = x as never;',
       'export const c = x as Record<string, LoopAgent>;',
+      'export const d = <string>x;',
+      'export const e = { ok: true } satisfies { ok: boolean };',
       '',
     ].join('\n');
     expect(await restricted(name, code, 'src/ok.ts')).toEqual([]);
