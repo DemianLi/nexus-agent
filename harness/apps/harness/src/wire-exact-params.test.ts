@@ -51,7 +51,6 @@ function fakeAgent() {
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return { agent: agent, ran };
 }

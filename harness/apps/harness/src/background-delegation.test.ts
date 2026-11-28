@@ -1189,7 +1189,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
         expect('__interrupt__' in result).toBe(true);
         const state = (await run.built.agent.getState({
           configurable: { thread_id: 'thread-1' },
-        })) as { tasks: readonly { interrupts: readonly unknown[] }[] };
+        })) as unknown as { tasks: readonly { interrupts: readonly unknown[] }[] };
         expect(state.tasks.flatMap((task) => task.interrupts)).not.toEqual([]);
         // 子代理被告知的是前景那句：核准交給使用者。
         const system = systemTextOf(run.workerModel.prompts[0] ?? []);
@@ -1235,7 +1235,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
         await until(() => run.workerModel.prompts.length === 2);
         const state = (await run.built.agent.getState({
           configurable: { thread_id: 'thread-1' },
-        })) as { tasks: readonly { interrupts: readonly unknown[] }[] };
+        })) as unknown as { tasks: readonly { interrupts: readonly unknown[] }[] };
         expect(state.tasks.flatMap((task) => task.interrupts)).toEqual([]);
         expect('__interrupt__' in result).toBe(false);
         expect(controller.peekGrant()).toBeUndefined();

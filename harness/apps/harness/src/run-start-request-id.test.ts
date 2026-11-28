@@ -66,7 +66,6 @@ function agentWith(holds: readonly Promise<void>[] = []) {
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return { agent: agent, ran };
 }

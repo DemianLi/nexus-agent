@@ -6,6 +6,7 @@
  * `threadId`），這一檔紅。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -17,7 +18,7 @@ import {
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { AttachSessions } from './session-attach.js';
-import type { PumpAgent, TurnFailedReport } from './thread-pump.js';
+import type { TurnFailedReport } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
@@ -30,11 +31,13 @@ afterEach(async () => {
 
 describe('背景子代理的失敗通知', () => {
   it('port.onTurnFailed 帶上這條 thread 的 id 再轉給外面的回呼；沒掛回呼時 port 上就沒有這一格', async () => {
-    const agent = createDeepAgent({
-      model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-      tools: [],
-      backend: new StateBackend(),
-    }) as unknown as PumpAgent;
+    const agent = adaptLangGraph(
+      createDeepAgent({
+        model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+        tools: [],
+        backend: new StateBackend(),
+      }),
+    );
 
     const received: TurnFailedReport[] = [];
     const ports: Parameters<AttachSessions>[1][] = [];

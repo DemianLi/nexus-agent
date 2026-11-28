@@ -686,7 +686,6 @@ function handleAgent(
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return { agent: agent, seen };
 }

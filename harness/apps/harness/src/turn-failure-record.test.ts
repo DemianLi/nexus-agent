@@ -368,11 +368,13 @@ describe('整條產品路徑（createNexusAgent＋ThreadPump）', () => {
 
   it('拋出來的值 toString 會拋錯：turn/failed 照樣寫成（UNKNOWN、固定字），不丟出原本的錯誤以外的東西', async () => {
     const value = hostile();
-    const { failed, thrown } = await failedEvents([], (agent) => ({
-      streamEvents: () => Promise.reject(value),
-      getState: (config) => agent.getState(config),
-      updateState: (config, values) => agent.updateState!(config, values),
-    }));
+    const { failed, thrown } = await failedEvents([], (agent) =>
+      fakePumpAgent({
+        streamEvents: () => Promise.reject(value),
+        getState: (config) => agent.getState(config),
+        appendLoggedMessages: (config, messages) => agent.appendLoggedMessages(config, messages),
+      }),
+    );
     expect(failed).toHaveLength(1);
     expect(failed[0]!.error.code).toBe('UNKNOWN');
     expect(failed[0]!.message).toBe(LLM_FAILURE_FALLBACK_MESSAGE);
@@ -409,8 +411,10 @@ describe('收回那一步（#withdraw）失敗：同一支記法', () => {
     let broken = false;
     const agent = fakePumpAgent({
       streamEvents: (input, config) => real.streamEvents(input, config),
-      getState: (config) => (broken ? Promise.reject(hostile()) : real.getState(config)),
-      updateState: (config, values) => real.updateState!(config, values),
+      getState: (config) => real.getState(config),
+      danglingCalls: (config, events) =>
+        broken ? Promise.reject(hostile()) : real.danglingCalls(config, events),
+      appendLoggedMessages: (config, messages) => real.appendLoggedMessages(config, messages),
     });
     const pump = new ThreadPump(agent, 'turn-failure-withdraw');
     const detach = built.attachSession(pump.sessions);

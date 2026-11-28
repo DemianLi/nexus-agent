@@ -14,6 +14,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -194,7 +195,7 @@ describe('工具本體拋錯（#346）', () => {
         { name: 'worker', description: '幹活的。', systemPrompt: '幹活。', tools: [boom] },
       ],
     });
-    const pump = new ThreadPump(agent as unknown as PumpAgent, 'bare-deep-agent');
+    const pump = new ThreadPump(adaptLangGraph(agent), 'bare-deep-agent');
 
     await expect(pump.submit({ kind: 'message', text: '跑。' })).rejects.toThrow(OVERLOADED);
     await pump.whenIdle();

@@ -1,10 +1,16 @@
+import type { LoopAgent } from '@nexus/core';
+
 import type { BackgroundAgent } from './background-subagents.js';
 import type { PumpAgent } from './thread-pump.js';
 
 type MemberNames<T> = readonly (keyof T & string)[];
 
-function fakeMembers<T extends object>(required: MemberNames<T>, members: Partial<T>): T {
-  const target: Record<string, unknown> = { ...members };
+function fakeMembers<T extends object>(
+  required: MemberNames<T>,
+  members: Partial<T>,
+  defaults: Partial<T> = {},
+): T {
+  const target: Record<string, unknown> = { ...defaults, ...members };
   return new Proxy(target, {
     get(held, name) {
       if (!(name in held) && required.includes(name as never)) {
@@ -17,16 +23,26 @@ function fakeMembers<T extends object>(required: MemberNames<T>, members: Partia
   }) as T;
 }
 
-type AllMemberNames<T> = T extends unknown ? keyof T & string : never;
+type PumpFakeMembers = {
+  [K in keyof PumpAgent]?: K extends 'streamEvents' ? (...args: never[]) => unknown : PumpAgent[K];
+};
 
-type LoosePumpMembers = { [K in AllMemberNames<PumpAgent>]?: (...args: never[]) => unknown };
+const PUMP_DEFAULTS: Partial<LoopAgent> = {
+  discardSuspended: () => undefined,
+  appendLoggedMessages: () => Promise.resolve(),
+  danglingCalls: () => Promise.resolve([]),
+};
 
-/** 沒給的 `streamEvents`／`getState` 一呼叫就拋錯；選填成員沒給就不存在（產品碼靠 `!== undefined` 認 loop）。 */
-export function fakePumpAgent(members: LoosePumpMembers = {}): PumpAgent {
-  return fakeMembers<PumpAgent>(['streamEvents', 'getState'], members as Partial<PumpAgent>);
+export function fakePumpAgent(members: PumpFakeMembers = {}): PumpAgent {
+  return fakeMembers<PumpAgent>(
+    ['streamEvents', 'stream', 'invoke', 'withConfig', 'getState', 'seedThread'],
+    members as Partial<PumpAgent>,
+    PUMP_DEFAULTS,
+  );
 }
 
-/** 沒給的 `streamEvents` 一呼叫就拋錯；選填成員沒給就不存在。 */
 export function fakeBackgroundAgent(members: Partial<BackgroundAgent> = {}): BackgroundAgent {
-  return fakeMembers<BackgroundAgent>(['streamEvents'], members);
+  return fakeMembers<BackgroundAgent>(['streamEvents', 'seedThread'], members, {
+    discardSuspended: () => undefined,
+  });
 }

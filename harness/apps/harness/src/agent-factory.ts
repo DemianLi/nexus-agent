@@ -101,11 +101,7 @@ import { subagentDefinitionValidator } from './subagent-definition.js';
 import type { DelegationBaseline } from './subagent-model-selection.js';
 import type { BackgroundSubagentsOptions } from './background-delegation.js';
 import { recordedModelSelectionPolicy } from './model-selection-policy.js';
-import type {
-  BackgroundAgent,
-  BackgroundParentPort,
-  SessionDetach,
-} from './background-subagents.js';
+import type { BackgroundParentPort, SessionDetach } from './background-subagents.js';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
@@ -1313,7 +1309,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
               subagent,
               options.agentLoop === 'native' ? undefined : options.checkpointer!,
               model,
-            ) as unknown as BackgroundAgent;
+            );
           },
           backgroundPort,
         );

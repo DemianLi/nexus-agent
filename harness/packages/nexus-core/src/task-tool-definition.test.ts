@@ -4,6 +4,7 @@
  * 組好的 agent 送給模型的是 core 這一份、它頂替的（`originalToolOf`）是基座那顆，也在這裡量。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { createSubAgentMiddleware, StateBackend } from 'deepagents';
@@ -92,7 +93,7 @@ describe('組好的 agent', () => {
       model: new FakeListChatModel({ responses: ['好。'] }),
       backend: new StateBackend(),
     });
-    await agent.invoke({ messages: [{ role: 'user', content: '嗨' }] });
+    await agent.invoke({ messages: [new HumanMessage('嗨')] });
 
     const definition = taskToolDefinition(subagents);
     expect(seen).toHaveLength(1);

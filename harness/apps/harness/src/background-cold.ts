@@ -149,16 +149,6 @@ export function createColdChildStore(store: SessionStore): ColdChildStore {
       }
       return { ...resumed, inspection: inspectionOf(resumed.events) };
     },
-    restore: (agent, threadId, events) => {
-      if (agent.seedThread !== undefined) {
-        return restoreConversation({ seedThread: agent.seedThread.bind(agent) }, threadId, events);
-      }
-      if (agent.updateState === undefined) {
-        return Promise.reject(
-          new Error('這張圖不能把對話灌回去（沒有 updateState，也沒有 seedThread）'),
-        );
-      }
-      return restoreConversation({ updateState: agent.updateState.bind(agent) }, threadId, events);
-    },
+    restore: (agent, threadId, events) => restoreConversation(agent, threadId, events),
   };
 }

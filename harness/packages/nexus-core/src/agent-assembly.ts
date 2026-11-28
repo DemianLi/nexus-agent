@@ -70,6 +70,8 @@ import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
   SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
 } from './model-selection.js';
+import { adaptLangGraph } from './langgraph-agent.js';
+import type { LoopAgent } from './loop-agent.js';
 import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
 import { HISTORY_FROM_LOG_MIDDLEWARE_NAME } from './history-shadow.js';
@@ -383,7 +385,7 @@ function assertSupportedSubagent(spec: SubAgent): void {
  *   那層 `withConfig({ recursionLimit: 10000 })` 本來就被我們蓋掉，這裡不再放。
  * @throws 沒有模型或 backend、沒有 `general-purpose`、規格帶了不支援的欄位。
  */
-export function assembleAgent(params: AssembleAgentParams) {
+export function assembleAgent(params: AssembleAgentParams): LoopAgent {
   const { model, backend, checkpointer, store } = params;
   if (model === undefined) throw new Error('組裝 agent 需要模型：fold 的產物沒有 model');
   if (backend === undefined) throw new Error('組裝 agent 需要 backend：fold 的產物沒有 backend');
@@ -511,9 +513,7 @@ export function assembleAgent(params: AssembleAgentParams) {
     checkpointer,
     store,
   });
-  if (params.loop !== 'native') return agent;
-  // 呼叫端拿到的型別仍是 `createAgent` 推導出來的那一個：harness 只叫兩者都有的那幾個成員（見 `NativeAgent` 的類別說明），
-  // TODO(#2363) 拿掉 LangChain 時換成自己的介面。編好的圖不用，只為了型別與參數檢查留著。
+  if (params.loop !== 'native') return adaptLangGraph(agent);
   return createNativeAgent({
     model,
     systemPrompt,
@@ -521,5 +521,5 @@ export function assembleAgent(params: AssembleAgentParams) {
     middleware,
     ...(params.events !== undefined && { events: params.events }),
     ...(store !== undefined && { store }),
-  }) as unknown as typeof agent;
+  });
 }

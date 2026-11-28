@@ -61,6 +61,8 @@ import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt
 import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
+import { adaptLangGraph } from './langgraph-agent.js';
+import type { LoopAgent } from './loop-agent.js';
 
 /** 編一個子代理要看的 fold 產物：規格清單、模型、backend、全域的 deny 規則、檔案工具的組態（`tool-fs`，#1605）與描述。 */
 export type SubagentGraphParams = Pick<
@@ -74,12 +76,6 @@ export type SubagentGraphParams = Pick<
   | 'patchToolCallsStateFix'
   | 'contextWindowOf'
 >;
-
-/**
- * 編出來的圖：帶 checkpointer 的 `createAgent` 圖；`native` 下是 native agent，型別仍標成前者。背景 host 經自己的 `BackgroundAgent`
- * 結構型別用它，只有 native 有的 `discardSuspended` 在那裡是選填。
- */
-export type SubagentGraph = ReturnType<typeof createAgent>;
 
 /** 編圖的選項。 */
 export interface SubagentGraphOptions {
@@ -147,7 +143,7 @@ export function compileSubagentGraph(
   params: SubagentGraphParams,
   name: string,
   options: SubagentGraphOptions,
-): SubagentGraph {
+): LoopAgent {
   const spec = params.subagents.find((candidate) => candidate.name === name);
   if (spec === undefined) {
     const known = params.subagents.map((candidate) => candidate.name).join('、');
@@ -224,19 +220,21 @@ export function compileSubagentGraph(
       ...(options.events !== undefined && { events: options.events }),
       ...nativeMaxTurns(declarative),
       background: true,
-    }) as unknown as SubagentGraph;
+    });
   }
   if (options.checkpointer === undefined) {
     throw new Error(
       `背景子代理 "${declarative.name}" 走 langgraph 要有 checkpointer：沒有存檔點，第二輪就看不到第一輪`,
     );
   }
-  return createAgent({
-    model: model as never,
-    systemPrompt: declarative.systemPrompt,
-    tools: tools as never,
-    middleware,
-    name: declarative.name,
-    checkpointer: options.checkpointer,
-  });
+  return adaptLangGraph(
+    createAgent({
+      model: model as never,
+      systemPrompt: declarative.systemPrompt,
+      tools: tools as never,
+      middleware,
+      name: declarative.name,
+      checkpointer: options.checkpointer,
+    }),
+  );
 }

@@ -468,7 +468,7 @@ describe('subagent 裡的閘門', () => {
 
       // 前提：真的停在核准上，而且停的是 `danger`（不是別的中斷）。
       expect(paused.__interrupt__).toHaveLength(1);
-      expect(paused.__interrupt__?.[0]?.value).toMatchObject({
+      expect((paused.__interrupt__ as { value: unknown }[] | undefined)?.[0]?.value).toMatchObject({
         kind: 'approval',
         actionRequests: [{ name: 'danger', description: 'danger 要人看過' }],
       });

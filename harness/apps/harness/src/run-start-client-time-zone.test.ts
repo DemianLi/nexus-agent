@@ -49,7 +49,6 @@ function instantAgent(): PumpAgent {
         yield COMPLETED;
       })(),
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
 }
 
@@ -300,7 +299,6 @@ describe('升 Node 之前排著的項目：原樣抄進新一輪，讀的時候�
         })();
       },
       getState: async () => ({ values: {} }),
-      updateState: async () => ({}),
     });
   }
 

@@ -1,4 +1,5 @@
 import { tool } from '@langchain/core/tools';
+import { adaptLangGraph } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import type { Event } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
@@ -9,7 +10,6 @@ import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
-import type { PumpAgent } from './thread-pump.js';
 import {
   emptyCommandPoint,
   fetchWithCookie,
@@ -40,11 +40,13 @@ afterEach(async () => {
 
 describe('接上真的 socket', () => {
   it('開線就先吐一行 SSE 註解，代理層才不會把 header 壓著', async () => {
-    const agent = createDeepAgent({
-      model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-      tools: [],
-      backend: new StateBackend(),
-    }) as unknown as PumpAgent;
+    const agent = adaptLangGraph(
+      createDeepAgent({
+        model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+        tools: [],
+        backend: new StateBackend(),
+      }),
+    );
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
@@ -83,29 +85,31 @@ describe('接上真的 socket', () => {
     });
     const calls: string[] = [];
 
-    const agent = createDeepAgent({
-      model: new ScriptedChatModel({
-        turns: [
-          { content: '我來記。', toolCalls: [{ name: 'take_note', args: { text: '第一筆' } }] },
-          { content: '記好了。' },
+    const agent = adaptLangGraph(
+      createDeepAgent({
+        model: new ScriptedChatModel({
+          turns: [
+            { content: '我來記。', toolCalls: [{ name: 'take_note', args: { text: '第一筆' } }] },
+            { content: '記好了。' },
+          ],
+        }),
+        tools: [
+          tool(
+            async ({ text }: { text: string }) => {
+              await blocked;
+              calls.push(text);
+              return `已記下：${text}`;
+            },
+            {
+              name: 'take_note',
+              description: '記一段文字。',
+              schema: z.object({ text: z.string() }),
+            },
+          ),
         ],
+        backend: new StateBackend(),
       }),
-      tools: [
-        tool(
-          async ({ text }: { text: string }) => {
-            await blocked;
-            calls.push(text);
-            return `已記下：${text}`;
-          },
-          {
-            name: 'take_note',
-            description: '記一段文字。',
-            schema: z.object({ text: z.string() }),
-          },
-        ),
-      ],
-      backend: new StateBackend(),
-    }) as unknown as PumpAgent;
+    );
 
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,

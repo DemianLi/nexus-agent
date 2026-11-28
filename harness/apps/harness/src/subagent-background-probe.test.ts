@@ -40,6 +40,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
+import { adaptLangGraph } from '@nexus/core';
 import type { PluginEntry, SubagentGraphParams } from '@nexus/core';
 import {
   compileSubagentGraph,
@@ -327,16 +328,18 @@ describe('第 1 項：子代理在 task 以外用自己的 thread id 連跑兩�
       [WORKER],
     );
     try {
-      const graph = createAgent({
-        model: params.model as never,
-        systemPrompt: spec('worker').systemPrompt,
-        tools: (spec('worker').tools ?? []) as never,
-        middleware: mergeByName(
-          baseDefaults(params.backend),
-          (spec('worker').middleware ?? []) as never,
-        ),
-        name: 'worker',
-      });
+      const graph = adaptLangGraph(
+        createAgent({
+          model: params.model as never,
+          systemPrompt: spec('worker').systemPrompt,
+          tools: (spec('worker').tools ?? []) as never,
+          middleware: mergeByName(
+            baseDefaults(params.backend),
+            (spec('worker').middleware ?? []) as never,
+          ),
+          name: 'worker',
+        }),
+      );
       await runBackground(graph, '第一輪的話');
       await runBackground(graph, '第二輪的話');
       expect(texts(model.prompts[1] ?? [])).not.toContain('第一輪的話');

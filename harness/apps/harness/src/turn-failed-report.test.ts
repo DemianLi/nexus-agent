@@ -18,7 +18,6 @@ function failingAgent(error: unknown): PumpAgent {
   return fakePumpAgent({
     streamEvents: () => Promise.reject(error),
     getState: () => Promise.resolve({ values: {} }),
-    updateState: () => Promise.resolve(undefined),
   });
 }
 
@@ -130,7 +129,6 @@ describe('ThreadPump 的 onTurnFailed', () => {
           signal.addEventListener('abort', () => reject(new Error('被切斷')), { once: true });
         }),
       getState: () => Promise.resolve({ values: {} }),
-      updateState: () => Promise.resolve(undefined),
     });
     const pump = pumpWith(waiting, (report) => reports.push(report));
     const done = pump.submit({ kind: 'message', text: '嗨' });

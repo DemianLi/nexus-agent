@@ -1,4 +1,5 @@
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import { adaptLangGraph } from '@nexus/core';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { ConversationState, Event, WireChannel } from '@nexus/wire';
@@ -74,7 +75,7 @@ function build(
         }
       : {}),
   });
-  return { agent: agent as unknown as PumpAgent, calls };
+  return { agent: adaptLangGraph(agent), calls };
 }
 
 function connect(agent: PumpAgent) {
@@ -242,11 +243,13 @@ describe('折疊器的狀態', () => {
   });
 
   it('run 炸掉：status 是 failed，而且說得出原因', async () => {
-    const agent = createDeepAgent({
-      model: new ThrowingModel({ turns: ONE_CALL }),
-      tools: [noteTool([])],
-      backend: new StateBackend(),
-    }) as unknown as PumpAgent;
+    const agent = adaptLangGraph(
+      createDeepAgent({
+        model: new ThrowingModel({ turns: ONE_CALL }),
+        tools: [noteTool([])],
+        backend: new StateBackend(),
+      }),
+    );
     const { state } = await converse(
       agent,
       'c5',

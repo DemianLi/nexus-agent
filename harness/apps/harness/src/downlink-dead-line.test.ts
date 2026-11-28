@@ -76,7 +76,6 @@ function fedAgent() {
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return {
     agent: agent,

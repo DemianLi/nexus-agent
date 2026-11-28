@@ -359,7 +359,6 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
       }),
     }),
     getState: async () => ({ values: {} }),
-    updateState: async () => undefined,
   });
 
   /**

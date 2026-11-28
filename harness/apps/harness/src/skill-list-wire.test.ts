@@ -8,6 +8,7 @@
  * **零憑證、零外部連線**。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +30,6 @@ import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { SkillCatalog } from './skill-catalog-wire.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
 const temporary: string[] = [];
@@ -241,11 +241,13 @@ describe('清單本身拋錯', () => {
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
-        agent: createDeepAgent({
-          model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-          backend: new StateBackend(),
-          checkpointer: new MemorySaver(),
-        }) as unknown as PumpAgent,
+        agent: adaptLangGraph(
+          createDeepAgent({
+            model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+            backend: new StateBackend(),
+            checkpointer: new MemorySaver(),
+          }),
+        ),
         attachSessions: noSessions,
         commands: emptyCommandPoint(),
         skillCatalog,

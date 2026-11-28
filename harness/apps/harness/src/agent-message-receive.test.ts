@@ -105,7 +105,6 @@ function fakeAgent(steps: readonly Step[] = []) {
       })();
     },
     getState: async () => ({ values: {} }),
-    updateState: async () => ({}),
   });
   return { agent: agent, inputs, claimed };
 }

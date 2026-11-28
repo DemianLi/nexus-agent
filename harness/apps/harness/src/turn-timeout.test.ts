@@ -855,7 +855,7 @@ describe('背景子代理（Q-B4 (a)）', () => {
     const agent = fakeBackgroundAgent({
       async streamEvents(input, config) {
         const text = String(
-          (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+          (input as unknown as { messages: { content: unknown }[] }).messages.at(-1)?.content,
         );
         await script(text, config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal);
         return (async function* () {})() as never;

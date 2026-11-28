@@ -1109,6 +1109,25 @@ export {
   RUN_STOP_CONFIG_KEY,
 } from './native-loop/agent.js';
 export type { NativeAgentParams, NativeStateSnapshot, RunStopReason } from './native-loop/agent.js';
+export { adaptLangGraph } from './langgraph-agent.js';
+export type { LangGraphLike } from './langgraph-agent.js';
+export { danglingLoggedCalls, danglingToolCalls } from './loop-agent.js';
+export type {
+  DanglingCall,
+  InvokeConfig,
+  LoopAgent,
+  LoopDefaults,
+  LoopDurability,
+  LoopInput,
+  RawProtocolEvent,
+  RunProjections,
+  StreamConfig,
+  StreamEventsConfig,
+  StreamEventsConfigurable,
+  SubagentProjection,
+  ThreadConfig,
+  ToolCallProjection,
+} from './loop-agent.js';
 export { LLM_STREAM_CONFIG_KEY } from './native-loop/events.js';
 export type {
   AgentStepPayload,
@@ -1161,7 +1180,7 @@ export type {
   HistoryShadowTally,
   HistorySource,
 } from './history-shadow.js';
-export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
+export type { SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
 export {
   BACKGROUND_RUN_PREFIX,

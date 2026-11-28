@@ -23,12 +23,17 @@ describe('假 agent 工廠', () => {
     });
   });
 
-  it('選填成員沒給就不存在，產品碼靠它認 agent 是哪一種 loop', () => {
+  it('收回、接上日誌的訊息、懸著的呼叫三個成員有預設：什麼都不做', async () => {
     const agent = fakePumpAgent({});
-    expect(agent.updateState).toBeUndefined();
-    expect(agent.appendLoggedMessages).toBeUndefined();
-    expect(agent.discardSuspended).toBeUndefined();
-    expect('updateState' in agent).toBe(false);
-    expect(fakeBackgroundAgent().seedThread).toBeUndefined();
+    const config = { configurable: { thread_id: 't' } };
+    expect(agent.discardSuspended(config)).toBeUndefined();
+    await expect(agent.appendLoggedMessages(config, [])).resolves.toBeUndefined();
+    await expect(agent.danglingCalls(config, [])).resolves.toEqual([]);
+    expect(() => (agent.seedThread as () => unknown)()).toThrow(
+      '假 agent 沒給成員 seedThread，卻被呼叫了',
+    );
+    expect(
+      fakeBackgroundAgent().discardSuspended({ configurable: { thread_id: 't' } }),
+    ).toBeUndefined();
   });
 });

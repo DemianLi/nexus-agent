@@ -1,4 +1,5 @@
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import { adaptLangGraph } from '@nexus/core';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Event } from '@nexus/wire';
@@ -66,7 +67,7 @@ function buildAgent(turns: readonly ScriptedTurn[], options: { gated?: boolean }
         }
       : {}),
   });
-  return { agent: agent as unknown as PumpAgent, calls };
+  return { agent: adaptLangGraph(agent), calls };
 }
 
 /** 把 handler 當成 fetch 用——瀏覽器端跑的是同一份 client。 */
@@ -390,11 +391,13 @@ describe('一條下行接得起 N 個 run', () => {
 
 describe('失敗與拒絕', () => {
   it('run 炸掉時原因先上線，下行不跟著斷', async () => {
-    const agent = createDeepAgent({
-      model: new ThrowingModel({ turns: ONE_CALL }),
-      tools: [recordingTool([])],
-      backend: new StateBackend(),
-    }) as unknown as PumpAgent;
+    const agent = adaptLangGraph(
+      createDeepAgent({
+        model: new ThrowingModel({ turns: ONE_CALL }),
+        tools: [recordingTool([])],
+        backend: new StateBackend(),
+      }),
+    );
     const { client } = connect(agent);
     const events = await client.openEvents('t6', { channels: ['lifecycle'] });
     await client.runStart('t6', '記一筆。');

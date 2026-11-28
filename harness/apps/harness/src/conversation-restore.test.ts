@@ -411,9 +411,8 @@ describe('過大的工具結果', () => {
 
     await restoreConversation(
       {
-        updateState: async (_config, values) => {
-          written.push(values);
-          return {};
+        seedThread: async (_config, messages) => {
+          written.push({ messages });
         },
       },
       'big',

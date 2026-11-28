@@ -240,7 +240,12 @@ async function observe(agent: Runnable, model: RecordingModel): Promise<Observed
   return {
     requests: model.prompts.map((prompt) => project(prompt)),
     bindings: model.sink,
-    nodes: Object.keys(agent.graph?.nodes ?? {}),
+    nodes: Object.keys(
+      agent.graph?.nodes ??
+        (agent.graph as { graph?: { nodes?: Record<string, unknown> } } | undefined)?.graph
+          ?.nodes ??
+        {},
+    ),
     finalText: result.messages.at(-1)?.text,
   };
 }

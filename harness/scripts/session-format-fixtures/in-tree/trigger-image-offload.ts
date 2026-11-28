@@ -19,7 +19,6 @@ import { createNexusAgent } from './agent-factory.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
-import type { PumpAgent } from './thread-pump.js';
 
 const directory = process.argv[2];
 if (directory === undefined) throw new Error('要給 run 目錄。');
@@ -47,7 +46,7 @@ const built = await createNexusAgent({
   // 有型錄（`modelLimits`）才掛圖片省略的兩顆 middleware；額度本身在腳本模型上。
   modelLimits: () => ({ contextWindow: 32_768, maxOutputTokens: 4096 }),
 });
-const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'image-offload');
+const pump = new ThreadPump(built.agent, 'image-offload');
 const detach = built.attachSession(pump.sessions);
 await pump.submit({
   kind: 'message',

@@ -14,9 +14,9 @@ import type { BaseMessage } from '@langchain/core/messages';
 export type AgentInput = string | BaseMessage | readonly (string | BaseMessage)[];
 
 /** 標準化之後的東西，可以直接交給 `agent.invoke()` 或 `agent.stream()`。 */
-export interface AgentInvocation {
+export type AgentInvocation = {
   messages: BaseMessage[];
-}
+};
 
 /**
  * 把入口的輸入標準化成基座收的形狀。

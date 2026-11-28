@@ -2,6 +2,23 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
 
+const LOOP_AGENT_NAMES = 'LoopAgent|PumpAgent|BackgroundAgent|RestorableAgent|NexusAgent';
+
+export const loopAgentCastGuard = {
+  files: ['src/**/*.ts'],
+  ignores: ['**/*.test.ts', '**/*.fixture.ts', '**/*.test.helper.ts'],
+  rules: {
+    'no-restricted-syntax': [
+      'error',
+      ...['TSAsExpression', 'TSTypeAssertion'].map((node) => ({
+        selector: `${node}[typeAnnotation.type='TSTypeReference'][typeAnnotation.typeName.name=/^(${LOOP_AGENT_NAMES})$/]`,
+        message:
+          '不准把東西轉型成 LoopAgent 或它的別名：兩條 loop 各自 implements LoopAgent，由編譯器檢查；LangGraph 的圖用 adaptLangGraph 包。',
+      })),
+    ],
+  },
+};
+
 export default tseslint.config(
   {
     ignores: [

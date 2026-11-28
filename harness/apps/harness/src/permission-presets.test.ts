@@ -6,6 +6,7 @@
  * 手搭一個 plugin 去驗，驗不到 `--sandbox`、續接與必掛名單那幾條線有沒有接上。
  */
 
+import { adaptLangGraph } from '@nexus/core';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +30,6 @@ import {
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
 const shipped = await shippedPlugins();
@@ -358,11 +358,13 @@ describe('wire 的 permission.catalog', () => {
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
-        agent: createDeepAgent({
-          model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
-          backend: new StateBackend(),
-          checkpointer: new MemorySaver(),
-        }) as unknown as PumpAgent,
+        agent: adaptLangGraph(
+          createDeepAgent({
+            model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+            backend: new StateBackend(),
+            checkpointer: new MemorySaver(),
+          }),
+        ),
         attachSessions: noSessions,
         commands: emptyCommandPoint(),
         dispose: async () => undefined,

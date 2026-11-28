@@ -191,14 +191,8 @@ describe('一輪失敗時補上沒配到結果的呼叫（#2029）', () => {
       wrapAgent: (agent) =>
         new Proxy(agent, {
           get(target, key, receiver) {
-            // 寫回對話那一步：`langgraph` 是 `updateState`，native 是 `appendLoggedMessages`。只換 agent 本來就有的那一支。
-            if (key === 'updateState' && 'updateState' in target) {
+            if (key === 'appendLoggedMessages') {
               return () => Promise.reject(new Error(WRITE_FAILED));
-            }
-            if (key === 'appendLoggedMessages' && 'appendLoggedMessages' in target) {
-              return () => {
-                throw new Error(WRITE_FAILED);
-              };
             }
             const value: unknown = Reflect.get(target, key, receiver);
             return typeof value === 'function'
