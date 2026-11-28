@@ -514,7 +514,6 @@ export function assembleAgent(params: AssembleAgentParams): LoopAgent {
     store,
   });
   if (params.loop !== 'native') return adaptLangGraph(agent);
-  // 編好的圖不用，只為了參數檢查留著。
   return createNativeAgent({
     model,
     systemPrompt,

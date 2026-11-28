@@ -2,11 +2,6 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
 
-/**
- * 非測試檔不准把東西轉型成 `LoopAgent` 與它的別名（[#3342](https://github.com/DemianLi/nexus-agent/issues/3342)）：兩條 loop 各自
- * 實作 `LoopAgent`，轉型會讓編譯器看不到哪一條不滿足它。`apps/harness` 與 `@nexus/core` 的 `eslint.config.js` 掛這一份。
- * 轉成臨時寫的結構型別 lint 擋不到。
- */
 const LOOP_AGENT_NAMES = 'LoopAgent|PumpAgent|BackgroundAgent|RestorableAgent|NexusAgent';
 
 export const loopAgentCastGuard = {

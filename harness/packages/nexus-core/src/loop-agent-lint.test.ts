@@ -1,10 +1,3 @@
-/**
- * 非測試檔轉型成 `LoopAgent` 與它的別名，lint 要紅（[#3342](https://github.com/DemianLi/nexus-agent/issues/3342)）。
- *
- * 量的是 `apps/harness` 與 `@nexus/core` **真的那份** `eslint.config.js`（`overrideConfigFile`）。違規碼放在記憶體裡、不落成檔
- * （理由同 `nexus-plugin-goal/src/eslint-exclusion.test.ts`），`lintText` 的 `filePath` 是虛擬路徑，決定它被當成哪一種檔。
- */
-
 import { fileURLToPath } from 'node:url';
 
 import { ESLint } from 'eslint';

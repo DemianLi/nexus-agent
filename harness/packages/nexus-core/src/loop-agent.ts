@@ -1,18 +1,3 @@
-/**
- * agent 把手：兩條 loop（`langgraph`、`native`）對外只有這一份形狀（[#3342](https://github.com/DemianLi/nexus-agent/issues/3342)）。
- *
- * 呼叫端（`thread-pump.ts`、`background-subagents.ts`、`conversation-restore.ts`、CLI、eval）只認 {@link LoopAgent}：成員全部必有，
- * 沒有選填，也不探測「現在是哪條 loop」。兩條 loop 在同一件事上做法不同的地方收進各自的實作：
- *
- * - `NativeAgent`（`native-loop/agent.ts`）直接 `implements` 它；
- * - LangGraph 的圖包一層 {@link adaptLangGraph}（`langgraph-agent.ts`）。
- *
- * 簽名裡的 LangChain 語彙（`Command` 的 `resume`、`BaseMessage`、`configurable.thread_id`、v3 事件、`__interrupt__`）這一版不換，
- * TODO(#2363) 刪 `langgraph` 時連同 adapter 與 {@link LoopAgent.danglingCalls} 一起處理。
- *
- * @module
- */
-
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { Command } from '@langchain/langgraph';
@@ -25,7 +10,6 @@ import { STEP_INBOX_CONFIG_KEY } from './step-inbox.js';
 import type { StepInbox } from './step-inbox.js';
 import { TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
 
-/** 這條 thread 的位址。 */
 export interface ThreadConfig {
   readonly configurable: { readonly thread_id: string };
 }
@@ -43,12 +27,10 @@ export interface RawProtocolEvent {
   };
 }
 
-/** langchain 投影裡一次工具呼叫的那一格。這裡只碰得到它的 `output`。 */
 export interface ToolCallProjection {
   readonly output: Promise<unknown>;
 }
 
-/** langchain 投影裡一個子代理：自己的 `output`，外加它那一層的工具呼叫與再下一層的子代理。 */
 export interface SubagentProjection {
   readonly output: Promise<unknown>;
   readonly toolCalls: AsyncIterable<ToolCallProjection>;
@@ -86,21 +68,18 @@ export interface StreamEventsConfigurable {
   readonly [key: string]: unknown;
 }
 
-/** `streamEvents` 的設定。 */
 export interface StreamEventsConfig {
   readonly version: 'v3';
   readonly durability?: LoopDurability;
   readonly configurable: StreamEventsConfigurable;
 }
 
-/** `stream` 的設定（CLI 那條）：`streamMode` 給陣列，吐 `[mode, payload]`。 */
 export interface StreamConfig {
   readonly streamMode: readonly ('updates' | 'values')[];
   readonly durability?: LoopDurability;
   readonly configurable?: { readonly thread_id?: string; readonly [key: string]: unknown };
 }
 
-/** `invoke` 的設定。 */
 export interface InvokeConfig {
   readonly configurable?: { readonly thread_id?: string; readonly [key: string]: unknown };
   readonly recursionLimit?: number;
@@ -108,7 +87,6 @@ export interface InvokeConfig {
   readonly [key: string]: unknown;
 }
 
-/** `withConfig` 收的兩格：步數上限與並行上限，語意同 LangGraph。 */
 export interface LoopDefaults {
   readonly recursionLimit?: number;
   readonly maxConcurrency?: number;
@@ -122,8 +100,6 @@ export interface DanglingCall {
 }
 
 /**
- * 一條 loop 對 harness 的全部要求。成員全部必有。
- *
  * thread 的對話由日誌推、loop 自己留一份：下面三個寫的成員（{@link LoopAgent.seedThread}、{@link LoopAgent.appendLoggedMessages}、
  * {@link LoopAgent.discardSuspended}）是呼叫端唯一能動它的路；{@link LoopAgent.getState} 只給測試讀，產品碼不叫。
  */
@@ -138,7 +114,6 @@ export interface LoopAgent {
     input: LoopInput,
     config: StreamConfig,
   ): Promise<AsyncIterable<readonly [mode: string, payload: unknown]>>;
-  /** 跑一次，回最後的 state。 */
   invoke(input: LoopInput, config?: InvokeConfig): Promise<LoopState>;
   /** 疊上步數與並行上限，回一個共用同一份 thread state 的新把手。 */
   withConfig(defaults: LoopDefaults): LoopAgent;
@@ -168,7 +143,6 @@ export interface LoopAgent {
   discardSuspended(config: ThreadConfig): void;
   /**
    * 這條 thread 對話上還沒配到結果的工具呼叫（停在核准點時是等核准的那幾顆，加上同一批排在後面還沒起跑的）。
-   * native 從日誌算；LangGraph 的 adapter 問存檔點。TODO(#2363) 連 adapter 一起刪，pump 改成直接從日誌算。
    *
    * @param events - 這份日誌的事件，照 `seq` 排。
    */
@@ -180,9 +154,6 @@ export interface LoopAgent {
 
 /**
  * 對話最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
- *
- * 停在核准點時是那幾顆等核准的，加上同一批排在後面、還沒起跑的呼叫。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
- * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  *
  * @param values - state 的值，讀它的 `messages`。
  */

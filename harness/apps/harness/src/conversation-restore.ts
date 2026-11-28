@@ -57,7 +57,6 @@ import type { LoopAgent } from '@nexus/core';
 import { CHECKPOINT_MAX_DEPTH, CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
 import { messageCheckpointDepth, vouchCheckpointDepth } from './pruned-memory-saver.js';
 
-/** 灌得進去的 agent 那一面：{@link LoopAgent.seedThread}。 */
 export type RestorableAgent = Pick<LoopAgent, 'seedThread'>;
 
 /* -------------------------------------------------------------------------- */
@@ -199,7 +198,6 @@ export async function restoreConversation(
   });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
     const config = { configurable: { thread_id: threadId } };
-    // native 沒有存檔點替它把關，灌進去之前量一次；`langgraph` 由存檔點寫入時量（下面接住它拋的錯）。兩條路拒的是同一份日誌，錯誤訊息的字各自照舊。
     let guardError: unknown;
     const guard = (messages: readonly BaseMessage[]): void => {
       for (const message of messages) {

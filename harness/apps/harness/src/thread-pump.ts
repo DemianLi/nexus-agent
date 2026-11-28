@@ -252,7 +252,6 @@ function markSubagents(subagents: AsyncIterable<SubagentProjection>): void {
   })().catch(ignore);
 }
 
-/** pump 對 agent 的全部要求就是 {@link LoopAgent}；成員全部必有，pump 不分辨現在是哪條 loop。 */
 export type PumpAgent = LoopAgent;
 
 /**
@@ -2906,8 +2905,7 @@ export class ThreadPump {
    * 結果從 {@link unansweredCallResults} 拿，句子與碼同續接的補結。對話那一側也由這裡寫，同 {@link ThreadPump.#withdraw}：
    * 對話上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
    * 只推對話上真的懸著的：模型那一步還沒進對話就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
-   * 經 {@link PumpAgent.appendLoggedMessages}：懸著與否由 agent 照自己的對話篩，不在懸著清單上的略過。
-   * 先寫日誌、再寫存檔點：存檔點那一步失敗時日誌已經有結果，存檔點沒有，下一輪那幾顆由基座補（句子不同，則數一樣）。
+   * 先寫日誌、再寫對話：對話那一步失敗時日誌已經有結果，對話沒有；`langgraph` 下一輪那幾顆由基座補（句子不同，則數一樣）。
    *
    * @param failure - 這一輪的原錯。
    * @returns 原錯；補寫也失敗時是把兩個錯一起帶出來的 `AggregateError`，`cause` 是原錯，沿 `cause` 認錯的地方照舊認得出原錯。

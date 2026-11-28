@@ -94,7 +94,6 @@ import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
 import { startTurnClock, unsettledToolNames } from './turn-clock.js';
 import type { TurnClock } from './turn-clock.js';
 
-/** host 對背景圖的全部要求：一個可抽的 v3 run、冷復活灌回對話、收回停在等待點的 run。 */
 export type BackgroundAgent = Pick<LoopAgent, 'streamEvents' | 'seedThread' | 'discardSuspended'>;
 
 /** 一輪的下場。**永遠是回傳值，不會 reject**——拋錯已記成 `turn/failed`。 */

@@ -487,7 +487,7 @@ export interface NativeStateSnapshot {
 }
 
 /**
- * native loop 的 agent，實作 {@link LoopAgent}：`streamEvents`、`stream`、`invoke`、`withConfig`，與只讀快取的 `getState`。thread 的 state 是這個實例的快取（`withConfig` 出來的共用同一份）：`messages` 由日誌推，
+ * native loop 的 agent。thread 的 state 是這個實例的快取（`withConfig` 出來的共用同一份）：`messages` 由日誌推，
  * 寫進去的路只有跑一輪（含 {@link NativeAgent.discardSuspended} 收回時套進已收完的寫入）、{@link NativeAgent.seedThread} 與
  * {@link NativeAgent.appendLoggedMessages}；其餘鍵（例如 `files`）只在快取裡，快取不在就沒有。
  */
@@ -669,7 +669,6 @@ export class NativeAgent implements LoopAgent {
    * {@link appendLoggedMessages} 跟著日誌往前推。
    * @param config - 帶 `configurable.thread_id`。
    * @param messages - 從日誌推出來的對話。
-   * @param guard - 沒有存檔點替它把關，放進去之前由這一支檢查，不能放就拋。
    * @throws 這條 thread 已經有快取：日誌以外的東西不能覆蓋它；`guard` 拒收。
    */
   async seedThread(
@@ -811,11 +810,6 @@ export class NativeAgent implements LoopAgent {
     link.suspension.withdraw();
   }
 
-  /**
-   * 這條 thread 對話上還沒配到結果的工具呼叫，從日誌算（{@link danglingLoggedCalls}）；不讀 thread 的快取。
-   * @param _config - 這條 thread 的位址；日誌已經是這條 thread 的。
-   * @param events - 這份日誌的事件，照 `seq` 排。
-   */
   async danglingCalls(
     _config: ThreadConfig,
     events: readonly SessionEvent[],

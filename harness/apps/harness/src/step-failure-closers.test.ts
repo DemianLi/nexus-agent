@@ -191,7 +191,6 @@ describe('一輪失敗時補上沒配到結果的呼叫（#2029）', () => {
       wrapAgent: (agent) =>
         new Proxy(agent, {
           get(target, key, receiver) {
-            // 寫回對話那一步：兩條 loop 都經 `appendLoggedMessages`。
             if (key === 'appendLoggedMessages') {
               return () => Promise.reject(new Error(WRITE_FAILED));
             }

@@ -1,14 +1,3 @@
-/**
- * LangGraph 的圖包成 {@link LoopAgent}（[#3342](https://github.com/DemianLi/nexus-agent/issues/3342)）。
- *
- * 圖沒有的三件事由這一層補：灌回對話與接上日誌的訊息經存檔點（`updateState`），收回停在等待點的 run 沒有東西可收（LangGraph 的中斷當場收掉那次
- * run，下一次照樣開）。哪幾顆呼叫還懸著問存檔點（{@link danglingToolCalls}）。
- *
- * TODO(#2363) 刪 `langgraph` 時連同這一層與 {@link LoopAgent.danglingCalls} 一起刪。
- *
- * @module
- */
-
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
@@ -27,10 +16,6 @@ import {
 } from './loop-agent.js';
 import type { LoopState } from './native-loop/state.js';
 
-/**
- * 這一層要用到的圖的成員。參數寫 `never`，所以 `createAgent`、`createDeepAgent` 推導出來的型別都收得下；實際的形狀由 {@link LoopAgent} 的簽名擔保，
- * 這一層只負責轉手。
- */
 export interface LangGraphLike {
   streamEvents(input: never, config: never): Promise<unknown>;
   stream(input: never, config: never): Promise<unknown>;
@@ -41,7 +26,6 @@ export interface LangGraphLike {
 }
 
 class LangGraphLoopAgent implements LoopAgent {
-  /** `#` 的私有欄位不列舉，`patch-tool-calls-mount.test.ts` 要從這個把手走進圖裡找 middleware 疊，所以用 TypeScript 的 `private`。 */
   constructor(private readonly graph: LangGraphLike) {}
 
   async streamEvents(
